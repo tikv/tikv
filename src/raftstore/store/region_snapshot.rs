@@ -539,13 +539,19 @@ mod tests {
             iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics)
                 .unwrap()
         );
-        let mut pair = (iter.key().to_vec(), iter.value().to_vec());
+        let mut pair = (
+            iter.key(&mut statistics).to_vec(),
+            iter.value(&mut statistics).to_vec(),
+        );
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
         assert!(
             iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics)
                 .unwrap()
         );
-        pair = (iter.key().to_vec(), iter.value().to_vec());
+        pair = (
+            iter.key(&mut statistics).to_vec(),
+            iter.value(&mut statistics).to_vec(),
+        );
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
         assert!(
             !iter
@@ -564,7 +570,10 @@ mod tests {
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
-            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            res.push((
+                iter.key(&mut statistics).to_vec(),
+                iter.value(&mut statistics).to_vec(),
+            ));
             if !iter.prev(&mut statistics) {
                 break;
             }
@@ -588,7 +597,10 @@ mod tests {
             iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
                 .unwrap()
         );
-        let pair = (iter.key().to_vec(), iter.value().to_vec());
+        let pair = (
+            iter.key(&mut statistics).to_vec(),
+            iter.value(&mut statistics).to_vec(),
+        );
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
@@ -597,14 +609,20 @@ mod tests {
                 "{}",
                 seek_key
             );
-            let pair = (iter.key().to_vec(), iter.value().to_vec());
+            let pair = (
+                iter.key(&mut statistics).to_vec(),
+                iter.value(&mut statistics).to_vec(),
+            );
             assert_eq!(pair, kv_pairs[0]);
         }
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
-            res.push((iter.key().to_vec(), iter.value().to_vec()));
+            res.push((
+                iter.key(&mut statistics).to_vec(),
+                iter.value(&mut statistics).to_vec(),
+            ));
             if !iter.prev(&mut statistics) {
                 break;
             }

@@ -85,7 +85,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
 /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
 /// has left bound.
-pub fn scan_lock<I, F>(
+pub fn scan_locks<I, F>(
     lock_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     predicate: F,
     start_key: Option<&Key>,
@@ -104,16 +104,20 @@ where
         return Ok(vec![]);
     }
     let mut locks = Vec::with_capacity(limit);
-    while lock_cursor.valid() {
-        let key = Key::from_encoded(lock_cursor.key().to_vec());
-        let lock = Lock::parse(lock_cursor.value())?;
+    loop {
+        let key = Key::from_encoded(lock_cursor.key(&mut statistics.lock).to_vec());
+        let lock = Lock::parse(lock_cursor.value(&mut statistics.lock))?;
         if predicate(&lock) {
             locks.push((key, lock));
             if limit > 0 && locks.len() == limit {
-                return Ok(locks);
+                // Reach limit
+                break;
             }
         }
-        lock_cursor.next(&mut statistics.lock);
+        if !lock_cursor.next(&mut statistics.lock) {
+            // No more keys
+            break;
+        }
     }
     statistics.lock.processed += locks.len();
     Ok(locks)
@@ -153,10 +157,6 @@ where
                 ),
                 Some(v) => {
                     statistics.data.processed += 1;
-                    // TODO: remove unnecessary key decode
-                    statistics.data.flow_stats.read_bytes +=
-                        key.raw().unwrap_or_default().len() + v.len();
-                    statistics.data.flow_stats.read_keys += 1;
                     Ok(v.to_vec())
                 }
             }

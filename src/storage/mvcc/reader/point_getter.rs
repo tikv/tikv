@@ -166,7 +166,6 @@ impl<S: Snapshot> PointGetter<S> {
         loop {
             // Near seek `${key}_${commit_ts}` in write CF.
 
-            // TODO: each next in near_seek should count flow_stats as well.
             if !self
                 .write_cursor
                 .near_seek(&key.append_ts(ts), &mut self.statistics.write)?
@@ -175,11 +174,8 @@ impl<S: Snapshot> PointGetter<S> {
                 return Ok(None);
             }
 
-            self.statistics.write.flow_stats.read_bytes +=
-                self.write_cursor.key().len() + self.write_cursor.value().len();
-            self.statistics.write.flow_stats.read_keys += 1;
-
-            let write_key = Key::from_encoded(self.write_cursor.key().to_vec());
+            let write_key =
+                Key::from_encoded(self.write_cursor.key(&mut self.statistics.write).to_vec());
             let commit_ts = write_key.decode_ts()?;
             let write_user_key = write_key.truncate_ts()?;
             if write_user_key != *key {
@@ -187,7 +183,7 @@ impl<S: Snapshot> PointGetter<S> {
                 return Ok(None);
             }
 
-            let write = Write::parse(self.write_cursor.value())?;
+            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
             match write.write_type {

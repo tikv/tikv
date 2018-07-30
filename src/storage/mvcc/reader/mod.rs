@@ -109,15 +109,17 @@ impl<S: Snapshot> MvccReader<S> {
             }
         } else {
             self.statistics.data.get += 1;
-            match self.snapshot.get(&k)? {
+            let value = match self.snapshot.get(&k)? {
                 None => panic!("key {} not found, ts: {}", key, ts),
                 Some(v) => v,
-            }
+            };
+            self.statistics.data.flow_stats.read_bytes +=
+                k.raw().unwrap_or_default().len() + value.len();
+            self.statistics.data.flow_stats.read_keys += 1;
+            value
         };
 
         self.statistics.data.processed += 1;
-        self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
-        self.statistics.data.flow_stats.read_keys += 1;
         Ok(res)
     }
 
@@ -169,16 +171,14 @@ impl<S: Snapshot> MvccReader<S> {
         if !ok {
             return Ok(None);
         }
-        let write_key = Key::from_encoded(cursor.key().to_vec());
+        let write_key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec());
         let commit_ts = write_key.decode_ts()?;
         let k = write_key.truncate_ts()?;
         if &k != key {
             return Ok(None);
         }
-        let write = Write::parse(cursor.value())?;
+        let write = Write::parse(cursor.value(&mut self.statistics.write))?;
         self.statistics.write.processed += 1;
-        self.statistics.write.flow_stats.read_bytes += cursor.key().len() + cursor.value().len();
-        self.statistics.write.flow_stats.read_keys += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -283,9 +283,10 @@ impl<S: Snapshot> MvccReader<S> {
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
         while ok {
-            if Write::parse(cursor.value())?.start_ts == ts {
+            if Write::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
                 return Ok(Some(
-                    Key::from_encoded(cursor.key().to_vec()).truncate_ts()?,
+                    Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
+                        .truncate_ts()?,
                 ));
             }
             ok = cursor.next(&mut self.statistics.write);
@@ -307,7 +308,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if w_cur.near_seek(&key, &mut self.statistics.write)? {
-                        w_key = Some(w_cur.key());
+                        w_key = Some(w_cur.key(&mut self.statistics.write));
                     } else {
                         w_key = None;
                         write_valid = false;
@@ -315,7 +316,7 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 if lock_valid {
                     if l_cur.near_seek(&key, &mut self.statistics.lock)? {
-                        l_key = Some(l_cur.key());
+                        l_key = Some(l_cur.key(&mut self.statistics.lock));
                     } else {
                         l_key = None;
                         lock_valid = false;
@@ -352,7 +353,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
-                        w_key = Some(w_cur.key());
+                        w_key = Some(w_cur.key(&mut self.statistics.write));
                     } else {
                         w_key = None;
                         write_valid = false;
@@ -360,7 +361,7 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 if lock_valid {
                     if l_cur.near_reverse_seek(&key, &mut self.statistics.lock)? {
-                        l_key = Some(l_cur.key());
+                        l_key = Some(l_cur.key(&mut self.statistics.lock));
                     } else {
                         l_key = None;
                         lock_valid = false;
@@ -396,10 +397,16 @@ impl<S: Snapshot> MvccReader<S> {
         // Check lock.
         match self.isolation_level {
             IsolationLevel::SI => {
-                let l_cur = self.lock_cursor.as_ref().unwrap();
-                if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
+                let l_cur = self.lock_cursor.as_mut().unwrap();
+                if l_cur.valid()
+                    && l_cur.key(&mut self.statistics.lock) == user_key.encoded().as_slice()
+                {
                     self.statistics.lock.processed += 1;
-                    self::util::check_lock(user_key, ts, &Lock::parse(l_cur.value())?)?;
+                    self::util::check_lock(
+                        user_key,
+                        ts,
+                        &Lock::parse(l_cur.value(&mut self.statistics.lock))?,
+                    )?;
                 }
             }
             IsolationLevel::RC => {}
@@ -416,9 +423,9 @@ impl<S: Snapshot> MvccReader<S> {
 
             let mut write = {
                 let (commit_ts, key) = {
-                    let w_cur = self.write_cursor.as_ref().unwrap();
-                    last_handled_key = Some(w_cur.key().to_vec());
-                    let w_key = Key::from_encoded(w_cur.key().to_vec());
+                    let w_cur = self.write_cursor.as_mut().unwrap();
+                    last_handled_key = Some(w_cur.key(&mut self.statistics.write).to_vec());
+                    let w_key = Key::from_encoded(w_cur.key(&mut self.statistics.write).to_vec());
                     (w_key.decode_ts()?, w_key.truncate_ts()?)
                 };
 
@@ -428,7 +435,12 @@ impl<S: Snapshot> MvccReader<S> {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
                 self.statistics.write.processed += 1;
-                Write::parse(self.write_cursor.as_ref().unwrap().value())?
+                Write::parse(
+                    self.write_cursor
+                        .as_mut()
+                        .unwrap()
+                        .value(&mut self.statistics.write),
+                )?
             };
 
             match write.write_type {
@@ -465,20 +477,24 @@ impl<S: Snapshot> MvccReader<S> {
             let mut write = {
                 // If we reach the last handled key, it means we have checked all versions
                 // for this user key.
-                if self.write_cursor.as_ref().unwrap().key()
+                if self
+                    .write_cursor
+                    .as_mut()
+                    .unwrap()
+                    .key(&mut self.statistics.write)
                     >= last_handled_key.as_ref().unwrap().as_slice()
                 {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
 
-                let w_cur = self.write_cursor.as_ref().unwrap();
-                let w_key = Key::from_encoded(w_cur.key().to_vec());
+                let w_cur = self.write_cursor.as_mut().unwrap();
+                let w_key = Key::from_encoded(w_cur.key(&mut self.statistics.write).to_vec());
                 let commit_ts = w_key.decode_ts()?;
                 assert!(commit_ts <= ts);
                 let key = w_key.truncate_ts()?;
                 assert_eq!(&key, user_key);
                 self.statistics.write.processed += 1;
-                Write::parse(w_cur.value())?
+                Write::parse(w_cur.value(&mut self.statistics.write))?
             };
 
             match write.write_type {
@@ -536,7 +552,8 @@ impl<S: Snapshot> MvccReader<S> {
                 self.statistics.write.processed += keys.len();
                 return Ok((keys, start));
             }
-            let key = Key::from_encoded(cursor.key().to_vec()).truncate_ts()?;
+            let key =
+                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
             start = Some(key.append_ts(0));
             keys.push(key);
         }
@@ -552,10 +569,13 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = Key::from_encoded(cursor.key().to_vec());
+            let cur_key = Key::from_encoded(cursor.key(&mut self.statistics.data).to_vec());
             let cur_key_without_ts = cur_key.truncate_ts()?;
             if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
-                v.push((cur_key.decode_ts()?, cursor.value().to_vec()));
+                v.push((
+                    cur_key.decode_ts()?,
+                    cursor.value(&mut self.statistics.data).to_vec(),
+                ));
             }
             if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
                 break;

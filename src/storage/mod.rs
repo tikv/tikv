@@ -804,7 +804,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn async_scan_lock(
+    pub fn async_scan_locks(
         &self,
         ctx: Context,
         max_ts: u64,
@@ -875,7 +875,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
@@ -927,7 +927,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
@@ -975,7 +975,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Put(
-                Self::rawkv_cf(cf)?,
+                Self::rawkv_cf(&cf)?,
                 Key::from_encoded(key),
                 value,
             )],
@@ -992,7 +992,7 @@ impl<E: Engine> Storage<E> {
         pairs: Vec<KvPair>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(&cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1026,7 +1026,7 @@ impl<E: Engine> Storage<E> {
         }
         self.engine.async_write(
             &ctx,
-            vec![Modify::Delete(Self::rawkv_cf(cf)?, Key::from_encoded(key))],
+            vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1054,7 +1054,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::DeleteRange(
-                Self::rawkv_cf(cf)?,
+                Self::rawkv_cf(&cf)?,
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
             )],
@@ -1073,7 +1073,7 @@ impl<E: Engine> Storage<E> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(&cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1096,11 +1096,11 @@ impl<E: Engine> Storage<E> {
 
     fn raw_scan(
         snapshot: &E::Snap,
-        cf: String,
+        cf: &str,
         start_key: &Key,
         end_key: Option<Key>,
         limit: usize,
-        stats: &mut Statistics,
+        statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
@@ -1108,20 +1108,21 @@ impl<E: Engine> Storage<E> {
             option.set_upper_bound(end.encoded().clone());
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
-        if !cursor.seek(start_key, &mut stats.data)? {
+        let statistics = statistics.mut_cf_statistics(cf);
+        if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
         while cursor.valid() && pairs.len() < limit {
             pairs.push(Ok((
-                cursor.key().to_owned(),
+                cursor.key(statistics).to_owned(),
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value().to_owned()
+                    cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.next(&mut stats.data);
+            cursor.next(statistics);
         }
         Ok(pairs)
     }
@@ -1153,30 +1154,16 @@ impl<E: Engine> Storage<E> {
                     let mut statistics = Statistics::default();
                     let result = Self::raw_scan(
                         &snapshot,
-                        cf,
+                        &cf,
                         &Key::from_encoded(key),
                         None,
                         limit,
                         &mut statistics,
                         key_only,
-                    ).map_err(Error::from)
-                        .map(|r| {
-                            let mut valid_keys = 0;
-                            let mut bytes_read = 0;
-                            let mut stats = Statistics::default();
-                            r.iter().for_each(|r| {
-                                if let Ok(ref pair) = *r {
-                                    valid_keys += 1;
-                                    bytes_read += pair.0.len() + pair.1.len();
-                                }
-                            });
-                            stats.data.flow_stats.read_keys = valid_keys;
-                            stats.data.flow_stats.read_bytes = bytes_read;
-                            thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                            thread_ctx.collect_key_reads(CMD, valid_keys as u64);
-                            r
-                        });
+                    ).map_err(Error::from);
 
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_key_reads(CMD, statistics.data.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     result
@@ -1192,16 +1179,16 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    fn rawkv_cf(cf: String) -> Result<CfName> {
+    fn rawkv_cf(cf: &str) -> Result<CfName> {
         if cf.is_empty() {
             return Ok(CF_DEFAULT);
         }
         for c in DATA_CFS {
-            if &cf == c {
+            if cf == *c {
                 return Ok(c);
             }
         }
-        Err(Error::InvalidCf(cf))
+        Err(Error::InvalidCf(cf.to_owned()))
     }
 
     fn check_key_ranges(ranges: &[KeyRange]) -> bool {
@@ -1263,29 +1250,18 @@ impl<E: Engine> Storage<E> {
                         };
                         let pairs = Self::raw_scan(
                             &snapshot,
-                            cf.clone(),
+                            &cf,
                             &start_key,
                             end_key,
                             each_limit,
                             &mut statistics,
                             key_only,
                         )?;
-                        let mut valid_keys = 0;
-                        let mut bytes_read = 0;
-                        let mut stats = Statistics::default();
-                        pairs.iter().for_each(|r| {
-                            if let Ok(ref pair) = *r {
-                                valid_keys += 1;
-                                bytes_read += pair.0.len() + pair.1.len();
-                            }
-                        });
-                        stats.data.flow_stats.read_keys = valid_keys;
-                        stats.data.flow_stats.read_bytes = bytes_read;
-                        thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                        thread_ctx.collect_key_reads(CMD, valid_keys as u64);
                         result.extend(pairs.into_iter());
                     }
 
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_key_reads(CMD, statistics.data.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     Ok(result)
@@ -1595,7 +1571,7 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Other(..)))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage.async_get(Context::new(), make_key(b"x"), 1).wait(),
@@ -1609,8 +1585,11 @@ mod tests {
                 .async_scan(Context::new(), make_key(b"x"), 1000, 1, Options::default())
                 .wait(),
         );
-        expect_multi_values(
-            vec![None, None],
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
             storage
                 .async_batch_get(Context::new(), vec![make_key(b"c"), make_key(b"d")], 1)
                 .wait(),

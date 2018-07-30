@@ -96,7 +96,7 @@ impl<S: Snapshot> CFReader<S> {
     /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
     /// has left bound.
     #[inline]
-    pub fn scan_lock<F>(
+    pub fn scan_locks<F>(
         &mut self,
         predicate: F,
         start_key: Option<&Key>,
@@ -107,7 +107,7 @@ impl<S: Snapshot> CFReader<S> {
     {
         self.ensure_lock_cursor()?;
         let lock_cursor = self.lock_cursor.as_mut().unwrap();
-        super::util::scan_lock(
+        super::util::scan_locks(
             lock_cursor,
             predicate,
             start_key,
