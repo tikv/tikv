@@ -24,14 +24,16 @@ pub fn load_lock<S>(snapshot: &S, key: &Key, statistics: &mut Statistics) -> Res
 where
     S: Snapshot,
 {
-    let res = match snapshot.get_cf(CF_LOCK, key)? {
-        Some(v) => Some(Lock::parse(&v)?),
-        None => None,
-    };
-    if res.is_some() {
+    let lock_value = snapshot.get_cf(CF_LOCK, key)?;
+    if let Some(ref lock_value) = lock_value {
+        statistics.lock.get += 1;
+        statistics.lock.flow_stats.read_keys += 1;
+        statistics.lock.flow_stats.read_bytes += key.encoded().len() + lock_value.len();
         statistics.lock.processed += 1;
+        Ok(Some(Lock::parse(lock_value)?))
+    } else {
+        Ok(None)
     }
-    Ok(res)
 }
 
 /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to see whether
