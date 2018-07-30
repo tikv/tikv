@@ -122,6 +122,7 @@ impl<S: Snapshot> CFReader<S> {
     /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
     /// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
     /// there is no more keys.
+    #[inline]
     pub fn scan_keys(
         &mut self,
         start_key: Option<&Key>,

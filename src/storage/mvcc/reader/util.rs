@@ -87,6 +87,8 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
 /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
 /// has left bound.
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 pub fn scan_locks<I, F>(
     lock_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     predicate: F,
@@ -172,6 +174,8 @@ where
 /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
 /// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
 /// there is no more keys.
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 ///
 /// # Panics
 ///
