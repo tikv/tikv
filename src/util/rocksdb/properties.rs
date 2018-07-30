@@ -39,6 +39,7 @@ const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
+const PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 const PROP_RANGE_INDEX: &str = "tikv.range_index";
 
 #[derive(Clone, Debug, Default)]
@@ -468,29 +469,29 @@ impl DecodeProperties for UserCollectedProperties {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum OffsetKindInRange {
+pub enum RangeOffsetKind {
     Size,
     Keys,
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct OffsetsInRange {
+pub struct RangeOffsets {
     size: u64,
     keys: u64,
 }
 
-impl OffsetsInRange {
-    fn get(&self, kind: OffsetKindInRange) -> u64 {
+impl RangeOffsets {
+    fn get(&self, kind: RangeOffsetKind) -> u64 {
         match kind {
-            OffsetKindInRange::Keys => self.keys,
-            OffsetKindInRange::Size => self.size,
+            RangeOffsetKind::Keys => self.keys,
+            RangeOffsetKind::Size => self.size,
         }
     }
 }
 
 #[derive(Debug, Default)]
 pub struct RangeProperties {
-    pub offsets: BTreeMap<Vec<u8>, OffsetsInRange>,
+    pub offsets: BTreeMap<Vec<u8>, RangeOffsets>,
 }
 
 impl RangeProperties {
@@ -510,7 +511,7 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res)=>return Ok(res),
-            Err(e)=>debug!("old_version:can not decode to RangeProperties:{:?}, try to decode from SizeProperties",e),
+            Err(e)=>debug!("old_version:can not decode to RangeProperties err:{:?}, try to decode to SizeProperties",e),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }
@@ -522,7 +523,7 @@ impl RangeProperties {
             let klen = number::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
-            let mut offsets = OffsetsInRange::default();
+            let mut offsets = RangeOffsets::default();
             offsets.size = number::decode_u64(&mut buf)?;
             offsets.keys = number::decode_u64(&mut buf)?;
             res.offsets.insert(k, offsets);
@@ -531,16 +532,16 @@ impl RangeProperties {
     }
 
     pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(OffsetKindInRange::Size, start, end)
+        self.get_approximate_distance_in_range(RangeOffsetKind::Size, start, end)
     }
 
     pub fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(OffsetKindInRange::Keys, start, end)
+        self.get_approximate_distance_in_range(RangeOffsetKind::Keys, start, end)
     }
 
     fn get_approximate_distance_in_range(
         &self,
-        kind: OffsetKindInRange,
+        kind: RangeOffsetKind,
         start: &[u8],
         end: &[u8],
     ) -> u64 {
@@ -581,7 +582,7 @@ impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         let mut res = RangeProperties::default();
         for (key, size_handle) in p.index_handles.0 {
-            let mut range = OffsetsInRange::default();
+            let mut range = RangeOffsets::default();
             range.size = size_handle.offset;
             res.offsets.insert(key, range);
         }
@@ -592,9 +593,9 @@ impl From<SizeProperties> for RangeProperties {
 #[derive(Default)]
 pub struct RangePropertiesCollector {
     props: RangeProperties,
-    last_offsets: OffsetsInRange,
+    last_offsets: RangeOffsets,
     last_key: Vec<u8>,
-    cur_offsets: OffsetsInRange,
+    cur_offsets: RangeOffsets,
 }
 
 impl RangePropertiesCollector {
@@ -624,7 +625,10 @@ impl TablePropertiesCollector for RangePropertiesCollector {
         let size = key.len() + value.len();
         self.cur_offsets.size += size as u64;
         // Add the start key for convenience.
-        if self.last_key.is_empty() || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE {
+        if self.last_key.is_empty()
+            || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE
+            || self.keys_in_last_range() >= PROP_KEYS_INDEX_DISTANCE
+        {
             self.insert_new_point(key.to_owned());
         }
         self.last_key.clear();
@@ -899,7 +903,7 @@ mod tests {
         assert_eq!(i.size, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
         let k = &handles[b"k".as_ref()];
         assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
-        let empty = OffsetsInRange::default();
+        let empty = RangeOffsets::default();
         let cases = [
             (" ", "z", k, &empty),
             (" ", " ", k, k),
