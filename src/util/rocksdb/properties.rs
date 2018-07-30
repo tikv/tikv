@@ -38,9 +38,9 @@ const PROP_ROWS_INDEX: &str = "tikv.rows_index";
 const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
+const PROP_RANGE_INDEX: &str = "tikv.range_index";
 const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 const PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
-const PROP_RANGE_INDEX: &str = "tikv.range_index";
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
@@ -511,7 +511,7 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
-            Err(e) => debug!("old_version:decode to RangeProperties with err:{:?}, try to decode to SizeProperties",e),
+            Err(e) => debug!("old_version:decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties", e),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }
@@ -851,29 +851,38 @@ mod tests {
     #[test]
     fn test_range_properties() {
         let cases = [
-            ("a", 0),
+            ("a", 0, 1),
             // handle "a": size(size = 1, offset = 1),keys(1,1)
-            ("b", PROP_SIZE_INDEX_DISTANCE / 8),
-            ("c", PROP_SIZE_INDEX_DISTANCE / 4),
-            ("d", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("e", PROP_SIZE_INDEX_DISTANCE / 8),
+            ("b", PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            ("c", PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            ("d", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("e", PROP_SIZE_INDEX_DISTANCE / 8, 1),
             // handle "e": size(size = DISTANCE + 4, offset = DISTANCE + 5),keys(4,5)
-            ("f", PROP_SIZE_INDEX_DISTANCE / 4),
-            ("g", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("h", PROP_SIZE_INDEX_DISTANCE / 8),
-            ("i", PROP_SIZE_INDEX_DISTANCE / 4),
+            ("f", PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            ("g", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("h", PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            ("i", PROP_SIZE_INDEX_DISTANCE / 4, 1),
             // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
-            ("j", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("k", PROP_SIZE_INDEX_DISTANCE),
+            ("j", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("k", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
+            ("l", 0, PROP_KEYS_INDEX_DISTANCE / 2),
+            ("m", 0, PROP_KEYS_INDEX_DISTANCE / 2),
+            //handle "m": keys = PROP_KEYS_INDEX_DISTANCE,offset = 11+PROP_KEYS_INDEX_DISTANCE
+            ("n", 1, PROP_KEYS_INDEX_DISTANCE),
+            //handle "n": keys = PROP_KEYS_INDEX_DISTANCE, offset = 11+2*PROP_KEYS_INDEX_DISTANCE
+            ("o", 1, 1),
+            // handle　"o": keys = 1, offset = 12 + 2*PROP_KEYS_INDEX_DISTANCE
         ];
-        // handle "k": size(size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 11),keys(2,11)
 
         let mut collector = RangePropertiesCollector::default();
-        for &(k, vlen) in &cases {
+        for &(k, vlen, count) in &cases {
             let v = vec![0; vlen as usize];
-            collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+            for _ in 0..count {
+                collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+            }
         }
-        for &(k, vlen) in &cases {
+        for &(k, vlen, _) in &cases {
             let v = vec![0; vlen as usize];
             collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
         }
@@ -886,15 +895,13 @@ mod tests {
             cases[cases.len() - 1].0.as_bytes()
         );
         assert_eq!(
-            props.get_approximate_size_in_range(b"", b"z"),
-            PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11
+            props.get_approximate_size_in_range(b"", b"k"),
+            PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
         );
-        assert_eq!(
-            props.get_approximate_keys_in_range(b"", b"z"),
-            cases.len() as u64
-        );
+        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11 as u64);
+
         let handles = &props.offsets;
-        assert_eq!(handles.len(), 4);
+        assert_eq!(handles.len(), 7);
         let a = &handles[b"a".as_ref()];
         assert_eq!(a.size, 1);
         let e = &handles[b"e".as_ref()];
@@ -902,12 +909,18 @@ mod tests {
         let i = &handles[b"i".as_ref()];
         assert_eq!(i.size, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
         let k = &handles[b"k".as_ref()];
-        assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
+        assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11);
+        let m = &handles[b"m".as_ref()];
+        assert_eq!(m.keys, 11 + PROP_KEYS_INDEX_DISTANCE);
+        let n = &handles[b"n".as_ref()];
+        assert_eq!(n.keys, 11 + 2 * PROP_KEYS_INDEX_DISTANCE);
+        let o = &handles[b"o".as_ref()];
+        assert_eq!(o.keys, 12 + 2 * PROP_KEYS_INDEX_DISTANCE);
         let empty = RangeOffsets::default();
         let cases = [
-            (" ", "z", k, &empty),
-            (" ", " ", k, k),
-            ("z", "z", k, k),
+            (" ", "k", k, &empty),
+            (" ", " ", &empty, &empty),
+            ("k", "k", k, k),
             ("a", "k", k, a),
             ("a", "i", i, a),
             ("e", "h", i, e),

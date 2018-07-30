@@ -338,13 +338,13 @@ pub fn get_region_approximate_keys_cf(
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
-    let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
-        size += props.get_approximate_keys_in_range(&start, &end);
+        keys += props.get_approximate_keys_in_range(&start, &end);
     }
-    Ok(size)
+    Ok(keys)
 }
 
 /// Get the approxmiate middle key of the region. If we suppose the region
@@ -404,8 +404,6 @@ pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u
             e
         ),
     }
-
-    debug!("old_version:get keys from RangeProperties failed,get from MvccProperties");
 
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);
