@@ -1471,9 +1471,9 @@ mod tests {
         }
     }
 
-    fn expect_ok_callback<T>(done: Sender<i32>, id: i32) -> Callback<T> {
+    fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
-            assert!(x.is_ok());
+            x.unwrap();
             done.send(id).unwrap();
         })
     }
@@ -2861,5 +2861,155 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        storage
+            .async_scan_lock(
+                Context::new(),
+                101,
+                b"b".to_vec(),
+                0,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                        lock_y.clone(),
+                        lock_z.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_resolve_lock() {
+        use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
+
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        // These locks (transaction ts=99) are not going to be resolved.
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((make_key(b"a"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"b"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                99,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let (lock_a, lock_b, lock_c) = (
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(99);
+                lock.set_key(b"a".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(99);
+                lock.set_key(b"b".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(99);
+                lock.set_key(b"c".to_vec());
+                lock
+            },
+        );
+
+        // We should be able to resolve all locks for transaction ts=100 when there are this
+        // many locks.
+        let scanned_locks_coll = vec![
+            1,
+            RESOLVE_LOCK_BATCH_SIZE,
+            RESOLVE_LOCK_BATCH_SIZE - 1,
+            RESOLVE_LOCK_BATCH_SIZE + 1,
+            RESOLVE_LOCK_BATCH_SIZE * 2,
+            RESOLVE_LOCK_BATCH_SIZE * 2 - 1,
+            RESOLVE_LOCK_BATCH_SIZE * 2 + 1,
+        ];
+
+        let is_rollback_coll = vec![
+            false, // commit
+            true,  // rollback
+        ];
+        let mut ts = 100;
+
+        for scanned_locks in scanned_locks_coll {
+            for is_rollback in &is_rollback_coll {
+                let mut mutations = vec![];
+                for i in 0..scanned_locks {
+                    mutations.push(Mutation::Put((
+                        make_key(format!("x{:08}", i).as_bytes()),
+                        b"foo".to_vec(),
+                    )));
+                }
+
+                storage
+                    .async_prewrite(
+                        Context::new(),
+                        mutations,
+                        b"x".to_vec(),
+                        ts,
+                        Options::default(),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let mut txn_status = HashMap::default();
+                txn_status.insert(
+                    ts,
+                    if *is_rollback {
+                        0 // rollback
+                    } else {
+                        ts + 5 // commit, commit_ts = start_ts + 5
+                    },
+                );
+                storage
+                    .async_resolve_lock(
+                        Context::new(),
+                        txn_status,
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                // All locks should be resolved except for a, b and c.
+                storage
+                    .async_scan_lock(
+                        Context::new(),
+                        ts,
+                        vec![],
+                        0,
+                        expect_value_callback(
+                            tx.clone(),
+                            0,
+                            vec![lock_a.clone(), lock_b.clone(), lock_c.clone()],
+                        ),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                ts += 10;
+            }
+        }
     }
 }
