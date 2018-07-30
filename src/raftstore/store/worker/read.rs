@@ -12,8 +12,6 @@
 // limitations under the License.
 
 use std::fmt::{self, Display, Formatter};
-use std::io;
-use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,7 +34,7 @@ use util::collections::HashMap;
 use util::time::duration_to_sec;
 use util::timer::Timer;
 use util::transport::{NotifyError, Sender};
-use util::worker::{Runnable, RunnableWithTimer, Worker};
+use util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
@@ -264,10 +262,10 @@ impl LocalReader<mio::Sender<StoreMsg>> {
         }
     }
 
-    pub fn start(self, worker: &mut Worker<Task>) -> StdResult<(), io::Error> {
+    pub fn new_timer() -> Timer<()> {
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-        worker.start_with_timer(self, timer)
+        timer
     }
 }
 

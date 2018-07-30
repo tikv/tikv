@@ -181,7 +181,7 @@ impl Default for Config {
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
-            local_read_batch_size: 256,
+            local_read_batch_size: 1024,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
