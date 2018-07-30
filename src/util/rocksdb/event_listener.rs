@@ -129,7 +129,7 @@ impl rocksdb::EventListener for CompactionListener {
         let mut output_props = Vec::with_capacity(info.output_file_count());
         let iter = info.table_properties().into_iter();
         for (file, properties) in iter {
-            if let Ok(prop) = RangeProperties::try_decode(properties.user_collected_properties()) {
+            if let Ok(prop) = RangeProperties::decode(properties.user_collected_properties()) {
                 if input_files.contains(file) {
                     input_props.push(prop);
                 } else if output_files.contains(file) {

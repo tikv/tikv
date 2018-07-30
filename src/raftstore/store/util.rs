@@ -323,7 +323,7 @@ pub fn get_region_approximate_size_cf(
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
-        let props = RangeProperties::try_decode(v.user_collected_properties())?;
+        let props = RangeProperties::decode(v.user_collected_properties())?;
         size += props.get_approximate_size_in_range(&start, &end);
     }
     Ok(size)
@@ -366,10 +366,9 @@ pub fn get_region_approximate_middle_cf(
 
     let mut keys = Vec::new();
     for (_, v) in &*collection {
-        let props = RangeProperties::try_decode(v.user_collected_properties())?;
+        let props = RangeProperties::decode(v.user_collected_properties())?;
         keys.extend(
             props
-                .offset_handles
                 .offsets
                 .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
                 .map(|(k, _)| k.to_owned()),
