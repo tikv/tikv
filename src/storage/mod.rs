@@ -1443,7 +1443,7 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
     use util::config::ReadableSize;
     use util::worker::FutureWorker;
@@ -1497,6 +1497,18 @@ mod tests {
                 },
                 x,
             );
+            done.send(id).unwrap();
+        })
+    }
+
+    fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
+        done: Sender<i32>,
+        id: i32,
+        value: T,
+    ) -> Callback<T> {
+        Box::new(move |x: Result<T>| {
+            assert!(x.is_ok());
+            assert_eq!(x.unwrap(), value);
             done.send(id).unwrap();
         })
     }
@@ -2661,4 +2673,193 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_scan_lock() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((make_key(b"x"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"y"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"z"), b"foo".to_vec())),
+                ],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((make_key(b"a"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"b"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                101,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(101);
+                lock.set_key(b"a".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(101);
+                lock.set_key(b"b".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(101);
+                lock.set_key(b"c".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(100);
+                lock.set_key(b"x".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(100);
+                lock.set_key(b"y".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(100);
+                lock.set_key(b"z".to_vec());
+                lock
+            },
+        );
+        storage
+            .async_scan_lock(
+                Context::new(),
+                99,
+                vec![],
+                10,
+                expect_value_callback(tx.clone(), 0, vec![]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_lock(
+                Context::new(),
+                100,
+                vec![],
+                10,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_lock(
+                Context::new(),
+                100,
+                b"a".to_vec(),
+                10,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_lock(
+                Context::new(),
+                100,
+                b"y".to_vec(),
+                10,
+                expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_lock(
+                Context::new(),
+                101,
+                vec![],
+                10,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_a.clone(),
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                        lock_y.clone(),
+                        lock_z.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_lock(
+                Context::new(),
+                101,
+                vec![],
+                4,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_a.clone(),
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_lock(
+                Context::new(),
+                101,
+                b"b".to_vec(),
+                4,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                        lock_y.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
 }
