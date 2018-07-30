@@ -26,6 +26,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::storage::CF_RAFT;
+use tikv::util::config::ReadableDuration;
 use tikv::util::HandyRwLock;
 
 use futures::Future;
@@ -797,6 +798,39 @@ fn test_learner_with_slow_snapshot() {
     pd_client.transfer_leader(r1, new_peer(3, 3));
     pd_client.region_leader_must_be(r1, new_peer(3, 3));
     assert!(count.load(Ordering::SeqCst) > 0);
+}
+
+fn test_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+    ::util::ci_setup();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // replace peer 3 with peer 4 while peer 3 is isoluted.
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    pd_client.must_add_peer(r1, new_peer(4, 4));
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+
+    thread::sleep(Duration::from_secs(1));
+
+    // After the peer gets back to the cluster, it knows it's removed.
+    cluster.clear_send_filters();
+    must_get_none(&cluster.get_engine(3), b"k1");
+}
+
+#[test]
+fn test_node_stale_peer() {
+    let mut cluster = new_node_cluster(0, 4);
+    // To avoid stale peers know they are stale from PD.
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(2);
+    test_stale_peer(&mut cluster);
 }
 
 fn call_conf_change<T>(
