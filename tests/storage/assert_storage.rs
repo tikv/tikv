@@ -33,7 +33,7 @@ pub struct AssertionStorage<E: Engine> {
 
 impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future–worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -66,7 +66,7 @@ impl AssertionStorage<SimulateEngine> {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future–worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || storage::ReadPoolContext::new(pd_worker.scheduler())
         });
