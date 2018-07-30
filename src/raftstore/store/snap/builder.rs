@@ -167,6 +167,7 @@ impl SnapshotBase {
         }
 
         snapshot_meta.write_to_writer(&mut self.tmp_meta_file)?;
+        self.tmp_meta_file.sync_all()?;
         let meta_path = gen_meta_file_path(&self.dir, self.for_send, self.key);
         fs::rename(&self.tmp_meta_path, &meta_path)?;
         self.success = true;
@@ -334,7 +335,8 @@ impl SnapshotReceiver {
     // Flush the give cf file. Only used for receive snapshots.
     fn flush_cf_file(cf_file: &mut CfFile) -> io::Result<()> {
         match cf_file.tmp_cf_file {
-            Either::Left(ref mut f) => f.flush(),
+            // To avoid the nvme delay-alloc issue, sync for cf files.
+            Either::Left(ref mut f) => f.sync_all(),
             _ => unreachable!(),
         }
     }
