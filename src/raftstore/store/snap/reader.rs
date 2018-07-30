@@ -195,6 +195,7 @@ impl Drop for SnapshotApplyer {
             if cf.get_size() == 0 || plain_file_used(cf.get_cf()) {
                 continue;
             }
+
             let (dir, key) = (&self.inner.dir, self.inner.key);
             let clone_path = gen_cf_clone_file_path(dir, false, key, cf.get_cf());
             delete_file_if_exist(&clone_path);

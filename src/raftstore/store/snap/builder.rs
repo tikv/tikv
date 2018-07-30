@@ -236,7 +236,7 @@ impl SnapshotGenerator {
             let file = if plain_file_used(cf) {
                 Either::Left(open_options.open(&path)?)
             } else {
-                Either::Right(get_sst_file_writer(&db_snap, cf, &path)?)
+                Either::Right(gen_sst_file_writer(&db_snap, cf, &path)?)
             };
             inner.tmp_cf_files.push(CfFile::new(cf, path, file));
 
@@ -262,7 +262,7 @@ impl SnapshotGenerator {
         info!(
             "[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
             region.get_id(),
-            get_display_path(&inner.dir, inner.for_send, inner.key),
+            gen_display_path(&inner.dir, inner.for_send, inner.key),
             total_size,
             snap_key_count,
             t.elapsed(),
@@ -418,7 +418,7 @@ fn gen_cf_tmp_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> Pa
     cf_path
 }
 
-fn get_display_path(dir: &str, for_send: bool, key: SnapKey) -> String {
+fn gen_display_path(dir: &str, for_send: bool, key: SnapKey) -> String {
     let prefix = if for_send {
         SNAP_GEN_PREFIX
     } else {
@@ -428,7 +428,7 @@ fn get_display_path(dir: &str, for_send: bool, key: SnapKey) -> String {
     format!("{}/{}_{}_{}{}", dir, prefix, key, cf_names, SST_FILE_SUFFIX)
 }
 
-fn get_sst_file_writer(
+fn gen_sst_file_writer(
     db_snap: &DbSnapshot,
     cf: &str,
     tmp_cf_path: &PathBuf,
