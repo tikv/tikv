@@ -77,7 +77,6 @@ crossbeam = "0.2"
 fxhash = "0.2"
 derive_more = "0.11.0"
 num = "0.2.0"
-build_info = { path = "components/build_info" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -110,8 +109,7 @@ optional = true
 
 [workspace]
 members = [
-  "fuzz",
-  "components/build_info"
+  "fuzz"
 ]
 
 [profile.dev]

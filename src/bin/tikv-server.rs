@@ -25,7 +25,6 @@ extern crate libc;
 extern crate log;
 #[macro_use(slog_o, slog_kv)]
 extern crate slog;
-extern crate build_info;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;

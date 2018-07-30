@@ -27,6 +27,11 @@ BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
+export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
+export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD)
+export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
+export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version)"
+
 default: release
 
 .PHONY: all
@@ -50,7 +55,7 @@ build:
 	cargo build --features "${ENABLE_FEATURES}"
 
 run:
-	cargo run --features "${ENABLE_FEATURES}"
+	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
 	@cargo build --release --features "${ENABLE_FEATURES}"

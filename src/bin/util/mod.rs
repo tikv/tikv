@@ -4,11 +4,8 @@ pub(crate) mod profiling;
 pub(crate) mod setup;
 pub(crate) mod signal_handler;
 
-use build_info::build_info;
-
 /// Returns the tikv version information.
 pub fn tikv_version_info() -> String {
-    let (hash, branch, date, rustc) = build_info!();
     format!(
         "\nRelease Version:   {}\
          \nGit Commit Hash:   {}\
@@ -16,10 +13,10 @@ pub fn tikv_version_info() -> String {
          \nUTC Build Time:    {}\
          \nRust Version:      {}",
         env!("CARGO_PKG_VERSION"),
-        hash,
-        branch,
-        date,
-        rustc,
+        env!("TIKV_BUILD_TIME"),
+        env!("TIKV_BUILD_GIT_HASH"),
+        env!("TIKV_BUILD_GIT_BRANCH"),
+        env!("TIKV_BUILD_RUSTC_VERSION"),
     )
 }
 
