@@ -1514,7 +1514,7 @@ mod tests {
     }
 
     fn new_read_pool() -> ReadPool<ReadPoolContext> {
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future–worker");
         ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         })
