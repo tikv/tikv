@@ -283,6 +283,8 @@ impl SnapManager {
             // The snapshot is just registered as receiving.
             meta_and_things = get_meta_and_things(entry);
             just_received = true;
+            // Check checksum again before apply.
+            snapshot_load(&self.core.dir, false, key)?;
         }
         if !just_received {
             let meta_path = gen_meta_file_path(&self.core.dir, false, key);
