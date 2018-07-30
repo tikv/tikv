@@ -209,7 +209,10 @@ impl RecvSnapContext {
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("{} saving received snapshot file", key);
-            file.save()?;
+            if let Err(e) = file.save() {
+                error!("{} saveing received snapshot fail: {}", key, e);
+                return Err(Error::from(e));
+            }
         }
         info!("{} sending raft snapshot to raftstore", key);
         if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
@@ -235,6 +238,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 Err(e) => return box future::err(e),
             };
             if context.file.is_none() {
+                info!("snap {} is loaded from disk, skip receiving", context.key);
                 return box future::result(context.finish(raft_router));
             }
 

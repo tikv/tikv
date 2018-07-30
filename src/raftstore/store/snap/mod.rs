@@ -180,7 +180,7 @@ impl SnapManager {
         match snapshot_load(&self.core.dir, true, key) {
             Ok(m) => meta = m,
             Err(e) => {
-                error!("{} build_sanpshot fail when load: {}", key, e);
+                error!("{} build_sanpshot load fail: {}", key, e);
                 self.delete_snapshot(true, key);
             }
         };
@@ -252,7 +252,7 @@ impl SnapManager {
             }
             Ok(None) => {}
             Err(e) => {
-                error!("{} get_snapshot_receiver fail when load: {}", key, e);
+                error!("{} get_snapshot_receiver load fail: {}", key, e);
                 self.delete_snapshot(false, key);
             }
         };

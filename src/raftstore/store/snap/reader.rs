@@ -321,11 +321,13 @@ mod tests {
         assert_eq!(s2.read_to_end(&mut buf).unwrap(), 1);
         assert_eq!(&buf[0], &buf[1]);
 
+        // Used times should be updated after the sender is dropped.
         drop(s1);
         assert_eq!(used_times.load(Ordering::SeqCst), 1);
         drop(s2);
         assert_eq!(used_times.load(Ordering::SeqCst), 2);
 
+        // Read should fail if the snapshot is corrupted.
         let mut s3 = get_sender();
         let p = gen_cf_file_path(&dir, true, key, CF_LOCK);
         assert!(delete_file_if_exist(&p));
