@@ -616,6 +616,15 @@ impl RemoteLease {
     }
 }
 
+// Contants used in `timespec_to_u64` and `u64_to_timespec`.
+const NSEC_PER_MSEC: i32 = 1_000_000;
+const TIMESPEC_NSEC_SHIFT: usize = 32 - NSEC_PER_MSEC.leading_zeros() as usize;
+
+const MSEC_PER_SEC: i64 = 1_000;
+const TIMESPEC_SEC_SHIFT: usize = 64 - MSEC_PER_SEC.leading_zeros() as usize;
+
+const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
+
 /// Convert Timespec to u64. It's millisecond precision and
 /// covers a range of about 571232829 years in total.
 ///
@@ -641,14 +650,6 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
     let sec = ts.sec << TIMESPEC_SEC_SHIFT;
     sec as u64 | ms as u64
 }
-
-const NSEC_PER_MSEC: i32 = 1_000_000;
-const TIMESPEC_NSEC_SHIFT: usize = 32 - NSEC_PER_MSEC.leading_zeros() as usize;
-
-const MSEC_PER_SEC: i64 = 1_000;
-const TIMESPEC_SEC_SHIFT: usize = 64 - MSEC_PER_SEC.leading_zeros() as usize;
-
-const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
 
 /// Convert Timespec to u64.
 ///
@@ -778,7 +779,7 @@ mod tests {
 
         let now = monotonic_raw_now();
         let next_expired_time = lease.next_expired_time(now);
-        assert_eq!(next_expired_time, next_expired_time);
+        assert_eq!(now + duration, next_expired_time);
 
         // Transit to the Valid state.
         lease.renew(now);

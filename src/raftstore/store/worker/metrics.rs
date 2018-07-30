@@ -59,7 +59,7 @@ lazy_static! {
     ).unwrap();
     pub static ref LOCAL_READ_REJECT: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_local_read_reject_total",
-        "Total number of rejection of the local read thread.",
+        "Total number of rejections from the local read thread.",
         &["reason"]
     ).unwrap();
     pub static ref LOCAL_READ_WAIT_DURATION: Histogram = register_histogram!(
