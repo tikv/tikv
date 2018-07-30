@@ -33,10 +33,8 @@ default: release
 
 all: format build test
 
-pre-clippy:
-	@if [ "`cat clippy-version`" != "`cargo clippy --version || echo 0`" ]; then\
-		cargo install clippy --version `cat clippy-version` --force;\
-	fi
+pre-clippy: unset-override
+	@rustup component add clippy-preview
 
 clippy: pre-clippy
 	@cargo clippy --bins --examples --tests --benches -- \
@@ -90,11 +88,12 @@ bench:
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "${ENABLE_FEATURES}" -- --nocapture && \
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
-pre-format:
+unset-override:
 	@# unset first in case of any previous overrides
 	@if rustup override list | grep `pwd` > /dev/null; then rustup override unset; fi
-	@rustup 2>/dev/null || true
-	@rustup component list | grep 'rustfmt-preview.*installed' &>/dev/null || rustup component add rustfmt-preview
+
+pre-format: unset-override
+	@rustup component add rustfmt-preview
 
 format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
