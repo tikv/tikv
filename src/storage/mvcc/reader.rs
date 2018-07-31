@@ -564,7 +564,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn scan_lock<F>(
+    pub fn scan_locks<F>(
         &mut self,
         start: Option<&Key>,
         filter: F,

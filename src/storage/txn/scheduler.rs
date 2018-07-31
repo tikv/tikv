@@ -510,7 +510,7 @@ fn process_read<E: Engine>(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_lock(start_key.as_ref(), |lock| lock.ts <= max_ts, limit)
+                .scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit)
                 .map_err(Error::from)
                 .and_then(|kv_pairs| {
                     let mut locks = Vec::with_capacity(kv_pairs.len());
@@ -536,7 +536,7 @@ fn process_read<E: Engine>(
         Command::ResolveLock {
             ref ctx,
             ref mut txn_status,
-            ref mut scan_key,
+            ref scan_key,
             ..
         } => {
             let mut reader = MvccReader::new(
@@ -548,7 +548,7 @@ fn process_read<E: Engine>(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_lock(
+                .scan_locks(
                     scan_key.as_ref(),
                     |lock| txn_status.contains_key(&lock.ts),
                     RESOLVE_LOCK_BATCH_SIZE,
