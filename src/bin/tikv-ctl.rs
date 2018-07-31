@@ -28,15 +28,16 @@ use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::iter::FromIterator;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
@@ -104,18 +105,19 @@ fn new_debug_executor(
                 Arc::new(raft_db),
             ))) as Box<DebugExecutor>
         }
-        (Some(remote), None) => {
-            let env = Arc::new(Environment::new(1));
-            let cb = ChannelBuilder::new(env)
-                .max_receive_message_len(1 << 30) // 1G.
-                .max_send_message_len(1 << 30);
-
-            let channel = mgr.connect(cb, remote);
-            let client = DebugClient::new(channel);
-            Box::new(client) as Box<DebugExecutor>
-        }
+        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<DebugExecutor>,
         _ => unreachable!(),
     }
+}
+
+fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
+    let env = Arc::new(Environment::new(1));
+    let cb = ChannelBuilder::new(env)
+            .max_receive_message_len(1 << 30) // 1G.
+            .max_send_message_len(1 << 30);
+
+    let channel = mgr.connect(cb, host);
+    DebugClient::new(channel)
 }
 
 trait DebugExecutor {
@@ -1477,6 +1479,46 @@ fn main() {
                         .takes_value(true)
                         .help("the key to split it, in unecoded escaped format")
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("fail")
+                .about("injecting failures to TiKV and recovery")
+                .subcommand(
+                    SubCommand::with_name("inject")
+                    .about("Inject failures")
+                    .arg(
+                        Arg::with_name("args")
+                            .multiple(true)
+                            .takes_value(true)
+                            .help(
+                                "Inject fail point and actions pairs.\
+                                E.g. tikv-fail inject fail::a=off fail::b=panic",
+                            ),
+                    )
+                    .arg(
+                        Arg::with_name("file")
+                            .short("f")
+                            .takes_value(true)
+                            .help("Read a file of fail points and actions to inject"),
+                    ),
+                )
+                .subcommand(
+                    SubCommand::with_name("recover")
+                        .about("Recover failures")
+                        .arg(
+                            Arg::with_name("args")
+                                .multiple(true)
+                                .takes_value(true)
+                                .help("Recover fail points. Eg. tikv-fail recover fail::a fail::b"),
+                        )
+                        .arg(
+                            Arg::with_name("file")
+                                .short("f")
+                                .takes_value(true)
+                                .help("Recover from a file of fail points"),
+                        ),
+                )
+                .subcommand(SubCommand::with_name("list").about("List all fail points"))
         );
 
     let matches = app.clone().get_matches();
@@ -1678,6 +1720,58 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("fail") {
+        if host.is_none() {
+            eprintln!("command fail requires host");
+            process::exit(-1);
+        }
+        let client = new_debug_client(host.unwrap(), mgr);
+        if let Some(matches) = matches.subcommand_matches("inject") {
+            let mut list = matches
+                .value_of("file")
+                .map_or_else(Vec::new, read_fail_file);
+            if let Some(ps) = matches.values_of("args") {
+                for pair in ps {
+                    let mut parts = pair.split('=');
+                    list.push((
+                        parts.next().unwrap().to_owned(),
+                        parts.next().unwrap_or("").to_owned(),
+                    ))
+                }
+            }
+            for (name, actions) in list {
+                if actions.is_empty() {
+                    println!("No action for fail point {}", name);
+                    continue;
+                }
+                let mut inject_req = InjectFailPointRequest::new();
+                inject_req.set_name(name);
+                inject_req.set_actions(actions);
+
+                let option = CallOption::default().timeout(Duration::from_secs(10));
+                client.inject_fail_point_opt(&inject_req, option).unwrap();
+            }
+        } else if let Some(matches) = matches.subcommand_matches("recover") {
+            let mut list = matches
+                .value_of("file")
+                .map_or_else(Vec::new, read_fail_file);
+            if let Some(fps) = matches.values_of("args") {
+                for fp in fps {
+                    list.push((fp.to_owned(), "".to_owned()))
+                }
+            }
+            for (name, _) in list {
+                let mut recover_req = RecoverFailPointRequest::new();
+                recover_req.set_name(name);
+                let option = CallOption::default().timeout(Duration::from_secs(10));
+                client.recover_fail_point_opt(&recover_req, option).unwrap();
+            }
+        } else if matches.is_present("list") {
+            let list_req = ListFailPointsRequest::new();
+            let option = CallOption::default().timeout(Duration::from_secs(10));
+            let resp = client.list_fail_points_opt(&list_req, option).unwrap();
+            println!("{:?}", resp.get_entries());
+        }
     } else {
         let _ = app.print_help();
     }
@@ -1867,4 +1961,20 @@ fn compact_whole_cluster(
     for h in handles {
         h.join().unwrap();
     }
+}
+
+fn read_fail_file(path: &str) -> Vec<(String, String)> {
+    let f = File::open(path).unwrap();
+    let f = BufReader::new(f);
+
+    let mut list = vec![];
+    for line in f.lines() {
+        let line = line.unwrap();
+        let mut parts = line.split('=');
+        list.push((
+            parts.next().unwrap().to_owned(),
+            parts.next().unwrap_or("").to_owned(),
+        ))
+    }
+    list
 }
