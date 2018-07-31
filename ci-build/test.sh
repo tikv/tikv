@@ -35,14 +35,14 @@ export RUSTFLAGS=-Dwarnings
 make clippy || panic "\e[35mplease fix the errors!!!\e[0m"
 
 if [[ "$SKIP_TESTS" != "true" ]]; then
-    make test 2>&1 | tee tests.out
+    make test 2>&1 | tee target/tests.out
 else
     EXTRA_CARGO_ARGS="--no-run" make test
     exit $?
 fi
 status=$?
 git diff-index --quiet HEAD -- || echo "\e[35mplease run tests before creating a pr!!!\e[0m"
-for case in `cat tests.out | python -c "import sys
+for case in `cat target/tests.out | python -c "import sys
 import re
 p = re.compile(\"thread '([^']+)' panicked at\")
 cases = set()
@@ -61,9 +61,9 @@ print ('\n'.join(cases))
 done
 
 rm $LOG_FILE || true
-# don't remove the tests.out, coverage counts on it.
+# don't remove the target/tests.out, coverage counts on it.
 if [[ "$TRAVIS" != "true" ]]; then
-    rm tests.out || true
+    rm target/tests.out || true
 fi
 
 exit $status

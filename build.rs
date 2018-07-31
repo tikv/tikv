@@ -31,6 +31,12 @@ fn main() {
 // build_info returns a string of commit hash and utc time.
 // TODO: use serde.
 fn build_info() -> String {
+    // Re-run if they changes. See more: man 1 git-rev-parse
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/refs");
+    println!("cargo:rerun-if-changed=.git/refs/tags");
+    println!("cargo:rerun-if-changed=.git/refs/heads");
+
     // explicit separates outputs by '\n'.
     format!(
         "{}\n{}\n{}\n{}",
