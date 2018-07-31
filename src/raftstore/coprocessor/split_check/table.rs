@@ -212,6 +212,7 @@ mod test {
     use std::sync::Arc;
 
     use kvproto::metapb::Peer;
+    use kvproto::pdpb::CheckPolicy;
     use rocksdb::Writable;
     use tempdir::TempDir;
 
@@ -325,7 +326,7 @@ mod test {
             for (encoded_start_key, encoded_end_key, table_id) in cases {
                 region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
                 region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
-                runnable.run(SplitCheckTask::new(region.clone(), true));
+                runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
 
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));

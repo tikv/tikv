@@ -122,7 +122,7 @@
 # sync-log = true
 
 # minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
-# prevote = false
+# prevote = true
 
 # set the path to raftdb directory, default value is data-dir/raft
 # raftdb-path = ""

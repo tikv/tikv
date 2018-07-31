@@ -142,6 +142,7 @@ mod tests {
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
+    use kvproto::pdpb::CheckPolicy;
     use rocksdb::Writable;
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
@@ -207,7 +208,7 @@ mod tests {
             engine.flush_cf(default_cf, true).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
             Ok(Msg::RegionApproximateSize { region_id, .. })
@@ -234,7 +235,7 @@ mod tests {
             engine.flush_cf(default_cf, true).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         loop {
             match rx.try_recv() {
                 Ok(Msg::SplitRegion {
@@ -261,6 +262,6 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true));
+        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
     }
 }

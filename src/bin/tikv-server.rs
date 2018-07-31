@@ -44,7 +44,6 @@ mod util;
 use util::setup::*;
 use util::signal_handler;
 
-use std::env;
 use std::fs::File;
 use std::path::Path;
 use std::process;
@@ -87,11 +86,6 @@ fn check_system_config(config: &TiKvConfig) {
         warn!("{:?}", e);
     }
 
-    if cfg!(unix) && env::var("TZ").is_err() {
-        env::set_var("TZ", ":/etc/localtime");
-        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
-    }
-
     // check rocksdb data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
         warn!("{:?}", e);
@@ -129,7 +123,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
-    let pd_worker = FutureWorker::new("pd worker");
+    let pd_worker = FutureWorker::new("pd-worker");
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let pd_sender = pd_worker.scheduler();
@@ -408,7 +402,7 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    configure_grpc_poll_strategy();
+    check_environment_variables();
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)

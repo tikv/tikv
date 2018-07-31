@@ -128,7 +128,7 @@ impl Simulator for ServerCluster {
         let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future-worker");
         let storage_read_pool =
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
                 || storage::ReadPoolContext::new(pd_worker.scheduler())
@@ -140,13 +140,13 @@ impl Simulator for ServerCluster {
 
         // Create import service.
         let importer = {
-            let dir = Path::new(engines.kv_engine.path()).join("import-sst");
+            let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(SSTImporter::new(dir).unwrap())
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
             sim_router.clone(),
-            Arc::clone(&engines.kv_engine),
+            Arc::clone(&engines.kv),
             Arc::clone(&importer),
         );
 

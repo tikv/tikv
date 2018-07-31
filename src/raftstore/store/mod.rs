@@ -50,10 +50,9 @@ pub use self::snap::{
     check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
-pub use self::store::{
-    create_event_loop, new_compaction_listener, Engines, Store, StoreChannel, StoreStat,
-};
+pub use self::store::{create_event_loop, new_compaction_listener, Store, StoreChannel, StoreStat};
 pub use self::transport::Transport;
+pub use self::util::Engines;
 pub use self::worker::KeyEntry;
 
 // Only used in tests

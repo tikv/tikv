@@ -16,12 +16,12 @@ use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::future::{err, ok};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
-use tokio_timer::Timer;
+use tokio_timer::timer::Handle;
 
 use super::util::*;
 use kvproto::metapb::{self, Region};
@@ -31,6 +31,7 @@ use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::collections::{HashMap, HashSet};
+use tikv::util::timer::GLOBAL_TIMER_HANDLE;
 use tikv::util::{escape, Either, HandyRwLock};
 
 struct Store {
@@ -639,7 +640,7 @@ pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
 pub struct TestPdClient {
     cluster_id: u64,
     cluster: Arc<RwLock<Cluster>>,
-    timer: Timer,
+    timer: Handle,
 }
 
 impl TestPdClient {
@@ -647,7 +648,7 @@ impl TestPdClient {
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
-            timer: Timer::default(),
+            timer: GLOBAL_TIMER_HANDLE.clone(),
         }
     }
 
@@ -985,7 +986,7 @@ impl PdClient for TestPdClient {
             rx.map(|resp| vec![resp])
                 .select(
                     stream::unfold(timer, |timer| {
-                        let interval = timer.sleep(Duration::from_millis(500));
+                        let interval = timer.delay(Instant::now() + Duration::from_millis(500));
                         Some(interval.then(|_| Ok(((), timer))))
                     }).map(move |_| {
                         let mut cluster = cluster1.wl();

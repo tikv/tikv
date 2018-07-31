@@ -13,6 +13,7 @@
 
 use std::collections::Bound::Excluded;
 use std::option::Option;
+use std::sync::Arc;
 use std::{fmt, u64};
 
 use kvproto::metapb;
@@ -25,8 +26,8 @@ use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
-use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use util::properties::SizeProperties;
+use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use util::properties::RangeProperties;
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
@@ -322,10 +323,28 @@ pub fn get_region_approximate_size_cf(
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
-        let props = SizeProperties::decode(v.user_collected_properties())?;
+        let props = RangeProperties::decode(v.user_collected_properties())?;
         size += props.get_approximate_size_in_range(&start, &end);
     }
     Ok(size)
+}
+
+pub fn get_region_approximate_keys_cf(
+    db: &DB,
+    cfname: &str,
+    region: &metapb::Region,
+) -> Result<u64> {
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+    for (_, v) in &*collection {
+        let props = RangeProperties::decode(v.user_collected_properties())?;
+        keys += props.get_approximate_keys_in_range(&start, &end);
+    }
+    Ok(keys)
 }
 
 /// Get the approxmiate middle key of the region. If we suppose the region
@@ -347,10 +366,10 @@ pub fn get_region_approximate_middle_cf(
 
     let mut keys = Vec::new();
     for (_, v) in &*collection {
-        let props = SizeProperties::decode(v.user_collected_properties())?;
+        let props = RangeProperties::decode(v.user_collected_properties())?;
         keys.extend(
             props
-                .index_handles
+                .offsets
                 .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
                 .map(|(k, _)| k.to_owned()),
         );
@@ -375,11 +394,38 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
 
 /// Get the approximate number of keys in the region.
 pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
+    // try to get from RangeProperties first.
+    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
+        Ok(v) => if v > 0 {
+            return Ok(v);
+        },
+        Err(e) => debug!(
+            "old_version:get keys from RangeProperties failed with err:{:?}",
+            e
+        ),
+    }
+
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
     Ok(keys)
+}
+
+/// Get region approximate middle key based on default and write cf size.
+pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+
+    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+    let middle_by_cf = if default_cf_size >= write_cf_size {
+        CF_DEFAULT
+    } else {
+        CF_WRITE
+    };
+
+    get_region_approximate_middle_cf(db, middle_by_cf, &region)
 }
 
 /// Check if replicas of two regions are on the same stores.
@@ -559,6 +605,21 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     conf_state
 }
 
+#[derive(Clone, Debug)]
+pub struct Engines {
+    pub kv: Arc<DB>,
+    pub raft: Arc<DB>,
+}
+
+impl Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+        Engines {
+            kv: kv_engine,
+            raft: raft_engine,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{iter, process, thread};
@@ -575,7 +636,7 @@ mod tests {
     use storage::mvcc::{Write, WriteType};
     use storage::{Key, ALL_CFS, CF_DEFAULT};
     use util::escape;
-    use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
+    use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::{monotonic_now, monotonic_raw_now};
 
@@ -778,7 +839,7 @@ mod tests {
 
     #[test]
     fn test_region_approximate_keys() {
-        let path = TempDir::new("_test_raftstore_region_approximate_stats").expect("");
+        let path = TempDir::new("_test_region_approximate_keys").expect("");
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -817,8 +878,8 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
@@ -1185,7 +1246,7 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
+        let f = Box::new(RangePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()

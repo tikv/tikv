@@ -510,7 +510,7 @@ fn process_read<E: Engine>(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_lock(start_key.take(), |lock| lock.ts <= max_ts, limit)
+                .scan_locks(start_key.take(), |lock| lock.ts <= max_ts, limit)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
                     let mut locks = vec![];
@@ -548,7 +548,7 @@ fn process_read<E: Engine>(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_lock(
+                .scan_locks(
                     scan_key.take(),
                     |lock| txn_status.contains_key(&lock.ts),
                     RESOLVE_LOCK_BATCH_SIZE,
@@ -954,8 +954,8 @@ impl<E: Engine> Scheduler<E> {
     /// Event handler for new command.
     ///
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
-    /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
-    /// the method adds the command to the waiting queue(s).   The command will be handled later in
+    /// acquired, the method initiates a get snapshot operation for furthur processing; otherwise,
+    /// the method adds the command to the waiting queue(s). The command will be handled later in
     /// `lock_and_register_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the

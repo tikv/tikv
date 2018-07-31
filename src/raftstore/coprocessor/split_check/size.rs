@@ -141,6 +141,7 @@ mod tests {
 
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
+    use kvproto::pdpb::CheckPolicy;
     use rocksdb::Writable;
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
@@ -150,7 +151,7 @@ mod tests {
     use raftstore::store::{keys, KeyEntry, Msg, SplitCheckRunner, SplitCheckTask};
     use storage::{ALL_CFS, CF_WRITE};
     use util::config::ReadableSize;
-    use util::properties::SizePropertiesCollectorFactory;
+    use util::properties::RangePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
@@ -161,8 +162,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
 
         let cfs_opts = ALL_CFS
             .iter()
@@ -196,7 +197,7 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Ok(Msg::RegionApproximateSize { region_id, .. }) => {
@@ -214,7 +215,7 @@ mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         loop {
             match rx.try_recv() {
                 Ok(Msg::RegionApproximateSize { region_id, .. })
@@ -249,7 +250,7 @@ mod tests {
             engine.flush_cf(handle, true).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true));
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         loop {
             match rx.try_recv() {
                 Ok(Msg::RegionApproximateSize { region_id, .. })
@@ -273,7 +274,7 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true));
+        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
     }
 
     #[test]
