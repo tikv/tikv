@@ -27,6 +27,13 @@ BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
+BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
+BUILD_INFO_RUSTC_FALLBACK := "Unknown"
+export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
+export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+
 default: release
 
 .PHONY: all
@@ -37,7 +44,7 @@ pre-clippy: unset-override
 	@rustup component add clippy-preview
 
 clippy: pre-clippy
-	@cargo clippy --bins --examples --tests --benches -- \
+	@cargo clippy --all --all-targets -- \
 		-A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
 		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
 		-A implicit_hasher -A large_enum_variant -A new_without_default_derive \
@@ -50,7 +57,7 @@ build:
 	cargo build --features "${ENABLE_FEATURES}"
 
 run:
-	cargo run --features "${ENABLE_FEATURES}"
+	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
 	@cargo build --release --features "${ENABLE_FEATURES}"
