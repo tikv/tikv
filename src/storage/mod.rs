@@ -804,7 +804,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn async_scan_lock(
+    pub fn async_scan_locks(
         &self,
         ctx: Context,
         max_ts: u64,
