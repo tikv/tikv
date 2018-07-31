@@ -121,7 +121,7 @@ pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrRe
 where
     T: PdClient + 'static,
 {
-    let mut worker = Worker::new("store address resolve worker");
+    let mut worker = Worker::new("addr-resolver");
 
     let runner = Runner {
         pd_client,

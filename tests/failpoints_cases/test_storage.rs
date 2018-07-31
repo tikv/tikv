@@ -31,7 +31,7 @@ fn test_storage_gcworker_busy() {
     let _guard = ::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let pd_worker = FutureWorker::new("test future worker");
+    let pd_worker = FutureWorker::new("test-future–worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
@@ -90,7 +90,7 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let config = Config::default();
-    let pd_worker = FutureWorker::new("test future worker");
+    let pd_worker = FutureWorker::new("test-future–worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
