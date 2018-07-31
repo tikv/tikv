@@ -2,10 +2,6 @@
 name = "tikv"
 version = "2.1.0-beta"
 keywords = ["KV", "distributed-systems", "raft"]
-build = "build.rs"
-
-[build-dependencies]
-time = "0.1"
 
 [features]
 default = []
@@ -109,7 +105,9 @@ features = ["profiling"]
 optional = true
 
 [workspace]
-members = ["fuzz"]
+members = [
+  "fuzz"
+]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
