@@ -129,15 +129,17 @@ where
 
 /// Reads user key's value in default CF according to the given write CF value (`write`).
 ///
-/// Internally, a near_seek will be performed.
+/// Internally, a `near_seek` will be performed.
 ///
-/// If the value is already carried in the `write` (short value), it will be used and
-/// default CF will not be looked up.
+/// Notice that the value may be already carried in the `write` (short value). In this case,
+/// you should not call this function.
 ///
 /// # Panics
 ///
+/// Panics if there is a short value carried in the given `write`.
+///
 /// Panics if key in default CF does not exist. This means there is a data corruption.
-pub fn load_data_from_write<I>(
+pub fn load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     key: &Key,
     write: Write,
@@ -146,24 +148,16 @@ pub fn load_data_from_write<I>(
 where
     I: Iterator,
 {
-    match write.short_value {
-        Some(short_value) => {
-            // value is embedded in `write`.
-            Ok(short_value)
-        }
-        None => {
-            // value is in the default CF.
-            let key = key.append_ts(write.start_ts); // TODO: eliminate clone.
-            match default_cursor.near_seek_get(&key, &mut statistics.data)? {
-                None => panic!(
-                    "Mvcc data for key {} is not found, start_ts = {}",
-                    key, write.start_ts
-                ),
-                Some(v) => {
-                    statistics.data.processed += 1;
-                    Ok(v.to_vec())
-                }
-            }
+    assert!(write.short_value.is_none());
+    let key = key.append_ts(write.start_ts); // TODO: eliminate clone.
+    match default_cursor.near_seek_get(&key, &mut statistics.data)? {
+        None => panic!(
+            "Mvcc data for key {} is not found, start_ts = {}",
+            key, write.start_ts
+        ),
+        Some(v) => {
+            statistics.data.processed += 1;
+            Ok(v.to_vec())
         }
     }
 }

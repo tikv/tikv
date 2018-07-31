@@ -14,6 +14,7 @@
 mod cf_reader;
 mod point_getter;
 mod util;
+mod write_iter;
 
 use super::lock::Lock;
 use super::write::{Write, WriteType};
@@ -27,6 +28,7 @@ use util::properties::MvccProperties;
 
 pub use self::cf_reader::{CFReader, CFReaderBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
+pub use self::write_iter::ForwardWriteIter;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 

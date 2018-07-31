@@ -69,6 +69,7 @@ pub struct CFReader<S: Snapshot> {
 
 impl<S: Snapshot> CFReader<S> {
     /// Take out and reset the statistics collected so far.
+    #[inline]
     pub fn take_statistics(&mut self) -> Statistics {
         ::std::mem::replace(&mut self.statistics, Statistics::default())
     }
