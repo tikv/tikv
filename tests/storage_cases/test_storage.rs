@@ -1056,7 +1056,7 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 #[test]
 fn test_conflict_commands_on_fault_engine() {
     let engine = RocksEngine::new(TEMP_DIR, ALL_CFS, None).unwrap();
-    let pd_worker = FutureWorker::new("test future worker");
+    let pd_worker = FutureWorker::new("test-future–worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
