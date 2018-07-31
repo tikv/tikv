@@ -28,11 +28,21 @@ pub fn file_exists(file: &PathBuf) -> bool {
 }
 
 /// Delete given path from file system. Return `true` for success.
-pub fn delete_file_if_exist(file: &PathBuf) -> bool {
-    match fs::remove_file(file) {
+pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> bool {
+    match fs::remove_file(&file) {
         Ok(_) => return true,
         Err(ref e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) => warn!("failed to delete file {}: {:?}", file.display(), e),
+        Err(e) => warn!("failed to delete file {}: {:?}", file.as_ref().display(), e),
+    }
+    false
+}
+
+/// Delete given path from file system. Return `true` for success.
+pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> bool {
+    match fs::remove_dir_all(&dir) {
+        Ok(_) => return true,
+        Err(ref e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => warn!("failed to delete dir {}: {:?}", dir.as_ref().display(), e),
     }
     false
 }

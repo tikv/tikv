@@ -1,7 +1,6 @@
 use std::cmp;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, prelude::*};
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,12 +15,10 @@ use raftstore::store::snap::*;
 use raftstore::Result as RaftStoreResult;
 use storage::CfName;
 use util::codec::bytes::BytesEncoder;
-use util::file::{calc_crc32, delete_file_if_exist, get_file_size};
+use util::file::{calc_crc32, delete_dir_if_exist, get_file_size};
 use util::rocksdb::get_fastest_supported_compression_type;
 use util::time::duration_to_sec;
 use util::Either;
-
-const TMP_FILE_SUFFIX: &str = ".tmp";
 
 struct CfFile {
     cf: CfName,
@@ -105,15 +102,6 @@ impl CfFile {
         );
         Ok(cf_key_count)
     }
-
-    fn save(&self, to: &PathBuf) -> io::Result<()> {
-        if self.written_bytes > 0 {
-            fs::rename(&self.tmp_cf_path, &to)?;
-        } else {
-            delete_file_if_exist(&self.tmp_cf_path);
-        }
-        Ok(())
-    }
 }
 
 struct SnapshotBase {
@@ -122,8 +110,6 @@ struct SnapshotBase {
     key: SnapKey,
 
     io_limiter: Option<Arc<IOLimiter>>,
-    tmp_meta_path: PathBuf,
-    tmp_meta_file: File,
     tmp_cf_files: Vec<CfFile>,
     success: bool,
 }
@@ -134,21 +120,15 @@ impl SnapshotBase {
         for_send: bool,
         key: SnapKey,
         io_limiter: Option<Arc<IOLimiter>>,
-    ) -> Result<SnapshotBase> {
-        let mut open_options = OpenOptions::new();
-        open_options.write(true).create_new(true);
-        let tmp_meta_path = gen_meta_tmp_file_path(&dir, for_send, key);
-        let tmp_meta_file = open_options.open(&tmp_meta_path)?;
-        Ok(SnapshotBase {
+    ) -> SnapshotBase {
+        SnapshotBase {
             dir,
             for_send,
             key,
             io_limiter,
-            tmp_meta_path,
-            tmp_meta_file,
             tmp_cf_files: vec![],
             success: false,
-        })
+        }
     }
 
     // Rename tmp files to cf files and meta file.
@@ -156,20 +136,21 @@ impl SnapshotBase {
     fn save(&mut self) -> Result<SnapshotMeta> {
         let mut snapshot_meta = SnapshotMeta::new();
         for cf_builder in &self.tmp_cf_files {
-            let to = gen_cf_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
-            cf_builder.save(&to)?;
-
             let mut snap_cf_file = SnapshotCFFile::new();
             snap_cf_file.set_cf(cf_builder.cf.to_owned());
             snap_cf_file.set_size(cf_builder.written_bytes);
             snap_cf_file.set_checksum(cf_builder.digest.sum32());
             snapshot_meta.mut_cf_files().push(snap_cf_file);
         }
+        let tmp_meta_path = gen_meta_tmp_file_path(&self.dir, self.for_send, self.key);
+        let mut tmp_meta_file = create_new_file_at(&tmp_meta_path)?;
+        snapshot_meta.write_to_writer(&mut tmp_meta_file)?;
+        tmp_meta_file.sync_all()?;
 
-        snapshot_meta.write_to_writer(&mut self.tmp_meta_file)?;
-        self.tmp_meta_file.sync_all()?;
-        let meta_path = gen_meta_file_path(&self.dir, self.for_send, self.key);
-        fs::rename(&self.tmp_meta_path, &meta_path)?;
+        let tmp_snap_dir = gen_tmp_snap_dir(&self.dir, self.for_send, self.key);
+        let snap_dir = gen_snap_dir(&self.dir, self.for_send, self.key);
+        fs::rename(&tmp_snap_dir, &snap_dir)?;
+
         self.success = true;
         Ok(snapshot_meta)
     }
@@ -180,44 +161,31 @@ impl Drop for SnapshotBase {
         if self.success {
             return;
         }
-        for cf_builder in &mut self.tmp_cf_files {
-            let p = gen_cf_tmp_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
-            delete_file_if_exist(&p);
-            let p = gen_cf_file_path(&self.dir, self.for_send, self.key, cf_builder.cf);
-            delete_file_if_exist(&p);
-        }
-        let p = gen_meta_tmp_file_path(&self.dir, self.for_send, self.key);
-        delete_file_if_exist(&p);
-        let p = gen_meta_file_path(&self.dir, self.for_send, self.key);
-        delete_file_if_exist(&p);
+        let tmp_snap_dir = gen_tmp_snap_dir(&self.dir, self.for_send, self.key);
+        delete_dir_if_exist(&tmp_snap_dir);
     }
 }
 
 pub(super) struct SnapshotGenerator {
     inner: SnapshotBase,
     snap_stale_notifier: Arc<SnapStaleNotifier>,
-    sender: SyncSender<SnapshotMeta>,
     size_tracker: Arc<AtomicU64>,
 }
 
 impl SnapshotGenerator {
-    /// Open a new SnapshotGenerator. It will lock a tmp meta file
-    /// so that there will be always 1 generator at most for a key.
     pub(super) fn new(
         dir: String,
         key: SnapKey,
         io_limiter: Option<Arc<IOLimiter>>,
         snap_stale_notifier: Arc<SnapStaleNotifier>,
-        sender: SyncSender<SnapshotMeta>,
         size_tracker: Arc<AtomicU64>,
-    ) -> Result<SnapshotGenerator> {
-        let inner = SnapshotBase::new(dir, true, key, io_limiter)?;
-        Ok(SnapshotGenerator {
+    ) -> SnapshotGenerator {
+        let inner = SnapshotBase::new(dir, true, key, io_limiter);
+        SnapshotGenerator {
             inner,
             snap_stale_notifier,
-            sender,
             size_tracker,
-        })
+        }
     }
 
     /// Build the snapshot with the given `db_snap` for `region`.
@@ -226,15 +194,12 @@ impl SnapshotGenerator {
         let (start_key, end_key) = (enc_start_key(region), enc_end_key(region));
         let mut snap_key_count = 0;
 
-        let mut open_options = OpenOptions::new();
-        open_options.write(true).create_new(true);
-
         // Scan every cf, write data into the tmp file respectively.
         let inner = &mut self.inner;
         for cf in SNAPSHOT_CFS.iter() {
             let path = gen_cf_tmp_file_path(&inner.dir, inner.for_send, inner.key, cf);
             let file = if plain_file_used(cf) {
-                Either::Left(open_options.open(&path)?)
+                Either::Left(create_new_file_at(&path)?)
             } else {
                 Either::Right(gen_sst_file_writer(&db_snap, cf, &path)?)
             };
@@ -269,7 +234,6 @@ impl SnapshotGenerator {
         );
 
         self.size_tracker.fetch_add(total_size, Ordering::SeqCst);
-        let _ = self.sender.send(snapshot_meta.clone());
         Ok(snapshot_meta)
     }
 }
@@ -277,7 +241,6 @@ impl SnapshotGenerator {
 pub struct SnapshotReceiver {
     inner: SnapshotBase,
     snapshot_meta: SnapshotMeta,
-    sender: SyncSender<SnapshotMeta>,
     size_tracker: Arc<AtomicU64>,
     cur_cf_pos: usize,
 }
@@ -288,17 +251,15 @@ impl SnapshotReceiver {
         key: SnapKey,
         io_limiter: Option<Arc<IOLimiter>>,
         snapshot_meta: SnapshotMeta,
-        sender: SyncSender<SnapshotMeta>,
         size_tracker: Arc<AtomicU64>,
-    ) -> Result<Self> {
-        let inner = SnapshotBase::new(dir, false, key, io_limiter)?;
-        Ok(SnapshotReceiver {
+    ) -> SnapshotReceiver {
+        let inner = SnapshotBase::new(dir, false, key, io_limiter);
+        SnapshotReceiver {
             inner,
             snapshot_meta,
-            sender,
             size_tracker,
             cur_cf_pos: 0,
-        })
+        }
     }
 
     pub fn save(&mut self) -> Result<()> {
@@ -328,7 +289,6 @@ impl SnapshotReceiver {
         }
 
         self.size_tracker.fetch_add(total_size, Ordering::SeqCst);
-        let _ = self.sender.send(self.snapshot_meta.clone());
         Ok(())
     }
 
@@ -396,36 +356,24 @@ impl Write for SnapshotReceiver {
     }
 }
 
+fn create_new_file_at<P: AsRef<Path>>(path: P) -> io::Result<File> {
+    OpenOptions::new().create_new(true).write(true).open(path)
+}
+
 fn gen_meta_tmp_file_path(dir: &str, for_send: bool, key: SnapKey) -> PathBuf {
-    let mut meta_path = gen_meta_file_path(dir, for_send, key);
-    let file_name = format!(
-        "{}{}",
-        meta_path.file_name().and_then(|n| n.to_str()).unwrap(),
-        TMP_FILE_SUFFIX,
-    );
-    meta_path.set_file_name(file_name);
-    meta_path
+    let tmp_snap_dir = gen_tmp_snap_dir(dir, for_send, key);
+    tmp_snap_dir.join(META_FILE_NAME)
 }
 
 fn gen_cf_tmp_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> PathBuf {
-    let mut cf_path = gen_cf_file_path(dir, for_send, key, cf);
-    let file_name = format!(
-        "{}{}",
-        cf_path.file_name().and_then(|n| n.to_str()).unwrap(),
-        TMP_FILE_SUFFIX
-    );
-    cf_path.set_file_name(file_name);
-    cf_path
+    let tmp_snap_dir = gen_tmp_snap_dir(dir, for_send, key);
+    let file_name = format!("{}{}", cf, SST_FILE_SUFFIX);
+    tmp_snap_dir.join(&file_name)
 }
 
 fn gen_display_path(dir: &str, for_send: bool, key: SnapKey) -> String {
-    let prefix = if for_send {
-        SNAP_GEN_PREFIX
-    } else {
-        SNAP_REV_PREFIX
-    };
-    let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
-    format!("{}/{}_{}_{}{}", dir, prefix, key, cf_names, SST_FILE_SUFFIX)
+    let snap_dir = gen_snap_dir(dir, for_send, key);
+    snap_dir.to_str().unwrap().to_owned()
 }
 
 fn gen_sst_file_writer(
@@ -448,19 +396,16 @@ fn gen_sst_file_writer(
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
-
     use super::*;
-    use raftstore::store::snap::tests::*;
 
     #[test]
     fn test_gen_meta_tmp_file_path() {
         let key = SnapKey::new(1, 2, 3);
         for &(dir, for_send, key, expected) in &[
-            ("abc", true, key, "abc/gen_1_2_3.meta.tmp"),
-            ("abc/", false, key, "abc/rev_1_2_3.meta.tmp"),
-            ("ab/c", false, key, "ab/c/rev_1_2_3.meta.tmp"),
-            ("", false, key, "rev_1_2_3.meta.tmp"),
+            ("abc", true, key, "abc/gen_1_2_3.tmp/meta"),
+            ("abc/", false, key, "abc/rev_1_2_3.tmp/meta"),
+            ("ab/c", false, key, "ab/c/rev_1_2_3.tmp/meta"),
+            ("", false, key, "rev_1_2_3.tmp/meta"),
         ] {
             let path = gen_meta_tmp_file_path(dir, for_send, key);
             assert_eq!(path.to_str().unwrap(), expected);
@@ -471,130 +416,19 @@ mod tests {
     fn test_gen_cf_tmp_file_path() {
         let key = SnapKey::new(1, 2, 3);
         for &(dir, for_send, key, cf, expected) in &[
-            ("abc", true, key, CF_LOCK, "abc/gen_1_2_3_lock.sst.tmp"),
-            ("abc/", false, key, CF_WRITE, "abc/rev_1_2_3_write.sst.tmp"),
+            ("abc", true, key, CF_LOCK, "abc/gen_1_2_3.tmp/lock.sst"),
+            ("abc/", false, key, CF_WRITE, "abc/rev_1_2_3.tmp/write.sst"),
             (
                 "ab/c",
                 false,
                 key,
                 CF_DEFAULT,
-                "ab/c/rev_1_2_3_default.sst.tmp",
+                "ab/c/rev_1_2_3.tmp/default.sst",
             ),
-            ("", false, key, CF_LOCK, "rev_1_2_3_lock.sst.tmp"),
+            ("", false, key, CF_LOCK, "rev_1_2_3.tmp/lock.sst"),
         ] {
             let path = gen_cf_tmp_file_path(dir, for_send, key, cf);
             assert_eq!(path.to_str().unwrap(), expected);
         }
-    }
-
-    #[test]
-    fn test_snapshot_generator() {
-        let tmp_dir = TempDir::new("test-snapshot-generator").unwrap();
-        let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
-        let snap_mgr = SnapManager::new(tmp_path.clone(), None);
-
-        let dir = snap_mgr.core.dir.clone();
-        let key = SnapKey::new(1, 1, 1);
-        let snap_stale_notifier = new_snap_stale_notifier();
-
-        // Can't init SnapshotGenerator because tmp meta file exists.
-        let p = gen_meta_tmp_file_path(&dir, true, key);
-        OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&p)
-            .unwrap();
-
-        let notifier = Arc::clone(&snap_stale_notifier);
-        let (tx, _) = sync_channel(1);
-        let size_tracker = Arc::new(AtomicU64::new(0));
-        let r = SnapshotGenerator::new(dir.clone(), key, None, notifier, tx, size_tracker);
-        assert!(r.is_err());
-        assert!(File::open(&p).is_ok()); // The tmp meta file shouldn't be deleted.
-
-        // Can't save the snapshot because some tmp files are removed.
-        delete_file_if_exist(&p);
-        let region = get_test_region(1, 1, 1);
-        let tmp_db_dir = TempDir::new("test-sanpshot-generator-db").unwrap();
-        let test_db = get_test_empty_db(&tmp_db_dir).unwrap();
-        let db_snap = DbSnapshot::new(Arc::clone(&test_db));
-
-        let notifier = Arc::clone(&snap_stale_notifier);
-        let (tx, _) = sync_channel(1);
-        let size_tracker = Arc::new(AtomicU64::new(0));
-        let mut generator =
-            SnapshotGenerator::new(dir.clone(), key, None, notifier, tx, size_tracker).unwrap();
-        assert!(delete_file_if_exist(&p));
-        assert!(generator.build(&region, db_snap).is_err());
-
-        // After the generator is dropped, there won't be any tmp files.
-        drop(generator);
-        assert_eq!(fs::read_dir(&tmp_path).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn test_snapshot_receiver() {
-        let tmp_dir = TempDir::new("test-snapshot-generator").unwrap();
-        let tmp_path = tmp_dir.path().to_str().unwrap().to_owned();
-        let snap_mgr = SnapManager::new(tmp_path.clone(), None);
-
-        let dir = snap_mgr.core.dir.clone();
-        let key = SnapKey::new(1, 1, 1);
-        let snap_stale_notifier = new_snap_stale_notifier();
-
-        let notifier = Arc::clone(&snap_stale_notifier);
-        let (tx, _) = sync_channel(1);
-        let size_tracker = Arc::new(AtomicU64::new(0));
-        let mut generator =
-            SnapshotGenerator::new(dir.clone(), key, None, notifier, tx, size_tracker).unwrap();
-
-        let region = get_test_region(1, 1, 1);
-        let tmp_db_dir = TempDir::new("test-sanpshot-sender-db").unwrap();
-        let test_db = get_test_empty_db(&tmp_db_dir).unwrap();
-        let db_snap = DbSnapshot::new(Arc::clone(&test_db));
-        let meta = generator.build(&region, db_snap).unwrap();
-
-        let data = snapshot_data_from_meta(meta, region.clone());
-        let data = data.write_to_bytes().unwrap();
-
-        let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
-        assert!(snap_mgr.get_snapshot_receiver(key, &data).is_err());
-
-        // Can't save because finished cfs is less than SNAPSHOT_CFS.
-        assert!(receiver.save().is_err());
-
-        // Can't save because the bad checksum.
-        assert!(receiver.write(&[0u8]).is_ok());
-        assert!(receiver.save().is_err());
-
-        // After the receiver is droped, no garbage should exist.
-        drop(receiver);
-        let rev_files = fs::read_dir(&tmp_path).unwrap().filter(|p| match p {
-            Ok(ref p) => p
-                .file_name()
-                .into_string()
-                .unwrap()
-                .starts_with(SNAP_REV_PREFIX),
-
-            Err(_) => false,
-        });
-        assert_eq!(rev_files.count(), 0);
-
-        let mut receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap().unwrap();
-
-        // Write correct data into the receiver.
-        let p = gen_cf_file_path(&dir, true, key, CF_LOCK);
-        let mut buf = Vec::with_capacity(10);
-        assert_eq!(File::open(p).unwrap().read_to_end(&mut buf).unwrap(), 1);
-
-        // Can't write extra bytes to snapshot.
-        assert!(receiver.write_all(&buf).is_ok());
-        assert!(receiver.write(&[0u8]).is_err());
-
-        // Don't need to receive it any more.
-        assert!(receiver.save().is_ok());
-        drop(receiver);
-        let receiver = snap_mgr.get_snapshot_receiver(key, &data).unwrap();
-        assert!(receiver.is_none());
     }
 }
