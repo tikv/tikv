@@ -477,16 +477,16 @@ fn test_txn_store_scan_lock() {
         vec![Some((b"k1", b"v1")), None, None, None, None],
     );
 
-    store.scan_lock_ok(10, b"".to_vec(), 1, vec![lock(b"p1", b"p1", 5)]);
+    store.scan_locks_ok(10, b"".to_vec(), 1, vec![lock(b"p1", b"p1", 5)]);
 
-    store.scan_lock_ok(
+    store.scan_locks_ok(
         10,
         b"s".to_vec(),
         2,
         vec![lock(b"s1", b"p1", 5), lock(b"s2", b"p2", 10)],
     );
 
-    store.scan_lock_ok(
+    store.scan_locks_ok(
         10,
         b"".to_vec(),
         0,
@@ -498,7 +498,7 @@ fn test_txn_store_scan_lock() {
         ],
     );
 
-    store.scan_lock_ok(
+    store.scan_locks_ok(
         10,
         b"".to_vec(),
         100,
@@ -537,7 +537,7 @@ fn test_txn_store_resolve_lock() {
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 20, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_lock_ok(30, b"".to_vec(), 100, vec![]);
+    store.scan_locks_ok(30, b"".to_vec(), 100, vec![]);
 }
 
 fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
@@ -584,7 +584,7 @@ fn test_txn_store_resolve_lock_in_a_batch() {
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 30, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_lock_ok(30, b"".to_vec(), 100, vec![]);
+    store.scan_locks_ok(30, b"".to_vec(), 100, vec![]);
 }
 
 #[test]
@@ -1056,7 +1056,7 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 #[test]
 fn test_conflict_commands_on_fault_engine() {
     let engine = RocksEngine::new(TEMP_DIR, ALL_CFS, None).unwrap();
-    let pd_worker = FutureWorker::new("test future worker");
+    let pd_worker = FutureWorker::new("test-future–worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
     });

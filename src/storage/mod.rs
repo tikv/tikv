@@ -804,7 +804,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn async_scan_lock(
+    pub fn async_scan_locks(
         &self,
         ctx: Context,
         max_ts: u64,
@@ -1502,7 +1502,7 @@ mod tests {
     }
 
     fn new_read_pool() -> ReadPool<ReadPoolContext> {
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future–worker");
         ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         })

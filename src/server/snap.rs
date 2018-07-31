@@ -315,7 +315,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
             env,
             snap_mgr,
             pool: CpuPoolBuilder::new()
-                .name_prefix(thd_name!("snap sender"))
+                .name_prefix(thd_name!("snap-sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
                 .create(),
             raft_router: r,
