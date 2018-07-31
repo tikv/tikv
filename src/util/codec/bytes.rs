@@ -192,7 +192,7 @@ pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
         if padding.iter().any(|x| *x != pad_byte) {
             return Err(Error::KeyPadding);
         }
-        
+
         if desc {
             for k in &mut key {
                 *k = !*k;

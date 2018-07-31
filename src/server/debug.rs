@@ -40,7 +40,7 @@ use raftstore::store::{
 };
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
-use storage::types::{truncate_ts, decode_ts, Key};
+use storage::types::{decode_ts, truncate_ts, Key};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::codec::bytes;
 use util::collections::HashSet;

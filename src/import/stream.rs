@@ -423,7 +423,7 @@ mod tests {
         for i in keys {
             let k = Key::from_raw(&[i]).append_ts(0);
             client.add_region_range(&last, k.encoded());
-            last = k;
+            last = k.take_encoded();
         }
         // Add an unrelated range.
         client.add_region_range(&last, b"abc");

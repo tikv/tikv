@@ -932,7 +932,7 @@ impl<E: Engine> Storage<E> {
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
-                        .map(|k| { 
+                        .map(|k| {
                             let v = snapshot.get_cf(cf, &k);
                             (k, v)
                         })
