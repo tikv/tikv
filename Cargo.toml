@@ -2,10 +2,6 @@
 name = "tikv"
 version = "2.1.0-beta"
 keywords = ["KV", "distributed-systems", "raft"]
-build = "build.rs"
-
-[build-dependencies]
-time = "0.1"
 
 [features]
 default = []
@@ -78,6 +74,7 @@ crossbeam = "0.2"
 fxhash = "0.2"
 derive_more = "0.11.0"
 num = "0.2.0"
+build_info = { path = "components/build_info" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
@@ -109,7 +106,10 @@ features = ["profiling"]
 optional = true
 
 [workspace]
-members = ["fuzz"]
+members = [
+  "fuzz",
+  "components/build_info"
+]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

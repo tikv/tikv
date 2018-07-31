@@ -37,7 +37,7 @@ pre-clippy: unset-override
 	@rustup component add clippy-preview
 
 clippy: pre-clippy
-	@cargo clippy --bins --examples --tests --benches -- \
+	@cargo clippy --all --all-targets -- \
 		-A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
 		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
 		-A implicit_hasher -A large_enum_variant -A new_without_default_derive \
