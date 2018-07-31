@@ -1507,7 +1507,6 @@ mod tests {
         value: T,
     ) -> Callback<T> {
         Box::new(move |x: Result<T>| {
-            assert!(x.is_ok());
             assert_eq!(x.unwrap(), value);
             done.send(id).unwrap();
         })
