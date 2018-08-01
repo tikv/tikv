@@ -13,8 +13,7 @@
 
 mod cf_reader;
 mod point_getter;
-mod util;
-mod write_iter;
+pub mod util;
 
 use super::lock::Lock;
 use super::write::{Write, WriteType};
@@ -28,7 +27,6 @@ use util::properties::MvccProperties;
 
 pub use self::cf_reader::{CFReader, CFReaderBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
-pub use self::write_iter::ForwardWriteIter;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -236,16 +234,6 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(None)
     }
 
-    fn create_data_cursor(&mut self) -> Result<()> {
-        self.scan_mode = Some(ScanMode::Forward);
-        if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, self.fill_cache);
-            let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
-            self.data_cursor = Some(iter);
-        }
-        Ok(())
-    }
-
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             let iter_opt = IterOption::new(
@@ -274,26 +262,6 @@ impl<S: Snapshot> MvccReader<S> {
             self.lock_cursor = Some(iter);
         }
         Ok(())
-    }
-
-    // Return the first committed key which start_ts equals to ts
-    pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
-        assert!(self.scan_mode.is_some());
-        self.create_write_cursor()?;
-
-        let cursor = self.write_cursor.as_mut().unwrap();
-        let mut ok = cursor.seek_to_first(&mut self.statistics.write);
-
-        while ok {
-            if Write::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
-                return Ok(Some(
-                    Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
-                        .truncate_ts()?,
-                ));
-            }
-            ok = cursor.next(&mut self.statistics.write);
-        }
-        Ok(None)
     }
 
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
@@ -531,32 +499,6 @@ impl<S: Snapshot> MvccReader<S> {
         } else {
             Ok(short_value)
         }
-    }
-
-    // Get all Value of the given key in CF_DEFAULT
-    pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
-        self.create_data_cursor()?;
-        let cursor = self.data_cursor.as_mut().unwrap();
-        let mut ok = cursor.seek(key, &mut self.statistics.data)?;
-        if !ok {
-            return Ok(vec![]);
-        }
-        let mut v = vec![];
-        while ok {
-            let cur_key = Key::from_encoded(cursor.key(&mut self.statistics.data).to_vec());
-            let cur_key_without_ts = cur_key.truncate_ts()?;
-            if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
-                v.push((
-                    cur_key.decode_ts()?,
-                    cursor.value(&mut self.statistics.data).to_vec(),
-                ));
-            }
-            if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
-                break;
-            }
-            ok = cursor.next(&mut self.statistics.data);
-        }
-        Ok(v)
     }
 
     // Returns true if it needs gc.

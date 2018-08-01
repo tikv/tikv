@@ -46,13 +46,10 @@ use storage::engine::{
     self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
     Result as EngineResult,
 };
-use storage::mvcc::{
-    CFReader, CFReaderBuilder, Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
-    MAX_TXN_WRITE_SIZE,
-};
+use storage::mvcc::{CFReaderBuilder, Error as MvccError, MvccTxn, MAX_TXN_WRITE_SIZE};
 use storage::{
-    Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-    Statistics, StatisticsSummary, StorageCb,
+    Command, Engine, Error as StorageError, Result as StorageResult, Statistics, StatisticsSummary,
+    StorageCb,
 };
 use storage::{Key, KvPair, MvccInfo, Value};
 use util::collections::HashMap;
@@ -367,35 +364,6 @@ pub struct Scheduler<E: Engine> {
     running_write_bytes: usize,
 }
 
-// Make clippy happy.
-type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
-
-// TODO: Move to Mvcc mod.
-fn find_mvcc_infos_by_key<S: Snapshot>(
-    reader: &mut MvccReader<S>,
-    cf_reader: &mut CFReader<S>,
-    key: &Key,
-    mut ts: u64,
-) -> Result<MultipleReturnValue> {
-    let mut writes = vec![];
-    let mut values = vec![];
-    let lock = cf_reader.load_lock(key)?;
-    loop {
-        let opt = reader.seek_write(key, ts)?;
-        match opt {
-            Some((commit_ts, write)) => {
-                ts = commit_ts - 1;
-                writes.push((commit_ts, write));
-            }
-            None => break,
-        };
-    }
-    for (ts, v) in reader.scan_values_in_default(key)? {
-        values.push((ts, v));
-    }
-    Ok((lock, writes, values))
-}
-
 impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
     pub fn new(
@@ -459,20 +427,12 @@ fn process_read_impl<E: Engine>(
     let tag = cmd.tag();
     match cmd {
         Command::MvccByKey { ref ctx, ref key } => {
-            let mut reader = MvccReader::new(
-                snapshot.clone(),
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                None,
-                ctx.get_isolation_level(),
-            );
             let mut cf_reader = CFReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            let (lock, writes, values) =
-                find_mvcc_infos_by_key(&mut reader, &mut cf_reader, key, u64::MAX)?;
-            statistics.add(reader.get_statistics());
+            let writes = cf_reader.scan_writes(&key, u64::MAX)?;
+            let values = cf_reader.scan_values(&key)?;
+            let lock = cf_reader.load_lock(&key)?;
             statistics.add(&cf_reader.take_statistics());
             Ok(ProcessResult::MvccKey {
                 mvcc: MvccInfo {
@@ -483,22 +443,14 @@ fn process_read_impl<E: Engine>(
             })
         }
         Command::MvccByStartTs { ref ctx, start_ts } => {
-            let mut reader = MvccReader::new(
-                snapshot.clone(),
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                None,
-                ctx.get_isolation_level(),
-            );
             let mut cf_reader = CFReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            match reader.seek_ts(start_ts)? {
+            match cf_reader.slowly_seek_key_by_start_ts(start_ts)? {
                 Some(key) => {
-                    let (lock, writes, values) =
-                        find_mvcc_infos_by_key(&mut reader, &mut cf_reader, &key, u64::MAX)?;
-                    statistics.add(reader.get_statistics());
+                    let writes = cf_reader.scan_writes(&key, u64::MAX)?;
+                    let values = cf_reader.scan_values(&key)?;
+                    let lock = cf_reader.load_lock(&key)?;
                     statistics.add(&cf_reader.take_statistics());
                     Ok(ProcessResult::MvccStartTs {
                         mvcc: Some((

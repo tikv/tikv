@@ -104,6 +104,8 @@ where
     I: Iterator,
     F: Fn(&Lock) -> bool,
 {
+    // TODO: We need to ensure that cursor is not prefix seek.
+
     let ok = match start_key {
         Some(ref start_key) => lock_cursor.seek(start_key, &mut statistics.lock)?,
         None => lock_cursor.seek_to_first(&mut statistics.lock),
@@ -169,6 +171,8 @@ where
 /// Iterate and get all user keys in the write CF within the given key space (specified by
 /// `start_key` and `limit`). `limit` must not be `0`.
 ///
+/// Internally, several `near_seek` will be performed.
+///
 /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
 /// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
 /// there is no more keys.
@@ -187,6 +191,7 @@ pub fn scan_keys<I>(
 where
     I: Iterator,
 {
+    // TODO: We need to ensure that cursor is not prefix seek.
     assert!(limit > 0);
 
     let ok = match start_key {
@@ -217,4 +222,113 @@ where
     }
     statistics.write.processed += keys.len();
     Ok((keys, next_start_key))
+}
+
+/// Iterate and get all `Write`s for a key whose commit_ts <= `max_ts`.
+///
+/// Internally, there will be a `near_seek` operation for first iterate and
+/// `next` operation for other iterations.
+///
+/// The return value is a `Vec` of type `(commit_ts, write)`.
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+pub fn scan_writes<I>(
+    write_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+    user_key: &Key,
+    max_ts: u64,
+    statistics: &mut Statistics,
+) -> Result<Vec<(u64, Write)>>
+where
+    I: Iterator,
+{
+    // TODO: We need to ensure that cursor is not prefix seek.
+
+    let mut writes = vec![];
+    write_cursor.near_seek(&user_key.append_ts(max_ts), &mut statistics.write)?;
+    while write_cursor.valid() {
+        // TODO: We don't really need to copy slice to a vector here.
+        let current_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());
+        let commit_ts = current_key.decode_ts()?;
+        let current_user_key = current_key.truncate_ts()?;
+        if *user_key != current_user_key {
+            // Meet another key: don't need to scan more.
+            break;
+        }
+
+        let write = Write::parse(write_cursor.value(&mut statistics.write))?;
+        writes.push((commit_ts, write));
+        statistics.write.processed += 1;
+
+        write_cursor.next(&mut statistics.write);
+    }
+    Ok(writes)
+}
+
+/// Iterate and get values of all versions for a given key in the default CF.
+///
+/// Notice that small values are embedded in `Write`, which will not be retrieved
+/// by this function.
+///
+/// Internally, there will be a `near_seek` operation for first iterate and
+/// `next` operation for other iterations.
+///
+/// The return value is a `Vec` of type `(start_ts, value)`.
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+pub fn scan_values<I>(
+    default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+    user_key: &Key,
+    statistics: &mut Statistics,
+) -> Result<Vec<(u64, Value)>>
+where
+    I: Iterator,
+{
+    // TODO: We need to ensure that cursor is not prefix seek.
+
+    let mut values = vec![];
+    default_cursor.near_seek(user_key, &mut statistics.data)?;
+    while default_cursor.valid() {
+        let current_key = Key::from_encoded(default_cursor.key(&mut statistics.data).to_vec());
+        let start_ts = current_key.decode_ts()?;
+        let current_user_key = current_key.truncate_ts()?;
+        if *user_key != current_user_key {
+            // Meet another key: don't need to scan more.
+            break;
+        }
+
+        let value = default_cursor.value(&mut statistics.data).to_vec();
+        values.push((start_ts, value));
+        statistics.data.processed += 1;
+
+        default_cursor.next(&mut statistics.write);
+    }
+    Ok(values)
+}
+
+/// Seek for the first committed user key with the given `start_ts`.
+///
+/// WARN: This function may perform a full scan. Use with caution.
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+pub fn slowly_seek_key_by_start_ts<I>(
+    write_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+    start_ts: u64,
+    statistics: &mut Statistics,
+) -> Result<Option<Key>>
+where
+    I: Iterator,
+{
+    // TODO: We need to ensure that cursor is not prefix seek.
+
+    write_cursor.seek_to_first(&mut statistics.write);
+    while write_cursor.valid() {
+        let write = Write::parse(write_cursor.value(&mut statistics.write))?;
+        statistics.write.processed += 1;
+        if write.start_ts == start_ts {
+            let write_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());;
+            return Ok(Some(write_key.truncate_ts()?));
+        }
+        write_cursor.next(&mut statistics.write);
+    }
+    Ok(None)
 }
