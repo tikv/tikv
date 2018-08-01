@@ -13,10 +13,10 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use raftstore::store::engine::IterOption;
+use super::util::CursorBuilder;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
-use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
 
 pub struct ForwardSeekerBuilder<S: Snapshot> {
@@ -85,13 +85,15 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
 
     /// Build `ForwardSeeker` from the current configuration.
     pub fn build(self) -> Result<ForwardSeeker<S>> {
-        let lock_cursor = self
-            .snapshot
-            .iter_cf(CF_LOCK, self.build_iter_opt(), ScanMode::Forward)?;
+        let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
+            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .fill_cache(self.fill_cache)
+            .build()?;
 
-        let write_cursor =
-            self.snapshot
-                .iter_cf(CF_WRITE, self.build_iter_opt(), ScanMode::Forward)?;
+        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .fill_cache(self.fill_cache)
+            .build()?;
 
         Ok(ForwardSeeker {
             snapshot: self.snapshot,
@@ -105,14 +107,6 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
             default_cursor: None,
             statistics: Statistics::default(),
         })
-    }
-
-    fn build_iter_opt(&self) -> IterOption {
-        IterOption::new(
-            self.lower_bound.clone(),
-            self.upper_bound.clone(),
-            self.fill_cache,
-        )
     }
 }
 
@@ -283,15 +277,11 @@ impl<S: Snapshot> ForwardSeeker<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let iter_opt = IterOption::new(
-            self.lower_bound.take(),
-            self.upper_bound.take(),
-            self.fill_cache,
-        );
-        let iter = self
-            .snapshot
-            .iter_cf(CF_DEFAULT, iter_opt, ScanMode::Forward)?;
-        self.default_cursor = Some(iter);
+        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .fill_cache(self.fill_cache)
+            .build()?;
+        self.default_cursor = Some(cursor);
         Ok(())
     }
 }
