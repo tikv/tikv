@@ -29,7 +29,7 @@ use super::print_result;
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
 fn bench_tombstone_scan() -> BenchSamples {
-    let pd_worker = FutureWorker::new("test pd worker");
+    let pd_worker = FutureWorker::new("test-pd-worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
     });

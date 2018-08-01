@@ -13,9 +13,8 @@
 
 #![feature(slice_patterns)]
 
-#[macro_use]
-extern crate clap;
 extern crate chrono;
+extern crate clap;
 extern crate fs2;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
@@ -123,7 +122,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
-    let pd_worker = FutureWorker::new("pd worker");
+    let pd_worker = FutureWorker::new("pd-worker");
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let pd_sender = pd_worker.scheduler();
@@ -248,23 +247,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 }
 
 fn main() {
-    let long_version: String = {
-        let (hash, branch, time, rust_ver) = tikv_util::build_info();
-        format!(
-            "\nRelease Version:   {}\
-             \nGit Commit Hash:   {}\
-             \nGit Commit Branch: {}\
-             \nUTC Build Time:    {}\
-             \nRust Version:      {}",
-            crate_version!(),
-            hash,
-            branch,
-            time,
-            rust_ver
-        )
-    };
     let matches = App::new("TiKV")
-        .long_version(long_version.as_ref())
+        .long_version(util::tikv_version_info().as_ref())
         .author("PingCAP Inc. <info@pingcap.com>")
         .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(
@@ -386,7 +370,7 @@ fn main() {
     init_log(&config);
 
     // Print version information.
-    tikv_util::print_tikv_info();
+    util::print_tikv_info();
 
     panic_hook::set_exit_hook(false);
 

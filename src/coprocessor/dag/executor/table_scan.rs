@@ -13,10 +13,12 @@
 
 use std::iter::Peekable;
 use std::mem;
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
+use tipb::schema::ColumnInfo;
 
 use storage::{Key, Snapshot, SnapshotStore};
 use util::collections::HashSet;
@@ -31,6 +33,7 @@ pub struct TableScanExecutor<S: Snapshot> {
     store: SnapshotStore<S>,
     desc: bool,
     col_ids: HashSet<i64>,
+    columns: Arc<Vec<ColumnInfo>>,
     key_ranges: Peekable<IntoIter<KeyRange>>,
     // The current `KeyRange` scanning on, used to build `scan_range`.
     current_range: Option<KeyRange>,
@@ -45,7 +48,7 @@ pub struct TableScanExecutor<S: Snapshot> {
 
 impl<S: Snapshot> TableScanExecutor<S> {
     pub fn new(
-        meta: &TableScan,
+        mut meta: TableScan,
         mut key_ranges: Vec<KeyRange>,
         store: SnapshotStore<S>,
         collect: bool,
@@ -69,6 +72,7 @@ impl<S: Snapshot> TableScanExecutor<S> {
             store,
             desc,
             col_ids,
+            columns: Arc::new(meta.take_columns().to_vec()),
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
             scan_range: KeyRange::default(),
@@ -88,7 +92,7 @@ impl<S: Snapshot> TableScanExecutor<S> {
             };
             let row_data = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(&key));
-            return Ok(Some(Row::new(h, row_data)));
+            return Ok(Some(Row::origin(h, row_data, self.columns.clone())));
         }
         Ok(None)
     }
@@ -101,7 +105,7 @@ impl<S: Snapshot> TableScanExecutor<S> {
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(&key));
-            return Ok(Some(Row::new(h, values)));
+            return Ok(Some(Row::origin(h, values, self.columns.clone())));
         }
         Ok(None)
     }
@@ -212,6 +216,10 @@ impl<S: Snapshot> Executor for TableScanExecutor<S> {
             self.first_collect = false;
         }
     }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.columns.len()
+    }
 }
 
 #[cfg(test)]
@@ -281,9 +289,9 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, true).unwrap();
+            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, true).unwrap();
 
-        let row = table_scanner.next().unwrap().unwrap();
+        let row = table_scanner.next().unwrap().unwrap().take_origin();
         assert_eq!(row.handle, handle as i64);
         assert_eq!(row.data.len(), wrapper.cols.len());
 
@@ -317,10 +325,10 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, false).unwrap();
+            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, false).unwrap();
 
         for handle in 0..KEY_NUMBER {
-            let row = table_scanner.next().unwrap().unwrap();
+            let row = table_scanner.next().unwrap().unwrap().take_origin();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -352,11 +360,11 @@ mod test {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(&wrapper.table_scan, wrapper.ranges, store, false).unwrap();
+            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, false).unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
-            let row = table_scanner.next().unwrap().unwrap();
+            let row = table_scanner.next().unwrap().unwrap().take_origin();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];

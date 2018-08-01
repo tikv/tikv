@@ -157,7 +157,7 @@ fn test_validate_endpoints() {
     let env = Arc::new(
         EnvBuilder::new()
             .cq_count(1)
-            .name_prefix(thd_name!("test_pd"))
+            .name_prefix(thd_name!("test-pd"))
             .build(),
     );
     let eps = server.bind_addrs();
