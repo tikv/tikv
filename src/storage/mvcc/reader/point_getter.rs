@@ -17,6 +17,7 @@ use raftstore::store::engine::IterOption;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
 use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_WRITE};
+use util::codec::number;
 
 /// Build `IterOption` (which is later used to build `Cursor`) according to configurations.
 fn build_iter_opt(fill_cache: bool, prefix_filter: bool) -> IterOption {
@@ -150,7 +151,7 @@ impl<S: Snapshot> PointGetter<S> {
     }
 
     /// Get the value of a user key. See `PointGetter` for details.
-    pub fn read_next(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
+    pub fn read_next(&mut self, user_key: &Key, mut ts: u64) -> Result<Option<Value>> {
         if !self.multi && self.read_once {
             panic!("PointGetter(multi=false) must not call `read_next` multiple times.");
         }
@@ -159,12 +160,19 @@ impl<S: Snapshot> PointGetter<S> {
 
         if self.isolation_level == IsolationLevel::SI {
             // Check for locks that signal concurrent writes in SI.
-            ts = super::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)?;
+            ts = super::util::load_and_check_lock(
+                &self.snapshot,
+                user_key,
+                ts,
+                &mut self.statistics,
+            )?;
         }
 
-        // First seek to `${key}_${ts}`.
+        let encoded_user_key = user_key.encoded();
+
+        // First seek to `${user_key}_${ts}`.
         self.write_cursor
-            .near_seek(&key.append_ts(ts), &mut self.statistics.write)?;
+            .near_seek(&user_key.append_ts(ts), &mut self.statistics.write)?;
 
         loop {
             if !self.write_cursor.valid() {
@@ -172,16 +180,18 @@ impl<S: Snapshot> PointGetter<S> {
                 return Ok(None);
             }
             // We may move forward / seek to another key. In this case, the scan ends.
-            let write_key =
-                Key::from_encoded(self.write_cursor.key(&mut self.statistics.write).to_vec());
-            let user_key = write_key.truncate_ts()?;
-            if &user_key != key {
-                // Moved to another key.
-                return Ok(None);
+            {
+                let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+                if cursor_key.len() != encoded_user_key.len() + number::U64_SIZE
+                    || !cursor_key.starts_with(encoded_user_key)
+                {
+                    // Meet another key.
+                    return Ok(None);
+                }
             }
+
             let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
-            self.write_cursor.next(&mut self.statistics.write);
 
             match write.write_type {
                 WriteType::Put => {
@@ -198,7 +208,7 @@ impl<S: Snapshot> PointGetter<S> {
                             self.ensure_default_cursor()?;
                             let value = super::util::load_data_by_write(
                                 &mut self.default_cursor.as_mut().unwrap(),
-                                key,
+                                user_key,
                                 write,
                                 &mut self.statistics,
                             )?;
