@@ -189,6 +189,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::Length
             | ScalarFuncSig::BitNegSig => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -346,7 +347,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Left
             | ScalarFuncSig::LeftBinary
             | ScalarFuncSig::LeftShift
-            | ScalarFuncSig::Length
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::LocateBinary2Args
@@ -768,6 +768,8 @@ dispatch_call! {
         BitNegSig => bit_neg,
         BitOrSig => bit_or,
         BitXorSig => bit_xor,
+
+        Length => length,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1078,6 +1080,7 @@ mod test {
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::BitNegSig,
+                    ScalarFuncSig::Length,
                 ],
                 1,
                 1,
@@ -1279,7 +1282,6 @@ mod test {
             ScalarFuncSig::Left,
             ScalarFuncSig::LeftBinary,
             ScalarFuncSig::LeftShift,
-            ScalarFuncSig::Length,
             ScalarFuncSig::Locate2Args,
             ScalarFuncSig::Locate3Args,
             ScalarFuncSig::LocateBinary2Args,
