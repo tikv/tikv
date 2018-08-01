@@ -151,7 +151,7 @@ impl<S: Snapshot> ForwardSeeker<S> {
                         .write_cursor
                         .near_seek(&key, &mut self.statistics.write)?
                     {
-                        w_key = Some(self.write_cursor.key());
+                        w_key = Some(self.write_cursor.key(&mut self.statistics.write));
                     } else {
                         w_key = None;
                         write_valid = false;
@@ -159,7 +159,7 @@ impl<S: Snapshot> ForwardSeeker<S> {
                 }
                 if lock_valid {
                     if self.lock_cursor.near_seek(&key, &mut self.statistics.lock)? {
-                        l_key = Some(self.lock_cursor.key());
+                        l_key = Some(self.lock_cursor.key(&mut self.statistics.lock));
                     } else {
                         l_key = None;
                         lock_valid = false;
@@ -207,10 +207,12 @@ impl<S: Snapshot> ForwardSeeker<S> {
             }
 
             self.statistics.write.flow_stats.read_bytes +=
-                self.write_cursor.key().len() + self.write_cursor.value().len();
+                self.write_cursor.key(&mut self.statistics.write).len()
+                    + self.write_cursor.value(&mut self.statistics.write).len();
             self.statistics.write.flow_stats.read_keys += 1;
 
-            let write_key = Key::from_encoded(self.write_cursor.key().to_vec());
+            let write_key =
+                Key::from_encoded(self.write_cursor.key(&mut self.statistics.write).to_vec());
             let commit_ts = write_key.decode_ts()?;
             let write_user_key = write_key.truncate_ts()?;
             if write_user_key != *key {
@@ -218,7 +220,7 @@ impl<S: Snapshot> ForwardSeeker<S> {
                 return Ok(None);
             }
 
-            let write = Write::parse(self.write_cursor.value())?;
+            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
@@ -226,7 +228,7 @@ impl<S: Snapshot> ForwardSeeker<S> {
                     if self.omit_value {
                         return Ok(Some(vec![]));
                     } else {
-                        let value = super::util::load_data_from_write(
+                        let value = super::util::load_data_by_write(
                             self.default_cursor.as_mut().unwrap(),
                             key,
                             write,
