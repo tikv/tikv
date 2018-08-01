@@ -15,7 +15,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use super::util::CursorBuilder;
 use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::Result;
+use storage::mvcc::{Lock, Result};
 use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
 
@@ -158,8 +158,10 @@ impl<S: Snapshot> ForwardSeeker<S> {
 
         // TODO: Add more comments to explain the logic.
         loop {
+            let mut has_lock = false;
             key = {
                 let (mut w_key, mut l_key) = (None, None);
+                // Try to advance both write_cursor and lock_valid
                 if write_valid {
                     if self
                         .write_cursor
@@ -181,16 +183,26 @@ impl<S: Snapshot> ForwardSeeker<S> {
                 }
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(k)) => Key::from_encoded(k.to_vec()),
+                    (None, Some(k)) => {
+                        has_lock = true;
+                        Key::from_encoded(k.to_vec())
+                    }
                     (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
                     (Some(wk), Some(lk)) => if wk < lk {
+                        // Lock greater than `wk`, so `wk` must not have lock.
                         Key::from_encoded(wk.to_vec()).truncate_ts()?
                     } else {
+                        has_lock = true;
                         Key::from_encoded(lk.to_vec())
                     },
                 }
             };
-            if let Some(v) = self.get(&key, ts)? {
+            let lock = if has_lock {
+                Some(self.lock_cursor.value(&mut self.statistics.lock).to_vec())
+            } else {
+                None
+            };
+            if let Some(v) = self.get(&key, ts, lock)? {
                 return Ok(Some((key, v)));
             }
             key = key.append_ts(0);
@@ -199,16 +211,13 @@ impl<S: Snapshot> ForwardSeeker<S> {
 
     /// Try to get the value of a key. Returns empty value if `omit_value` is set. Returns `None` if
     /// No valid value on this key.
-    fn get(&mut self, user_key: &Key, mut ts: u64) -> Result<Option<Value>> {
+    fn get(&mut self, user_key: &Key, mut ts: u64, lock: Option<Vec<u8>>) -> Result<Option<Value>> {
         match self.isolation_level {
             IsolationLevel::SI => {
-                // TODO: Use `self.lock_cursor` here
-                ts = super::util::load_and_check_lock(
-                    &self.snapshot,
-                    user_key,
-                    ts,
-                    &mut self.statistics,
-                )?
+                if let Some(lock) = lock {
+                    let lock = Lock::parse(&lock)?;
+                    ts = super::util::check_lock(user_key, ts, &lock)?
+                }
             }
             IsolationLevel::RC => {}
         }
