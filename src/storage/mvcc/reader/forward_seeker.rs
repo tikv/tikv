@@ -222,7 +222,7 @@ impl<S: Snapshot> ForwardSeeker<S> {
             IsolationLevel::RC => {}
         }
 
-        // TODO: following code is duplicated with PointGetter::read_next
+        // TODO: following code is very similar with PointGetter::read_next but different
         let encoded_user_key = user_key.encoded();
 
         // First seek to `${user_key}_${ts}`.
