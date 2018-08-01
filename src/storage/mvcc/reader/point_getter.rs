@@ -14,7 +14,7 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use raftstore::store::engine::IterOption;
-use storage::mvcc::write::WriteType;
+use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
 use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_WRITE};
 
@@ -102,11 +102,11 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 
             read_once: false,
 
-            write_cursor: Some(self.snapshot.iter_cf(
+            write_cursor: self.snapshot.iter_cf(
                 CF_WRITE,
                 build_iter_opt(self.fill_cache, !self.multi),
                 ScanMode::Forward,
-            )?),
+            )?,
             default_cursor: None,
         })
     }
@@ -135,8 +135,7 @@ pub struct PointGetter<S: Snapshot> {
     /// to check that `read_next` is called only once.
     read_once: bool,
 
-    /// Write cursor will never be `None`. It is `Option` so that we can take it away.
-    write_cursor: Option<Cursor<S::Iter>>,
+    write_cursor: Cursor<S::Iter>,
 
     /// Default cursor is optional since when value is short we don't need to look up in
     /// the default CF.
@@ -163,54 +162,58 @@ impl<S: Snapshot> PointGetter<S> {
             ts = super::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)?;
         }
 
-        let mut ret_value = None;
+        // First seek to `${key}_${ts}`.
+        self.write_cursor
+            .near_seek(&key.append_ts(ts), &mut self.statistics.write)?;
 
-        // Iterate all versions <= max_ts for the key.
-        // We take `write_cursor` to avoid keeping a mutable reference of `self`.
-        let mut write_cursor = self.write_cursor.take().unwrap();
-        {
-            let mut writes_iter = super::ForwardWriteIter::new(&mut write_cursor, &key, ts)?;
-            for result in &mut writes_iter {
-                let (_commit_ts, write) = result?;
-                match write.write_type {
-                    WriteType::Put => {
-                        if self.omit_value {
-                            ret_value = Some(vec![]);
-                        } else {
-                            match write.short_value {
-                                Some(value) => {
-                                    // Value is carried in `write`.
-                                    ret_value = Some(value);
-                                }
-                                None => {
-                                    // Value is in the default CF.
-                                    self.ensure_default_cursor()?;
-                                    let value = super::util::load_data_by_write(
-                                        &mut self.default_cursor.as_mut().unwrap(),
-                                        key,
-                                        write,
-                                        &mut self.statistics,
-                                    )?;
-                                    ret_value = Some(value);
-                                }
-                            }
+        loop {
+            if !self.write_cursor.valid() {
+                // Key space ended.
+                return Ok(None);
+            }
+            // We may move forward / seek to another key. In this case, the scan ends.
+            let write_key =
+                Key::from_encoded(self.write_cursor.key(&mut self.statistics.write).to_vec());
+            let user_key = write_key.truncate_ts()?;
+            if &user_key != key {
+                // Moved to another key.
+                return Ok(None);
+            }
+            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            self.statistics.write.processed += 1;
+            self.write_cursor.next(&mut self.statistics.write);
+
+            match write.write_type {
+                WriteType::Put => {
+                    if self.omit_value {
+                        return Ok(Some(vec![]));
+                    }
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            return Ok(Some(value));
                         }
-                        break;
+                        None => {
+                            // Value is in the default CF.
+                            self.ensure_default_cursor()?;
+                            let value = super::util::load_data_by_write(
+                                &mut self.default_cursor.as_mut().unwrap(),
+                                key,
+                                write,
+                                &mut self.statistics,
+                            )?;
+                            return Ok(Some(value));
+                        }
                     }
-                    WriteType::Delete => {
-                        ret_value = None;
-                        break;
-                    }
-                    WriteType::Lock | WriteType::Rollback => {
-                        // Continue iterate next `write`.
-                    }
+                }
+                WriteType::Delete => return Ok(None),
+                WriteType::Lock | WriteType::Rollback => {
+                    // Continue iterate next `write`.
                 }
             }
 
-            self.statistics.add(&writes_iter.take_statistics());
+            self.write_cursor.next(&mut self.statistics.write);
         }
-        self.write_cursor = Some(write_cursor);
-        Ok(ret_value)
     }
 
     /// Create the default cursor if it doesn't exist.
