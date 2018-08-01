@@ -11,9 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod cursor_builder;
+
 use storage::mvcc::{Error, Result};
 use storage::mvcc::{Lock, LockType, Write};
 use storage::{Cursor, Iterator, Key, Snapshot, Statistics, Value, CF_LOCK};
+
+pub use self::cursor_builder::CursorBuilder;
 
 /// Get the lock of a user key in the lock CF.
 ///
