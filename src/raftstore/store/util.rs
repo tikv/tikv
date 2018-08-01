@@ -546,7 +546,7 @@ impl Lease {
         }
     }
 
-    pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
+    pub fn maybe_new_remote_lease(&mut self) -> Option<RemoteLease> {
         if self.remote.is_some() {
             // At most one connected RemoteLease.
             return None;
@@ -560,12 +560,10 @@ impl Lease {
         };
         let remote = RemoteLease {
             expired_time: Arc::new(AtomicU64::new(expired_time)),
-            term,
         };
         // Clone the remote.
         let remote_clone = RemoteLease {
             expired_time: Arc::clone(&remote.expired_time),
-            term,
         };
         self.remote = Some(remote);
         Some(remote_clone)
@@ -589,7 +587,6 @@ impl fmt::Debug for Lease {
 #[derive(Debug)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
-    term: u64,
 }
 
 impl RemoteLease {
@@ -609,10 +606,6 @@ impl RemoteLease {
 
     fn expire(&self) {
         self.expired_time.store(0, AtomicOrdering::Release);
-    }
-
-    pub fn term(&self) -> u64 {
-        self.term
     }
 }
 
@@ -767,7 +760,7 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        let remote = lease.maybe_new_remote_lease(1).unwrap();
+        let remote = lease.maybe_new_remote_lease().unwrap();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);
             if state == LeaseState::Expired || state == LeaseState::Suspect {

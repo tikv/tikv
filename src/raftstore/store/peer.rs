@@ -417,12 +417,21 @@ impl Peer {
         Ok(peer)
     }
 
-    pub fn register_delegates(&self) {
+    pub fn register_apply_delegate(&self) {
         self.apply_scheduler
             .schedule(ApplyTask::register(self))
             .unwrap();
+    }
+
+    pub fn register_read_delegate(&self) {
         self.read_scheduler
             .schedule(ReadTask::register(self))
+            .unwrap();
+    }
+
+    pub fn deregister_read_delegate(&self) {
+        self.read_scheduler
+            .schedule(ReadTask::destroy(self.region_id))
             .unwrap();
     }
 
@@ -799,6 +808,7 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
+                    self.register_read_delegate();
                     self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
@@ -808,6 +818,7 @@ impl Peer {
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
+                    self.deregister_read_delegate();
                 }
                 _ => {}
             }
@@ -988,7 +999,7 @@ impl Peer {
         }
 
         if apply_snap_result.is_some() {
-            self.register_delegates();
+            self.register_apply_delegate();
         }
 
         apply_snap_result
@@ -1182,8 +1193,7 @@ impl Peer {
             return;
         }
         self.leader_lease.renew(ts);
-        let term = self.term();
-        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
+        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease() {
             let mut progress = ReadProgress::new();
             progress.set_leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);
