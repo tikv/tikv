@@ -17,6 +17,7 @@ use raftstore::store::engine::IterOption;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
 use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use util::codec::number;
 
 pub struct ForwardSeekerBuilder<S: Snapshot> {
     snapshot: S,
@@ -27,7 +28,9 @@ pub struct ForwardSeekerBuilder<S: Snapshot> {
     upper_bound: Option<Vec<u8>>,
 }
 
+/// `ForwardSeeker` factory.
 impl<S: Snapshot> ForwardSeekerBuilder<S> {
+    /// Initialize a new `ForwardSeeker`
     pub fn new(snapshot: S) -> Self {
         Self {
             snapshot,
@@ -39,24 +42,40 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
         }
     }
 
+    /// Set whether or not read operations should fill the cache.
+    ///
+    /// Defaults to `true`.
     #[inline]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
         self.fill_cache = fill_cache;
         self
     }
 
+    /// Set whether values of the user key should be omitted. When `omit_value` is `true`, the
+    /// length of returned value will be 0.
+    ///
+    /// Previously this option is called `key_only`.
+    ///
+    /// Defaults to `false`.
     #[inline]
     pub fn omit_value(mut self, omit_value: bool) -> Self {
         self.omit_value = omit_value;
         self
     }
 
+    /// Set the isolation level.
+    ///
+    /// Defaults to `IsolationLevel::SI`.
     #[inline]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.isolation_level = isolation_level;
         self
     }
 
+    /// Limit the range in which the `ForwardSeeker` should seek. `None` means unbounded.
+    /// TODO: Is the range `[lower_bound, upper_bound)`?
+    ///
+    /// Default is `(None, None)`.
     #[inline]
     pub fn range(mut self, lower_bound: Option<Vec<u8>>, upper_bound: Option<Vec<u8>>) -> Self {
         self.lower_bound = lower_bound;
@@ -64,60 +83,62 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
         self
     }
 
+    /// Build `ForwardSeeker` from the current configuration.
     pub fn build(self) -> Result<ForwardSeeker<S>> {
-        let lock_cursor = self.snapshot.iter_cf(
-            CF_LOCK,
-            IterOption::new(
-                self.lower_bound.clone(),
-                self.upper_bound.clone(),
-                self.fill_cache,
-            ),
-            ScanMode::Forward,
-        )?;
+        let lock_cursor = self
+            .snapshot
+            .iter_cf(CF_LOCK, self.build_iter_opt(), ScanMode::Forward)?;
 
-        let write_cursor = self.snapshot.iter_cf(
-            CF_WRITE,
-            IterOption::new(
-                self.lower_bound.clone(),
-                self.upper_bound.clone(),
-                self.fill_cache,
-            ),
-            ScanMode::Forward,
-        )?;
-
-        let default_cursor = if self.omit_value {
-            None
-        } else {
-            Some(self.snapshot.iter_cf(
-                CF_DEFAULT,
-                IterOption::new(
-                    self.lower_bound.clone(),
-                    self.upper_bound.clone(),
-                    self.fill_cache,
-                ),
-                ScanMode::Forward,
-            )?)
-        };
+        let write_cursor =
+            self.snapshot
+                .iter_cf(CF_WRITE, self.build_iter_opt(), ScanMode::Forward)?;
 
         Ok(ForwardSeeker {
             snapshot: self.snapshot,
+            fill_cache: self.fill_cache,
             omit_value: self.omit_value,
             isolation_level: self.isolation_level,
+            lower_bound: self.lower_bound,
+            upper_bound: self.upper_bound,
             lock_cursor,
             write_cursor,
-            default_cursor,
+            default_cursor: None,
             statistics: Statistics::default(),
         })
     }
+
+    fn build_iter_opt(&self) -> IterOption {
+        IterOption::new(
+            self.lower_bound.clone(),
+            self.upper_bound.clone(),
+            self.fill_cache,
+        )
+    }
 }
 
+/// This struct can be used to find next key greater or equal to a given user key. Internally,
+/// rollbacks are ignored and smaller version will be tried. If the isolation level is SI, locks
+/// will be checked first.
+///
+/// This struct keeps the iterator moves forward. If you use this to perform seeking multiple times,
+/// then you are not allowed to seek a key that is less than the previous one.
+///
+/// Use `ForwardSeekerBuilder` to build `ForwardSeeker`.
 pub struct ForwardSeeker<S: Snapshot> {
     snapshot: S,
+    fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
 
+    /// `lower_bound` and `upper_bound` is only used to create `default_cursor`. It will be consumed
+    /// after default_cursor's being created.
+    lower_bound: Option<Vec<u8>>,
+    upper_bound: Option<Vec<u8>>,
+
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
+
+    /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
 
     statistics: Statistics,
@@ -134,15 +155,14 @@ impl<S: Snapshot> ForwardSeeker<S> {
         &self.statistics
     }
 
+    /// Get the next key-value pair, where the key is greater or equal to given `key`.
     pub fn read_next(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        //        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Forward);
-        //        self.ensure_write_cursor()?;
-        //        self.ensure_lock_cursor()?;
         // TODO: Panic if given key is less than current key
         // (Maybe we can panic in cursor's code)
 
         let (mut write_valid, mut lock_valid) = (true, true);
 
+        // TODO: Add more comments to explain the logic.
         loop {
             key = {
                 let (mut w_key, mut l_key) = (None, None);
@@ -183,41 +203,43 @@ impl<S: Snapshot> ForwardSeeker<S> {
         }
     }
 
-    fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
+    /// Try to get the value of a key. Returns empty value if `omit_value` is set. Returns `None` if
+    /// No valid value on this key.
+    fn get(&mut self, user_key: &Key, mut ts: u64) -> Result<Option<Value>> {
         match self.isolation_level {
             IsolationLevel::SI => {
                 // TODO: Use `self.lock_cursor` here
-                ts =
-                    super::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)?
+                ts = super::util::load_and_check_lock(
+                    &self.snapshot,
+                    user_key,
+                    ts,
+                    &mut self.statistics,
+                )?
             }
             IsolationLevel::RC => {}
         }
 
         // TODO: following code is duplicated with PointGetter::read_next
-        loop {
-            // Near seek `${key}_${commit_ts}` in write CF.
+        let encoded_user_key = user_key.encoded();
 
-            // TODO: each next in near_seek should count flow_stats as well.
-            if !self
-                .write_cursor
-                .near_seek(&key.append_ts(ts), &mut self.statistics.write)?
-            {
-                // Cursor reaches range end and key is not found
+        // First seek to `${user_key}_${ts}`.
+        self.write_cursor
+            .near_seek(&user_key.append_ts(ts), &mut self.statistics.write)?;
+
+        loop {
+            if !self.write_cursor.valid() {
+                // Key space ended.
                 return Ok(None);
             }
-
-            self.statistics.write.flow_stats.read_bytes +=
-                self.write_cursor.key(&mut self.statistics.write).len()
-                    + self.write_cursor.value(&mut self.statistics.write).len();
-            self.statistics.write.flow_stats.read_keys += 1;
-
-            let write_key =
-                Key::from_encoded(self.write_cursor.key(&mut self.statistics.write).to_vec());
-            let commit_ts = write_key.decode_ts()?;
-            let write_user_key = write_key.truncate_ts()?;
-            if write_user_key != *key {
-                // Found another key, current key with commit_ts < ts must not exist.
-                return Ok(None);
+            // We may move forward / seek to another key. In this case, the scan ends.
+            {
+                let cursor_key = self.write_cursor.key(&mut self.statistics.write);
+                if cursor_key.len() != encoded_user_key.len() + number::U64_SIZE
+                    || !cursor_key.starts_with(encoded_user_key)
+                {
+                    // Meet another key.
+                    return Ok(None);
+                }
             }
 
             let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
@@ -227,19 +249,49 @@ impl<S: Snapshot> ForwardSeeker<S> {
                 WriteType::Put => {
                     if self.omit_value {
                         return Ok(Some(vec![]));
-                    } else {
-                        let value = super::util::load_data_by_write(
-                            self.default_cursor.as_mut().unwrap(),
-                            key,
-                            write,
-                            &mut self.statistics,
-                        )?;
-                        return Ok(Some(value));
+                    }
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            return Ok(Some(value));
+                        }
+                        None => {
+                            // Value is in the default CF.
+                            self.ensure_default_cursor()?;
+                            let value = super::util::load_data_by_write(
+                                &mut self.default_cursor.as_mut().unwrap(),
+                                user_key,
+                                write,
+                                &mut self.statistics,
+                            )?;
+                            return Ok(Some(value));
+                        }
                     }
                 }
                 WriteType::Delete => return Ok(None),
-                WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
+                WriteType::Lock | WriteType::Rollback => {
+                    // Continue iterate next `write`.
+                }
             }
+
+            self.write_cursor.next(&mut self.statistics.write);
         }
+    }
+
+    /// Create the default cursor if it doesn't exist.
+    fn ensure_default_cursor(&mut self) -> Result<()> {
+        if self.default_cursor.is_some() {
+            return Ok(());
+        }
+        let iter_opt = IterOption::new(
+            self.lower_bound.take(),
+            self.upper_bound.take(),
+            self.fill_cache,
+        );
+        let iter = self
+            .snapshot
+            .iter_cf(CF_DEFAULT, iter_opt, ScanMode::Forward)?;
+        self.default_cursor = Some(iter);
+        Ok(())
     }
 }
