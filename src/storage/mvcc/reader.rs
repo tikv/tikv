@@ -271,6 +271,13 @@ impl<S: Snapshot> MvccReader<S> {
             if write.start_ts == start_ts {
                 return Ok(Some((commit_ts, write.write_type)));
             }
+
+            // If we reach a commit version whose type is not Rollback and start ts is
+            // larger than the given start ts, stop searching.
+            if write.write_type != WriteType::Rollback && write.start_ts > start_ts {
+                break;
+            }
+
             seek_ts = commit_ts + 1;
         }
         Ok(None)
@@ -558,7 +565,7 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
-    pub fn scan_lock<F>(
+    pub fn scan_locks<F>(
         &mut self,
         start: Option<Key>,
         filter: F,
@@ -711,6 +718,7 @@ mod tests {
     use std::sync::Arc;
     use std::u64;
     use storage::engine::{Modify, ScanMode};
+    use storage::mvcc::write::WriteType;
     use storage::mvcc::{MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
@@ -1205,5 +1213,64 @@ mod tests {
         assert_eq!(reader.get_statistics().write.next, total_next);
         assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
         assert_eq!(reader.get_statistics().write.get, 0);
+    }
+
+    #[test]
+    fn test_get_txn_commit_info() {
+        let path = TempDir::new("_test_storage_mvcc_reader_reverse_seek_basic").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::Put((make_key(k), v.to_vec()));
+        engine.prewrite(m, k, 1);
+        engine.commit(k, 1, 10);
+
+        engine.rollback(k, 5);
+        engine.rollback(k, 20);
+
+        let m = Mutation::Put((make_key(k), v.to_vec()));
+        engine.prewrite(m, k, 25);
+        engine.commit(k, 25, 30);
+
+        let m = Mutation::Put((make_key(k), v.to_vec()));
+        engine.prewrite(m, k, 35);
+        engine.commit(k, 35, 40);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+
+        // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
+        // is 40.
+        // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        let key = make_key(k);
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
+        assert_eq!(commit_ts, 40);
+        assert_eq!(write_type, WriteType::Put);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 25).unwrap().unwrap();
+        assert_eq!(commit_ts, 30);
+        assert_eq!(write_type, WriteType::Put);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 20).unwrap().unwrap();
+        assert_eq!(commit_ts, 20);
+        assert_eq!(write_type, WriteType::Rollback);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().unwrap();
+        assert_eq!(commit_ts, 10);
+        assert_eq!(write_type, WriteType::Put);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5).unwrap().unwrap();
+        assert_eq!(commit_ts, 5);
+        assert_eq!(write_type, WriteType::Rollback);
+
+        let seek_for_prev_old = reader.get_statistics().write.seek_for_prev;
+        assert!(reader.get_txn_commit_info(&key, 15).unwrap().is_none());
+        let seek_for_prev_new = reader.get_statistics().write.seek_for_prev;
+
+        // `get_txn_commit_info(&key, 15)` stopped at `30_25 PUT`.
+        assert_eq!(seek_for_prev_new - seek_for_prev_old, 2);
     }
 }

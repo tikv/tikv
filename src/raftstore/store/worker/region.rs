@@ -471,7 +471,7 @@ impl Runner {
         clean_stale_peer_delay: Duration,
     ) -> Runner {
         Runner {
-            pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap generator"))
+            pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
                 .thread_count(GENERATE_POOL_SIZE)
                 .build(),
             ctx: SnapContext {
