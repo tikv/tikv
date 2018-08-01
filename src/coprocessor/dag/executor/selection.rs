@@ -14,16 +14,14 @@
 use std::sync::Arc;
 
 use tipb::executor::Selection;
-use tipb::schema::ColumnInfo;
 
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
 
-use super::{inflate_with_col_for_dag, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 pub struct SelectionExecutor {
     conditions: Vec<Expression>,
-    cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
     src: Box<Executor + Send>,
@@ -34,16 +32,14 @@ impl SelectionExecutor {
     pub fn new(
         mut meta: Selection,
         eval_cfg: Arc<EvalConfig>,
-        columns_info: Arc<Vec<ColumnInfo>>,
         src: Box<Executor + Send>,
     ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
-        let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
+        let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
         let mut ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
             conditions: Expression::batch_build(&mut ctx, conditions)?,
-            cols: columns_info,
             related_cols_offset: visitor.column_offsets(),
             ctx,
             src,
@@ -56,20 +52,15 @@ impl SelectionExecutor {
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
-            let cols = inflate_with_col_for_dag(
-                &mut self.ctx,
-                &row.data,
-                self.cols.as_ref(),
-                &self.related_cols_offset,
-                row.handle,
-            )?;
+            let row = row.take_origin();
+            let cols = row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)?;
             for filter in &self.conditions {
                 let val = filter.eval(&mut self.ctx, &cols)?;
                 if !val.into_bool(&mut self.ctx)?.unwrap_or(false) {
                     continue 'next;
                 }
             }
-            return Ok(Some(row));
+            return Ok(Some(Row::Origin(row)));
         }
         Ok(None)
     }
@@ -93,6 +84,10 @@ impl Executor for SelectionExecutor {
         } else {
             Some(self.ctx.take_warnings())
         }
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
     }
 }
 
@@ -211,7 +206,7 @@ mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         let inner_table_scan =
-            TableScanExecutor::new(&table_scan, key_ranges, store, false).unwrap();
+            TableScanExecutor::new(table_scan, key_ranges, store, false).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -221,13 +216,12 @@ mod tests {
         let mut selection_executor = SelectionExecutor::new(
             selection,
             Arc::new(EvalConfig::default()),
-            Arc::new(cis),
             Box::new(inner_table_scan),
         ).unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row);
+            selection_rows.push(row.take_origin());
         }
 
         assert_eq!(selection_rows.len(), raw_data.len());
@@ -265,8 +259,7 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let inner_table_scan =
-            TableScanExecutor::new(&table_scan, key_ranges, store, true).unwrap();
+        let inner_table_scan = TableScanExecutor::new(table_scan, key_ranges, store, true).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -276,13 +269,12 @@ mod tests {
         let mut selection_executor = SelectionExecutor::new(
             selection,
             Arc::new(EvalConfig::default()),
-            Arc::new(cis),
             Box::new(inner_table_scan),
         ).unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row);
+            selection_rows.push(row.take_origin());
         }
 
         let expect_row_handles = raw_data
