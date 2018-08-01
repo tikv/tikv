@@ -3481,7 +3481,7 @@ mod tests {
             total_output_bytes: 0,
             start_key: size_prop.smallest_key().unwrap(),
             end_key: size_prop.largest_key().unwrap(),
-            input_props: vec![size_prop],
+            input_props: vec![size_prop.into()],
             output_props: vec![],
         };
 
