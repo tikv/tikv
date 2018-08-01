@@ -20,6 +20,7 @@ use std::{error, result};
 pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -161,6 +162,17 @@ pub trait Iterator: Send + Sized {
 
     fn key(&self) -> &[u8];
     fn value(&self) -> &[u8];
+}
+
+pub trait RegionInfoProvider: Send + Sized + Clone + 'static {
+    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
+    /// this TiKV satisfies `filter(peer)` returns true.
+    fn seek_region(
+        &self,
+        from: &[u8],
+        filter: SeekRegionFilter,
+        limit: u32,
+    ) -> Result<SeekRegionResult>;
 }
 
 macro_rules! near_loop {

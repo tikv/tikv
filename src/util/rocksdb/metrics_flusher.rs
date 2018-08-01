@@ -47,7 +47,7 @@ impl MetricsFlusher {
         let interval = self.interval;
         self.sender = Some(tx);
         let h = Builder::new()
-            .name(thd_name!("rocksb-metrics-flusher"))
+            .name(thd_name!("rocksdb-metrics"))
             .spawn(move || {
                 let mut last_reset = Instant::now();
                 let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);

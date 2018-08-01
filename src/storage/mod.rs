@@ -804,7 +804,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn async_scan_lock(
+    pub fn async_scan_locks(
         &self,
         ctx: Context,
         max_ts: u64,
@@ -875,7 +875,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
@@ -927,7 +927,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
@@ -975,7 +975,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Put(
-                Self::rawkv_cf(cf)?,
+                Self::rawkv_cf(&cf)?,
                 Key::from_encoded(key),
                 value,
             )],
@@ -992,7 +992,7 @@ impl<E: Engine> Storage<E> {
         pairs: Vec<KvPair>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(&cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1026,7 +1026,7 @@ impl<E: Engine> Storage<E> {
         }
         self.engine.async_write(
             &ctx,
-            vec![Modify::Delete(Self::rawkv_cf(cf)?, Key::from_encoded(key))],
+            vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1054,7 +1054,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::DeleteRange(
-                Self::rawkv_cf(cf)?,
+                Self::rawkv_cf(&cf)?,
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
             )],
@@ -1073,7 +1073,7 @@ impl<E: Engine> Storage<E> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(&cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1096,7 +1096,7 @@ impl<E: Engine> Storage<E> {
 
     fn raw_scan(
         snapshot: &E::Snap,
-        cf: String,
+        cf: &str,
         start_key: &Key,
         end_key: Option<Key>,
         limit: usize,
@@ -1153,7 +1153,7 @@ impl<E: Engine> Storage<E> {
                     let mut statistics = Statistics::default();
                     let result = Self::raw_scan(
                         &snapshot,
-                        cf,
+                        &cf,
                         &Key::from_encoded(key),
                         None,
                         limit,
@@ -1192,16 +1192,16 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    fn rawkv_cf(cf: String) -> Result<CfName> {
+    fn rawkv_cf(cf: &str) -> Result<CfName> {
         if cf.is_empty() {
             return Ok(CF_DEFAULT);
         }
         for c in DATA_CFS {
-            if &cf == c {
+            if cf == *c {
                 return Ok(c);
             }
         }
-        Err(Error::InvalidCf(cf))
+        Err(Error::InvalidCf(cf.to_owned()))
     }
 
     fn check_key_ranges(ranges: &[KeyRange]) -> bool {
@@ -1263,7 +1263,7 @@ impl<E: Engine> Storage<E> {
                         };
                         let pairs = Self::raw_scan(
                             &snapshot,
-                            cf.clone(),
+                            &cf,
                             &start_key,
                             end_key,
                             each_limit,
@@ -1502,7 +1502,7 @@ mod tests {
     }
 
     fn new_read_pool() -> ReadPool<ReadPoolContext> {
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future–worker");
         ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         })
