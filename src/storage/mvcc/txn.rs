@@ -375,7 +375,7 @@ mod tests {
     use super::MvccTxn;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, Modify, Snapshot, TEMP_DIR};
-    use storage::{make_key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
+    use storage::{make_key, Mutation, Options, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
     use tempdir::TempDir;
 
     fn gen_value(v: u8, len: usize) -> Vec<u8> {
@@ -1116,8 +1116,8 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_values_in_default() {
-        let path = TempDir::new("_test_scan_values_in_default").expect("");
+    fn test_scan_values() {
+        let path = TempDir::new("_test_scan_values").unwrap();
         let path = path.path().to_str().unwrap();
         let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
 
@@ -1158,24 +1158,16 @@ mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Forward),
-            true,
-            None,
-            None,
-            IsolationLevel::SI,
-        );
-
-        let v = reader.scan_values_in_default(&make_key(&[3])).unwrap();
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let v = cf_reader.scan_values(&make_key(&[3])).unwrap();
         assert_eq!(v.len(), 2);
         assert_eq!(v[1], (3, gen_value(b'a', SHORT_VALUE_MAX_LEN + 1)));
         assert_eq!(v[0], (5, gen_value(b'b', SHORT_VALUE_MAX_LEN + 1)));
     }
 
     #[test]
-    fn test_seek_ts() {
-        let path = TempDir::new("_test_seek_ts").expect("");
+    fn test_slowly_seek_key_by_start_ts() {
+        let path = TempDir::new("_test_slowly_seek_key_by_start_ts").unwrap();
         let path = path.path().to_str().unwrap();
         let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
 
@@ -1204,15 +1196,10 @@ mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Forward),
-            true,
-            None,
-            None,
-            IsolationLevel::SI,
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        assert_eq!(
+            cf_reader.slowly_seek_key_by_start_ts(3).unwrap().unwrap(),
+            make_key(&[2])
         );
-
-        assert_eq!(reader.seek_ts(3).unwrap().unwrap(), make_key(&[2]));
     }
 }

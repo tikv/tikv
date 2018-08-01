@@ -11,9 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::mvcc::Lock;
 use storage::mvcc::Result;
-use storage::{Cursor, Key, Snapshot, Statistics, CF_LOCK, CF_WRITE};
+use storage::mvcc::{Lock, Write};
+use storage::{Cursor, Snapshot, Statistics, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{Key, Value};
 
 /// `CFReader` factory.
 pub struct CFReaderBuilder<S: Snapshot> {
@@ -48,6 +49,7 @@ impl<S: Snapshot> CFReaderBuilder<S> {
 
             lock_cursor: None,
             write_cursor: None,
+            default_cursor: None,
         })
     }
 }
@@ -64,6 +66,7 @@ pub struct CFReader<S: Snapshot> {
 
     lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Option<Cursor<S::Iter>>,
+    default_cursor: Option<Cursor<S::Iter>>,
 }
 
 impl<S: Snapshot> CFReader<S> {
@@ -117,7 +120,9 @@ impl<S: Snapshot> CFReader<S> {
     }
 
     /// Iterate and get all user keys in the write CF within the given key space (specified by
-    /// `start_key` and `limit`). If `limit` is `0`, no keys will be returned.
+    /// `start_key` and `limit`). `limit` must not be `0`.
+    ///
+    /// Internally, several `near_seek` will be performed.
     ///
     /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
     /// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
@@ -131,6 +136,45 @@ impl<S: Snapshot> CFReader<S> {
         self.ensure_write_cursor()?;
         let write_cursor = self.write_cursor.as_mut().unwrap();
         super::util::scan_keys(write_cursor, start_key, limit, &mut self.statistics)
+    }
+
+    /// Iterate and get all `Write`s for a key whose commit_ts <= `max_ts`.
+    ///
+    /// Internally, there will be a `near_seek` operation for first iterate and
+    /// `next` operation for other iterations.
+    ///
+    /// The return value is a `Vec` of type `(commit_ts, write)`.
+    #[inline]
+    pub fn scan_writes(&mut self, user_key: &Key, max_ts: u64) -> Result<Vec<(u64, Write)>> {
+        self.ensure_write_cursor()?;
+        let write_cursor = self.write_cursor.as_mut().unwrap();
+        super::util::scan_writes(write_cursor, user_key, max_ts, &mut self.statistics)
+    }
+
+    /// Iterate and get values of all versions for a given key in the default CF.
+    ///
+    /// Notice that small values are embedded in `Write`, which will not be retrieved
+    /// by this function.
+    ///
+    /// Internally, there will be a `near_seek` operation for first iterate and
+    /// `next` operation for other iterations.
+    ///
+    /// The return value is a `Vec` of type `(start_ts, value)`.
+    #[inline]
+    pub fn scan_values(&mut self, user_key: &Key) -> Result<Vec<(u64, Value)>> {
+        self.ensure_default_cursor()?;
+        let default_cursor = self.default_cursor.as_mut().unwrap();
+        super::util::scan_values(default_cursor, user_key, &mut self.statistics)
+    }
+
+    /// Seek for the first committed user key with the given `start_ts`.
+    ///
+    /// WARN: This function may perform a full scan. Use with caution.
+    #[inline]
+    pub fn slowly_seek_key_by_start_ts(&mut self, start_ts: u64) -> Result<Option<Key>> {
+        self.ensure_write_cursor()?;
+        let write_cursor = self.write_cursor.as_mut().unwrap();
+        super::util::slowly_seek_key_by_start_ts(write_cursor, start_ts, &mut self.statistics)
     }
 
     /// Create the lock cursor if it doesn't exist.
@@ -154,6 +198,18 @@ impl<S: Snapshot> CFReader<S> {
             .fill_cache(self.fill_cache)
             .build()?;
         self.write_cursor = Some(cursor);
+        Ok(())
+    }
+
+    /// Create the default cursor if it doesn't exist.
+    fn ensure_default_cursor(&mut self) -> Result<()> {
+        if self.default_cursor.is_some() {
+            return Ok(());
+        }
+        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+            .fill_cache(self.fill_cache)
+            .build()?;
+        self.default_cursor = Some(cursor);
         Ok(())
     }
 }
