@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
+use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
@@ -30,6 +31,24 @@ impl ScalarFunc {
         let format_mask_str = String::from_utf8(format_mask.into_owned())?;
         let res = t.date_format(format_mask_str)?;
         Ok(Some(Cow::Owned(res.into_bytes())))
+    }
+
+    #[inline]
+    pub fn eval_data<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let t = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.invalid_zero() {
+            return Err(box_err!("Incorrect datetime value: '{}'", t));
+        }
+        let res = Time::new(
+            t.get_time().date().and_hms(0, 0, 0),
+            mysql::types::DATE,
+            t.get_fsp() as i8,
+        ).unwrap();
+        Ok(Some(Cow::Owned(res)))
     }
 }
 
@@ -89,6 +108,23 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
+        }
+    }
+
+    #[test]
+    fn test_date() {
+        let tests = vec![
+            ("2011-11-11", "2011-11-11"),
+            ("2011-11-11 10:10:10", "2011-11-11"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let exp = Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap());
+            let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
