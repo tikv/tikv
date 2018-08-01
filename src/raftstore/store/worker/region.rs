@@ -18,21 +18,19 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{Writable, WriteBatch};
 
 use raftstore::store::engine::{Mutable, Snapshot};
-use raftstore::store::msg::Msg;
 use raftstore::store::peer_storage::*;
 use raftstore::store::snap::{ApplyOptions, SnapError};
-use raftstore::store::util::{find_peer, Engines};
+use raftstore::store::util::Engines;
 use raftstore::store::{self, keys, Peekable, SnapKey, SnapManager};
 use raftstore::{Error as RaftStoreError, Result};
 use storage::CF_RAFT;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::timer::Timer;
-use util::transport::SendCh;
 use util::worker::{Runnable, RunnableWithTimer};
 use util::{escape, rocksdb, time};
 
@@ -210,7 +208,6 @@ impl PendingDeleteRanges {
 struct SnapContext {
     engines: Engines,
     store_id: u64,
-    sendch: SendCh<Msg>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -366,7 +363,7 @@ impl SnapContext {
             _ => panic!("failed to get region_state from {}", escape(&region_key)),
         };
 
-        let counter = match self.apply_snap(
+        match self.apply_snap(
             region_id,
             &region_key,
             region_state.clone(),
@@ -374,37 +371,26 @@ impl SnapContext {
         ) {
             Ok(()) => {
                 snap_applying_state.store(APPLY_STATUS_RELAX, Ordering::SeqCst);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "success"])
+                SNAP_COUNTER_VEC
+                    .with_label_values(&["apply", "success"])
+                    .inc();
             }
             Err(RaftStoreError::Snapshot(SnapError::Abort)) => {
                 // Abort normally is caused by raftstore canceled the apply.
                 snap_applying_state.store(APPLY_STATUS_FAILED, Ordering::SeqCst);
                 warn!("applying snapshot for region {} is aborted.", region_id);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"])
+                SNAP_COUNTER_VEC
+                    .with_label_values(&["apply", "abort"])
+                    .inc();
             }
             Err(e) => {
                 snap_applying_state.store(APPLY_STATUS_FAILED, Ordering::SeqCst);
                 error!("failed to apply snap: {:?}!!!", e);
-                self.gc_peer_after_apply_fail(region_state, self.store_id);
-                SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"])
+                SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
+                panic!("region {} apply fail: {}", region_id, e);
             }
-        };
-        counter.inc();
+        }
         timer.observe_duration();
-    }
-
-    fn gc_peer_after_apply_fail(&self, mut region_state: RegionLocalState, store_id: u64) {
-        let mut region = region_state.take_region();
-        let peer = find_peer(&region, store_id).unwrap().clone();
-        let mut epoch = region.take_region_epoch();
-        epoch.version += 1; // To ensure the peer can be gc.
-
-        let mut raft_message = RaftMessage::new();
-        raft_message.set_region_id(region.get_id());
-        raft_message.set_to_peer(peer);
-        raft_message.set_region_epoch(epoch);
-        raft_message.set_is_tombstone(true);
-        self.sendch.send(Msg::RaftMessage(raft_message)).unwrap();
     }
 
     fn cleanup_range(
@@ -505,7 +491,6 @@ impl Runner {
     pub fn new(
         engines: Engines,
         store_id: u64,
-        sendch: SendCh<Msg>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -518,7 +503,6 @@ impl Runner {
             ctx: SnapContext {
                 engines,
                 store_id,
-                sendch,
                 mgr,
                 batch_size,
                 use_delete_range,

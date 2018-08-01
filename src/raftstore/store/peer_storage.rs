@@ -1359,7 +1359,6 @@ mod test {
     use raft::{Error as RaftError, StorageError};
     use raftstore::store::bootstrap;
     use raftstore::store::local_metrics::RaftMetrics;
-    use raftstore::store::msg::Msg;
     use raftstore::store::util::Engines;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
@@ -1373,7 +1372,6 @@ mod test {
     use storage::{ALL_CFS, CF_DEFAULT};
     use tempdir::*;
     use util::rocksdb::new_engine;
-    use util::transport::SendCh;
     use util::worker::{Scheduler, Worker};
 
     use super::*;
@@ -1452,19 +1450,6 @@ mod test {
 
     fn size_of<T: protobuf::Message>(m: &T) -> u32 {
         m.compute_size()
-    }
-
-    fn get_test_sendch() -> SendCh<Msg> {
-        use mio::{EventLoop, Handler};
-        struct H;
-        impl Handler for H {
-            type Timeout = ();
-            type Message = Msg;
-            fn notify(&mut self, _: &mut EventLoop<Self>, _: Msg) {}
-        }
-
-        let event_loop = EventLoop::<H>::new().unwrap();
-        SendCh::new(event_loop.channel(), "test")
     }
 
     #[test]
@@ -1668,15 +1653,7 @@ mod test {
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
-        let runner = RegionRunner::new(
-            s.engines.clone(),
-            1,
-            get_test_sendch(),
-            mgr,
-            0,
-            true,
-            Duration::from_secs(0),
-        );
+        let runner = RegionRunner::new(s.engines.clone(), 1, mgr, 0, true, Duration::from_secs(0));
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -1965,7 +1942,6 @@ mod test {
         let runner = RegionRunner::new(
             s1.engines.clone(),
             1,
-            get_test_sendch(),
             mgr.clone(),
             0,
             true,
