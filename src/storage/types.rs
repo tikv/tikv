@@ -69,7 +69,7 @@ pub fn decode_ts(key: &[u8]) -> Result<u64, codec::Error> {
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
@@ -111,6 +111,13 @@ impl Key {
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
     pub fn decode_ts(&self) -> Result<u64, codec::Error> {
+        Ok(decode_ts(&self.0)?)
+    }
+
+    /// Creates a new key by truncating the timestamp from this key.
+    ///
+    /// Preconditions: the caller must ensure this is actually a timestamped key.
+    pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
         if len < number::U64_SIZE {
             // TODO: IMHO, this should be an assertion failure instead of
@@ -124,17 +131,19 @@ impl Key {
             // in the core storage engine layer.
             Err(codec::Error::KeyLength)
         } else {
-            Ok(decode_ts(&self.0)?)
+            self.0.truncate(len - number::U64_SIZE);
+            Ok(Key(self.0))
         }
     }
+}
 
-    /// Creates a new key by truncating the timestamp from this key.
-    ///
-    /// Preconditions: the caller must ensure this is actually a timestamped key.
-    pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
-        let len = self.0.len();
-        self.0.truncate(len - number::U64_SIZE);
-        Ok(Key(self.0))
+impl Clone for Key {
+    fn clone(&self) -> Self {
+        // default clone implemention use self.len() to reserve capacity
+        // for the sake of appending ts, we need to reserve more
+        let mut key = Vec::with_capacity(self.0.capacity());
+        key.extend_from_slice(&self.0);
+        Key(key)
     }
 }
 

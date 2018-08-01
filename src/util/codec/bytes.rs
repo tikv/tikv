@@ -23,6 +23,7 @@ const ENC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 
 // returns the maximum encoded bytes size.
 pub fn max_encoded_bytes_size(n: usize) -> usize {
+    // reserve number::U64_SIZE for later append_ts
     (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1) + number::U64_SIZE
 }
 
@@ -347,7 +348,11 @@ mod tests {
     #[test]
     fn test_max_encoded_bytes_size() {
         let n = bytes::ENC_GROUP_SIZE;
-        let tbl: Vec<(usize, usize)> = vec![(0, n + 1), (n / 2, n + 1), (n, 2 * (n + 1))];
+        let tbl: Vec<(usize, usize)> = vec![
+            (0, n + 1 + number::U64_SIZE),
+            (n / 2, n + 1 + number::U64_SIZE),
+            (n, 2 * (n + 1) + number::U64_SIZE),
+        ];
         for (x, y) in tbl {
             assert_eq!(max_encoded_bytes_size(x), y);
         }
