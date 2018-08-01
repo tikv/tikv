@@ -512,7 +512,7 @@ fn process_read<E: Engine>(
             let res = reader
                 .scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit)
                 .map_err(Error::from)
-                .and_then(|kv_pairs| {
+                .and_then(|(kv_pairs, _)| {
                     let mut locks = Vec::with_capacity(kv_pairs.len());
                     for (key, lock) in kv_pairs {
                         let mut lock_info = LockInfo::new();
@@ -554,7 +554,7 @@ fn process_read<E: Engine>(
                     RESOLVE_LOCK_BATCH_SIZE,
                 )
                 .map_err(Error::from)
-                .and_then(|kv_pairs| {
+                .and_then(|(kv_pairs, is_remain)| {
                     sched_ctx
                         .command_keyread_duration
                         .with_label_values(&[tag])
@@ -562,8 +562,8 @@ fn process_read<E: Engine>(
                     if kv_pairs.is_empty() {
                         Ok(None)
                     } else {
-                        let next_scan_key = if kv_pairs.len() == RESOLVE_LOCK_BATCH_SIZE {
-                            // We got this many locks (as we specified). There might be more locks.
+                        let next_scan_key = if is_remain {
+                            // There might be more locks.
                             kv_pairs.last().map(|(k, _lock)| k.clone())
                         } else {
                             // All locks are scanned

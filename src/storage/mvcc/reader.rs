@@ -564,12 +564,14 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
+    /// remaining locks that can be scanned.
     pub fn scan_locks<F>(
         &mut self,
         start: Option<&Key>,
         filter: F,
         limit: usize,
-    ) -> Result<Vec<(Key, Lock)>>
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
         F: Fn(&Lock) -> bool,
     {
@@ -580,7 +582,7 @@ impl<S: Snapshot> MvccReader<S> {
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
-            return Ok(vec![]);
+            return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
         while cursor.valid() {
@@ -589,13 +591,14 @@ impl<S: Snapshot> MvccReader<S> {
             if filter(&lock) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
-                    return Ok(locks);
+                    return Ok((locks, true));
                 }
             }
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed += locks.len();
-        Ok(locks)
+        // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
+        Ok((locks, false))
     }
 
     pub fn scan_keys(
