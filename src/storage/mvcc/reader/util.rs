@@ -24,14 +24,16 @@ pub fn load_lock<S>(snapshot: &S, key: &Key, statistics: &mut Statistics) -> Res
 where
     S: Snapshot,
 {
-    let res = match snapshot.get_cf(CF_LOCK, key)? {
-        Some(v) => Some(Lock::parse(&v)?),
-        None => None,
-    };
-    if res.is_some() {
+    let lock_value = snapshot.get_cf(CF_LOCK, key)?;
+    if let Some(ref lock_value) = lock_value {
+        statistics.lock.get += 1;
+        statistics.lock.flow_stats.read_keys += 1;
+        statistics.lock.flow_stats.read_bytes += key.encoded().len() + lock_value.len();
         statistics.lock.processed += 1;
+        Ok(Some(Lock::parse(lock_value)?))
+    } else {
+        Ok(None)
     }
-    Ok(res)
 }
 
 /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to see whether
@@ -85,7 +87,9 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
 /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
 /// has left bound.
-pub fn scan_lock<I, F>(
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+pub fn scan_locks<I, F>(
     lock_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     predicate: F,
     start_key: Option<&Key>,
@@ -104,16 +108,20 @@ where
         return Ok(vec![]);
     }
     let mut locks = Vec::with_capacity(limit);
-    while lock_cursor.valid() {
-        let key = Key::from_encoded(lock_cursor.key().to_vec());
-        let lock = Lock::parse(lock_cursor.value())?;
+    loop {
+        let key = Key::from_encoded(lock_cursor.key(&mut statistics.lock).to_vec());
+        let lock = Lock::parse(lock_cursor.value(&mut statistics.lock))?;
         if predicate(&lock) {
             locks.push((key, lock));
-            if limit > 0 && locks.len() == limit {
-                return Ok(locks);
+            if limit > 0 && locks.len() >= limit {
+                // Reach limit
+                break;
             }
         }
-        lock_cursor.next(&mut statistics.lock);
+        if !lock_cursor.next(&mut statistics.lock) {
+            // No more keys
+            break;
+        }
     }
     statistics.lock.processed += locks.len();
     Ok(locks)
@@ -121,15 +129,17 @@ where
 
 /// Reads user key's value in default CF according to the given write CF value (`write`).
 ///
-/// Internally, a near_seek will be performed.
+/// Internally, a `near_seek` will be performed.
 ///
-/// If the value is already carried in the `write` (short value), it will be used and
-/// default CF will not be looked up.
+/// Notice that the value may be already carried in the `write` (short value). In this case,
+/// you should not call this function.
 ///
 /// # Panics
 ///
+/// Panics if there is a short value carried in the given `write`.
+///
 /// Panics if key in default CF does not exist. This means there is a data corruption.
-pub fn load_data_from_write<I>(
+pub fn load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     key: &Key,
     write: Write,
@@ -138,28 +148,69 @@ pub fn load_data_from_write<I>(
 where
     I: Iterator,
 {
-    match write.short_value {
-        Some(short_value) => {
-            // value is embedded in `write`.
-            Ok(short_value)
-        }
-        None => {
-            // value is in the default CF.
-            let key = key.append_ts(write.start_ts); // TODO: eliminate clone.
-            match default_cursor.near_seek_get(&key, &mut statistics.data)? {
-                None => panic!(
-                    "Mvcc data for key {} is not found, start_ts = {}",
-                    key, write.start_ts
-                ),
-                Some(v) => {
-                    statistics.data.processed += 1;
-                    // TODO: remove unnecessary key decode
-                    statistics.data.flow_stats.read_bytes +=
-                        key.raw().unwrap_or_default().len() + v.len();
-                    statistics.data.flow_stats.read_keys += 1;
-                    Ok(v.to_vec())
-                }
-            }
+    assert!(write.short_value.is_none());
+    let key = key.append_ts(write.start_ts); // TODO: eliminate clone.
+    match default_cursor.near_seek_get(&key, &mut statistics.data)? {
+        None => panic!(
+            "Mvcc data for key {} is not found, start_ts = {}",
+            key, write.start_ts
+        ),
+        Some(v) => {
+            statistics.data.processed += 1;
+            Ok(v.to_vec())
         }
     }
+}
+
+/// Iterate and get all user keys in the write CF within the given key space (specified by
+/// `start_key` and `limit`). `limit` must not be `0`.
+///
+/// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
+/// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
+/// there is no more keys.
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+///
+/// # Panics
+///
+/// Panics if `limit` is `0`.
+pub fn scan_keys<I>(
+    write_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+    start_key: Option<&Key>,
+    limit: usize,
+    statistics: &mut Statistics,
+) -> Result<(Vec<Key>, Option<Key>)>
+where
+    I: Iterator,
+{
+    assert!(limit > 0);
+
+    let ok = match start_key {
+        Some(ref x) => write_cursor.near_seek(x, &mut statistics.write)?,
+        None => write_cursor.seek_to_first(&mut statistics.write),
+    };
+    if !ok {
+        return Ok((vec![], None));
+    }
+    let mut keys = Vec::with_capacity(limit);
+    let mut next_start_key;
+    loop {
+        // TODO: Eliminate memory copy
+        let key =
+            Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec()).truncate_ts()?;
+        // Jump to the last version of the key. We assumed that there is no key that ts == 0.
+        next_start_key = Some(key.append_ts(0)); // TODO: Eliminate clone (might not be possible?)
+        keys.push(key);
+        if !write_cursor.near_seek(next_start_key.as_ref().unwrap(), &mut statistics.write)? {
+            // No more keys found, we don't need to scan keys next time
+            next_start_key = None;
+            break;
+        }
+        if keys.len() >= limit {
+            // Reach limit
+            break;
+        }
+    }
+    statistics.write.processed += keys.len();
+    Ok((keys, next_start_key))
 }

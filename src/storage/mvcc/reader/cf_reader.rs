@@ -14,7 +14,7 @@
 use raftstore::store::engine::IterOption;
 use storage::mvcc::Lock;
 use storage::mvcc::Result;
-use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, CF_LOCK};
+use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, CF_LOCK, CF_WRITE};
 
 /// `CFReader` factory.
 pub struct CFReaderBuilder<S: Snapshot> {
@@ -48,6 +48,7 @@ impl<S: Snapshot> CFReaderBuilder<S> {
             statistics: Statistics::default(),
 
             lock_cursor: None,
+            write_cursor: None,
         })
     }
 }
@@ -63,14 +64,14 @@ pub struct CFReader<S: Snapshot> {
     statistics: Statistics,
 
     lock_cursor: Option<Cursor<S::Iter>>,
+    write_cursor: Option<Cursor<S::Iter>>,
 }
 
 impl<S: Snapshot> CFReader<S> {
     /// Take out and reset the statistics collected so far.
+    #[inline]
     pub fn take_statistics(&mut self) -> Statistics {
-        let mut statistics = Statistics::default();
-        ::std::mem::swap(&mut statistics, &mut self.statistics);
-        statistics
+        ::std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
     /// Get the lock of a user key in the lock CF.
@@ -96,7 +97,7 @@ impl<S: Snapshot> CFReader<S> {
     /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
     /// has left bound.
     #[inline]
-    pub fn scan_lock<F>(
+    pub fn scan_locks<F>(
         &mut self,
         predicate: F,
         start_key: Option<&Key>,
@@ -107,13 +108,30 @@ impl<S: Snapshot> CFReader<S> {
     {
         self.ensure_lock_cursor()?;
         let lock_cursor = self.lock_cursor.as_mut().unwrap();
-        super::util::scan_lock(
+        super::util::scan_locks(
             lock_cursor,
             predicate,
             start_key,
             limit,
             &mut self.statistics,
         )
+    }
+
+    /// Iterate and get all user keys in the write CF within the given key space (specified by
+    /// `start_key` and `limit`). If `limit` is `0`, no keys will be returned.
+    ///
+    /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
+    /// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
+    /// there is no more keys.
+    #[inline]
+    pub fn scan_keys(
+        &mut self,
+        start_key: Option<&Key>,
+        limit: usize,
+    ) -> Result<(Vec<Key>, Option<Key>)> {
+        self.ensure_write_cursor()?;
+        let write_cursor = self.write_cursor.as_mut().unwrap();
+        super::util::scan_keys(write_cursor, start_key, limit, &mut self.statistics)
     }
 
     /// Create the lock cursor if it doesn't exist.
@@ -124,6 +142,19 @@ impl<S: Snapshot> CFReader<S> {
         let iter_opt = IterOption::new(None, None, self.fill_cache);
         let iter = self.snapshot.iter_cf(CF_LOCK, iter_opt, ScanMode::Forward)?;
         self.lock_cursor = Some(iter);
+        Ok(())
+    }
+
+    /// Create the write cursor if it doesn't exist.
+    fn ensure_write_cursor(&mut self) -> Result<()> {
+        if self.write_cursor.is_some() {
+            return Ok(());
+        }
+        let iter_opt = IterOption::new(None, None, self.fill_cache);
+        let iter = self
+            .snapshot
+            .iter_cf(CF_WRITE, iter_opt, ScanMode::Forward)?;
+        self.write_cursor = Some(iter);
         Ok(())
     }
 }

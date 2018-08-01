@@ -13,7 +13,7 @@
 
 use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
-use super::mvcc::{MvccReader, MvccTxn};
+use super::mvcc::{CFReaderBuilder, MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
@@ -96,14 +96,17 @@ impl<E: Engine> GCRunner<E> {
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut reader = MvccReader::new(
-            snapshot,
+        let reader = MvccReader::new(
+            snapshot.clone(),
             Some(ScanMode::Forward),
             !ctx.get_not_fill_cache(),
             None,
             None,
             ctx.get_isolation_level(),
         );
+        let mut cf_reader = CFReaderBuilder::new(snapshot)
+            .fill_cache(ctx.get_not_fill_cache())
+            .build()?;
 
         // If from.is_some(), it must not be the first scan of the region.
         // So we must continue doing GC.
@@ -112,8 +115,8 @@ impl<E: Engine> GCRunner<E> {
             KV_GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
         } else {
-            reader
-                .scan_keys(from.clone(), limit)
+            cf_reader
+                .scan_keys(from.as_ref(), limit)
                 .map_err(Error::from)
                 .and_then(|(keys, next)| {
                     if keys.is_empty() {
@@ -126,6 +129,7 @@ impl<E: Engine> GCRunner<E> {
                 })
         };
         self.stats.add_statistics(reader.get_statistics());
+        self.stats.add_statistics(&cf_reader.take_statistics());
         res
     }
 

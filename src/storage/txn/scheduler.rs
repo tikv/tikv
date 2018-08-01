@@ -526,7 +526,7 @@ fn process_read_impl<E: Engine>(
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
             let kv_pairs =
-                cf_reader.scan_lock(|lock| lock.ts <= max_ts, start_key.as_ref(), limit)?;
+                cf_reader.scan_locks(|lock| lock.ts <= max_ts, start_key.as_ref(), limit)?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
             for (key, lock) in kv_pairs {
                 let mut lock_info = LockInfo::new();
@@ -551,7 +551,7 @@ fn process_read_impl<E: Engine>(
             let mut cf_reader = CFReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            let kv_pairs = cf_reader.scan_lock(
+            let kv_pairs = cf_reader.scan_locks(
                 |lock| txn_status.contains_key(&lock.ts),
                 scan_key.as_ref(),
                 RESOLVE_LOCK_BATCH_SIZE,
