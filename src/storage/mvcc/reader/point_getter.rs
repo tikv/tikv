@@ -13,21 +13,10 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use raftstore::store::engine::IterOption;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
-use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_WRITE};
+use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_WRITE};
 use util::codec::number;
-
-/// Build `IterOption` (which is later used to build `Cursor`) according to configurations.
-fn build_iter_opt(fill_cache: bool, prefix_filter: bool) -> IterOption {
-    let mut iter_opt = IterOption::new(None, None, fill_cache);
-    if prefix_filter {
-        // Use prefix bloom filter if we only want to get a single value.
-        iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
-    }
-    iter_opt
-}
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -92,8 +81,13 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
+        let write_cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(self.fill_cache)
+            .prefix_seek(!self.multi)
+            .build()?;
+
         Ok(PointGetter {
-            snapshot: self.snapshot.clone(),
+            snapshot: self.snapshot,
             multi: self.multi,
             fill_cache: self.fill_cache,
             omit_value: self.omit_value,
@@ -103,11 +97,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 
             read_once: false,
 
-            write_cursor: self.snapshot.iter_cf(
-                CF_WRITE,
-                build_iter_opt(self.fill_cache, !self.multi),
-                ScanMode::Forward,
-            )?,
+            write_cursor,
             default_cursor: None,
         })
     }
@@ -231,11 +221,11 @@ impl<S: Snapshot> PointGetter<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let iter_opt = build_iter_opt(self.fill_cache, !self.multi);
-        let iter = self
-            .snapshot
-            .iter_cf(CF_DEFAULT, iter_opt, ScanMode::Forward)?;
-        self.default_cursor = Some(iter);
+        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+            .fill_cache(self.fill_cache)
+            .prefix_seek(!self.multi)
+            .build()?;
+        self.default_cursor = Some(cursor);
         Ok(())
     }
 }

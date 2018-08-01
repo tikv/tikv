@@ -11,10 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::engine::IterOption;
 use storage::mvcc::Lock;
 use storage::mvcc::Result;
-use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, CF_LOCK, CF_WRITE};
+use storage::{Cursor, Key, Snapshot, Statistics, CF_LOCK, CF_WRITE};
 
 /// `CFReader` factory.
 pub struct CFReaderBuilder<S: Snapshot> {
@@ -139,9 +138,10 @@ impl<S: Snapshot> CFReader<S> {
         if self.lock_cursor.is_some() {
             return Ok(());
         }
-        let iter_opt = IterOption::new(None, None, self.fill_cache);
-        let iter = self.snapshot.iter_cf(CF_LOCK, iter_opt, ScanMode::Forward)?;
-        self.lock_cursor = Some(iter);
+        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_LOCK)
+            .fill_cache(self.fill_cache)
+            .build()?;
+        self.lock_cursor = Some(cursor);
         Ok(())
     }
 
@@ -150,11 +150,10 @@ impl<S: Snapshot> CFReader<S> {
         if self.write_cursor.is_some() {
             return Ok(());
         }
-        let iter_opt = IterOption::new(None, None, self.fill_cache);
-        let iter = self
-            .snapshot
-            .iter_cf(CF_WRITE, iter_opt, ScanMode::Forward)?;
-        self.write_cursor = Some(iter);
+        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(self.fill_cache)
+            .build()?;
+        self.write_cursor = Some(cursor);
         Ok(())
     }
 }
