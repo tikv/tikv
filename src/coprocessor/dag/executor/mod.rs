@@ -180,7 +180,6 @@ impl OriginCols {
         Ok(res)
     }
 
-    #[inline]
     pub fn get_binary(&self, output_offsets: &[u32]) -> Result<Vec<u8>> {
         // TODO capacity is not enough
         let mut values = Vec::with_capacity(self.data.value.len());

@@ -99,7 +99,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
             store,
             desc: false,
             col_ids,
-            cols: Arc::new(Vec::default()), //TODO:do not need cols info
+            cols: Arc::new(vec![]), //TODO:do not need cols info
             pk_col: None,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
