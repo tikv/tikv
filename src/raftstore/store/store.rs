@@ -56,7 +56,9 @@ use util::{escape, rocksdb};
 use super::cmd_resp::{bind_term, new_error};
 use super::config::Config;
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as EngineSnapshot};
-use super::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use super::keys::{
+    self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key, DATA_MAX_KEY,
+};
 use super::local_metrics::RaftMetrics;
 use super::metrics::*;
 use super::msg::{Callback, ReadResponse};
@@ -70,7 +72,10 @@ use super::worker::{
     RaftlogGcTask, ReadTask, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
     STALE_PEER_CHECK_INTERVAL,
 };
-use super::{util, Engines, Msg, SignificantMsg, SnapKey, SnapManager, SnapshotDeleter, Tick};
+use super::{
+    util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
+    SnapKey, SnapManager, SnapshotDeleter, Tick,
+};
 use import::SSTImporter;
 
 type Key = Vec<u8>;
@@ -224,14 +229,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region_peers: HashMap::default(),
             merging_regions: Some(vec![]),
             pending_raft_groups: HashSet::default(),
-            split_check_worker: Worker::new("split check worker"),
-            region_worker: Worker::new("snapshot worker"),
-            raftlog_gc_worker: Worker::new("raft gc worker"),
-            compact_worker: Worker::new("compact worker"),
+            split_check_worker: Worker::new("split-check"),
+            region_worker: Worker::new("snapshot-worker"),
+            raftlog_gc_worker: Worker::new("raft-gc-worker"),
+            compact_worker: Worker::new("compact-worker"),
             pd_worker,
-            consistency_check_worker: Worker::new("consistency check worker"),
-            cleanup_sst_worker: Worker::new("cleanup sst worker"),
-            apply_worker: Worker::new("apply worker"),
+            consistency_check_worker: Worker::new("consistency-check"),
+            cleanup_sst_worker: Worker::new("cleanup-sst"),
+            apply_worker: Worker::new("apply-worker"),
             apply_res_receiver: None,
             local_reader,
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
@@ -883,7 +888,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg = msg_type == MessageType::MsgRequestVote;
+        let is_vote_msg =
+            msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote;
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -3139,6 +3145,45 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("{} register cleanup import sst tick err: {:?}", self.tag, e);
         }
     }
+
+    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
+    /// this TiKV satisfies `filter(peer)` returns true.
+    fn seek_region(
+        &self,
+        from_key: &[u8],
+        filter: SeekRegionFilter,
+        mut limit: u32,
+        callback: SeekRegionCallback,
+    ) {
+        assert!(limit > 0);
+
+        let from_key = data_key(from_key);
+        for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
+            let peer = &self.region_peers[region_id];
+            if filter(peer) {
+                callback(SeekRegionResult::Found {
+                    local_peer: peer.peer.clone(),
+                    region: peer.region().clone(),
+                });
+                return;
+            }
+
+            limit -= 1;
+            if limit == 0 {
+                // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
+                // than `LimitExceeded`.
+                if end_key.as_slice() >= DATA_MAX_KEY {
+                    break;
+                }
+
+                callback(SeekRegionResult::LimitExceeded {
+                    next_key: origin_key(end_key).to_vec(),
+                });
+                return;
+            }
+        }
+        callback(SeekRegionResult::Ended);
+    }
 }
 
 fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
@@ -3281,6 +3326,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch, policy),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
+            Msg::SeekRegion {
+                from_key,
+                filter,
+                limit,
+                callback,
+            } => self.seek_region(&from_key, filter, limit, callback),
         }
     }
 
@@ -3492,7 +3543,7 @@ mod tests {
             total_output_bytes: 0,
             start_key: size_prop.smallest_key().unwrap(),
             end_key: size_prop.largest_key().unwrap(),
-            input_props: vec![size_prop],
+            input_props: vec![size_prop.into()],
             output_props: vec![],
         };
 
