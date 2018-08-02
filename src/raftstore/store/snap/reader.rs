@@ -126,7 +126,6 @@ impl SnapshotApplyer {
             error!("{} apply_snapshot conflicts", key);
             return Err(Error::Snapshot(SnapError::Conflict));
         }
-        ref_count.fetch_add(1, Ordering::SeqCst);
         Ok(SnapshotApplyer {
             base,
             snap_stale_notifier,

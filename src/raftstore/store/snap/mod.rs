@@ -357,8 +357,8 @@ impl SnapManager {
         }
 
         for (for_send, key) in snap_keys {
-            if let Some(usage) = self.get_registry(for_send).get_mut(&key) {
-                if usage.check_is_busy()
+            if let Some(usage) = self.get_registry(for_send).get(&key) {
+                if usage.is_busy()
                     || (!usage.has_been_used()
                         && !self.snapshot_is_stale(for_send, key).unwrap_or(true))
                 {
@@ -496,7 +496,7 @@ impl SnapUsage {
         }
     }
 
-    fn check_is_busy(&mut self) -> bool {
+    fn is_busy(&self) -> bool {
         self.ref_count.load(Ordering::SeqCst) > 0
     }
 
