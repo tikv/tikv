@@ -1081,6 +1081,7 @@ mod test {
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::BitNegSig,
+                    ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
                 ],
                 1,
