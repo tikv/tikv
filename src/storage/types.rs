@@ -85,7 +85,7 @@ impl Key {
     }
 
     /// Convert to encoded representation of this key.
-    pub fn into_encoded(self) -> Vec<u8> {
+    pub fn take_encoded(self) -> Vec<u8> {
         self.0
     }
 
@@ -180,7 +180,7 @@ pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error>
 /// Pick the part without ts from a key represented by a slice.
 /// This function helps avoiding copying in some situations.
 #[inline]
-pub fn slice_remove_ts(key: &[u8]) -> &[u8] {
+pub fn slice_without_ts(key: &[u8]) -> &[u8] {
     &key[..key.len() - number::U64_SIZE]
 }
 

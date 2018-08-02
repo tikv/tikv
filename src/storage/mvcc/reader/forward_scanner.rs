@@ -18,7 +18,7 @@ use std::cmp::Ordering;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
 use storage::{
-    slice_remove_ts, Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    slice_without_ts, Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use util::codec::number;
 
@@ -178,7 +178,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                     (None, None) => return Ok(None),
                     (None, Some(k)) => (Key::from_encoded(k.to_vec()), false, true),
                     (Some(k), None) => (Key::from_encoded(k.to_vec()).truncate_ts()?, true, false),
-                    (Some(wk), Some(lk)) => match slice_remove_ts(wk).cmp(wk) {
+                    (Some(wk), Some(lk)) => match slice_without_ts(wk).cmp(wk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
                         Ordering::Less => {
                             (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)

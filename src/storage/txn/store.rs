@@ -353,7 +353,7 @@ mod test {
             .scanner(
                 ScanMode::Forward,
                 false,
-                Some(start_key.into_encoded()),
+                Some(start_key.take_encoded()),
                 None,
             )
             .unwrap();
@@ -406,7 +406,7 @@ mod test {
             .scanner(
                 ScanMode::Forward,
                 false,
-                Some(start_key.into_encoded()),
+                Some(start_key.take_encoded()),
                 None,
             )
             .unwrap();
