@@ -93,7 +93,7 @@ impl Error {
 
     pub fn invalid_timezone(given_time_zone: &str) -> Error {
         let msg = format!("unknown or incorrect time zone: {}", given_time_zone);
-        Error::Eval(msg.into(), ERR_UNKNOWN_TIMEZONE)
+        Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
     }
 
     pub fn division_by_zero() -> Error {
