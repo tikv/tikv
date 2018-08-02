@@ -106,6 +106,7 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
             write_cursor,
             default_cursor: None,
             statistics: Statistics::default(),
+            last_read_key: Key::from_encoded(vec![]),
         })
     }
 }
@@ -136,6 +137,8 @@ pub struct ForwardSeeker<S: Snapshot> {
     default_cursor: Option<Cursor<S::Iter>>,
 
     statistics: Statistics,
+
+    last_read_key: Key,
 }
 
 impl<S: Snapshot> ForwardSeeker<S> {
@@ -151,8 +154,14 @@ impl<S: Snapshot> ForwardSeeker<S> {
 
     /// Get the next key-value pair, where the key is greater or equal to given `key`.
     pub fn read_next(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        // TODO: Panic if given key is less than current key
-        // (Maybe we can panic in cursor's code)
+        if key < self.last_read_key {
+            panic!(
+                "ForwardSeeker: try to read from key {} which is less than previous read key {}",
+                key, self.last_read_key
+            );
+        }
+        // TODO: Can we avoid cloning?
+        self.last_read_key = key.clone();
 
         let (mut write_valid, mut lock_valid) = (true, true);
 
