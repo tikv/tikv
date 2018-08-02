@@ -370,7 +370,7 @@ impl Debugger {
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
 
-        let fake_snap_worker = Worker::new("fake snap worker");
+        let fake_snap_worker = Worker::new("fake-snap-worker");
 
         let check_value = |value: Vec<u8>| -> Result<()> {
             let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));

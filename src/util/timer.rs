@@ -13,8 +13,10 @@
 
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
+use std::sync::mpsc;
+use std::thread::Builder;
 use std::time::Duration;
-
+use tokio_timer::{self, timer::Handle};
 use util::time::Instant;
 
 pub struct Timer<T> {
@@ -86,9 +88,29 @@ impl<T> Ord for TimeoutTask<T> {
     }
 }
 
+lazy_static! {
+    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer();
+}
+
+fn start_global_timer() -> Handle {
+    let (tx, rx) = mpsc::channel();
+    Builder::new()
+        .name(thd_name!("timer"))
+        .spawn(move || {
+            let mut timer = tokio_timer::Timer::default();
+            tx.send(timer.handle()).unwrap();
+            loop {
+                timer.turn(None).unwrap();
+            }
+        })
+        .unwrap();
+    rx.recv().unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
     use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
@@ -193,5 +215,15 @@ mod tests {
         );
 
         worker.stop().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn test_global_timer() {
+        let handle = super::GLOBAL_TIMER_HANDLE.clone();
+        let delay =
+            handle.delay(::std::time::Instant::now() + ::std::time::Duration::from_millis(100));
+        let timer = Instant::now();
+        delay.wait().unwrap();
+        assert!(timer.elapsed() >= Duration::from_millis(100));
     }
 }

@@ -405,7 +405,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
 
         let (cb, future) = paired_future_callback();
-        let res = self.storage.async_scan_lock(
+        let res = self.storage.async_scan_locks(
             req.take_context(),
             req.get_max_version(),
             req.take_start_key(),

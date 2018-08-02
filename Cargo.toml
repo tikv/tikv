@@ -2,10 +2,6 @@
 name = "tikv"
 version = "2.1.0-beta"
 keywords = ["KV", "distributed-systems", "raft"]
-build = "build.rs"
-
-[build-dependencies]
-time = "0.1"
 
 [features]
 default = []
@@ -26,9 +22,6 @@ path = "benches/bin/bench-tikv.rs"
 
 [[bin]]
 name = "tikv-ctl"
-
-[[bin]]
-name = "tikv-fail"
 
 [[bin]]
 name = "tikv-importer"
@@ -65,7 +58,7 @@ mio = "0.5"
 futures = "0.1"
 futures-cpupool = "0.1"
 tokio-core = "0.1"
-tokio-timer = "0.1"
+tokio-timer = "0.2"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
@@ -112,7 +105,9 @@ features = ["profiling"]
 optional = true
 
 [workspace]
-members = ["fuzz"]
+members = [
+  "fuzz"
+]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
