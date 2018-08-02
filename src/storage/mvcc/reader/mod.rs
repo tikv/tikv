@@ -27,7 +27,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 pub use self::cf_reader::{CFReader, CFReaderBuilder};
-pub use self::forward_seeker::{ForwardSeeker, ForwardSeekerBuilder};
+pub use self::forward_seeker::{ForwardScanner, ForwardScannerBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;

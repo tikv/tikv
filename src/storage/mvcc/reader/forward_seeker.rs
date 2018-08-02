@@ -19,7 +19,7 @@ use storage::mvcc::{Lock, Result};
 use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
 
-pub struct ForwardSeekerBuilder<S: Snapshot> {
+pub struct ForwardScannerBuilder<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
     omit_value: bool,
@@ -28,9 +28,9 @@ pub struct ForwardSeekerBuilder<S: Snapshot> {
     upper_bound: Option<Vec<u8>>,
 }
 
-/// `ForwardSeeker` factory.
-impl<S: Snapshot> ForwardSeekerBuilder<S> {
-    /// Initialize a new `ForwardSeeker`
+/// `ForwardScanner` factory.
+impl<S: Snapshot> ForwardScannerBuilder<S> {
+    /// Initialize a new `ForwardScanner`
     pub fn new(snapshot: S) -> Self {
         Self {
             snapshot,
@@ -72,8 +72,8 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
         self
     }
 
-    /// Limit the range in which the `ForwardSeeker` should seek. `None` means unbounded.
-    /// TODO: Is the range `[lower_bound, upper_bound)`?
+    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should seek.
+    /// `None` means unbounded.
     ///
     /// Default is `(None, None)`.
     #[inline]
@@ -83,8 +83,8 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
         self
     }
 
-    /// Build `ForwardSeeker` from the current configuration.
-    pub fn build(self) -> Result<ForwardSeeker<S>> {
+    /// Build `ForwardScanner` from the current configuration.
+    pub fn build(self) -> Result<ForwardScanner<S>> {
         let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
             .bound(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
@@ -95,7 +95,7 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
             .fill_cache(self.fill_cache)
             .build()?;
 
-        Ok(ForwardSeeker {
+        Ok(ForwardScanner {
             snapshot: self.snapshot,
             fill_cache: self.fill_cache,
             omit_value: self.omit_value,
@@ -118,8 +118,8 @@ impl<S: Snapshot> ForwardSeekerBuilder<S> {
 /// This struct keeps the iterator moves forward. If you use this to perform seeking multiple times,
 /// then you are not allowed to seek a key that is less than the previous one.
 ///
-/// Use `ForwardSeekerBuilder` to build `ForwardSeeker`.
-pub struct ForwardSeeker<S: Snapshot> {
+/// Use `ForwardScannerBuilder` to build `ForwardScanner`.
+pub struct ForwardScanner<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
     omit_value: bool,
@@ -141,7 +141,7 @@ pub struct ForwardSeeker<S: Snapshot> {
     last_read_key: Key,
 }
 
-impl<S: Snapshot> ForwardSeeker<S> {
+impl<S: Snapshot> ForwardScanner<S> {
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         ::std::mem::replace(&mut self.statistics, Statistics::default())
@@ -156,7 +156,7 @@ impl<S: Snapshot> ForwardSeeker<S> {
     pub fn read_next(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
         if key < self.last_read_key {
             panic!(
-                "ForwardSeeker: try to read from key {} which is less than previous read key {}",
+                "ForwardScanner: try to read from key {} which is less than previous read key {}",
                 key, self.last_read_key
             );
         }

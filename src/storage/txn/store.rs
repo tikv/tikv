@@ -14,7 +14,7 @@
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 use storage::mvcc::{
-    Error as MvccError, ForwardSeeker, ForwardSeekerBuilder, MvccReader, PointGetterBuilder,
+    Error as MvccError, ForwardScanner, ForwardScannerBuilder, MvccReader, PointGetterBuilder,
 };
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
@@ -85,7 +85,7 @@ impl<S: Snapshot> SnapshotStore<S> {
     ) -> Result<StoreScanner<S>> {
         let (forward_seeker, reader) = match mode {
             ScanMode::Forward => {
-                let forward_seeker = ForwardSeekerBuilder::new(self.snapshot.clone())
+                let forward_seeker = ForwardScannerBuilder::new(self.snapshot.clone())
                     .range(lower_bound, upper_bound)
                     .omit_value(key_only)
                     .fill_cache(self.fill_cache)
@@ -116,7 +116,7 @@ impl<S: Snapshot> SnapshotStore<S> {
 }
 
 pub struct StoreScanner<S: Snapshot> {
-    forward_seeker: Option<ForwardSeeker<S>>,
+    forward_seeker: Option<ForwardScanner<S>>,
     reader: Option<MvccReader<S>>,
     start_ts: u64,
 }
