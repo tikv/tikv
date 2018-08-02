@@ -12,7 +12,7 @@
 // limitations under the License.
 
 mod cf_reader;
-mod forward_seeker;
+mod forward_scanner;
 mod point_getter;
 pub mod util;
 
@@ -27,7 +27,7 @@ use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
 pub use self::cf_reader::{CFReader, CFReaderBuilder};
-pub use self::forward_seeker::{ForwardScanner, ForwardScannerBuilder};
+pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
