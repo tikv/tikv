@@ -190,6 +190,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::Length
+            | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -261,7 +262,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitCount
-            | ScalarFuncSig::BitLength
             | ScalarFuncSig::Char
             | ScalarFuncSig::CharLength
             | ScalarFuncSig::Compress
@@ -770,6 +770,7 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        BitLength => bit_length,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1196,7 +1197,6 @@ mod test {
             ScalarFuncSig::Atan2Args,
             ScalarFuncSig::Bin,
             ScalarFuncSig::BitCount,
-            ScalarFuncSig::BitLength,
             ScalarFuncSig::Char,
             ScalarFuncSig::CharLength,
             ScalarFuncSig::Compress,

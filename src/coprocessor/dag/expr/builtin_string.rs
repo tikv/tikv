@@ -21,6 +21,11 @@ impl ScalarFunc {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         Ok(Some(input.len() as i64))
     }
+
+    pub fn bit_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        Ok(Some(input.len() as i64 * 8))
+    }
 }
 
 #[cfg(test)]
@@ -57,5 +62,34 @@ mod test {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "length(NULL)");
+    }
+
+    #[test]
+    fn test_bit_length() {
+        let cases = vec![
+            ("你好", 48i64),
+            ("TiKV", 32i64),
+            ("あなたのことが好きです", 264i64),
+            ("분산 데이터베이스", 200i64),
+            ("россия в мире  кубок", 304i64),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, exp) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::BitLength, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::from(exp);
+            assert_eq!(got, exp, "bit_length('{:?}')", input_str);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::BitLength, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "bit_length(NULL)");
     }
 }
