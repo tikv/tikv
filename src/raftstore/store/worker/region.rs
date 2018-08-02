@@ -18,11 +18,10 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
 
-use raftstore::store::engine::{Mutable, Snapshot};
+use raftstore::store::engine::Snapshot;
 use raftstore::store::peer_storage::*;
 use raftstore::store::snap::{ApplyOptions, SnapError};
 use raftstore::store::util::Engines;
@@ -32,7 +31,7 @@ use storage::CF_RAFT;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use util::timer::Timer;
 use util::worker::{Runnable, RunnableWithTimer};
-use util::{escape, rocksdb, time};
+use util::{escape, time};
 
 use super::super::util;
 use super::metrics::*;
@@ -273,17 +272,22 @@ impl SnapContext {
     fn apply_snap(
         &mut self,
         region_id: u64,
-        region_key: &[u8],
-        mut region_state: RegionLocalState,
         snap_stale_notifier: Arc<SnapStaleNotifier>,
     ) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
 
+        let kv = Arc::clone(&self.engines.kv);
+
+        let region_key = keys::region_state_key(region_id);
+        let region_state = match kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key) {
+            Ok(Some(state)) => state,
+            _ => panic!("failed to get region_state from {}", escape(&region_key)),
+        };
+
         // clear up origin data.
-        let region = region_state.get_region().clone();
-        let start_key = keys::enc_start_key(&region);
-        let end_key = keys::enc_end_key(&region);
+        let start_key = keys::enc_start_key(&region_state.get_region());
+        let end_key = keys::enc_end_key(&region_state.get_region());
         self.cleanup_overlap_ranges(&start_key, &end_key);
         box_try!(util::delete_all_in_range(
             &self.engines.kv,
@@ -293,11 +297,10 @@ impl SnapContext {
         ));
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
-                Some(state) => state,
-                None => panic!("failed to get apply state from {}", escape(&state_key)),
-            };
+        let apply_state: RaftApplyState = match box_try!(kv.get_msg_cf(CF_RAFT, &state_key)) {
+            Some(state) => state,
+            None => panic!("failed to get apply state from {}", escape(&state_key)),
+        };
 
         let timer = Instant::now();
         let term = apply_state.get_truncated_state().get_term();
@@ -306,19 +309,12 @@ impl SnapContext {
         self.mgr.apply_snapshot(
             SnapKey::new(region_id, term, idx),
             ApplyOptions {
-                db: Arc::clone(&self.engines.kv),
-                region,
+                db: kv,
+                region_state,
                 write_batch_size: self.batch_size,
             },
             snap_stale_notifier,
         )?;
-
-        let wb = WriteBatch::new();
-        region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocksdb::get_cf_handle(&self.engines.kv, CF_RAFT));
-        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
-        box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        box_try!(self.engines.kv.write(wb));
 
         info!(
             "[region {}] apply new data takes {:?}",
@@ -353,22 +349,7 @@ impl SnapContext {
             .with_label_values(&["apply"])
             .start_coarse_timer();
 
-        let region_key = keys::region_state_key(region_id);
-        let region_state = match self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
-        {
-            Ok(Some(state)) => state,
-            _ => panic!("failed to get region_state from {}", escape(&region_key)),
-        };
-
-        match self.apply_snap(
-            region_id,
-            &region_key,
-            region_state.clone(),
-            snap_stale_notifier,
-        ) {
+        match self.apply_snap(region_id, snap_stale_notifier) {
             Ok(()) => {
                 snap_applying_state.store(APPLY_STATUS_RELAX, Ordering::SeqCst);
                 SNAP_COUNTER_VEC

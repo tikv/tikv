@@ -32,7 +32,7 @@ use protobuf::Message;
 use regex::Regex;
 
 use kvproto::metapb::Region;
-use kvproto::raft_serverpb::{RaftSnapshotData, SnapshotCFFile, SnapshotMeta};
+use kvproto::raft_serverpb::{RaftSnapshotData, RegionLocalState, SnapshotCFFile, SnapshotMeta};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::DB;
 
@@ -506,7 +506,7 @@ pub struct SnapStats {
 
 pub struct ApplyOptions {
     pub db: Arc<DB>,
-    pub region: Region,
+    pub region_state: RegionLocalState,
     pub write_batch_size: usize,
 }
 
@@ -814,11 +814,13 @@ mod tests {
             let dst_db_dir = TempDir::new("test-snap-mgr-registry-db-dst").unwrap();
             let dst_db_path = dst_db_dir.path().to_str().unwrap();
             let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, ALL_CFS, None).unwrap());
-            let apply_options = ApplyOptions {
+            let mut apply_options = ApplyOptions {
                 db: Arc::clone(&dst_db),
-                region: region.clone(),
+                region_state: RegionLocalState::new(),
                 write_batch_size: TEST_WRITE_BATCH_SIZE,
             };
+            apply_options.region_state.set_region(region.clone());
+
             let notifier = new_snap_stale_notifier();
             let res = snap_mgr.apply_snapshot(key, apply_options, notifier);
             if should_success {

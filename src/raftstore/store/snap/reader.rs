@@ -2,12 +2,16 @@ use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use kvproto::raft_serverpb::PeerState;
+use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{IngestExternalFileOptions, Writable, WriteBatch};
 
+use raftstore::store::engine::Mutable;
 use raftstore::store::keys;
 use raftstore::store::metrics::*;
 use raftstore::store::snap::*;
 use raftstore::store::util::check_key_in_region;
+use storage::CF_RAFT;
 use util::codec::bytes::CompactBytesFromFileDecoder;
 use util::file::{calc_crc32, delete_file_if_exist, get_file_size};
 use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion};
@@ -134,7 +138,7 @@ impl SnapshotApplyer {
         })
     }
 
-    pub(super) fn apply(&self, options: ApplyOptions) -> Result<()> {
+    pub(super) fn apply(&self, mut options: ApplyOptions) -> Result<()> {
         for cf in self.base.snapshot_meta.get_cf_files() {
             if cf.get_size() == 0 {
                 continue;
@@ -156,6 +160,22 @@ impl SnapshotApplyer {
                 db.ingest_external_file_cf(handle, &options, &[clone_path.to_str().unwrap()])?;
             }
         }
+
+        // Update region local state and snapshot raft state, so that
+        // after apply finished, snap manager can delete snapshot safely.
+        let handle = box_try!(get_cf_handle(&options.db, CF_RAFT));
+        let wb = WriteBatch::new();
+
+        let region_id = options.region_state.get_region().get_id();
+        let region_key = keys::region_state_key(region_id);
+        options.region_state.set_state(PeerState::Normal);
+        box_try!(wb.put_msg_cf(handle, &region_key, &options.region_state));
+
+        box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
+
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        box_try!(options.db.write_opt(wb, &write_opts));
         Ok(())
     }
 
@@ -163,7 +183,7 @@ impl SnapshotApplyer {
         let path = gen_cf_file_path(&self.base.dir, false, self.base.key, cf);
         let mut reader = BufReader::new(File::open(path)?);
 
-        let handle = box_try!(get_cf_handle(options.db.as_ref(), cf));
+        let handle = box_try!(get_cf_handle(&options.db, cf));
         let mut wb = WriteBatch::new();
         let mut finished = false;
         while !finished {
@@ -175,7 +195,8 @@ impl SnapshotApplyer {
             if key.is_empty() {
                 finished = true;
             } else {
-                box_try!(check_key_in_region(keys::origin_key(&key), &options.region));
+                let region = options.region_state.get_region();
+                box_try!(check_key_in_region(keys::origin_key(&key), &region));
                 let value = reader.decode_compact_bytes()?;
                 box_try!(wb.put_cf(handle, &key, &value));
             }
