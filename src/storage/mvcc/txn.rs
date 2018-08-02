@@ -206,7 +206,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
-                return match self.reader.get_txn_commit_info(key, self.start_ts)? {
+                return match self
+                    .cf_reader
+                    .reverse_seek_write_type_by_start_ts(key, self.start_ts)?
+                {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // None: related Rollback has been collapsed.
@@ -250,7 +253,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             _ => {
-                return match self.reader.get_txn_commit_info(key, self.start_ts)? {
+                return match self
+                    .cf_reader
+                    .reverse_seek_write_type_by_start_ts(key, self.start_ts)?
+                {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
@@ -1049,9 +1055,9 @@ mod tests {
 
     fn must_get_commit_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        let (ts, write_type) = reader
-            .get_txn_commit_info(&make_key(key), start_ts)
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let (ts, write_type) = cf_reader
+            .reverse_seek_write_type_by_start_ts(&make_key(key), start_ts)
             .unwrap()
             .unwrap();
         assert_ne!(write_type, WriteType::Rollback);
@@ -1060,11 +1066,11 @@ mod tests {
 
     fn must_get_commit_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-
-        let ret = reader.get_txn_commit_info(&make_key(key), start_ts);
-        assert!(ret.is_ok());
-        match ret.unwrap() {
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let some_commit_info = cf_reader
+            .reverse_seek_write_type_by_start_ts(&make_key(key), start_ts)
+            .unwrap();
+        match some_commit_info {
             None => {}
             Some((_, write_type)) => {
                 assert_eq!(write_type, WriteType::Rollback);
@@ -1074,10 +1080,9 @@ mod tests {
 
     fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-
-        let (ts, write_type) = reader
-            .get_txn_commit_info(&make_key(key), start_ts)
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let (ts, write_type) = cf_reader
+            .reverse_seek_write_type_by_start_ts(&make_key(key), start_ts)
             .unwrap()
             .unwrap();
         assert_eq!(ts, start_ts);
@@ -1086,12 +1091,11 @@ mod tests {
 
     fn must_get_rollback_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-
-        let ret = reader
-            .get_txn_commit_info(&make_key(key), start_ts)
+        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let some_commit_info = cf_reader
+            .reverse_seek_write_type_by_start_ts(&make_key(key), start_ts)
             .unwrap();
-        assert_eq!(ret, None);
+        assert_eq!(some_commit_info, None);
     }
 
     fn must_scan_keys<E: Engine>(
