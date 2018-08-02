@@ -151,7 +151,7 @@ mod tests {
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
     use storage::ALL_CFS;
     use util::config::ReadableSize;
-    use util::properties::SizePropertiesCollectorFactory;
+    use util::properties::RangePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
@@ -162,8 +162,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
 
         let cfs_opts = ALL_CFS
             .iter()
