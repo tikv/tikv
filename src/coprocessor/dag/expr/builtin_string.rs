@@ -19,7 +19,7 @@ use coprocessor::codec::Datum;
 impl ScalarFunc {
     pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        return Ok(Some(input.len() as i64))
+        Ok(Some(input.len() as i64))
     }
 }
 
