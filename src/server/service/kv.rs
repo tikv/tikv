@@ -1124,14 +1124,15 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
 
         let (cb, future) = paired_future_callback();
+        let region_id = req.get_context().get_region_id();
         let req = StoreMessage::SplitRegion {
-            region_id: req.get_context().get_region_id(),
+            region_id,
             region_epoch: req.take_context().take_region_epoch(),
             split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
             callback: Callback::Write(cb),
         };
 
-        if let Err(e) = self.ch.try_send(req) {
+        if let Err(e) = self.ch.try_send(region_id, req) {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }

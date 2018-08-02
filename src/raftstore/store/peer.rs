@@ -44,14 +44,14 @@ use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnap
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
-use util::worker::{FutureWorker, Scheduler};
+use util::worker::{FutureScheduler, Scheduler};
 use util::{escape, MustConsumeVec};
 
+use super::actor_store::{DestroyPeerJob, Store};
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::store::{DestroyPeerJob, StoreMeta};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, Lease, LeaseState};
 
@@ -157,18 +157,18 @@ pub struct ReadyContext<'a, T: 'a> {
     pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
-    pub ready_res: Vec<(Ready, InvokeContext)>,
+    pub ready_res: Option<(Ready, InvokeContext)>,
 }
 
 impl<'a, T> ReadyContext<'a, T> {
-    pub fn new(metrics: &'a mut RaftMetrics, trans: &'a T, cap: usize) -> ReadyContext<'a, T> {
+    pub fn new(metrics: &'a mut RaftMetrics, trans: &'a T) -> ReadyContext<'a, T> {
         ReadyContext {
             kv_wb: WriteBatch::new(),
             raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             sync_log: false,
             metrics,
             trans,
-            ready_res: Vec::with_capacity(cap),
+            ready_res: None,
         }
     }
 }
@@ -216,8 +216,8 @@ pub struct PeerStat {
 }
 
 pub struct Peer {
-    engines: Engines,
-    cfg: Arc<Config>,
+    pub engines: Engines,
+    pub cfg: Arc<Config>,
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -281,7 +281,7 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<S: StoreMeta>(store: &S, region: &metapb::Region) -> Result<Peer> {
+    pub fn create<T, C>(store: &Store<T, C>, region: &metapb::Region) -> Result<Peer> {
         let store_id = store.store_id();
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -305,7 +305,11 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
-    pub fn replicate<S: StoreMeta>(store: &S, region_id: u64, peer: metapb::Peer) -> Result<Peer> {
+    pub fn replicate<T, C>(
+        store: &Store<T, C>,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> Result<Peer> {
         // We will remove tombstone key when apply snapshot
         info!(
             "[region {}] replicate peer with id {}",
@@ -318,7 +322,7 @@ impl Peer {
         Peer::new(store, &region, peer)
     }
 
-    fn new<S: StoreMeta>(store: &S, region: &metapb::Region, peer: metapb::Peer) -> Result<Peer> {
+    fn new<T, C>(store: &Store<T, C>, region: &metapb::Region, peer: metapb::Peer) -> Result<Peer> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }
@@ -330,27 +334,9 @@ impl Peer {
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
         let ps = PeerStorage::new(store.engines(), region, sched, tag.clone())?;
-
         let applied_index = ps.applied_index();
+        let raft_group = Peer::create_raft_node(&cfg, &tag, peer.get_id(), ps);
 
-        let raft_cfg = raft::Config {
-            id: peer.get_id(),
-            peers: vec![],
-            election_tick: cfg.raft_election_timeout_ticks,
-            heartbeat_tick: cfg.raft_heartbeat_ticks,
-            min_election_tick: cfg.raft_min_election_timeout_ticks,
-            max_election_tick: cfg.raft_max_election_timeout_ticks,
-            max_size_per_msg: cfg.raft_max_size_per_msg.0,
-            max_inflight_msgs: cfg.raft_max_inflight_msgs,
-            applied: applied_index,
-            check_quorum: true,
-            tag: tag.clone(),
-            skip_bcast_commit: true,
-            pre_vote: cfg.prevote,
-            ..Default::default()
-        };
-
-        let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
         let mut peer = Peer {
             engines: store.engines(),
             peer,
@@ -397,6 +383,71 @@ impl Peer {
         }
 
         Ok(peer)
+    }
+
+    fn create_raft_node(
+        cfg: &Config,
+        tag: &str,
+        peer_id: u64,
+        ps: PeerStorage,
+    ) -> RawNode<PeerStorage> {
+        let applied_index = ps.applied_index();
+
+        let raft_cfg = raft::Config {
+            id: peer_id,
+            peers: vec![],
+            election_tick: cfg.raft_election_timeout_ticks,
+            heartbeat_tick: cfg.raft_heartbeat_ticks,
+            min_election_tick: cfg.raft_min_election_timeout_ticks,
+            max_election_tick: cfg.raft_max_election_timeout_ticks,
+            max_size_per_msg: cfg.raft_max_size_per_msg.0,
+            max_inflight_msgs: cfg.raft_max_inflight_msgs,
+            applied: applied_index,
+            check_quorum: true,
+            tag: tag.to_owned(),
+            skip_bcast_commit: true,
+            pre_vote: cfg.prevote,
+            ..Default::default()
+        };
+
+        match RawNode::new(&raft_cfg, ps, vec![]) {
+            Ok(n) => n,
+            Err(e) => panic!("{} failed to create raft node: {:?}", tag, e),
+        }
+    }
+
+    pub fn reinit(&mut self, region: &metapb::Region) {
+        if self.get_store().is_initialized() {
+            panic!("{} was initialized: {:?}", self.tag, region);
+        }
+        let sched = self.get_store().snap_scheduler().to_owned();
+        let ps = match PeerStorage::new(self.engines.clone(), region, sched, self.tag.clone()) {
+            Ok(ps) => ps,
+            Err(e) => panic!("{} failed to re-init peer storage: {:?}", self.tag, e),
+        };
+        match util::find_peer(region, self.peer.get_store_id()) {
+            Some(p) => if *p != self.peer {
+                panic!(
+                    "{} peer changs after reinitialization: {:?} -> {:?}",
+                    self.tag, p, self.peer
+                );
+            },
+            None => panic!(
+                "{} peer on store {} is expected in {:?}",
+                self.tag,
+                self.peer.get_store_id(),
+                region
+            ),
+        }
+        let applied_index = ps.applied_index();
+        let raw_node = Peer::create_raft_node(&self.cfg, &self.tag, self.peer.get_id(), ps);
+        self.raft_group = raw_node;
+        self.last_applying_idx = applied_index;
+
+        // If this region has only one peer, and apparently I am the one, campaign directly.
+        if region.get_peers().len() == 1 {
+            let _ = self.raft_group.campaign();
+        }
     }
 
     #[inline]
@@ -747,7 +798,7 @@ impl Peer {
         }
     }
 
-    fn on_role_changed(&mut self, ready: &Ready, worker: &FutureWorker<PdTask>) {
+    fn on_role_changed(&mut self, ready: &Ready, worker: &FutureScheduler<PdTask>) {
         // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             match ss.raft_state {
@@ -830,7 +881,7 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut ReadyContext<T>,
-        worker: &FutureWorker<PdTask>,
+        worker: &FutureScheduler<PdTask>,
     ) {
         self.marked_to_be_checked = false;
         if self.pending_remove {
@@ -901,8 +952,7 @@ impl Peer {
                 panic!("{} failed to handle raft ready: {:?}", self.tag, e)
             }
         };
-
-        ctx.ready_res.push((ready, invoke_ctx));
+        ctx.ready_res = Some((ready, invoke_ctx));
     }
 
     pub fn post_raft_ready_append<T: Transport>(
@@ -956,7 +1006,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) -> Option<Apply> {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -964,6 +1014,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
+        let mut res = None;
         if self.is_applying_snapshot() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
@@ -1017,7 +1068,7 @@ impl Peer {
             }
             if !committed_entries.is_empty() {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
-                apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
+                res = Some(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
 
@@ -1030,6 +1081,7 @@ impl Peer {
             self.raft_group.advance_apply(self.last_applying_idx);
         }
         self.proposals.gc();
+        res
     }
 
     fn apply_reads(&mut self, ready: &Ready) {
@@ -1072,12 +1124,11 @@ impl Peer {
 
     pub fn post_apply(
         &mut self,
-        groups: &mut HashSet<u64>,
         apply_state: RaftApplyState,
         applied_index_term: u64,
         merged: bool,
         apply_metrics: &ApplyMetrics,
-    ) {
+    ) -> bool {
         if self.is_applying_snapshot() {
             panic!("{} should not applying snapshot.", self.tag);
         }
@@ -1094,9 +1145,7 @@ impl Peer {
         let diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
         self.size_diff_hint = cmp::max(diff, 0) as u64;
 
-        if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
-            self.mark_to_be_checked(groups);
-        }
+        let may_have_ready = self.has_pending_snapshot() && self.ready_to_handle_pending_snap();
 
         if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
             for _ in 0..self.pending_reads.ready_cnt {
@@ -1108,6 +1157,7 @@ impl Peer {
             self.pending_reads.ready_cnt = 0;
         }
         self.pending_reads.gc();
+        may_have_ready
     }
 
     pub fn post_split(&mut self) {
@@ -1139,24 +1189,19 @@ impl Peer {
         self.leader_lease.renew(ts);
     }
 
-    pub fn maybe_campaign(
-        &mut self,
-        last_peer: &Peer,
-        pending_raft_groups: &mut HashSet<u64>,
-    ) -> bool {
+    pub fn maybe_campaign(&mut self, was_leader_before_split: bool) -> bool {
         if self.region().get_peers().len() <= 1 {
             // The peer campaigned when it was created, no need to do it again.
-            return false;
+            return true;
         }
 
-        if !last_peer.is_leader() {
+        if !was_leader_before_split {
             return false;
         }
 
         // If last peer is the leader of the region before split, it's intuitional for
         // it to become the leader of new split region.
         let _ = self.raft_group.campaign();
-        self.mark_to_be_checked(pending_raft_groups);
 
         true
     }
@@ -1761,7 +1806,7 @@ impl Peer {
         None
     }
 
-    pub fn heartbeat_pd(&mut self, worker: &FutureWorker<PdTask>) {
+    pub fn heartbeat_pd(&mut self, sched: &FutureScheduler<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
@@ -1772,7 +1817,7 @@ impl Peer {
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
         };
-        if let Err(e) = worker.schedule(task) {
+        if let Err(e) = sched.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
     }
@@ -2040,32 +2085,6 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
 trait AssertSend: Send {}
 
 impl AssertSend for Peer {}
-
-use raftstore::store::Msg;
-use util::mpsc::{self, LooseBoundedSender, Receiver};
-
-pub struct PeerHolder {
-    peer: Peer,
-    receiver: Receiver<Msg>,
-}
-
-impl PeerHolder {
-    pub fn new(peer: Peer) -> (LooseBoundedSender<Msg>, PeerHolder) {
-        let (sender, receiver) = mpsc::loose_bounded(4096);
-        (sender, PeerHolder { peer, receiver })
-    }
-}
-
-use futures::{Future, Poll};
-
-impl Future for PeerHolder {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        unimplemented!()
-    }
-}
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
     if !msg.has_admin_request() {

@@ -11,14 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod actor_store;
 pub mod bootstrap;
 pub mod cmd_resp;
 pub mod config;
 pub mod engine;
 pub mod keys;
 pub mod msg;
+pub mod pineapple;
 pub mod router;
-pub mod store;
+// pub mod store;
 pub mod transport;
 pub mod util;
 
@@ -30,6 +32,7 @@ mod region_snapshot;
 mod snap;
 mod worker;
 
+pub use self::actor_store::{new_compaction_listener, Store};
 pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap, clear_prepare_bootstrap_state, prepare_bootstrap,
     write_prepare_bootstrap,
@@ -37,7 +40,7 @@ pub use self::bootstrap::{
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::msg::{
-    BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SignificantMsg, Tick,
+    AllMsg, BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SignificantMsg, Tick,
     WriteCallback, WriteResponse,
 };
 pub use self::peer::{Peer, ProposalContext};
@@ -47,12 +50,10 @@ pub use self::peer_storage::{
     RAFT_INIT_LOG_TERM,
 };
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
+pub use self::router::InternalMailboxes;
 pub use self::snap::{
     check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
-};
-pub use self::store::{
-    create_event_loop, new_compaction_listener, Store, StoreChannel, StoreMeta, StoreStat,
 };
 pub use self::transport::Transport;
 pub use self::util::Engines;

@@ -19,7 +19,6 @@ use std::thread;
 use std::time::Duration;
 
 use kvproto::metapb;
-use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use tikv::pd::PdClient;
@@ -496,26 +495,23 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // check whether a new cluster [1,2,3] is formed
     // if so, both [1,2,3] and [4,5,6] think they serve for region r1
     // result in split brain
-    let header0 = find_leader_response_header(cluster, r1, new_peer(2, 2));
-    assert!(header0.get_error().has_region_not_found());
+    region_should_be_removed(cluster, r1, new_peer(2, 2));
 
     // at least wait for a round of election timeout and check again
     let base_tick = cluster.cfg.raft_store.raft_base_tick_interval.0;
     let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     thread::sleep(election_timeout * 2);
 
-    let header1 = find_leader_response_header(cluster, r1, new_peer(2, 2));
-    assert!(header1.get_error().has_region_not_found());
+    region_should_be_removed(cluster, r1, new_peer(2, 2));
 }
 
-fn find_leader_response_header<T: Simulator>(
+fn region_should_be_removed<T: Simulator>(
     cluster: &mut Cluster<T>,
     region_id: u64,
     peer: metapb::Peer,
-) -> RaftResponseHeader {
+) {
     let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-    let resp = cluster.call_command(find_leader, Duration::from_secs(5));
-    resp.unwrap().take_header()
+    must_region_not_found(cluster.call_command(find_leader, Duration::from_secs(5)));
 }
 
 #[test]

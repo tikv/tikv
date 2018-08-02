@@ -85,17 +85,17 @@ impl SyncBenchRouter {
 }
 
 impl RaftStoreRouter for SyncBenchRouter {
-    fn send(&self, msg: Msg) -> Result<()> {
+    fn send(&self, _: u64, msg: Msg) -> Result<()> {
         self.invoke(msg);
         Ok(())
     }
 
-    fn try_send(&self, msg: Msg) -> Result<()> {
+    fn try_send(&self, _: u64, msg: Msg) -> Result<()> {
         self.invoke(msg);
         Ok(())
     }
 
-    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, _: u64, _: SignificantMsg) -> Result<()> {
         Ok(())
     }
 }

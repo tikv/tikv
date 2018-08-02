@@ -17,8 +17,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 use std::{error, io, thread};
 
-use mio;
 use prometheus::IntCounterVec;
+
+use raftstore::store::router::InternalTransport;
 
 lazy_static! {
     pub static ref CHANNEL_FULL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -70,17 +71,6 @@ pub enum NotifyError<T> {
 
 pub trait Sender<T>: Clone {
     fn send(&self, t: T) -> Result<(), NotifyError<T>>;
-}
-
-impl<T: Send> Sender<T> for mio::Sender<T> {
-    fn send(&self, t: T) -> Result<(), NotifyError<T>> {
-        match mio::Sender::send(self, t) {
-            Ok(()) => Ok(()),
-            Err(mio::NotifyError::Closed(t)) => Err(NotifyError::Closed(t)),
-            Err(mio::NotifyError::Full(t)) => Err(NotifyError::Full(t)),
-            Err(mio::NotifyError::Io(e)) => Err(NotifyError::Io(e)),
-        }
-    }
 }
 
 impl<T> Sender<T> for mpsc::SyncSender<T> {
@@ -158,131 +148,5 @@ impl<T, C: Sender<T>> Clone for RetryableSendCh<T, C> {
     }
 }
 
-pub type SendCh<T> = RetryableSendCh<T, mio::Sender<T>>;
+pub type InternalSendCh<T> = RetryableSendCh<T, InternalTransport>;
 pub type SyncSendCh<T> = RetryableSendCh<T, mpsc::SyncSender<T>>;
-
-#[cfg(test)]
-mod tests {
-    use std::sync::mpsc::Receiver;
-    use std::thread;
-    use std::time::Duration;
-
-    use mio::{EventLoop, EventLoopConfig, Handler};
-
-    use super::*;
-
-    #[derive(Debug)]
-    enum Msg {
-        Quit,
-        Stop,
-        Sleep(u64),
-    }
-
-    struct SenderHandler<S: Sender<Msg>> {
-        ch: RetryableSendCh<Msg, S>,
-    }
-
-    impl<S: Sender<Msg>> SenderHandler<S> {
-        fn run(&mut self, recv: Receiver<Msg>) {
-            while let Ok(msg) = recv.recv() {
-                if !self.on_msg(msg) {
-                    break;
-                }
-            }
-        }
-
-        fn on_msg(&mut self, msg: Msg) -> bool {
-            match msg {
-                Msg::Quit => return false,
-                Msg::Stop => self.ch.try_send(Msg::Quit).unwrap(),
-                Msg::Sleep(millis) => thread::sleep(Duration::from_millis(millis)),
-            }
-            true
-        }
-    }
-
-    impl<S: Sender<Msg>> Handler for SenderHandler<S> {
-        type Timeout = ();
-        type Message = Msg;
-
-        fn notify(&mut self, event_loop: &mut EventLoop<SenderHandler<S>>, msg: Msg) {
-            if !self.on_msg(msg) {
-                event_loop.shutdown();
-            }
-        }
-    }
-
-    #[test]
-    fn test_sendch() {
-        let mut event_loop = EventLoop::new().unwrap();
-        let ch = SendCh::new(event_loop.channel(), "test");
-        let _ch = ch.clone();
-        let h = thread::spawn(move || {
-            let mut sender = SenderHandler { ch: _ch };
-            event_loop.run(&mut sender).unwrap();
-        });
-
-        ch.try_send(Msg::Stop).unwrap();
-
-        h.join().unwrap();
-    }
-
-    #[test]
-    fn test_sendch_full() {
-        let mut config = EventLoopConfig::new();
-        config.notify_capacity(2);
-        let mut event_loop = EventLoop::configured(config).unwrap();
-        let ch = SendCh::new(event_loop.channel(), "test");
-        let _ch = ch.clone();
-        let h = thread::spawn(move || {
-            let mut sender = SenderHandler { ch: _ch };
-            event_loop.run(&mut sender).unwrap();
-        });
-
-        ch.send(Msg::Sleep(1000)).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        match ch.send(Msg::Stop) {
-            Err(Error::Discard(_)) => {}
-            res => panic!("expect discard error, but found: {:?}", res),
-        }
-
-        h.join().unwrap();
-    }
-
-    #[test]
-    fn test_sync_sendch() {
-        let (tx, rx) = mpsc::sync_channel(10);
-        let ch = SyncSendCh::new(tx, "test");
-        let _ch = ch.clone();
-        let h = thread::spawn(move || {
-            let mut handler = SenderHandler { ch: _ch };
-            handler.run(rx);
-        });
-
-        ch.try_send(Msg::Stop).unwrap();
-
-        h.join().unwrap();
-    }
-
-    #[test]
-    fn test_sync_sendch_full() {
-        let (tx, rx) = mpsc::sync_channel(2);
-        let ch = SyncSendCh::new(tx, "test");
-        let _ch = ch.clone();
-        let h = thread::spawn(move || {
-            let mut handler = SenderHandler { ch: _ch };
-            handler.run(rx);
-        });
-
-        ch.send(Msg::Sleep(1000)).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        match ch.send(Msg::Stop) {
-            Err(Error::Discard(_)) => {}
-            res => panic!("expect discard error, but found: {:?}", res),
-        }
-
-        h.join().unwrap();
-    }
-}

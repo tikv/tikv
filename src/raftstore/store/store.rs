@@ -15,7 +15,7 @@ use protobuf::{self, Message, RepeatedField};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, thread, u64};
 use time::{self, Timespec};
@@ -46,7 +46,7 @@ use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use util::time::{duration_to_sec, SlowTimer};
 use util::timer::Timer;
-use util::transport::SendCh;
+use util::transport::{self, RetryableSendCh, SendCh};
 use util::worker::{FutureWorker, Scheduler, Stopped, Worker};
 use util::RingQueue;
 use util::{escape, rocksdb};
@@ -690,13 +690,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     } = res;
                     self.on_ready_result(region_id, merged, exec_res, &metrics);
                     if let Some(p) = self.region_peers.get_mut(&region_id) {
-                        p.post_apply(
-                            &mut self.pending_raft_groups,
-                            apply_state,
-                            applied_index_term,
-                            merged,
-                            &metrics,
-                        );
+                        if p.post_apply(apply_state, applied_index_term, merged, &metrics) {
+                            p.mark_to_be_checked(&mut self.pending_raft_groups);
+                        }
                     }
                 },
                 Ok(ApplyTaskRes::Destroy(p)) => {
@@ -1589,8 +1585,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     // this will be used by balance write flow.
                     new_peer.peer_stat = origin_peer.peer_stat.clone();
 
-                    campaigned =
-                        new_peer.maybe_campaign(origin_peer, &mut self.pending_raft_groups);
+                    campaigned = new_peer.maybe_campaign(origin_peer.is_leader());
+                    if campaigned {
+                        new_peer.mark_to_be_checked(&mut self.pending_raft_groups);
+                    }
 
                     if origin_peer.is_leader() {
                         // Notify pd immediately to let it update the region meta.
@@ -2886,7 +2884,7 @@ fn report_split_pd(
 // Consistency Check implementation.
 
 /// Verify and store the hash to state. return true means the hash has been stored successfully.
-fn verify_and_store_hash(
+pub fn verify_and_store_hash(
     region_id: u64,
     state: &mut ConsistencyState,
     expected_index: u64,
@@ -3148,14 +3146,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
-fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
+pub fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
     let mut request = RaftCmdRequest::new();
     request.mut_header().set_region_id(region_id);
     request.mut_header().set_peer(peer);
     request
 }
 
-fn new_verify_hash_request(
+pub fn new_verify_hash_request(
     region_id: u64,
     peer: metapb::Peer,
     state: &ConsistencyState,
@@ -3170,7 +3168,7 @@ fn new_verify_hash_request(
     request
 }
 
-fn new_compute_hash_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
+pub fn new_compute_hash_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
     let mut admin = AdminRequest::new();
@@ -3201,7 +3199,7 @@ fn register_timer<T: Transport, C: PdClient>(
     Ok(())
 }
 
-fn new_compact_log_request(
+pub fn new_compact_log_request(
     region_id: u64,
     peer: metapb::Peer,
     compact_index: u64,
@@ -3288,6 +3286,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch, policy),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
+            Msg::CompactedDeclinedBytes(_) | Msg::InitSplit { .. } | Msg::ProposeMerge { .. } => {
+                unreachable!()
+            }
         }
     }
 
@@ -3391,7 +3392,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
-fn size_change_filter(info: &CompactionJobInfo) -> bool {
+pub fn size_change_filter(info: &CompactionJobInfo) -> bool {
     // When calculating region size, we only consider write and default
     // column families.
     let cf = info.cf_name();
@@ -3406,9 +3407,16 @@ fn size_change_filter(info: &CompactionJobInfo) -> bool {
     true
 }
 
-pub fn new_compaction_listener(ch: SendCh<Msg>) -> CompactionListener {
+pub fn new_compaction_listener<S: transport::Sender<Msg> + Send + 'static>(
+    ch: RetryableSendCh<Msg, S>,
+) -> CompactionListener {
+    let ch = Arc::new(Mutex::new(ch));
     let compacted_handler = box move |compacted_event: CompactedEvent| {
-        if let Err(e) = ch.try_send(Msg::CompactedEvent(compacted_event)) {
+        if let Err(e) = ch
+            .lock()
+            .unwrap()
+            .try_send(Msg::CompactedEvent(compacted_event))
+        {
             error!(
                 "Send compaction finished event to raftstore failed: {:?}",
                 e
@@ -3418,7 +3426,7 @@ pub fn new_compaction_listener(ch: SendCh<Msg>) -> CompactionListener {
     CompactionListener::new(compacted_handler, Some(size_change_filter))
 }
 
-fn calc_region_declined_bytes(
+pub fn calc_region_declined_bytes(
     event: CompactedEvent,
     region_ranges: &BTreeMap<Key, u64>,
     bytes_threshold: u64,

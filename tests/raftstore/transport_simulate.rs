@@ -28,8 +28,8 @@ use std::{thread, time, usize};
 use tikv::util::collections::{HashMap, HashSet};
 
 pub trait Channel<M>: Send + Clone {
-    fn send(&self, m: M) -> Result<()>;
-    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+    fn send(&self, region_id: u64, m: M) -> Result<()>;
+    fn significant_send(&self, _: u64, _: SignificantMsg) -> Result<()> {
         unimplemented!()
     }
     fn flush(&mut self) {}
@@ -40,7 +40,7 @@ where
     T: RaftStoreRouter,
     S: StoreAddrResolver,
 {
-    fn send(&self, m: RaftMessage) -> Result<()> {
+    fn send(&self, _: u64, m: RaftMessage) -> Result<()> {
         Transport::send(self, m)
     }
 
@@ -49,13 +49,13 @@ where
     }
 }
 
-impl Channel<StoreMsg> for ServerRaftStoreRouter {
-    fn send(&self, m: StoreMsg) -> Result<()> {
-        RaftStoreRouter::try_send(self, m)
+impl Channel<StoreMsg> for ServerThreadedStoreRouter {
+    fn send(&self, region_id: u64, m: StoreMsg) -> Result<()> {
+        RaftStoreRouter::try_send(self, region_id, m)
     }
 
-    fn significant_send(&self, msg: SignificantMsg) -> Result<()> {
-        RaftStoreRouter::significant_send(self, msg)
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
+        RaftStoreRouter::significant_send(self, region_id, msg)
     }
 }
 
@@ -190,7 +190,7 @@ impl<M, C: Channel<M>> SimulateTransport<M, C> {
 }
 
 impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
-    fn send(&self, msg: M) -> Result<()> {
+    fn send(&self, region_id: u64, msg: M) -> Result<()> {
         let mut taken = 0;
         let mut msgs = vec![msg];
         let filters = self.filters.rl();
@@ -204,7 +204,7 @@ impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
         }
         if res.is_ok() {
             for msg in msgs {
-                res = self.ch.lock().unwrap().send(msg);
+                res = self.ch.lock().unwrap().send(region_id, msg);
                 if res.is_err() {
                     break;
                 }
@@ -228,7 +228,8 @@ impl<M, C: Channel<M>> Clone for SimulateTransport<M, C> {
 
 impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
     fn send(&self, m: RaftMessage) -> Result<()> {
-        Channel::send(self, m)
+        let region_id = m.get_region_id();
+        Channel::send(self, region_id, m)
     }
 
     fn flush(&mut self) {
@@ -237,16 +238,16 @@ impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
 }
 
 impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
-    fn send(&self, m: StoreMsg) -> Result<()> {
-        Channel::send(self, m)
+    fn send(&self, region_id: u64, m: StoreMsg) -> Result<()> {
+        Channel::send(self, region_id, m)
     }
 
-    fn try_send(&self, m: StoreMsg) -> Result<()> {
-        Channel::send(self, m)
+    fn try_send(&self, region_id: u64, m: StoreMsg) -> Result<()> {
+        Channel::send(self, region_id, m)
     }
 
-    fn significant_send(&self, m: SignificantMsg) -> Result<()> {
-        self.ch.lock().unwrap().significant_send(m)
+    fn significant_send(&self, region_id: u64, m: SignificantMsg) -> Result<()> {
+        self.ch.lock().unwrap().significant_send(region_id, m)
     }
 }
 

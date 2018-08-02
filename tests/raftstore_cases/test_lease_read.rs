@@ -301,16 +301,9 @@ fn test_node_callback_when_destroyed() {
     let get = new_get_cmd(b"k1");
     let req = new_request(1, epoch, vec![get], true);
     block.store(false, Ordering::SeqCst);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
+    must_region_not_found(cluster.call_command_on_leader(req, Duration::from_secs(3)));
     assert!(
         !filter.ctx.rl().is_empty(),
         "read index should be performed"
-    );
-    assert!(
-        resp.get_header().get_error().has_region_not_found(),
-        "{:?}",
-        resp
     );
 }

@@ -198,7 +198,7 @@ impl Operator {
                     .is_none()
                 {
                     *policy.write().unwrap() = SchedulePolicy::Stop;
-                    false
+                    true
                 } else {
                     !policy.write().unwrap().schedule()
                 }
@@ -353,6 +353,8 @@ impl Cluster {
 
         let version = region.get_region_epoch().get_version();
 
+        debug!("heartbeat {:?}", region);
+
         loop {
             let search_key = data_key(region.get_start_key());
             let search_region = match self.get_region(search_key) {
@@ -363,6 +365,8 @@ impl Cluster {
                 }
                 Some(search_region) => search_region,
             };
+
+            debug!("search {:?}", search_region);
 
             let search_start_key = enc_start_key(&search_region);
             let search_end_key = enc_end_key(&search_region);

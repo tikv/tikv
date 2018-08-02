@@ -473,6 +473,10 @@ impl PeerStorage {
         !self.region().get_peers().is_empty()
     }
 
+    pub fn snap_scheduler(&self) -> &Scheduler<RegionTask> {
+        &self.region_sched
+    }
+
     pub fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state.get_hard_state().clone();
         if hard_state == HardState::new() {
@@ -986,9 +990,7 @@ impl PeerStorage {
             status,
         };
         // TODO: gracefully remove region instead.
-        self.region_sched
-            .schedule(task)
-            .expect("snap apply job should not fail");
+        let _ = self.region_sched.schedule(task);
     }
 
     /// Save memory states to disk.
@@ -1430,7 +1432,7 @@ mod test {
         let mut ctx = InvokeContext::new(&store);
         let mut metrics = RaftMetrics::default();
         let trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans);
         store
             .append(&mut ctx, &ents[1..], &mut ready_ctx)
             .expect("");
@@ -1455,7 +1457,7 @@ mod test {
         let mut ctx = InvokeContext::new(store);
         let mut metrics = RaftMetrics::default();
         let trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans);
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         store.engines.raft.write(ready_ctx.raft_wb).expect("");
@@ -1719,7 +1721,7 @@ mod test {
         let mut kv_wb = WriteBatch::new();
         let mut metrics = RaftMetrics::default();
         let trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, 2);
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans);
         s.append(
             &mut ctx,
             &[new_entry(6, 5), new_entry(7, 5)],

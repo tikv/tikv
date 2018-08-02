@@ -20,7 +20,7 @@ use import::SSTImporter;
 use pd::PdClient;
 use raftstore::store::util::is_epoch_stale;
 use raftstore::store::Msg;
-use util::transport::SendCh;
+use util::transport::InternalSendCh;
 use util::worker::Runnable;
 
 pub enum Task {
@@ -39,7 +39,7 @@ impl fmt::Display for Task {
 
 pub struct Runner<C> {
     store_id: u64,
-    store_ch: SendCh<Msg>,
+    store_ch: InternalSendCh<Msg>,
     importer: Arc<SSTImporter>,
     pd_client: Arc<C>,
 }
@@ -47,7 +47,7 @@ pub struct Runner<C> {
 impl<C: PdClient> Runner<C> {
     pub fn new(
         store_id: u64,
-        store_ch: SendCh<Msg>,
+        store_ch: InternalSendCh<Msg>,
         importer: Arc<SSTImporter>,
         pd_client: Arc<C>,
     ) -> Runner<C> {

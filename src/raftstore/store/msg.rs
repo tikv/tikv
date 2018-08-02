@@ -16,12 +16,15 @@ use std::fmt;
 use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
-use kvproto::metapb::RegionEpoch;
+use kvproto::metapb::{Peer, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
+use raft::eraftpb::Entry;
 use raft::SnapshotStatus;
+use raftstore::store::peer::PeerStat;
+use raftstore::store::worker::ApplyTaskRes;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
@@ -184,17 +187,32 @@ pub enum Msg {
 
     // Compaction finished event
     CompactedEvent(CompactedEvent),
+    CompactedDeclinedBytes(u64),
     HalfSplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
     },
-    MergeFail {
+    MergeResult {
         region_id: u64,
+        peer: Peer,
+        successful: bool,
     },
 
     ValidateSSTResult {
         invalid_ssts: Vec<SSTMeta>,
+    },
+    InitSplit {
+        region: Region,
+        peer_stat: PeerStat,
+        right_derive: bool,
+        is_leader: bool,
+    },
+    ProposeMerge {
+        target_region: Region,
+        source_region: Region,
+        commit: u64,
+        entries: Vec<Entry>,
     },
 }
 
@@ -233,11 +251,31 @@ impl fmt::Debug for Msg {
                 region_id, keys
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
+            Msg::CompactedDeclinedBytes(declined_bytes) => {
+                write!(fmt, "CompactedDeclinedBytes {}", declined_bytes)
+            }
             Msg::HalfSplitRegion { ref region_id, .. } => {
                 write!(fmt, "Half Split region {}", region_id)
             }
-            Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
+            Msg::MergeResult {
+                region_id,
+                successful,
+                ..
+            } => write!(fmt, "[region {}] MergeResult {}", region_id, successful),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            Msg::InitSplit { ref region, .. } => {
+                write!(fmt, "InitSplit region {}", region.get_id())
+            }
+            Msg::ProposeMerge {
+                ref target_region,
+                ref source_region,
+                ..
+            } => write!(
+                fmt,
+                "ProposeMerge (region {} -> region {})",
+                source_region.get_id(),
+                target_region.get_id()
+            ),
         }
     }
 }
@@ -275,77 +313,10 @@ impl Msg {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::thread;
-    use std::time::Duration;
-
-    use mio::{EventLoop, Handler};
-
-    use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-    use raftstore::Error;
-    use util::transport::SendCh;
-
-    fn call_command(
-        sendch: &SendCh<Msg>,
-        request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse, Error> {
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                let callback = Callback::Write(Box::new(move |write_resp: WriteResponse| {
-                    cb(write_resp.response);
-                }));
-                sendch.try_send(Msg::new_raft_cmd(request, callback))
-            },
-            timeout
-        ).ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
-    }
-
-    struct TestHandler;
-
-    impl Handler for TestHandler {
-        type Timeout = ();
-        type Message = Msg;
-
-        fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Self::Message) {
-            match msg {
-                Msg::Quit => event_loop.shutdown(),
-                Msg::RaftCmd {
-                    callback, request, ..
-                } => {
-                    // a trick for test timeout.
-                    if request.get_header().get_region_id() == u64::max_value() {
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                    callback.invoke_with_response(RaftCmdResponse::new());
-                }
-                // we only test above message types, others panic.
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    #[test]
-    fn test_sender() {
-        let mut event_loop = EventLoop::new().unwrap();
-        let sendch = &SendCh::new(event_loop.channel(), "test-sender");
-
-        let t = thread::spawn(move || {
-            event_loop.run(&mut TestHandler).unwrap();
-        });
-
-        let mut request = RaftCmdRequest::new();
-        request.mut_header().set_region_id(u64::max_value());
-        assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
-        match call_command(sendch, request, Duration::from_millis(10)) {
-            Err(Error::Timeout(_)) => {}
-            _ => panic!("should failed with timeout"),
-        }
-
-        sendch.try_send(Msg::Quit).unwrap();
-
-        t.join().unwrap();
-    }
+#[derive(Debug)]
+pub enum AllMsg {
+    Msg(Msg),
+    SignificantMsg(SignificantMsg),
+    Tick(Tick),
+    ApplyRes(ApplyTaskRes),
 }
