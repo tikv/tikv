@@ -42,7 +42,7 @@ use storage::{
 use util::config::{
     self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB,
 };
-use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
+use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
 use util::rocksdb::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
@@ -207,8 +207,8 @@ impl Default for DefaultCfConfig {
 impl DefaultCfConfig {
     pub fn build_opt(&self) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
     }
 }
@@ -271,8 +271,8 @@ impl WriteCfConfig {
         // Collects user defined properties.
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
     }
 }
