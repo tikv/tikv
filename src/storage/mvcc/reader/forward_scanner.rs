@@ -29,12 +29,13 @@ pub struct ForwardScannerBuilder<S: Snapshot> {
     isolation_level: IsolationLevel,
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
+    ts: u64,
 }
 
 /// `ForwardScanner` factory.
 impl<S: Snapshot> ForwardScannerBuilder<S> {
     /// Initialize a new `ForwardScanner`
-    pub fn new(snapshot: S) -> Self {
+    pub fn new(snapshot: S, ts: u64) -> Self {
         Self {
             snapshot,
             fill_cache: true,
@@ -42,6 +43,7 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
             isolation_level: IsolationLevel::SI,
             lower_bound: None,
             upper_bound: None,
+            ts,
         }
     }
 
@@ -105,6 +107,7 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
             isolation_level: self.isolation_level,
             lower_bound: self.lower_bound,
             upper_bound: self.upper_bound,
+            ts: self.ts,
             lock_cursor,
             write_cursor,
             default_cursor: None,
@@ -130,6 +133,8 @@ pub struct ForwardScanner<S: Snapshot> {
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
 
+    ts: u64,
+
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
 
@@ -154,7 +159,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     }
 
     /// Get the next key-value pair.
-    pub fn read_next(&mut self, ts: u64) -> Result<Option<(Key, Value)>> {
+    pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
             self.write_cursor.seek_to_first(&mut self.statistics.write);
             self.lock_cursor.seek_to_first(&mut self.statistics.lock);
@@ -194,7 +199,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             } else {
                 None
             };
-            let res = self.get(&key, ts, lock);
+            let res = self.get(&key, lock);
 
             if has_write {
                 let next_seek_key = key.append_ts(0);
@@ -213,7 +218,9 @@ impl<S: Snapshot> ForwardScanner<S> {
 
     /// Try to get the value of a key. Returns empty value if `omit_value` is set. Returns `None` if
     /// No valid value on this key.
-    fn get(&mut self, user_key: &Key, mut ts: u64, lock: Option<Vec<u8>>) -> Result<Option<Value>> {
+    fn get(&mut self, user_key: &Key, lock: Option<Vec<u8>>) -> Result<Option<Value>> {
+        let mut ts = self.ts;
+
         match self.isolation_level {
             IsolationLevel::SI => {
                 if let Some(lock) = lock {

@@ -85,12 +85,13 @@ impl<S: Snapshot> SnapshotStore<S> {
     ) -> Result<StoreScanner<S>> {
         let (forward_scanner, reader) = match mode {
             ScanMode::Forward => {
-                let forward_scanner = ForwardScannerBuilder::new(self.snapshot.clone())
-                    .range(lower_bound, upper_bound)
-                    .omit_value(key_only)
-                    .fill_cache(self.fill_cache)
-                    .isolation_level(self.isolation_level)
-                    .build()?;
+                let forward_scanner =
+                    ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+                        .range(lower_bound, upper_bound)
+                        .omit_value(key_only)
+                        .fill_cache(self.fill_cache)
+                        .isolation_level(self.isolation_level)
+                        .build()?;
                 (Some(forward_scanner), None)
             }
             ScanMode::Backward => {
@@ -148,11 +149,7 @@ impl<S: Snapshot> StoreScanner<S> {
     //    }
 
     pub fn next(&mut self) -> Result<Option<(Key, Value)>> {
-        Ok(self
-            .forward_scanner
-            .as_mut()
-            .unwrap()
-            .read_next(self.start_ts)?)
+        Ok(self.forward_scanner.as_mut().unwrap().read_next()?)
     }
 
     pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
