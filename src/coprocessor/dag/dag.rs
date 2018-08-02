@@ -43,7 +43,7 @@ impl<S: Snapshot + 'static> DAGContext<S> {
         let mut eval_cfg = box_try!(EvalConfig::new(req.get_flags()));
 
         // We respect time zone name first, then offset.
-        if req.has_time_zone_name() && req.get_time_zone_name().len() > 0 {
+        if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
             box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
         } else if req.has_time_zone_offset() {
             box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
