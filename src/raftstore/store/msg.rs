@@ -16,7 +16,7 @@ use std::fmt;
 use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
-use kvproto::metapb::{Peer, Region, RegionEpoch};
+use kvproto::metapb;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
@@ -28,7 +28,7 @@ use raftstore::store::worker::ApplyTaskRes;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
-use super::RegionSnapshot;
+use super::{Peer, RegionSnapshot};
 
 #[derive(Debug)]
 pub struct ReadResponse {
@@ -41,9 +41,24 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
+#[derive(Debug)]
+pub enum SeekRegionResult {
+    Found {
+        local_peer: metapb::Peer,
+        region: metapb::Region,
+    },
+    LimitExceeded {
+        next_key: Vec<u8>,
+    },
+    Ended,
+}
+
 pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
 pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
+
+pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
+pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -156,7 +171,7 @@ pub enum Msg {
 
     SplitRegion {
         region_id: u64,
-        region_epoch: RegionEpoch,
+        region_epoch: metapb::RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
         split_key: Vec<u8>,
@@ -190,12 +205,12 @@ pub enum Msg {
     CompactedDeclinedBytes(u64),
     HalfSplitRegion {
         region_id: u64,
-        region_epoch: RegionEpoch,
+        region_epoch: metapb::RegionEpoch,
         policy: CheckPolicy,
     },
     MergeResult {
         region_id: u64,
-        peer: Peer,
+        peer: metapb::Peer,
         successful: bool,
     },
 
@@ -203,16 +218,22 @@ pub enum Msg {
         invalid_ssts: Vec<SSTMeta>,
     },
     InitSplit {
-        region: Region,
+        region: metapb::Region,
         peer_stat: PeerStat,
         right_derive: bool,
         is_leader: bool,
     },
     ProposeMerge {
-        target_region: Region,
-        source_region: Region,
+        target_region: metapb::Region,
+        source_region: metapb::Region,
         commit: u64,
         entries: Vec<Entry>,
+    },
+    SeekRegion {
+        from_key: Vec<u8>,
+        filter: SeekRegionFilter,
+        limit: u32,
+        callback: SeekRegionCallback,
     },
 }
 
@@ -276,6 +297,9 @@ impl fmt::Debug for Msg {
                 source_region.get_id(),
                 target_region.get_id()
             ),
+            Msg::SeekRegion { ref from_key, .. } => {
+                write!(fmt, "Seek Region from_key {:?}", from_key)
+            }
         }
     }
 }
@@ -302,7 +326,7 @@ impl Msg {
 
     pub fn new_half_split_region(
         region_id: u64,
-        region_epoch: RegionEpoch,
+        region_epoch: metapb::RegionEpoch,
         policy: CheckPolicy,
     ) -> Msg {
         Msg::HalfSplitRegion {

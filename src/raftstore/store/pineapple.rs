@@ -1012,7 +1012,8 @@ impl<R: Transport + 'static> PeerHolder<R> {
             Msg::InitSplit { .. }
             | Msg::CompactedEvent(_)
             | Msg::SnapshotStats
-            | Msg::ValidateSSTResult { .. } => unreachable!(),
+            | Msg::ValidateSSTResult { .. }
+            | Msg::SeekRegion { .. } => unreachable!(),
         }
     }
 

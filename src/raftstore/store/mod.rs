@@ -40,8 +40,8 @@ pub use self::bootstrap::{
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::msg::{
-    AllMsg, BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SignificantMsg, Tick,
-    WriteCallback, WriteResponse,
+    AllMsg, BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SeekRegionCallback,
+    SeekRegionFilter, SeekRegionResult, SignificantMsg, Tick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{Peer, ProposalContext};
 pub use self::peer_storage::{
