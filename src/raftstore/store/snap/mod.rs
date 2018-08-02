@@ -387,17 +387,24 @@ impl SnapManager {
         }
 
         for (for_send, key) in snap_keys {
+            let mut can_remove = false;
             if let Some(usage) = self.get_registry(for_send).get(&key) {
-                if usage.is_busy()
-                    || (!usage.has_been_used()
-                        && !self.snapshot_is_stale(for_send, key).unwrap_or(true))
-                {
-                    continue;
+                if !usage.is_busy() && usage.has_been_used() {
+                    can_remove = true;
                 }
             }
-            self.delete_snapshot(for_send, key);
-            self.deregister(for_send, key);
-            removed += 1;
+            if !can_remove && self.snapshot_is_stale(for_send, key).unwrap_or(true) {
+                // TODO: if the snapshot is just received and then TiKV restarts after
+                // a while, we can't gc it because TiKV could need to recover from it.
+                // Maybe can let `SnapManager` holds an engine to knows the snapshot is
+                // stale or not exactly.
+                can_remove = true;
+            }
+            if can_remove {
+                self.delete_snapshot(for_send, key);
+                self.deregister(for_send, key);
+                removed += 1;
+            }
         }
 
         let snap_size = self.snap_size.load(Ordering::SeqCst);
@@ -945,15 +952,8 @@ mod tests {
             snap_data.get_meta().write_to_writer(&mut f).unwrap();
         };
 
-        // Can gc it if it's not registered.
-        ensure_meta_file_exists();
-        snap_mgr.deregister(true, key);
-        snap_mgr.snap_size.store(1918, Ordering::SeqCst);
-        assert!(snap_mgr.get_snapshot_receiver(key, &data).is_ok());
-        assert!(File::open(&meta_path).is_err());
-
-        let get_usage = |mgr: &SnapManager| -> SnapUsage {
-            mgr.get_registry(false).get(&key).cloned().unwrap()
+        let get_usage = |snap_mgr: &SnapManager| -> SnapUsage {
+            snap_mgr.get_registry(true).get(&key).cloned().unwrap()
         };
 
         // Can gc it if it's used.
@@ -967,12 +967,10 @@ mod tests {
         assert!(File::open(&meta_path).is_err());
 
         // Can gc it if it's stale.
-        let usage = get_usage(&snap_mgr);
         ensure_meta_file_exists();
         snap_mgr.snap_size.store(1918, Ordering::SeqCst);
         snap_mgr.sending_count.fetch_add(1, Ordering::SeqCst);
 
-        usage.used_times.store(0, Ordering::SeqCst);
         snap_mgr.gc_timeout = Duration::default();
         assert!(snap_mgr.get_snapshot_receiver(key, &data).is_ok());
         assert!(File::open(&meta_path).is_err());
