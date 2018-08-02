@@ -58,7 +58,6 @@ pub const APPLY_STATUS_RELAX: usize = 0;
 pub const APPLY_STATUS_PENDING: usize = 1;
 pub const APPLY_STATUS_RUNNING: usize = 2;
 pub const APPLY_STATUS_CANCELED: usize = 3;
-pub const APPLY_STATUS_FAILED: usize = 4;
 
 // Discard all log entries prior to compact_index. We must guarantee
 // that the compact_index is not greater than applied index.
@@ -918,32 +917,20 @@ impl PeerStorage {
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         let state = self.snap_applying_state.load(Ordering::SeqCst);
-        state == APPLY_STATUS_PENDING
-            || state == APPLY_STATUS_RUNNING
-            // Failed should be treated as applying. But it can be canceled.
-            || state == APPLY_STATUS_FAILED
+        state == APPLY_STATUS_PENDING || state == APPLY_STATUS_RUNNING
     }
 
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
-        let mut origin_state = self.snap_applying_state.compare_and_swap(
+        let origin_state = self.snap_applying_state.compare_and_swap(
             APPLY_STATUS_PENDING,
             APPLY_STATUS_CANCELED,
             Ordering::SeqCst,
         );
-        if origin_state != APPLY_STATUS_PENDING {
-            origin_state = self.snap_applying_state.compare_and_swap(
-                APPLY_STATUS_FAILED,
-                APPLY_STATUS_CANCELED,
-                Ordering::SeqCst,
-            );
-        }
         self.snap_stale_notifier
             .apply_canceled
             .store(true, Ordering::SeqCst);
-        origin_state == APPLY_STATUS_PENDING
-            || origin_state == APPLY_STATUS_CANCELED
-            || origin_state == APPLY_STATUS_FAILED
+        origin_state == APPLY_STATUS_PENDING || origin_state == APPLY_STATUS_CANCELED
     }
 
     pub fn get_region_id(&self) -> u64 {

@@ -47,6 +47,15 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> bool {
     false
 }
 
+/// Delete given path from file system. Return `true` for new created.
+pub fn create_dir_if_not_exists<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
+    match fs::create_dir(&dir) {
+        Ok(_) => Ok(true),
+        Err(ref e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     if !from.as_ref().is_file() {
         return Err(io::Error::new(

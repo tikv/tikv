@@ -11,9 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 mod builder;
+mod migration;
 mod reader;
 use self::builder::SnapshotGenerator;
 pub use self::builder::SnapshotReceiver;
+use self::migration::*;
 pub use self::reader::SnapshotSender;
 use self::reader::{check_snapshot_with_meta, SnapshotApplyer};
 
@@ -40,7 +42,7 @@ use raftstore::store::Msg;
 use raftstore::{Error, Result};
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::collections::HashMap;
-use util::file::delete_dir_if_exist;
+use util::file::{create_dir_if_not_exists, delete_dir_if_exist};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::time::Instant;
 use util::transport::SendCh;
@@ -154,6 +156,7 @@ impl SnapManager {
             fs::create_dir_all(path)?;
             return Ok(());
         }
+        self.migrate_old_snap_files()?;
         self.scan_meta_files()?;
         Ok(())
     }
@@ -257,6 +260,33 @@ impl SnapManager {
         }
         error!("{} apply_snapshot without avaliable snapshot", key);
         Err(Error::Snapshot(SnapError::Unavaliable))
+    }
+
+    // Migrate old snapshot files to subdir, which is a new layout.
+    fn migrate_old_snap_files(&self) -> io::Result<()> {
+        for p in fs::read_dir(&PathBuf::from(&self.core.dir))?
+            .filter_map(|p| p.ok())
+            .filter(|p| p.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        {
+            let dir = &self.core.dir;
+            let snap_key = match p.file_name().to_str() {
+                Some(s) if !s.ends_with(META_FILE_NAME) => continue,
+                Some(s) => parse_old_snap_name(s),
+                None => continue,
+            };
+
+            if let Some((for_send, key)) = snap_key {
+                create_dir_if_not_exists(&gen_snap_dir(dir, for_send, key))?;
+                let new_meta_path = gen_meta_file_path(dir, for_send, key);
+                fs::rename(&p.path(), &new_meta_path)?;
+                for cf in SNAPSHOT_CFS {
+                    let old_path = gen_old_cf_file_path(dir, for_send, key, cf);
+                    let new_path = gen_cf_file_path(dir, for_send, key, cf);
+                    let _ = fs::rename(&old_path, &new_path);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn scan_meta_files(&self) -> io::Result<()> {

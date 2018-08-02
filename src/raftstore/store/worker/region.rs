@@ -377,14 +377,12 @@ impl SnapContext {
             }
             Err(RaftStoreError::Snapshot(SnapError::Abort)) => {
                 // Abort normally is caused by raftstore canceled the apply.
-                snap_applying_state.store(APPLY_STATUS_FAILED, Ordering::SeqCst);
                 warn!("applying snapshot for region {} is aborted.", region_id);
                 SNAP_COUNTER_VEC
                     .with_label_values(&["apply", "abort"])
                     .inc();
             }
             Err(e) => {
-                snap_applying_state.store(APPLY_STATUS_FAILED, Ordering::SeqCst);
                 error!("failed to apply snap: {:?}!!!", e);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
                 panic!("region {} apply fail: {}", region_id, e);
