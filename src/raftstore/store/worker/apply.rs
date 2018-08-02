@@ -2120,11 +2120,10 @@ pub struct AppliesRes {
 }
 
 /// When an existing region receive an registration message, it
-/// should stop current running future by send it a suicide message,
-/// and then spawn a new future use the latest registration message.
-pub struct Suicide {
+/// should update to the latest registration.
+pub struct Update {
     pub region_id: u64,
-    pub term: u64,
+    pub new_delegate: ApplyDelegate,
 }
 
 /// Borrow region only happens when two regions are going to merge.
@@ -2148,7 +2147,7 @@ pub enum RegionTask {
     Destroy(u64),
     Proposal(RegionProposal),
 
-    Suicide(Suicide),
+    Update(Update),
     Borrow(BorrowDelegate),
     Stop((u64, Sender<()>)),
 }
@@ -2166,8 +2165,11 @@ impl RegionTask {
         RegionTask::Destroy(region_id)
     }
 
-    pub fn suicide(region_id: u64, term: u64) -> RegionTask {
-        RegionTask::Suicide(Suicide { region_id, term })
+    pub fn update(region_id: u64, new_delegate: ApplyDelegate) -> RegionTask {
+        RegionTask::Update(Update {
+            region_id,
+            new_delegate,
+        })
     }
 }
 
@@ -2419,6 +2421,7 @@ impl Runner {
                                     }
 
                                     if delegate.pending_remove {
+                                        info!("{} destroyed due to pending_remove", delegate.tag);
                                         delegate.destroy();
                                         return Err(());
                                     }
@@ -2447,13 +2450,12 @@ impl Runner {
                             // Exit current task
                             box future::err(())
                         }
-                        RegionTask::Suicide(s) => {
-                            assert_eq!(delegate.region_id(), s.region_id);
-                            delegate.term = s.term;
+                        RegionTask::Update(u) => {
+                            assert_eq!(delegate.region_id(), u.region_id);
+                            delegate.term = u.new_delegate.term;
                             delegate.clear_all_commands_as_stale();
 
-                            // Exit current task
-                            box future::err(())
+                            box future::ok(u.new_delegate)
                         }
                         RegionTask::Stop((region_id, stop_tx)) => {
                             assert_eq!(delegate.region_id(), region_id);
@@ -2499,7 +2501,6 @@ impl Runner {
     fn handle_registration(&mut self, s: Registration) {
         let peer_id = s.id;
         let region_id = s.region.get_id();
-        let term = s.term;
         let delegate = ApplyDelegate::from_registration(
             Arc::clone(&self.db),
             Arc::clone(&self.raft_db),
@@ -2510,23 +2511,42 @@ impl Runner {
             Arc::clone(&self.importer),
             self.use_delete_range,
         );
-        info!(
-            "{} peer {} register to apply pool at term {}",
-            delegate.tag, peer_id, delegate.term
-        );
 
-        let (tx, rx) = unbounded();
-        if let Some(tx) = self.region_task_senders.insert(region_id, tx) {
-            // There already exist an sender for this region, this only happen when the registration
-            // message send for several times, use the latest message.
-            tx.unbounded_send(RegionTask::suicide(region_id, term))
-                .unwrap_or_else(|_| {
-                    error!("Dangling message sender for region {}", region_id);
+        let mut d = None;
+
+        // If there existing related sender, try to send update message.
+        if let Some(tx) = self.region_task_senders.get(&region_id) {
+            info!(
+                "{} peer {} update delegate at term {}",
+                delegate.tag, peer_id, delegate.term
+            );
+            tx.unbounded_send(RegionTask::update(region_id, delegate))
+                .unwrap_or_else(|e| {
+                    error!(
+                        "send update message failed for region {}, error {:?}",
+                        region_id, e
+                    );
+                    let task = e.into_inner();
+                    if let RegionTask::Update(u) = task {
+                        d = Some(u.new_delegate);
+                    } else {
+                        panic!("Proposal task is expected.")
+                    }
                 });
+        } else {
+            d = Some(delegate);
         }
 
-        // Register to apply pool.
-        Self::spawn_region(&self.apply_pool, delegate, rx);
+        // Spawn a future for this region.
+        if let Some(delegate) = d {
+            info!(
+                "{} peer {} register to apply pool at term {}",
+                delegate.tag, peer_id, delegate.term
+            );
+            let (tx, rx) = unbounded();
+            Self::spawn_region(&self.apply_pool, delegate, rx);
+            self.region_task_senders.insert(region_id, tx);
+        }
     }
 
     fn handle_destroy(&mut self, d: Destroy) {
