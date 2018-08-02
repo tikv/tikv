@@ -15,7 +15,7 @@ use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
-use std::i64;
+use std::{f64, i64};
 
 impl ScalarFunc {
     #[inline]
@@ -105,6 +105,11 @@ impl ScalarFunc {
     #[inline]
     pub fn floor_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
+    }
+
+    #[inline]
+    pub fn pi(&self, _ctx: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
+        Ok(Some(f64::consts::PI))
     }
 }
 
@@ -297,5 +302,13 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    #[test]
+    fn test_pi() {
+        let mut ctx = EvalContext::default();
+        let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::PI, &[])).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::F64(f64::consts::PI));
     }
 }

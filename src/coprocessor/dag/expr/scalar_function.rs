@@ -232,6 +232,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonInsertSig
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
 
+            ScalarFuncSig::PI => (0, 0),
+
             // unimplement signature
             ScalarFuncSig::Acos
             | ScalarFuncSig::AddDateAndDuration
@@ -377,7 +379,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
-            | ScalarFuncSig::PI
             | ScalarFuncSig::Pow
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
@@ -788,6 +789,7 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
+        PI => pi,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -1146,6 +1148,7 @@ mod test {
                 3,
                 usize::MAX,
             ),
+            (vec![ScalarFuncSig::PI], 0, 0),
         ];
         for (sigs, min, max) in cases {
             for sig in sigs {
@@ -1310,7 +1313,6 @@ mod test {
             ScalarFuncSig::Password,
             ScalarFuncSig::PeriodAdd,
             ScalarFuncSig::PeriodDiff,
-            ScalarFuncSig::PI,
             ScalarFuncSig::Pow,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
