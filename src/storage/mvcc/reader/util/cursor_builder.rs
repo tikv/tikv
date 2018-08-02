@@ -35,7 +35,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             snapshot,
             cf,
 
-            scan_mode: ScanMode::Forward,
+            scan_mode: ScanMode::ForwardNew,
             fill_cache: true,
             prefix_seek: false,
             upper_bound: None,
@@ -61,11 +61,13 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
-    /// Set iterator scanning mode. Mixed mode is not allowed.
+    /// Set iterator scanning mode. Only `ForwardNew` and `BackwardNew` is allowed.
     ///
-    /// Defaults to `ScanMode::Forward`.
+    /// Defaults to `ScanMode::ForwardNew`.
     #[inline]
     pub fn scan_mode(mut self, scan_mode: ScanMode) -> Self {
+        assert_ne!(scan_mode, ScanMode::Forward);
+        assert_ne!(scan_mode, ScanMode::Backward);
         assert_ne!(scan_mode, ScanMode::Mixed);
         self.scan_mode = scan_mode;
         self

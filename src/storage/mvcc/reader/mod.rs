@@ -184,28 +184,6 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
-    pub fn get_txn_commit_info(
-        &mut self,
-        key: &Key,
-        start_ts: u64,
-    ) -> Result<Option<(u64, WriteType)>> {
-        let mut seek_ts = start_ts;
-        while let Some((commit_ts, write)) = self.reverse_seek_write(key, seek_ts)? {
-            if write.start_ts == start_ts {
-                return Ok(Some((commit_ts, write.write_type)));
-            }
-
-            // If we reach a commit version whose type is not Rollback and start ts is
-            // larger than the given start ts, stop searching.
-            if write.write_type != WriteType::Rollback && write.start_ts > start_ts {
-                break;
-            }
-
-            seek_ts = commit_ts + 1;
-        }
-        Ok(None)
-    }
-
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             let iter_opt = IterOption::new(
@@ -497,7 +475,7 @@ mod tests {
     use std::u64;
     use storage::engine::{Modify, ScanMode};
     use storage::mvcc::write::WriteType;
-    use storage::mvcc::{MvccReader, MvccTxn};
+    use storage::mvcc::{CFReaderBuilder, MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
@@ -995,8 +973,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_txn_commit_info() {
-        let path = TempDir::new("_test_storage_mvcc_reader_reverse_seek_basic").expect("");
+    fn test_reverse_seek_write_by_start_ts() {
+        let path =
+            TempDir::new("_test_storage_mvcc_reader_reverse_seek_write_by_start_ts").unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
@@ -1019,37 +998,61 @@ mod tests {
         engine.commit(k, 35, 40);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let mut cf_reader = CFReaderBuilder::new(snap).build().unwrap();
 
         // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
         // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = make_key(k);
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
+        let (commit_ts, write) = cf_reader
+            .reverse_seek_write_by_start_ts(&key, 35)
+            .unwrap()
+            .unwrap();
         assert_eq!(commit_ts, 40);
-        assert_eq!(write_type, WriteType::Put);
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 35);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 25).unwrap().unwrap();
+        let (commit_ts, write) = cf_reader
+            .reverse_seek_write_by_start_ts(&key, 25)
+            .unwrap()
+            .unwrap();
         assert_eq!(commit_ts, 30);
-        assert_eq!(write_type, WriteType::Put);
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 25);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 20).unwrap().unwrap();
+        let (commit_ts, write) = cf_reader
+            .reverse_seek_write_by_start_ts(&key, 20)
+            .unwrap()
+            .unwrap();
         assert_eq!(commit_ts, 20);
-        assert_eq!(write_type, WriteType::Rollback);
+        assert_eq!(write.write_type, WriteType::Rollback);
+        assert_eq!(write.start_ts, 20);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().unwrap();
+        let (commit_ts, write) = cf_reader
+            .reverse_seek_write_by_start_ts(&key, 1)
+            .unwrap()
+            .unwrap();
         assert_eq!(commit_ts, 10);
-        assert_eq!(write_type, WriteType::Put);
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5).unwrap().unwrap();
+        let (commit_ts, write) = cf_reader
+            .reverse_seek_write_by_start_ts(&key, 5)
+            .unwrap()
+            .unwrap();
         assert_eq!(commit_ts, 5);
-        assert_eq!(write_type, WriteType::Rollback);
+        assert_eq!(write.write_type, WriteType::Rollback);
+        assert_eq!(write.start_ts, 5);
 
-        let seek_for_prev_old = reader.get_statistics().write.seek_for_prev;
-        assert!(reader.get_txn_commit_info(&key, 15).unwrap().is_none());
-        let seek_for_prev_new = reader.get_statistics().write.seek_for_prev;
-
-        // `get_txn_commit_info(&key, 15)` stopped at `30_25 PUT`.
-        assert_eq!(seek_for_prev_new - seek_for_prev_old, 2);
+        cf_reader.take_statistics();
+        assert!(
+            cf_reader
+                .reverse_seek_write_by_start_ts(&key, 15)
+                .unwrap()
+                .is_none()
+        );
+        // `reverse_seek_write_by_start_ts(&key, 15)` starts from `5_5 Rollback`,
+        // stopped at `30_25 PUT`.
+        assert_eq!(cf_reader.take_statistics().write.prev, 3);
     }
 }
