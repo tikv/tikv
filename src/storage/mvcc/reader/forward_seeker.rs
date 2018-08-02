@@ -17,7 +17,9 @@ use super::util::CursorBuilder;
 use std::cmp::Ordering;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{
+    slice_remove_ts, Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 use util::codec::number;
 
 pub struct ForwardScannerBuilder<S: Snapshot> {
@@ -176,7 +178,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                     (None, None) => return Ok(None),
                     (None, Some(k)) => (Key::from_encoded(k.to_vec()), false, true),
                     (Some(k), None) => (Key::from_encoded(k.to_vec()).truncate_ts()?, true, false),
-                    (Some(wk), Some(lk)) => match wk.cmp(wk) {
+                    (Some(wk), Some(lk)) => match slice_remove_ts(wk).cmp(wk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
                         Ordering::Less => {
                             (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)
@@ -192,7 +194,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             } else {
                 None
             };
-            let value = self.get(&key, ts, lock)?;
+            let res = self.get(&key, ts, lock);
 
             if has_write {
                 let next_seek_key = key.append_ts(0);
@@ -203,7 +205,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 self.lock_cursor.next(&mut self.statistics.lock);
             }
 
-            if let Some(v) = value {
+            if let Some(v) = res? {
                 return Ok(Some((key, v)));
             }
         }

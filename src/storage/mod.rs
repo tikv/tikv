@@ -48,7 +48,7 @@ pub use self::engine::{
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
-pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
+pub use self::types::{make_key, slice_remove_ts, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -655,11 +655,18 @@ impl<E: Engine> Storage<E> {
                         ScanMode::Forward
                     };
 
-                    let mut scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
+                    let mut scanner;
                     let res = if options.reverse_scan {
+                        scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
                         scanner.reverse_scan(start_key, limit)
                     } else {
-                        scanner.scan(start_key, limit)
+                        scanner = snap_store.scanner(
+                            scan_mode,
+                            options.key_only,
+                            Some(start_key.into_encoded()),
+                            None,
+                        )?;
+                        scanner.scan(limit)
                     };
 
                     let statistics = scanner.get_statistics();
