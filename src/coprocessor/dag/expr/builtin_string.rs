@@ -38,6 +38,7 @@ mod test {
     #[test]
     fn test_length() {
         let cases = vec![
+            ("", 0i64),
             ("你好", 6i64),
             ("TiKV", 4i64),
             ("あなたのことが好きです", 33i64),
@@ -67,6 +68,7 @@ mod test {
     #[test]
     fn test_bit_length() {
         let cases = vec![
+            ("", 0i64),
             ("你好", 48i64),
             ("TiKV", 32i64),
             ("あなたのことが好きです", 264i64),
