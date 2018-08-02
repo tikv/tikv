@@ -92,6 +92,9 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
 /// has left bound.
 ///
+/// The return type is `(locks, has_remain)`. `has_remain` indicates whether there MAY be
+/// remaining locks that can be scanned.
+///
 /// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 pub fn scan_locks<I, F>(
     lock_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
@@ -99,7 +102,7 @@ pub fn scan_locks<I, F>(
     start_key: Option<&Key>,
     limit: usize,
     statistics: &mut Statistics,
-) -> Result<Vec<(Key, Lock)>>
+) -> Result<(Vec<(Key, Lock)>, bool)>
 where
     I: Iterator,
     F: Fn(&Lock) -> bool,
@@ -111,16 +114,18 @@ where
         None => lock_cursor.seek_to_first(&mut statistics.lock),
     };
     if !ok {
-        return Ok(vec![]);
+        return Ok((vec![], false));
     }
     let mut locks = Vec::with_capacity(limit);
+    let mut has_remain = false;
     loop {
         let key = Key::from_encoded(lock_cursor.key(&mut statistics.lock).to_vec());
         let lock = Lock::parse(lock_cursor.value(&mut statistics.lock))?;
         if predicate(&lock) {
             locks.push((key, lock));
             if limit > 0 && locks.len() >= limit {
-                // Reach limit
+                // Reach limit. There might be remainings.
+                has_remain = true;
                 break;
             }
         }
@@ -130,7 +135,7 @@ where
         }
     }
     statistics.lock.processed += locks.len();
-    Ok(locks)
+    Ok((locks, has_remain))
 }
 
 /// Reads user key's value in default CF according to the given write CF value (`write`).

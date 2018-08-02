@@ -104,13 +104,16 @@ impl<S: Snapshot> CFReader<S> {
     /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
     /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
     /// has left bound.
+    ///
+    /// The return type is `(locks, has_remain)`. `has_remain` indicates whether there MAY be
+    /// remaining locks that can be scanned.
     #[inline]
     pub fn scan_locks<F>(
         &mut self,
         predicate: F,
         start_key: Option<&Key>,
         limit: usize,
-    ) -> Result<Vec<(Key, Lock)>>
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
         F: Fn(&Lock) -> bool,
     {
