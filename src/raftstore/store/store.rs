@@ -1377,6 +1377,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.apply_worker
                 .schedule(ApplyTask::destroy(job.region_id))
                 .unwrap();
+            // Merges will destroy leaders.
+            self.local_reader
+                .schedule(ReadTask::destroy(job.region_id))
+                .unwrap();
         }
         if job.async_remove {
             info!(

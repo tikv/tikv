@@ -423,18 +423,6 @@ impl Peer {
             .unwrap();
     }
 
-    pub fn register_read_delegate(&self) {
-        self.read_scheduler
-            .schedule(ReadTask::register(self))
-            .unwrap();
-    }
-
-    pub fn deregister_read_delegate(&self) {
-        self.read_scheduler
-            .schedule(ReadTask::destroy(self.region_id))
-            .unwrap();
-    }
-
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
@@ -463,7 +451,6 @@ impl Peer {
                 );
                 return None;
             }
-            // There is no tasks in apply/local read worker.
             false
         } else {
             initialized
@@ -808,7 +795,9 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    self.register_read_delegate();
+                    self.read_scheduler
+                        .schedule(ReadTask::register(self))
+                        .unwrap();
                     self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
@@ -818,7 +807,9 @@ impl Peer {
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
-                    self.deregister_read_delegate();
+                    self.read_scheduler
+                        .schedule(ReadTask::destroy(self.region_id))
+                        .unwrap();
                 }
                 _ => {}
             }
@@ -999,7 +990,8 @@ impl Peer {
         }
 
         if apply_snap_result.is_some() {
-            self.register_apply_delegate();
+            let reg = ApplyTask::register(self);
+            self.apply_scheduler.schedule(reg).unwrap();
         }
 
         apply_snap_result
