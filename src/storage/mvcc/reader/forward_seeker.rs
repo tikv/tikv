@@ -14,6 +14,7 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use super::util::CursorBuilder;
+use std::cmp::Ordering;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
 use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -105,8 +106,8 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
             lock_cursor,
             write_cursor,
             default_cursor: None,
+            is_started: false,
             statistics: Statistics::default(),
-            last_read_key: Key::from_encoded(vec![]),
         })
     }
 }
@@ -114,9 +115,6 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
 /// This struct can be used to find next key greater or equal to a given user key. Internally,
 /// rollbacks are ignored and smaller version will be tried. If the isolation level is SI, locks
 /// will be checked first.
-///
-/// This struct keeps the iterator moves forward. If you use this to perform seeking multiple times,
-/// then you are not allowed to seek a key that is less than the previous one.
 ///
 /// Use `ForwardScannerBuilder` to build `ForwardScanner`.
 pub struct ForwardScanner<S: Snapshot> {
@@ -136,9 +134,10 @@ pub struct ForwardScanner<S: Snapshot> {
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
 
-    statistics: Statistics,
+    /// Is iteration started
+    is_started: bool,
 
-    last_read_key: Key,
+    statistics: Statistics,
 }
 
 impl<S: Snapshot> ForwardScanner<S> {
@@ -152,69 +151,61 @@ impl<S: Snapshot> ForwardScanner<S> {
         &self.statistics
     }
 
-    /// Get the next key-value pair, where the key is greater or equal to given `key`.
-    pub fn read_next(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-        if key < self.last_read_key {
-            panic!(
-                "ForwardScanner: try to read from key {} which is less than previous read key {}",
-                key, self.last_read_key
-            );
+    /// Get the next key-value pair.
+    pub fn read_next(&mut self, ts: u64) -> Result<Option<(Key, Value)>> {
+        if !self.is_started {
+            self.write_cursor.seek_to_first(&mut self.statistics.write);
+            self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+            self.is_started = true;
         }
-        // TODO: Can we avoid cloning?
-        self.last_read_key = key.clone();
-
-        let (mut write_valid, mut lock_valid) = (true, true);
 
         // TODO: Add more comments to explain the logic.
         loop {
-            let mut has_lock = false;
-            key = {
-                let (mut w_key, mut l_key) = (None, None);
-                // Try to advance both write_cursor and lock_valid
-                if write_valid {
-                    if self
-                        .write_cursor
-                        .near_seek(&key, &mut self.statistics.write)?
-                    {
-                        w_key = Some(self.write_cursor.key(&mut self.statistics.write));
-                    } else {
-                        w_key = None;
-                        write_valid = false;
-                    }
-                }
-                if lock_valid {
-                    if self.lock_cursor.near_seek(&key, &mut self.statistics.lock)? {
-                        l_key = Some(self.lock_cursor.key(&mut self.statistics.lock));
-                    } else {
-                        l_key = None;
-                        lock_valid = false;
-                    }
-                }
+            let (key, has_write, has_lock) = {
+                let w_key = if self.write_cursor.valid() {
+                    Some(self.write_cursor.key(&mut self.statistics.write))
+                } else {
+                    None
+                };
+                let l_key = if self.lock_cursor.valid() {
+                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                } else {
+                    None
+                };
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(k)) => {
-                        has_lock = true;
-                        Key::from_encoded(k.to_vec())
-                    }
-                    (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
-                    (Some(wk), Some(lk)) => if wk < lk {
+                    (None, Some(k)) => (Key::from_encoded(k.to_vec()), false, true),
+                    (Some(k), None) => (Key::from_encoded(k.to_vec()).truncate_ts()?, true, false),
+                    (Some(wk), Some(lk)) => match wk.cmp(wk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
-                        Key::from_encoded(wk.to_vec()).truncate_ts()?
-                    } else {
-                        has_lock = true;
-                        Key::from_encoded(lk.to_vec())
+                        Ordering::Less => {
+                            (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)
+                        }
+                        Ordering::Greater => (Key::from_encoded(lk.to_vec()), false, true),
+                        Ordering::Equal => (Key::from_encoded(lk.to_vec()), true, true),
                     },
                 }
             };
+
             let lock = if has_lock {
                 Some(self.lock_cursor.value(&mut self.statistics.lock).to_vec())
             } else {
                 None
             };
-            if let Some(v) = self.get(&key, ts, lock)? {
+            let value = self.get(&key, ts, lock)?;
+
+            if has_write {
+                let next_seek_key = key.append_ts(0);
+                self.write_cursor
+                    .near_seek(&next_seek_key, &mut self.statistics.write)?;
+            }
+            if has_lock {
+                self.lock_cursor.next(&mut self.statistics.lock);
+            }
+
+            if let Some(v) = value {
                 return Ok(Some((key, v)));
             }
-            key = key.append_ts(0);
         }
     }
 
@@ -296,7 +287,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .bound(self.lower_bound.take(), self.upper_bound.take())
             .fill_cache(self.fill_cache)
             .build()?;
         self.default_cursor = Some(cursor);
