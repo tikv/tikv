@@ -110,7 +110,7 @@ impl EvalConfig {
                 self.tz = tz;
                 Ok(())
             }
-            None => Err(Error::invalid_timezone(&ormat!("offset {}s", offset_sec))),
+            None => Err(Error::invalid_timezone(&format!("offset {}s", offset_sec))),
         }
     }
 
