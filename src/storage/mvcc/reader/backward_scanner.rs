@@ -16,22 +16,23 @@ use kvproto::kvrpcpb::IsolationLevel;
 use super::util::CursorBuilder;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
 
-pub struct ReversedSeekerBuilder<S: Snapshot> {
+pub struct BackwardScannerBuilder<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
+    ts: u64,
 }
 
-/// `ForwardSeeker` factory.
-impl<S: Snapshot> ReversedSeekerBuilder<S> {
-    /// Initialize a new `ReversedSeeker`
-    pub fn new(snapshot: S) -> Self {
+/// `BackwardScanner` factory.
+impl<S: Snapshot> BackwardScannerBuilder<S> {
+    /// Initialize a new `BackwardScanner`
+    pub fn new(snapshot: S, ts: u64) -> Self {
         Self {
             snapshot,
             fill_cache: true,
@@ -39,6 +40,7 @@ impl<S: Snapshot> ReversedSeekerBuilder<S> {
             isolation_level: IsolationLevel::SI,
             lower_bound: None,
             upper_bound: None,
+            ts,
         }
     }
 
@@ -72,7 +74,7 @@ impl<S: Snapshot> ReversedSeekerBuilder<S> {
         self
     }
 
-    /// Limit the range in which the `ReversedSeeker` should seek. `None` means unbounded.
+    /// Limit the range in which the `BackwardScanner` should seek. `None` means unbounded.
     /// TODO: Is the range `[lower_bound, upper_bound)`?
     ///
     /// Default is `(None, None)`.
@@ -83,28 +85,32 @@ impl<S: Snapshot> ReversedSeekerBuilder<S> {
         self
     }
 
-    /// Build `ReversedSeeker` from the current configuration.
-    pub fn build(self) -> Result<ReversedSeeker<S>> {
+    /// Build `BackwardScanner` from the current configuration.
+    pub fn build(self) -> Result<BackwardScanner<S>> {
         let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
             .bound(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
+            .scan_mode(ScanMode::BackwardNew)
             .build()?;
 
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .bound(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
+            .scan_mode(ScanMode::BackwardNew)
             .build()?;
 
-        Ok(ReversedSeeker {
+        Ok(BackwardScanner {
             snapshot: self.snapshot,
             fill_cache: self.fill_cache,
             omit_value: self.omit_value,
             isolation_level: self.isolation_level,
             lower_bound: self.lower_bound,
             upper_bound: self.upper_bound,
+            ts: self.ts,
             lock_cursor,
             write_cursor,
             default_cursor: None,
+            is_started: false,
             statistics: Statistics::default(),
         })
     }
@@ -112,13 +118,10 @@ impl<S: Snapshot> ReversedSeekerBuilder<S> {
 
 /// This struct can be used to find next key less or equal to a given user key. Internally,
 /// rollbacks are ignored and smaller version will be tried. If the isolation level is SI, locks
-/// will be checked first.
+/// will be checked first..
 ///
-/// This struct keeps the iterator moves Reversed. If you use this to perform seeking multiple times,
-/// then you are not allowed to seek a key that is less than the previous one.
-///
-/// Use `ReversedSeekerBuilder` to build `ReversedSeeker`.
-pub struct ReversedSeeker<S: Snapshot> {
+/// Use `BackwardScannerBuilder` to build `BackwardScanner`.
+pub struct BackwardScanner<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
     omit_value: bool,
@@ -129,11 +132,53 @@ pub struct ReversedSeeker<S: Snapshot> {
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
 
+    ts: u64,
+
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
 
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
 
+    /// Is iteration started
+    is_started: bool,
+
     statistics: Statistics,
+}
+
+impl<S: Snapshot> BackwardScanner<S> {
+    /// Take out and reset the statistics collected so far.
+    pub fn take_statistics(&mut self) -> Statistics {
+        ::std::mem::replace(&mut self.statistics, Statistics::default())
+    }
+
+    /// Get reference of the statics collected so far.
+    pub fn get_statistics(&self) -> &Statistics {
+        &self.statistics
+    }
+
+    /// Get the next key-value pair, in backward order.
+    pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
+        if !self.is_started {
+            self.write_cursor.seek_to_first(&mut self.statistics.write);
+            self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+            self.is_started = true;
+        }
+
+        // TODO: Finish this
+    }
+
+    /// Create the default cursor if it doesn't exist.
+    fn ensure_default_cursor(&mut self) -> Result<()> {
+        if self.default_cursor.is_some() {
+            return Ok(());
+        }
+        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+            .bound(self.lower_bound.take(), self.upper_bound.take())
+            .fill_cache(self.fill_cache)
+            .scan_mode(ScanMode::BackwardNew)
+            .build()?;
+        self.default_cursor = Some(cursor);
+        Ok(())
+    }
 }

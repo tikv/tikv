@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod backward_scanner;
 mod cf_reader;
 mod forward_scanner;
 mod point_getter;

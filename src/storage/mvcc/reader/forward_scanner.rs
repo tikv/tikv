@@ -158,7 +158,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         &self.statistics
     }
 
-    /// Get the next key-value pair.
+    /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
             self.write_cursor.seek_to_first(&mut self.statistics.write);
