@@ -99,7 +99,7 @@ impl<S: Snapshot> Scanner<S> {
 
         let kv = match self.scan_mode {
             ScanMode::Backward => self.scanner.reverse_seek(Key::from_raw(&self.seek_key))?,
-            ScanMode::Forward => self.scanner.seek(Key::from_raw(&self.seek_key))?,
+            ScanMode::Forward => self.scanner.next()?,
             _ => unreachable!(),
         };
 
@@ -121,7 +121,7 @@ impl<S: Snapshot> Scanner<S> {
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
-            (ScanMode::Forward, _) => util::prefix_next(&key),
+            (ScanMode::Forward, _) => util::prefix_next(&key), // Where is this thing useful?????
             (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
             (ScanMode::Backward, ScanOn::Index) => key.clone(),
             _ => unreachable!(),
