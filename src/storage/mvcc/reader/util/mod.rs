@@ -21,7 +21,7 @@ pub use self::cursor_builder::CursorBuilder;
 
 /// Get the lock of a user key in the lock CF.
 ///
-/// Internally, a db get will be performed.
+/// Internally, there is a db `get`.
 ///
 /// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 pub fn load_lock<S>(snapshot: &S, key: &Key, statistics: &mut Statistics) -> Result<Option<Lock>>
@@ -40,11 +40,11 @@ where
     }
 }
 
-/// Get a lock of a user key in the lock CF. If lock exists, it will be checked to see whether
-/// it conflicts with the given `ts`. If there is no conflict or no lock, the safe `ts` will be
-/// returned.
+/// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
+/// see whether it conflicts with the given `ts`. If there is no conflict or no lock,
+/// the safe `ts` will be returned.
 ///
-/// Internally, a db get will be performed.
+/// Internally, there is a db `get`.
 ///
 /// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 pub fn load_and_check_lock<S>(
@@ -62,8 +62,8 @@ where
     Ok(ts)
 }
 
-/// Checks whether the lock conflicts with the given `ts`. If there is no conflict, the safe `ts`
-/// will be returned.
+/// Checks whether the lock conflicts with the given `ts`. If there is no conflict,
+/// the safe `ts` will be returned.
 pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
     if lock.ts > ts || lock.lock_type == LockType::Lock {
         // Ignore lock when lock.ts > ts or lock's type is Lock
@@ -88,12 +88,15 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
     })
 }
 
-/// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
-/// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
-/// has left bound.
+/// Iterate and get all locks in the lock CF that `predicate` returns `true` within
+/// the given key space (specified by `start_key` and `limit`). If `limit` is `0`,
+/// the key space only has left bound.
 ///
-/// The return type is `(locks, has_remain)`. `has_remain` indicates whether there MAY be
-/// remaining locks that can be scanned.
+/// Internally, there will be a `near_or_re_seek` for the first iteration and
+/// `next` for other iterations.
+///
+/// The return type is `(locks, has_remain)`. `has_remain` indicates whether there
+/// MAY be remaining locks that can be scanned.
 ///
 /// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 pub fn scan_locks<I, F>(
@@ -110,7 +113,7 @@ where
     // TODO: We need to ensure that cursor is not prefix seek.
 
     let ok = match start_key {
-        Some(ref start_key) => lock_cursor.seek(start_key, &mut statistics.lock)?,
+        Some(ref start_key) => lock_cursor.near_or_re_seek(start_key, &mut statistics.lock)?,
         None => lock_cursor.seek_to_first(&mut statistics.lock),
     };
     if !ok {
@@ -138,12 +141,13 @@ where
     Ok((locks, has_remain))
 }
 
-/// Reads user key's value in default CF according to the given write CF value (`write`).
+/// Reads user key's value in default CF according to the given write CF value
+/// (`write`).
 ///
-/// Internally, a `near_seek` will be performed.
+/// Internally, there will be a `near_or_re_seek` operation.
 ///
-/// Notice that the value may be already carried in the `write` (short value). In this case,
-/// you should not call this function.
+/// Notice that the value may be already carried in the `write` (short value). In this
+/// case, you should not call this function.
 ///
 /// # Panics
 ///
@@ -161,7 +165,7 @@ where
 {
     assert!(write.short_value.is_none());
     let key = key.clone().append_ts(write.start_ts); // TODO: eliminate clone.
-    match default_cursor.near_seek_get(&key, &mut statistics.data)? {
+    match default_cursor.near_or_re_seek_get(&key, &mut statistics.data)? {
         None => panic!(
             "Mvcc data for key {} is not found, start_ts = {}",
             key, write.start_ts
@@ -173,14 +177,15 @@ where
     }
 }
 
-/// Iterate and get all user keys in the write CF within the given key space (specified by
-/// `start_key` and `limit`). `limit` must not be `0`.
+/// Iterate and get all user keys in the write CF within the given key space
+/// (specified by `start_key` and `limit`). `limit` must not be `0`.
 ///
-/// Internally, several `near_seek` will be performed.
+/// Internally, there will be a `near_or_re_seek` operation for the first iteration
+/// and `near_seek` for other iterations.
 ///
-/// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
-/// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
-/// there is no more keys.
+/// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key`
+/// that can be used to continue scanning keys. If `next_start_key` is `None`, it means
+/// that there is no more keys.
 ///
 /// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 ///
@@ -200,7 +205,7 @@ where
     assert!(limit > 0);
 
     let ok = match start_key {
-        Some(ref x) => write_cursor.near_seek(x, &mut statistics.write)?,
+        Some(ref x) => write_cursor.near_or_re_seek(x, &mut statistics.write)?,
         None => write_cursor.seek_to_first(&mut statistics.write),
     };
     if !ok {
@@ -231,8 +236,8 @@ where
 
 /// Iterate and get all `Write`s for a key whose commit_ts <= `max_ts`.
 ///
-/// Internally, there will be a `near_seek` operation for first iterate and
-/// `next` operation for other iterations.
+/// Internally, there will be a `near_or_re_seek` operation the for the first iteration
+/// and `next` operation for other iterations.
 ///
 /// The return value is a `Vec` of type `(commit_ts, write)`.
 ///
@@ -249,7 +254,7 @@ where
     // TODO: We need to ensure that cursor is not prefix seek.
 
     let mut writes = vec![];
-    write_cursor.near_seek(&user_key.clone().append_ts(max_ts), &mut statistics.write)?;
+    write_cursor.near_or_re_seek(&user_key.clone().append_ts(max_ts), &mut statistics.write)?;
     while write_cursor.valid() {
         // TODO: We don't really need to copy slice to a vector here.
         let current_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());
@@ -274,8 +279,8 @@ where
 /// Notice that small values are embedded in `Write`, which will not be retrieved
 /// by this function.
 ///
-/// Internally, there will be a `near_seek` operation for first iterate and
-/// `next` operation for other iterations.
+/// Internally, there will be a `near_or_re_seek` operation for the first iteration
+/// and `next` operation for other iterations.
 ///
 /// The return value is a `Vec` of type `(start_ts, value)`.
 ///
@@ -291,7 +296,7 @@ where
     // TODO: We need to ensure that cursor is not prefix seek.
 
     let mut values = vec![];
-    default_cursor.near_seek(user_key, &mut statistics.data)?;
+    default_cursor.near_or_re_seek(user_key, &mut statistics.data)?;
     while default_cursor.valid() {
         // TODO: We don't really need to copy slice to a vector here.
         let current_key = Key::from_encoded(default_cursor.key(&mut statistics.data).to_vec());
@@ -343,7 +348,8 @@ where
 
 /// Seek for a `Write` of a given key in the write CF by the given `start_ts`.
 ///
-/// Internally, backward seek and backward iterate will be performed.
+/// Internally, there will be a `near_or_re_seek_for_prev` operation for the first
+/// iteration and `prev` for other iterations.
 ///
 /// The return value is a `Vec` of type `(commit_ts, write)`.
 ///
@@ -381,7 +387,8 @@ pub fn reverse_seek_write_by_start_ts<I>(
 where
     I: Iterator,
 {
-    write_cursor.near_seek_for_prev(&user_key.clone().append_ts(start_ts), &mut statistics.write)?;
+    write_cursor
+        .near_or_re_seek_for_prev(&user_key.clone().append_ts(start_ts), &mut statistics.write)?;
     while write_cursor.valid() {
         // TODO: We don't really need to copy slice to a vector here.
         let current_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());

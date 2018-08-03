@@ -105,7 +105,7 @@ impl<S: Snapshot> MvccReader<S> {
 
         let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.near_seek_get(&k, &mut self.statistics.data)? {
+            match cursor.near_or_re_seek_get(&k, &mut self.statistics.data)? {
                 None => panic!("key {} not found, ts {}", key, ts),
                 Some(v) => v.to_vec(),
             }

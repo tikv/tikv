@@ -84,29 +84,32 @@ impl<S: Snapshot> CFReader<S> {
 
     /// Get the lock of a user key in the lock CF.
     ///
-    /// Internally, a db get will be performed.
+    /// Internally, there is a db `get`.
     #[inline]
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         // TODO: `load_lock` should respect `fill_cache` options as well.
         super::util::load_lock(&self.snapshot, key, &mut self.statistics)
     }
 
-    /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to see whether
-    /// it conflicts with the given `ts`. If there is no conflict or no lock, the safe `ts` will be
-    /// returned.
+    /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
+    /// see whether it conflicts with the given `ts`. If there is no conflict or no lock,
+    /// the safe `ts` will be returned.
     ///
-    /// Internally, a db get will be performed.
+    /// Internally, there is a db `get`.
     #[inline]
     pub fn load_and_check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
         super::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)
     }
 
-    /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
-    /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
-    /// has left bound.
+    /// Iterate and get all locks in the lock CF that `predicate` returns `true` within
+    /// the given key space (specified by `start_key` and `limit`). If `limit` is `0`,
+    /// the key space only has left bound.
     ///
-    /// The return type is `(locks, has_remain)`. `has_remain` indicates whether there MAY be
-    /// remaining locks that can be scanned.
+    /// Internally, there will be a `near_or_re_seek` for the first iteration and
+    /// `next` for other iterations.
+    ///
+    /// The return type is `(locks, has_remain)`. `has_remain` indicates whether there
+    /// MAY be remaining locks that can be scanned.
     #[inline]
     pub fn scan_locks<F>(
         &mut self,
@@ -128,14 +131,15 @@ impl<S: Snapshot> CFReader<S> {
         )
     }
 
-    /// Iterate and get all user keys in the write CF within the given key space (specified by
-    /// `start_key` and `limit`). `limit` must not be `0`.
+    /// Iterate and get all user keys in the write CF within the given key space
+    /// (specified by `start_key` and `limit`). `limit` must not be `0`.
     ///
-    /// Internally, several `near_seek` will be performed.
+    /// Internally, there will be a `near_or_re_seek` operation for the first iteration
+    /// and `near_seek` for other iterations.
     ///
-    /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key` that
-    /// can be used to continue scanning keys. If `next_start_key` is `None`, it means that
-    /// there is no more keys.
+    /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key`
+    /// that can be used to continue scanning keys. If `next_start_key` is `None`, it means
+    /// that there is no more keys.
     #[inline]
     pub fn scan_keys(
         &mut self,
@@ -149,8 +153,8 @@ impl<S: Snapshot> CFReader<S> {
 
     /// Iterate and get all `Write`s for a key whose commit_ts <= `max_ts`.
     ///
-    /// Internally, there will be a `near_seek` operation for first iterate and
-    /// `next` operation for other iterations.
+    /// Internally, there will be a `near_or_re_seek` operation the for the first iteration
+    /// and `next` operation for other iterations.
     ///
     /// The return value is a `Vec` of type `(commit_ts, write)`.
     #[inline]
@@ -165,8 +169,8 @@ impl<S: Snapshot> CFReader<S> {
     /// Notice that small values are embedded in `Write`, which will not be retrieved
     /// by this function.
     ///
-    /// Internally, there will be a `near_seek` operation for first iterate and
-    /// `next` operation for other iterations.
+    /// Internally, there will be a `near_or_re_seek` operation for the first iteration
+    /// and `next` operation for other iterations.
     ///
     /// The return value is a `Vec` of type `(start_ts, value)`.
     #[inline]
@@ -188,7 +192,8 @@ impl<S: Snapshot> CFReader<S> {
 
     /// Seek for a `Write` of a given key in the write CF by the given `start_ts`.
     ///
-    /// Internally, backward seek and backward iterate will be performed.
+    /// Internally, there will be a `near_or_re_seek_for_prev` operation for the first
+    /// iteration and `prev` for other iterations.
     ///
     /// The return value is a `Vec` of type `(commit_ts, write)`.
     #[inline]
@@ -210,7 +215,8 @@ impl<S: Snapshot> CFReader<S> {
     /// Seek for a `Write` of a given key in the write CF by the given `start_ts`.
     /// Return its `WriteType` if `Write` is found. Otherwise `None`.
     ///
-    /// Internally, backward seek and backward iterate will be performed.
+    /// Internally, there will be a `near_or_re_seek_for_prev` operation for the first
+    /// iteration and `prev` for other iterations.
     ///
     /// The return value is a `Vec` of type `(commit_ts, write_type)`.
     ///
@@ -258,7 +264,7 @@ impl<S: Snapshot> CFReader<S> {
         }
         let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::BackwardNew)
+            .scan_mode(ScanMode::Backward)
             .build()?;
         self.reverse_write_cursor = Some(cursor);
         Ok(())
