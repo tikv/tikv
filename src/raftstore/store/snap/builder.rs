@@ -297,7 +297,7 @@ impl SnapshotReceiver {
     fn flush_cf_file(cf_file: &mut CfFile) -> io::Result<()> {
         match cf_file.tmp_cf_file {
             // To avoid the nvme delay-alloc issue, sync for cf files.
-            Either::Left(ref mut f) => f.sync_all(),
+            Either::Left(ref mut f) => f.flush().and_then(|_| f.sync_all()),
             _ => unreachable!(),
         }
     }
