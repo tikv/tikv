@@ -9,7 +9,7 @@ resources to make it easier to get your contribution accepted.
 - Read the README.md for build instructions.
 - Play with the project, submit bugs, submit patches!
 
-## Contribution Flow
+## Contribution flow
 
 This is a rough outline of what a contributor's workflow looks like:
 
