@@ -515,18 +515,24 @@ mod test {
     fn test_left_shift() {
         let cases = vec![
             (Datum::I64(123), Datum::I64(2), Datum::I64(492)),
-            (Datum::I64(-123), Datum::I64(2), Datum::I64(18446744073709551124)),
             (Datum::I64(-123), Datum::I64(-1), Datum::I64(0)),
             (Datum::I64(123), Datum::I64(0), Datum::I64(123)),
             (Datum::Null, Datum::I64(1), Datum::Null),
             (Datum::I64(123), Datum::Null, Datum::Null),
+            (
+                Datum::I64(-123),
+                Datum::I64(60),
+                Datum::I64(5764607523034234880),
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let lhs = datum_expr(lhs);
             let rhs = datum_expr(rhs);
-            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]))
-                .unwrap();
+            let op = Expression::build(
+                &mut ctx,
+                scalar_func_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]),
+            ).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -536,18 +542,24 @@ mod test {
     fn test_right_shift() {
         let cases = vec![
             (Datum::I64(123), Datum::I64(2), Datum::I64(30)),
-            (Datum::I64(-123), Datum::I64(2), Datum::I64(4611686018427387873)),
             (Datum::I64(-123), Datum::I64(-1), Datum::I64(0)),
             (Datum::I64(123), Datum::I64(0), Datum::I64(123)),
             (Datum::Null, Datum::I64(1), Datum::Null),
             (Datum::I64(123), Datum::Null, Datum::Null),
+            (
+                Datum::I64(-123),
+                Datum::I64(2),
+                Datum::I64(4611686018427387873),
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let lhs = datum_expr(lhs);
             let rhs = datum_expr(rhs);
-            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::RightShift, &[lhs, rhs]))
-                .unwrap();
+            let op = Expression::build(
+                &mut ctx,
+                scalar_func_expr(ScalarFuncSig::RightShift, &[lhs, rhs]),
+            ).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
