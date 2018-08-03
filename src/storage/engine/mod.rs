@@ -20,6 +20,7 @@ use std::{error, result};
 pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -163,6 +164,17 @@ pub trait Iterator: Send + Sized {
     fn value(&self) -> &[u8];
 }
 
+pub trait RegionInfoProvider: Send + Sized + Clone + 'static {
+    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
+    /// this TiKV satisfies `filter(peer)` returns true.
+    fn seek_region(
+        &self,
+        from: &[u8],
+        filter: SeekRegionFilter,
+        limit: u32,
+    ) -> Result<SeekRegionResult>;
+}
+
 macro_rules! near_loop {
     ($cond:expr, $fallback:expr, $st:expr) => {{
         let mut cnt = 0;
@@ -179,8 +191,14 @@ macro_rules! near_loop {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ScanMode {
     Forward,
+    ForwardNew,
     Backward,
+    BackwardNew,
     Mixed,
+    // `ForwardNew` and `BackwardNew` is the scan mode to bridge existing code with our new
+    // `Cursor`. `ScanMode` will be totally removed after `Cursor` is fully refined.
+    // The new forward and backward differs from existing ones only in that they allow `near_seek`
+    // operation to re-seek in contrary direction. In the old ones, the cursor will not move.
 }
 
 /// Statistics collects the ops taken when fetching data.
@@ -339,6 +357,7 @@ impl<I: Iterator> Cursor<I> {
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
+        assert_ne!(self.scan_mode, ScanMode::BackwardNew);
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
@@ -357,6 +376,7 @@ impl<I: Iterator> Cursor<I> {
     /// around `key`, otherwise you should use `seek` instead.
     pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
+        assert_ne!(self.scan_mode, ScanMode::BackwardNew);
         if !self.iter.valid() {
             return self.seek(key, statistics);
         }
@@ -365,6 +385,11 @@ impl<I: Iterator> Cursor<I> {
             || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
             return Ok(true);
+        }
+        if self.scan_mode == ScanMode::ForwardNew && ord == Ordering::Greater {
+            // In the new mode, when we near_seek to a contrary direction, we simply
+            // invoke a seek for it.
+            return self.seek(key, statistics);
         }
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             self.iter.validate_key(key)?;
@@ -409,8 +434,10 @@ impl<I: Iterator> Cursor<I> {
         statistics: &mut CFStatistics,
     ) -> Result<Option<&[u8]>> {
         let seek_result = match self.scan_mode {
-            ScanMode::Forward | ScanMode::Mixed => self.near_seek(key, statistics),
-            ScanMode::Backward => self.near_seek_for_prev(key, statistics),
+            ScanMode::Forward | ScanMode::Mixed | ScanMode::ForwardNew => {
+                self.near_seek(key, statistics)
+            }
+            ScanMode::Backward | ScanMode::BackwardNew => self.near_seek_for_prev(key, statistics),
         };
         if seek_result? && self.key(statistics) == &**key.encoded() {
             Ok(Some(self.value(statistics)))
@@ -421,6 +448,7 @@ impl<I: Iterator> Cursor<I> {
 
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
+        assert_ne!(self.scan_mode, ScanMode::ForwardNew);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
@@ -443,6 +471,7 @@ impl<I: Iterator> Cursor<I> {
     /// Find the largest key that is not greater than the specific key.
     pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
+        assert_ne!(self.scan_mode, ScanMode::ForwardNew);
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
         }
@@ -451,12 +480,15 @@ impl<I: Iterator> Cursor<I> {
         {
             return Ok(true);
         }
-
+        if self.scan_mode == ScanMode::BackwardNew && ord == Ordering::Less {
+            // In the new cursor, when we near_seek to a contrary direction, we simply
+            // invoke a seek for it.
+            return self.seek_for_prev(key, statistics);
+        }
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
-
         if ord == Ordering::Less {
             near_loop!(
                 self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
@@ -478,7 +510,6 @@ impl<I: Iterator> Cursor<I> {
                 statistics
             );
         }
-
         if !self.iter.valid() {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);

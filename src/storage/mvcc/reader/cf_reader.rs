@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use storage::engine::ScanMode;
 use storage::mvcc::Result;
-use storage::mvcc::{Lock, Write};
+use storage::mvcc::{Lock, Write, WriteType};
 use storage::{Cursor, Snapshot, Statistics, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use storage::{Key, Value};
 
@@ -49,6 +50,7 @@ impl<S: Snapshot> CFReaderBuilder<S> {
 
             lock_cursor: None,
             write_cursor: None,
+            reverse_write_cursor: None,
             default_cursor: None,
         })
     }
@@ -66,6 +68,10 @@ pub struct CFReader<S: Snapshot> {
 
     lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Option<Cursor<S::Iter>>,
+    // TODO: If there is already a write_cursor, which approach is faster?
+    // - convert it to a reverse cursor and use it
+    // - create a new cursor specifically for reverse iteration
+    reverse_write_cursor: Option<Cursor<S::Iter>>,
     default_cursor: Option<Cursor<S::Iter>>,
 }
 
@@ -98,13 +104,16 @@ impl<S: Snapshot> CFReader<S> {
     /// Iterate and get all locks in the lock CF that `predicate` returns `true` within the given
     /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
     /// has left bound.
+    ///
+    /// The return type is `(locks, has_remain)`. `has_remain` indicates whether there MAY be
+    /// remaining locks that can be scanned.
     #[inline]
     pub fn scan_locks<F>(
         &mut self,
         predicate: F,
         start_key: Option<&Key>,
         limit: usize,
-    ) -> Result<Vec<(Key, Lock)>>
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
         F: Fn(&Lock) -> bool,
     {
@@ -177,6 +186,47 @@ impl<S: Snapshot> CFReader<S> {
         super::util::slowly_seek_key_by_start_ts(write_cursor, start_ts, &mut self.statistics)
     }
 
+    /// Seek for a `Write` of a given key in the write CF by the given `start_ts`.
+    ///
+    /// Internally, backward seek and backward iterate will be performed.
+    ///
+    /// The return value is a `Vec` of type `(commit_ts, write)`.
+    #[inline]
+    pub fn reverse_seek_write_by_start_ts(
+        &mut self,
+        user_key: &Key,
+        start_ts: u64,
+    ) -> Result<Option<(u64, Write)>> {
+        self.ensure_reverse_write_cursor()?;
+        let reverse_write_cursor = self.reverse_write_cursor.as_mut().unwrap();
+        super::util::reverse_seek_write_by_start_ts(
+            reverse_write_cursor,
+            user_key,
+            start_ts,
+            &mut self.statistics,
+        )
+    }
+
+    /// Seek for a `Write` of a given key in the write CF by the given `start_ts`.
+    /// Return its `WriteType` if `Write` is found. Otherwise `None`.
+    ///
+    /// Internally, backward seek and backward iterate will be performed.
+    ///
+    /// The return value is a `Vec` of type `(commit_ts, write_type)`.
+    ///
+    /// This is a convenience method, wrapped over `reverse_seek_write_by_start_ts`.
+    pub fn reverse_seek_write_type_by_start_ts(
+        &mut self,
+        user_key: &Key,
+        start_ts: u64,
+    ) -> Result<Option<(u64, WriteType)>> {
+        let some_pairs = self.reverse_seek_write_by_start_ts(user_key, start_ts)?;
+        match some_pairs {
+            None => Ok(None),
+            Some((commit_ts, write)) => Ok(Some((commit_ts, write.write_type))),
+        }
+    }
+
     /// Create the lock cursor if it doesn't exist.
     fn ensure_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_some() {
@@ -198,6 +248,19 @@ impl<S: Snapshot> CFReader<S> {
             .fill_cache(self.fill_cache)
             .build()?;
         self.write_cursor = Some(cursor);
+        Ok(())
+    }
+
+    /// Create the reverse write cursor if it doesn't exist.
+    fn ensure_reverse_write_cursor(&mut self) -> Result<()> {
+        if self.reverse_write_cursor.is_some() {
+            return Ok(());
+        }
+        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(self.fill_cache)
+            .scan_mode(ScanMode::BackwardNew)
+            .build()?;
+        self.reverse_write_cursor = Some(cursor);
         Ok(())
     }
 

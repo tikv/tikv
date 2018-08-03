@@ -14,7 +14,7 @@
 mod cursor_builder;
 
 use storage::mvcc::{Error, Result};
-use storage::mvcc::{Lock, LockType, Write};
+use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::{Cursor, Iterator, Key, Snapshot, Statistics, Value, CF_LOCK};
 
 pub use self::cursor_builder::CursorBuilder;
@@ -92,6 +92,9 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 /// key space (specified by `start_key` and `limit`). If `limit` is `0`, the key space only
 /// has left bound.
 ///
+/// The return type is `(locks, has_remain)`. `has_remain` indicates whether there MAY be
+/// remaining locks that can be scanned.
+///
 /// You may want to use the wrapper `mvcc::reader::CFReader` instead.
 pub fn scan_locks<I, F>(
     lock_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
@@ -99,7 +102,7 @@ pub fn scan_locks<I, F>(
     start_key: Option<&Key>,
     limit: usize,
     statistics: &mut Statistics,
-) -> Result<Vec<(Key, Lock)>>
+) -> Result<(Vec<(Key, Lock)>, bool)>
 where
     I: Iterator,
     F: Fn(&Lock) -> bool,
@@ -111,16 +114,18 @@ where
         None => lock_cursor.seek_to_first(&mut statistics.lock),
     };
     if !ok {
-        return Ok(vec![]);
+        return Ok((vec![], false));
     }
     let mut locks = Vec::with_capacity(limit);
+    let mut has_remain = false;
     loop {
         let key = Key::from_encoded(lock_cursor.key(&mut statistics.lock).to_vec());
         let lock = Lock::parse(lock_cursor.value(&mut statistics.lock))?;
         if predicate(&lock) {
             locks.push((key, lock));
             if limit > 0 && locks.len() >= limit {
-                // Reach limit
+                // Reach limit. There might be remainings.
+                has_remain = true;
                 break;
             }
         }
@@ -130,7 +135,7 @@ where
         }
     }
     statistics.lock.processed += locks.len();
-    Ok(locks)
+    Ok((locks, has_remain))
 }
 
 /// Reads user key's value in default CF according to the given write CF value (`write`).
@@ -204,7 +209,7 @@ where
     let mut keys = Vec::with_capacity(limit);
     let mut next_start_key;
     loop {
-        // TODO: Eliminate memory copy
+        // TODO: We don't really need to copy slice to a vector here.
         let key =
             Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec()).truncate_ts()?;
         // Jump to the last version of the key. We assumed that there is no key that ts == 0.
@@ -288,6 +293,7 @@ where
     let mut values = vec![];
     default_cursor.near_seek(user_key, &mut statistics.data)?;
     while default_cursor.valid() {
+        // TODO: We don't really need to copy slice to a vector here.
         let current_key = Key::from_encoded(default_cursor.key(&mut statistics.data).to_vec());
         let start_ts = current_key.decode_ts()?;
         let current_user_key = current_key.truncate_ts()?;
@@ -297,8 +303,9 @@ where
         }
 
         let value = default_cursor.value(&mut statistics.data).to_vec();
-        values.push((start_ts, value));
         statistics.data.processed += 1;
+
+        values.push((start_ts, value));
 
         default_cursor.next(&mut statistics.write);
     }
@@ -325,10 +332,79 @@ where
         let write = Write::parse(write_cursor.value(&mut statistics.write))?;
         statistics.write.processed += 1;
         if write.start_ts == start_ts {
+            // TODO: We don't really need to copy slice to a vector here.
             let write_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());;
             return Ok(Some(write_key.truncate_ts()?));
         }
         write_cursor.next(&mut statistics.write);
+    }
+    Ok(None)
+}
+
+/// Seek for a `Write` of a given key in the write CF by the given `start_ts`.
+///
+/// Internally, backward seek and backward iterate will be performed.
+///
+/// The return value is a `Vec` of type `(commit_ts, write)`.
+///
+/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+///
+/// # Algorithm Explanation
+///
+/// We start from finding the first `write` whose `commit_ts` <= given `start_ts`
+/// (note that we must have `this_write.start_ts` < given `start_ts` because
+/// `this_write.start_ts` < `this_write.commit_ts` <= given `start_ts`).
+///
+/// Then, we move cursor backward so that we will get `write`s with larger
+/// `commit_ts`. It is done repeatly until we get a `write` that
+/// `this_write.start_ts` == given `start_ts`.
+///
+/// The loop will break when we get a `write` that `this_write.start_ts` > given
+/// `start_ts` and `write` is not a rollback. In this case, there must be no
+/// future `write`s whose `start_ts` matches our given `start_ts`.
+///
+/// The rollback is an exception. We may have:
+///
+/// ```
+/// KEY_10 => PUT_1
+/// KEY_5 => ROLLBACK_5
+/// ```
+///
+/// In this case if we want to find by `start_ts == 1`, we will meet rollback's
+/// larger `start_ts == 5` first. So we just ignore it.
+pub fn reverse_seek_write_by_start_ts<I>(
+    write_cursor: &mut Cursor<I>, // TODO: make it `BackwardCursor`.
+    user_key: &Key,
+    start_ts: u64,
+    statistics: &mut Statistics,
+) -> Result<Option<(u64, Write)>>
+where
+    I: Iterator,
+{
+    write_cursor.near_seek_for_prev(&user_key.append_ts(start_ts), &mut statistics.write)?;
+    while write_cursor.valid() {
+        // TODO: We don't really need to copy slice to a vector here.
+        let current_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());
+        let commit_ts = current_key.decode_ts()?;
+        let current_user_key = current_key.truncate_ts()?;
+        if *user_key != current_user_key {
+            // Meet another key: don't need to scan more.
+            break;
+        }
+        let write = Write::parse(write_cursor.value(&mut statistics.write))?;
+        statistics.write.processed += 1;
+
+        if write.start_ts == start_ts {
+            return Ok(Some((commit_ts, write)));
+        }
+
+        // If we reach a commit version whose type is not Rollback and start ts is
+        // larger than the given start ts, stop searching.
+        if write.write_type != WriteType::Rollback && write.start_ts > start_ts {
+            break;
+        }
+
+        write_cursor.prev(&mut statistics.write);
     }
     Ok(None)
 }

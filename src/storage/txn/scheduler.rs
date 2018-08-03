@@ -477,7 +477,7 @@ fn process_read_impl<E: Engine>(
             let mut cf_reader = CFReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            let kv_pairs =
+            let (kv_pairs, _) =
                 cf_reader.scan_locks(|lock| lock.ts <= max_ts, start_key.as_ref(), limit)?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
             for (key, lock) in kv_pairs {
@@ -503,7 +503,7 @@ fn process_read_impl<E: Engine>(
             let mut cf_reader = CFReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            let kv_pairs = cf_reader.scan_locks(
+            let (kv_pairs, has_remain) = cf_reader.scan_locks(
                 |lock| txn_status.contains_key(&lock.ts),
                 scan_key.as_ref(),
                 RESOLVE_LOCK_BATCH_SIZE,
@@ -516,8 +516,8 @@ fn process_read_impl<E: Engine>(
             if kv_pairs.is_empty() {
                 Ok(ProcessResult::Res)
             } else {
-                let next_scan_key = if kv_pairs.len() == RESOLVE_LOCK_BATCH_SIZE {
-                    // We got this many locks (as we specified). There might be more locks.
+                let next_scan_key = if has_remain {
+                    // There might be more locks.
                     kv_pairs.last().map(|(k, _lock)| k.clone())
                 } else {
                     // All locks are scanned
