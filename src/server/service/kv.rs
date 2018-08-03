@@ -1127,7 +1127,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let req = StoreMessage::SplitRegion {
             region_id: req.get_context().get_region_id(),
             region_epoch: req.take_context().take_region_epoch(),
-            split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
+            split_key: Key::from_raw(req.get_split_key()).take_encoded(),
             callback: Callback::Write(cb),
         };
 

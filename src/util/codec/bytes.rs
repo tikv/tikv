@@ -23,7 +23,8 @@ const ENC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 
 // returns the maximum encoded bytes size.
 pub fn max_encoded_bytes_size(n: usize) -> usize {
-    (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1)
+    // reserve number::U64_SIZE for later append_ts
+    (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1) + number::U64_SIZE
 }
 
 pub trait BytesEncoder: NumberEncoder {
@@ -92,7 +93,6 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     let cap = max_encoded_bytes_size(bs.len());
     let mut encoded = Vec::with_capacity(cap);
     encoded.encode_bytes(bs, desc).unwrap();
-    encoded.shrink_to_fit();
     encoded
 }
 
@@ -193,7 +193,7 @@ pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
         if padding.iter().any(|x| *x != pad_byte) {
             return Err(Error::KeyPadding);
         }
-        key.shrink_to_fit();
+
         if desc {
             for k in &mut key {
                 *k = !*k;
@@ -348,7 +348,11 @@ mod tests {
     #[test]
     fn test_max_encoded_bytes_size() {
         let n = bytes::ENC_GROUP_SIZE;
-        let tbl: Vec<(usize, usize)> = vec![(0, n + 1), (n / 2, n + 1), (n, 2 * (n + 1))];
+        let tbl: Vec<(usize, usize)> = vec![
+            (0, n + 1 + number::U64_SIZE),
+            (n / 2, n + 1 + number::U64_SIZE),
+            (n, 2 * (n + 1) + number::U64_SIZE),
+        ];
         for (x, y) in tbl {
             assert_eq!(max_encoded_bytes_size(x), y);
         }
