@@ -315,7 +315,7 @@ mod tests {
     }
 
     fn new_encoded_key(i: u8, ts: u64) -> Vec<u8> {
-        Key::from_raw(&[i]).append_ts(ts).encoded().to_owned()
+        Key::from_raw(&[i]).append_ts(ts).take_encoded()
     }
 
     #[test]

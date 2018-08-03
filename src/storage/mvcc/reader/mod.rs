@@ -101,7 +101,7 @@ impl<S: Snapshot> MvccReader<S> {
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
-        let k = key.append_ts(ts);
+        let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
             match cursor.near_seek_get(&k, &mut self.statistics.data)? {
                 None => panic!("key {} not found, ts {}", key, ts),
@@ -164,9 +164,9 @@ impl<S: Snapshot> MvccReader<S> {
 
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
-            cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek_for_prev(&key.clone().append_ts(ts), &mut self.statistics.write)?
         } else {
-            cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?
         };
         if !ok {
             return Ok(None);
@@ -414,7 +414,7 @@ impl<S: Snapshot> MvccReader<S> {
 
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        let key = user_key.append_ts(ts);
+        let key = user_key.clone().append_ts(ts);
         let valid = self
             .write_cursor
             .as_mut()

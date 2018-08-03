@@ -162,7 +162,7 @@ impl<S: Snapshot> PointGetter<S> {
 
         // First seek to `${user_key}_${ts}`.
         self.write_cursor
-            .near_seek(&user_key.append_ts(ts), &mut self.statistics.write)?;
+            .near_seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
 
         loop {
             if !self.write_cursor.valid() {

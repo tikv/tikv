@@ -48,7 +48,7 @@ pub use self::engine::{
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
-pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
+pub use self::types::{decode_ts, make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -755,7 +755,7 @@ impl<E: Engine> Storage<E> {
             // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
             // length of start key is less than 8, we will encounter index out of range error.
             let s = if *cf == CF_WRITE {
-                start_key.append_ts(u64::MAX)
+                start_key.clone().append_ts(u64::MAX)
             } else {
                 start_key.clone()
             };
@@ -931,15 +931,17 @@ impl<E: Engine> Storage<E> {
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
-                        .iter()
-                        .map(|k| (k, snapshot.get_cf(cf, k)))
-                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .into_iter()
+                        .map(|k| {
+                            let v = snapshot.get_cf(cf, &k);
+                            (k, v)
+                        })
+                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| match v {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
                                 stats.data.flow_stats.read_bytes += k.encoded().len() + v.len();
-                                Ok((k.encoded().clone(), v))
+                                Ok((k.take_encoded(), v))
                             }
                             Err(e) => Err(Error::from(e)),
                             _ => unreachable!(),
@@ -1105,7 +1107,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.encoded().clone());
+            option.set_upper_bound(end.take_encoded());
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);

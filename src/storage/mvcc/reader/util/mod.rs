@@ -160,7 +160,7 @@ where
     I: Iterator,
 {
     assert!(write.short_value.is_none());
-    let key = key.append_ts(write.start_ts); // TODO: eliminate clone.
+    let key = key.clone().append_ts(write.start_ts); // TODO: eliminate clone.
     match default_cursor.near_seek_get(&key, &mut statistics.data)? {
         None => panic!(
             "Mvcc data for key {} is not found, start_ts = {}",
@@ -213,7 +213,7 @@ where
         let key =
             Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec()).truncate_ts()?;
         // Jump to the last version of the key. We assumed that there is no key that ts == 0.
-        next_start_key = Some(key.append_ts(0)); // TODO: Eliminate clone (might not be possible?)
+        next_start_key = Some(key.clone().append_ts(0)); // TODO: Eliminate clone (might not be possible?)
         keys.push(key);
         if !write_cursor.near_seek(next_start_key.as_ref().unwrap(), &mut statistics.write)? {
             // No more keys found, we don't need to scan keys next time
@@ -249,7 +249,7 @@ where
     // TODO: We need to ensure that cursor is not prefix seek.
 
     let mut writes = vec![];
-    write_cursor.near_seek(&user_key.append_ts(max_ts), &mut statistics.write)?;
+    write_cursor.near_seek(&user_key.clone().append_ts(max_ts), &mut statistics.write)?;
     while write_cursor.valid() {
         // TODO: We don't really need to copy slice to a vector here.
         let current_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());
@@ -381,7 +381,7 @@ pub fn reverse_seek_write_by_start_ts<I>(
 where
     I: Iterator,
 {
-    write_cursor.near_seek_for_prev(&user_key.append_ts(start_ts), &mut statistics.write)?;
+    write_cursor.near_seek_for_prev(&user_key.clone().append_ts(start_ts), &mut statistics.write)?;
     while write_cursor.valid() {
         // TODO: We don't really need to copy slice to a vector here.
         let current_key = Key::from_encoded(write_cursor.key(&mut statistics.write).to_vec());
