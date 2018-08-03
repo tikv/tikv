@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.0.5"
+version = "2.0.6"
 keywords = ["KV", "distributed-systems", "raft"]
 build = "build.rs"
 
