@@ -263,6 +263,7 @@ impl SnapshotReceiver {
     }
 
     pub fn save(&mut self) -> Result<()> {
+        self.flush()?;
         let mut got_meta = self.inner.save()?;
         let got_total_size = get_size_from_snapshot_meta(&got_meta);
         let total_size = get_size_from_snapshot_meta(&self.snapshot_meta);

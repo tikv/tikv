@@ -397,6 +397,9 @@ impl SnapManager {
                 if !usage.is_busy() && usage.has_been_used() {
                     can_remove = true;
                 }
+            } else if for_send {
+                // Generated snapshots can be deleted if they are not registered.
+                can_remove = true;
             }
             if !can_remove && self.snapshot_is_stale(for_send, key).unwrap_or(true) {
                 // TODO: if the snapshot is just received and then TiKV restarts after
