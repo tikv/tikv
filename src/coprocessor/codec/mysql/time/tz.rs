@@ -63,16 +63,21 @@ impl Tz {
 impl fmt::Debug for Tz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Tz::Offset(ref offset) => fmt::Debug::fmt(offset, f),
-            Tz::Name(ref offset) => fmt::Debug::fmt(offset, f),
-            Tz::Local(_) => write!(f, "Local"),
+            Tz::Offset(ref offset) => write!(f, "Tz::Offset({:?})", offset),
+            Tz::Name(ref offset) => write!(f, "Tz::Name({:?})", offset),
+            Tz::Local(_) => write!(f, "Tz::Local"),
         }
     }
 }
 
 impl fmt::Display for Tz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
+        match *self {
+            // `Display` is not implemented for them, so we use `Debug`.
+            Tz::Offset(ref offset) => fmt::Debug::fmt(offset, f),
+            Tz::Name(ref offset) => fmt::Debug::fmt(offset, f),
+            Tz::Local(_) => write!(f, "Local"),
+        }
     }
 }
 
@@ -193,7 +198,7 @@ impl TimeZone for Tz {
 /// `Tz::Local` -> `TzOffset::Local`
 /// `Tz::Offset` -> `TzOffset::Fixed`
 /// `Tz::Name` -> `TzOffset::NonFixed`
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TzOffset {
     Local(FixedOffset),
     Fixed(FixedOffset),
@@ -206,16 +211,6 @@ impl Offset for TzOffset {
             TzOffset::Local(ref offset) => offset.fix(),
             TzOffset::Fixed(ref offset) => offset.fix(),
             TzOffset::NonFixed(ref offset) => offset.fix(),
-        }
-    }
-}
-
-impl fmt::Debug for TzOffset {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            TzOffset::Local(ref offset) => fmt::Debug::fmt(offset, f),
-            TzOffset::Fixed(ref offset) => fmt::Debug::fmt(offset, f),
-            TzOffset::NonFixed(ref offset) => fmt::Debug::fmt(offset, f),
         }
     }
 }
