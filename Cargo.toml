@@ -75,6 +75,7 @@ uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.2", features = [ "secure" ] }
 raft = "0.2"
 crossbeam-channel = { version = "0.1", features = [ "nightly" ] }
+num = "0.2.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.4"
