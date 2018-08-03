@@ -49,6 +49,16 @@ pub fn truncate_ts(key: &[u8]) -> &[u8] {
     &key[..key.len() - number::U64_SIZE]
 }
 
+/// The caller should ensure the key is a timestamped key.
+pub fn decode_ts(key: &[u8]) -> Result<u64, codec::Error> {
+    let len = key.len();
+    if len < number::U64_SIZE {
+        return Err(codec::Error::KeyLength);
+    }
+    let mut ts = &key[len - number::U64_SIZE..];
+    number::decode_u64_desc(&mut ts)
+}
+
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw
@@ -59,7 +69,7 @@ pub fn truncate_ts(key: &[u8]) -> &[u8] {
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
@@ -84,9 +94,14 @@ impl Key {
         &self.0
     }
 
+    /// Gets and moves the encoded representation of this key.
+    pub fn take_encoded(self) -> Vec<u8> {
+        self.0
+    }
+
     /// Creates a new key by appending a `u64` timestamp to this key.
-    pub fn append_ts(&self, ts: u64) -> Key {
-        let mut encoded = self.0.clone();
+    pub fn append_ts(self, ts: u64) -> Key {
+        let mut encoded = self.0;
         encoded.encode_u64_desc(ts).unwrap();
         Key(encoded)
     }
@@ -96,6 +111,13 @@ impl Key {
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
     pub fn decode_ts(&self) -> Result<u64, codec::Error> {
+        Ok(decode_ts(&self.0)?)
+    }
+
+    /// Creates a new key by truncating the timestamp from this key.
+    ///
+    /// Preconditions: the caller must ensure this is actually a timestamped key.
+    pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
         if len < number::U64_SIZE {
             // TODO: IMHO, this should be an assertion failure instead of
@@ -109,21 +131,19 @@ impl Key {
             // in the core storage engine layer.
             Err(codec::Error::KeyLength)
         } else {
-            let mut ts = &self.0[len - number::U64_SIZE..];
-            Ok(number::decode_u64_desc(&mut ts)?)
+            self.0.truncate(len - number::U64_SIZE);
+            Ok(Key(self.0))
         }
     }
+}
 
-    /// Creates a new key by truncating the timestamp from this key.
-    ///
-    /// Preconditions: the caller must ensure this is actually a timestamped key.
-    pub fn truncate_ts(&self) -> Result<Key, codec::Error> {
-        let len = self.0.len();
-        if len < number::U64_SIZE {
-            // TODO: (the same as above)
-            return Err(codec::Error::KeyLength);
-        }
-        Ok(Key::from_encoded(truncate_ts(&self.0).to_vec()))
+impl Clone for Key {
+    fn clone(&self) -> Self {
+        // default clone implemention use self.len() to reserve capacity
+        // for the sake of appending ts, we need to reserve more
+        let mut key = Vec::with_capacity(self.0.capacity());
+        key.extend_from_slice(&self.0);
+        Key(key)
     }
 }
 
