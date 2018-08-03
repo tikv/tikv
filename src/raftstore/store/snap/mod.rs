@@ -188,7 +188,10 @@ impl SnapManager {
         let size_tracker = Arc::clone(&self.snap_size);
         let mut g = SnapshotGenerator::new(dir, key, io_limiter, stale_notifier, size_tracker);
         match g.build(&region, db_snap) {
-            Ok(meta) => Ok(Some(snapshot_data_from_meta(meta, region))),
+            Ok(meta) => {
+                info!("{} build_snapshot success, meta: {:?}", key, meta);
+                Ok(Some(snapshot_data_from_meta(meta, region)))
+            }
             Err(e) => {
                 error!("{} build_snapshot fail when generate: {}", key, e);
                 Err(e)
@@ -200,6 +203,7 @@ impl SnapManager {
         let meta_path = gen_meta_file_path(&self.core.dir, true, key);
         if let Ok(meta) = read_snapshot_meta(&meta_path) {
             if let Some(usage) = self.get_registry(true).get(&key) {
+                info!("{} get_snapshot_sender success, meta: {:?}", key, meta);
                 let dir = self.core.dir.clone();
                 let notifier = usage.snap_stale_notifier.clone().unwrap();
                 let ref_count = Arc::clone(&usage.ref_count);
@@ -230,6 +234,7 @@ impl SnapManager {
             return Err(Error::Snapshot(SnapError::Conflict));
         }
 
+        info!("{} get_snapshot_receiver success, meta: {:?}", key, meta);
         let dir = self.core.dir.clone();
         let io_limiter = self.io_limiter.clone();
         let snap_size = Arc::clone(&self.snap_size);
