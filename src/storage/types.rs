@@ -135,6 +135,18 @@ impl Key {
             Ok(Key(self.0))
         }
     }
+
+    /// Splits ts encoded key, returns the user key and timestamp.
+    pub fn split_ts_encoded(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+        if key.len() < number::U64_SIZE {
+            Err(codec::Error::KeyLength)
+        } else {
+            let pos = key.len() - number::U64_SIZE;
+            let k = &key[..pos];
+            let mut ts = &key[pos..];
+            Ok((k, number::decode_u64_desc(&mut ts)?))
+        }
+    }
 }
 
 impl Clone for Key {
@@ -174,19 +186,6 @@ impl PartialOrd for Key {
     }
 }
 
-/// Splits encoded key on timestamp.
-/// Returns the split key and timestamp.
-pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
-    if key.len() < number::U64_SIZE {
-        Err(codec::Error::KeyLength)
-    } else {
-        let pos = key.len() - number::U64_SIZE;
-        let k = &key[..pos];
-        let mut ts = &key[pos..];
-        Ok((k, number::decode_u64_desc(&mut ts)?))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,9 +194,9 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = 123;
-        assert!(split_encoded_key_on_ts(k).is_err());
+        assert!(Key::split_ts_encoded(k).is_err());
         let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
-        let res = split_encoded_key_on_ts(enc.encoded()).unwrap();
+        let res = Key::split_ts_encoded(enc.encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
     }
 }
