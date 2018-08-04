@@ -424,7 +424,7 @@ mod test {
 
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
