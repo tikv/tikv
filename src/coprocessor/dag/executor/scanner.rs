@@ -73,8 +73,8 @@ impl<S: Snapshot> Scanner<S> {
         key_only: bool,
         range: &KeyRange,
     ) -> Result<StoreScanner<S>> {
-        let lower_bound = Some(Key::from_raw(range.get_start()).encoded().to_vec());
-        let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
+        let lower_bound = Some(Key::from_raw(range.get_start()).take_encoded());
+        let upper_bound = Some(Key::from_raw(range.get_end()).take_encoded());
         store.scanner(scan_mode, key_only, lower_bound, upper_bound)
     }
 
@@ -197,10 +197,6 @@ pub mod test {
             let col1 = self.cols[0].clone();
             let col2 = self.cols[1].clone();
             vec![col1, col2]
-        }
-
-        pub fn get_index_cols(&self) -> Vec<ColumnInfo> {
-            vec![self.cols[1].clone(), self.cols[2].clone()]
         }
 
         pub fn get_col_pk(&self) -> ColumnInfo {

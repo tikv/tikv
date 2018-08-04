@@ -483,7 +483,7 @@ impl<E: Engine> AssertionStorage<E> {
         );
     }
 
-    pub fn scan_lock_ok(
+    pub fn scan_locks_ok(
         &self,
         max_ts: u64,
         start_key: Vec<u8>,
@@ -492,7 +492,7 @@ impl<E: Engine> AssertionStorage<E> {
     ) {
         assert_eq!(
             self.store
-                .scan_lock(self.ctx.clone(), max_ts, start_key, limit)
+                .scan_locks(self.ctx.clone(), max_ts, start_key, limit)
                 .unwrap(),
             expect
         );

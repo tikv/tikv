@@ -48,7 +48,7 @@ pub use self::engine::{
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
-pub use self::types::{make_key, Key, KvPair, MvccInfo, Value};
+pub use self::types::{decode_ts, make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -755,7 +755,7 @@ impl<E: Engine> Storage<E> {
             // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
             // length of start key is less than 8, we will encounter index out of range error.
             let s = if *cf == CF_WRITE {
-                start_key.append_ts(u64::MAX)
+                start_key.clone().append_ts(u64::MAX)
             } else {
                 start_key.clone()
             };
@@ -804,7 +804,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn async_scan_lock(
+    pub fn async_scan_locks(
         &self,
         ctx: Context,
         max_ts: u64,
@@ -875,7 +875,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
@@ -927,19 +927,21 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
-                        .iter()
-                        .map(|k| (k, snapshot.get_cf(cf, k)))
-                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .into_iter()
+                        .map(|k| {
+                            let v = snapshot.get_cf(cf, &k);
+                            (k, v)
+                        })
+                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| match v {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
                                 stats.data.flow_stats.read_bytes += k.encoded().len() + v.len();
-                                Ok((k.encoded().clone(), v))
+                                Ok((k.take_encoded(), v))
                             }
                             Err(e) => Err(Error::from(e)),
                             _ => unreachable!(),
@@ -975,7 +977,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Put(
-                Self::rawkv_cf(cf)?,
+                Self::rawkv_cf(&cf)?,
                 Key::from_encoded(key),
                 value,
             )],
@@ -992,7 +994,7 @@ impl<E: Engine> Storage<E> {
         pairs: Vec<KvPair>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(&cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1026,7 +1028,7 @@ impl<E: Engine> Storage<E> {
         }
         self.engine.async_write(
             &ctx,
-            vec![Modify::Delete(Self::rawkv_cf(cf)?, Key::from_encoded(key))],
+            vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
             box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
         )?;
         KV_COMMAND_COUNTER_VEC
@@ -1054,7 +1056,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::DeleteRange(
-                Self::rawkv_cf(cf)?,
+                Self::rawkv_cf(&cf)?,
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
             )],
@@ -1073,7 +1075,7 @@ impl<E: Engine> Storage<E> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(cf)?;
+        let cf = Self::rawkv_cf(&cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
@@ -1096,7 +1098,7 @@ impl<E: Engine> Storage<E> {
 
     fn raw_scan(
         snapshot: &E::Snap,
-        cf: String,
+        cf: &str,
         start_key: &Key,
         end_key: Option<Key>,
         limit: usize,
@@ -1105,7 +1107,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.encoded().clone());
+            option.set_upper_bound(end.take_encoded());
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         if !cursor.seek(start_key, &mut stats.data)? {
@@ -1153,7 +1155,7 @@ impl<E: Engine> Storage<E> {
                     let mut statistics = Statistics::default();
                     let result = Self::raw_scan(
                         &snapshot,
-                        cf,
+                        &cf,
                         &Key::from_encoded(key),
                         None,
                         limit,
@@ -1192,16 +1194,16 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    fn rawkv_cf(cf: String) -> Result<CfName> {
+    fn rawkv_cf(cf: &str) -> Result<CfName> {
         if cf.is_empty() {
             return Ok(CF_DEFAULT);
         }
         for c in DATA_CFS {
-            if &cf == c {
+            if cf == *c {
                 return Ok(c);
             }
         }
-        Err(Error::InvalidCf(cf))
+        Err(Error::InvalidCf(cf.to_owned()))
     }
 
     fn check_key_ranges(ranges: &[KeyRange]) -> bool {
@@ -1263,7 +1265,7 @@ impl<E: Engine> Storage<E> {
                         };
                         let pairs = Self::raw_scan(
                             &snapshot,
-                            cf.clone(),
+                            &cf,
                             &start_key,
                             end_key,
                             each_limit,
@@ -1443,7 +1445,7 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
     use util::config::ReadableSize;
     use util::worker::FutureWorker;
@@ -1471,9 +1473,9 @@ mod tests {
         }
     }
 
-    fn expect_ok_callback<T>(done: Sender<i32>, id: i32) -> Callback<T> {
+    fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
-            assert!(x.is_ok());
+            x.unwrap();
             done.send(id).unwrap();
         })
     }
@@ -1497,6 +1499,17 @@ mod tests {
                 },
                 x,
             );
+            done.send(id).unwrap();
+        })
+    }
+
+    fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
+        done: Sender<i32>,
+        id: i32,
+        value: T,
+    ) -> Callback<T> {
+        Box::new(move |x: Result<T>| {
+            assert_eq!(x.unwrap(), value);
             done.send(id).unwrap();
         })
     }
@@ -2661,4 +2674,343 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_scan_lock() {
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((make_key(b"x"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"y"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"z"), b"foo".to_vec())),
+                ],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((make_key(b"a"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"b"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                101,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(101);
+                lock.set_key(b"a".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(101);
+                lock.set_key(b"b".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(101);
+                lock.set_key(b"c".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(100);
+                lock.set_key(b"x".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(100);
+                lock.set_key(b"y".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(100);
+                lock.set_key(b"z".to_vec());
+                lock
+            },
+        );
+        storage
+            .async_scan_locks(
+                Context::new(),
+                99,
+                vec![],
+                10,
+                expect_value_callback(tx.clone(), 0, vec![]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_locks(
+                Context::new(),
+                100,
+                vec![],
+                10,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_locks(
+                Context::new(),
+                100,
+                b"a".to_vec(),
+                10,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_locks(
+                Context::new(),
+                100,
+                b"y".to_vec(),
+                10,
+                expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_locks(
+                Context::new(),
+                101,
+                vec![],
+                10,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_a.clone(),
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                        lock_y.clone(),
+                        lock_z.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_locks(
+                Context::new(),
+                101,
+                vec![],
+                4,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_a.clone(),
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_locks(
+                Context::new(),
+                101,
+                b"b".to_vec(),
+                4,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                        lock_y.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_scan_locks(
+                Context::new(),
+                101,
+                b"b".to_vec(),
+                0,
+                expect_value_callback(
+                    tx.clone(),
+                    0,
+                    vec![
+                        lock_b.clone(),
+                        lock_c.clone(),
+                        lock_x.clone(),
+                        lock_y.clone(),
+                        lock_z.clone(),
+                    ],
+                ),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_resolve_lock() {
+        use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
+
+        let read_pool = new_read_pool();
+        let config = Config::default();
+        let mut storage = Storage::new(&config, read_pool).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+
+        // These locks (transaction ts=99) are not going to be resolved.
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((make_key(b"a"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"b"), b"foo".to_vec())),
+                    Mutation::Put((make_key(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                99,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let (lock_a, lock_b, lock_c) = (
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(99);
+                lock.set_key(b"a".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(99);
+                lock.set_key(b"b".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::new();
+                lock.set_primary_lock(b"c".to_vec());
+                lock.set_lock_version(99);
+                lock.set_key(b"c".to_vec());
+                lock
+            },
+        );
+
+        // We should be able to resolve all locks for transaction ts=100 when there are this
+        // many locks.
+        let scanned_locks_coll = vec![
+            1,
+            RESOLVE_LOCK_BATCH_SIZE,
+            RESOLVE_LOCK_BATCH_SIZE - 1,
+            RESOLVE_LOCK_BATCH_SIZE + 1,
+            RESOLVE_LOCK_BATCH_SIZE * 2,
+            RESOLVE_LOCK_BATCH_SIZE * 2 - 1,
+            RESOLVE_LOCK_BATCH_SIZE * 2 + 1,
+        ];
+
+        let is_rollback_coll = vec![
+            false, // commit
+            true,  // rollback
+        ];
+        let mut ts = 100;
+
+        for scanned_locks in scanned_locks_coll {
+            for is_rollback in &is_rollback_coll {
+                let mut mutations = vec![];
+                for i in 0..scanned_locks {
+                    mutations.push(Mutation::Put((
+                        make_key(format!("x{:08}", i).as_bytes()),
+                        b"foo".to_vec(),
+                    )));
+                }
+
+                storage
+                    .async_prewrite(
+                        Context::new(),
+                        mutations,
+                        b"x".to_vec(),
+                        ts,
+                        Options::default(),
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                let mut txn_status = HashMap::default();
+                txn_status.insert(
+                    ts,
+                    if *is_rollback {
+                        0 // rollback
+                    } else {
+                        ts + 5 // commit, commit_ts = start_ts + 5
+                    },
+                );
+                storage
+                    .async_resolve_lock(
+                        Context::new(),
+                        txn_status,
+                        expect_ok_callback(tx.clone(), 0),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                // All locks should be resolved except for a, b and c.
+                storage
+                    .async_scan_locks(
+                        Context::new(),
+                        ts,
+                        vec![],
+                        0,
+                        expect_value_callback(
+                            tx.clone(),
+                            0,
+                            vec![lock_a.clone(), lock_b.clone(), lock_c.clone()],
+                        ),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                ts += 10;
+            }
+        }
+    }
 }

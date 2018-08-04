@@ -11,7 +11,7 @@ where
     I: Iterator<Item = u8>,
 {
     let mut bytes = [0u8; 8];
-    for byte in bytes.iter_mut() {
+    for byte in &mut bytes {
         *byte = iter.next().unwrap();
     }
     unsafe { mem::transmute(bytes) }
