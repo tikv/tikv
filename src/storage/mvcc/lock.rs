@@ -138,23 +138,27 @@ impl Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::{make_key, Mutation};
+    use storage::{Key, Mutation};
 
     #[test]
     fn test_lock_type() {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((make_key(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec())),
                 LockType::Put,
                 FLAG_PUT,
             ),
             (
-                Mutation::Delete(make_key(key)),
+                Mutation::Delete(Key::from_raw(key)),
                 LockType::Delete,
                 FLAG_DELETE,
             ),
-            (Mutation::Lock(make_key(key)), LockType::Lock, FLAG_LOCK),
+            (
+                Mutation::Lock(Key::from_raw(key)),
+                LockType::Lock,
+                FLAG_LOCK,
+            ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
             let lt = LockType::from_mutation(&mutation);

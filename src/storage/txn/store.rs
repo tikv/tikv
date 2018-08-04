@@ -177,7 +177,7 @@ mod test {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
+    use storage::{Key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -225,7 +225,7 @@ mod test {
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
-                        Mutation::Put((make_key(key), key.to_vec())),
+                        Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &Options::default(),
                     ).unwrap();
@@ -244,7 +244,7 @@ mod test {
                 );
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.commit(&make_key(key), COMMIT_TS).unwrap();
+                    txn.commit(&Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
@@ -274,7 +274,9 @@ mod test {
         let mut statistics = Statistics::default();
         for key in &store.keys {
             let key = key.as_bytes();
-            let data = snapshot_store.get(&make_key(key), &mut statistics).unwrap();
+            let data = snapshot_store
+                .get(&Key::from_raw(key), &mut statistics)
+                .unwrap();
             assert!(data.is_some(), "{:?} expect some, but got none", key);
         }
     }
@@ -287,7 +289,7 @@ mod test {
         let mut statistics = Statistics::default();
         let mut keys_list = Vec::new();
         for key in &store.keys {
-            keys_list.push(make_key(key.as_bytes()));
+            keys_list.push(Key::from_raw(key.as_bytes()));
         }
         let data = snapshot_store.batch_get(&keys_list, &mut statistics);
         assert!(data.is_ok(), "expect ok,while got {:?}", data.unwrap_err());
@@ -307,7 +309,7 @@ mod test {
             .unwrap();
 
         let key = format!("{}{}", KEY_PREFIX, START_ID);
-        let start_key = make_key(key.as_bytes());
+        let start_key = Key::from_raw(key.as_bytes());
         let half = (key_num / 2) as usize;
         let expect = &store.keys[0..half];
         let result = scanner.scan(start_key, half).unwrap();
@@ -330,7 +332,7 @@ mod test {
 
         let half = (key_num / 2) as usize;
         let key = format!("{}{}", KEY_PREFIX, START_ID + (half as u64) - 1);
-        let start_key = make_key(key.as_bytes());
+        let start_key = Key::from_raw(key.as_bytes());
         let expect = &store.keys[0..half - 1];
         let result = scanner.reverse_scan(start_key, half).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
@@ -354,11 +356,11 @@ mod test {
             .unwrap();
 
         let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
-        let start_key = make_key(key.as_bytes());
+        let start_key = Key::from_raw(key.as_bytes());
         let result = scanner.seek(start_key).unwrap();
         let expect_key = format!("{}{}", KEY_PREFIX, START_ID + 1);
         let expect_value = expect_key.clone().into_bytes();
-        let expect = Some((make_key(expect_key.as_bytes()), expect_value as Value));
+        let expect = Some((Key::from_raw(expect_key.as_bytes()), expect_value as Value));
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
     }
 
@@ -373,11 +375,11 @@ mod test {
             .unwrap();
 
         let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
-        let start_key = make_key(key.as_bytes());
+        let start_key = Key::from_raw(key.as_bytes());
         let result = scanner.reverse_seek(start_key).unwrap();
         let expect_key = format!("{}{}", KEY_PREFIX, START_ID);
         let expect_value = expect_key.clone().into_bytes();
-        let expect = Some((make_key(expect_key.as_bytes()), expect_value as Value));
+        let expect = Some((Key::from_raw(expect_key.as_bytes()), expect_value as Value));
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
     }
 
@@ -400,7 +402,7 @@ mod test {
             .unwrap();
 
         // Seek with upper bound should returns None.
-        let result = scanner.seek(make_key(&upper_bound)).unwrap();
+        let result = scanner.seek(Key::from_raw(&upper_bound)).unwrap();
         assert!(result.is_none());
 
         let mut scanner = snapshot_store
@@ -413,7 +415,7 @@ mod test {
             .unwrap();
 
         // Reverse seek with lower bound should returns None.
-        let result = scanner.reverse_seek(make_key(&lower_bound)).unwrap();
+        let result = scanner.reverse_seek(Key::from_raw(&lower_bound)).unwrap();
         assert!(result.is_none());
     }
 }

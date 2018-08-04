@@ -174,11 +174,6 @@ impl PartialOrd for Key {
     }
 }
 
-/// Creates a new key from raw bytes.
-pub fn make_key(k: &[u8]) -> Key {
-    Key::from_raw(k)
-}
-
 /// Splits encoded key on timestamp.
 /// Returns the split key and timestamp.
 pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {

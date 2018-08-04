@@ -21,7 +21,7 @@ use tikv::storage::config::Config;
 use tikv::storage::engine::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
-use tikv::storage::{self, make_key, Engine, Key, KvPair, Mutation, Value};
+use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
 use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
@@ -80,8 +80,8 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: u64,
         commit_ts: u64,
     ) {
-        let mutations = vec![Mutation::Delete(make_key(key))];
-        let commit_keys = vec![make_key(key)];
+        let mutations = vec![Mutation::Delete(Key::from_raw(key))];
+        let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
     }
 
@@ -92,7 +92,7 @@ impl AssertionStorage<SimulateEngine> {
         ts: u64,
     ) -> Option<Value> {
         for _ in 0..3 {
-            let res = self.store.get(self.ctx.clone(), &make_key(key), ts);
+            let res = self.store.get(self.ctx.clone(), &Key::from_raw(key), ts);
             if let Ok(data) = res {
                 return data;
             }
@@ -119,8 +119,8 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: u64,
         commit_ts: u64,
     ) {
-        let mutations = vec![Mutation::Put((make_key(key), value.to_vec()))];
-        let commit_keys = vec![make_key(key)];
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
     }
 
@@ -203,17 +203,17 @@ impl AssertionStorage<SimulateEngine> {
 
 impl<E: Engine> AssertionStorage<E> {
     pub fn get_none(&self, key: &[u8], ts: u64) {
-        let key = make_key(key);
+        let key = Key::from_raw(key);
         assert_eq!(self.store.get(self.ctx.clone(), &key, ts).unwrap(), None);
     }
 
     pub fn get_err(&self, key: &[u8], ts: u64) {
-        let key = make_key(key);
+        let key = Key::from_raw(key);
         assert!(self.store.get(self.ctx.clone(), &key, ts).is_err());
     }
 
     pub fn get_ok(&self, key: &[u8], ts: u64, expect: &[u8]) {
-        let key = make_key(key);
+        let key = Key::from_raw(key);
         assert_eq!(
             self.store.get(self.ctx.clone(), &key, ts).unwrap().unwrap(),
             expect
@@ -221,7 +221,7 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
-        let keys: Vec<Key> = keys.into_iter().map(|x| make_key(x)).collect();
+        let keys: Vec<Key> = keys.into_iter().map(|x| Key::from_raw(x)).collect();
         let result: Vec<Vec<u8>> = self
             .store
             .batch_get(self.ctx.clone(), &keys, ts)
@@ -276,13 +276,18 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Put((make_key(key), value.to_vec()))],
+                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
                 key.to_vec(),
                 start_ts,
             )
             .unwrap();
         self.store
-            .commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts)
+            .commit(
+                self.ctx.clone(),
+                vec![Key::from_raw(key)],
+                start_ts,
+                commit_ts,
+            )
             .unwrap();
     }
 
@@ -290,13 +295,18 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Delete(make_key(key))],
+                vec![Mutation::Delete(Key::from_raw(key))],
                 key.to_vec(),
                 start_ts,
             )
             .unwrap();
         self.store
-            .commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts)
+            .commit(
+                self.ctx.clone(),
+                vec![Key::from_raw(key)],
+                start_ts,
+                commit_ts,
+            )
             .unwrap();
     }
 
@@ -307,7 +317,7 @@ impl<E: Engine> AssertionStorage<E> {
         ts: u64,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = make_key(start_key);
+        let key_address = Key::from_raw(start_key);
         let result = self
             .store
             .scan(self.ctx.clone(), key_address, limit, false, ts)
@@ -327,7 +337,7 @@ impl<E: Engine> AssertionStorage<E> {
         ts: u64,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = make_key(start_key);
+        let key_address = Key::from_raw(start_key);
         let result = self
             .store
             .reverse_scan(self.ctx.clone(), key_address, limit, false, ts)
@@ -347,7 +357,7 @@ impl<E: Engine> AssertionStorage<E> {
         ts: u64,
         expect: Vec<Option<&[u8]>>,
     ) {
-        let key_address = make_key(start_key);
+        let key_address = Key::from_raw(start_key);
         let result = self
             .store
             .scan(self.ctx.clone(), key_address, limit, true, ts)
@@ -439,14 +449,14 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
-        let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         self.store
             .commit(self.ctx.clone(), keys, start_ts, commit_ts)
             .unwrap();
     }
 
     pub fn commit_with_illegal_tso(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
-        let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         let resp = self
             .store
             .commit(self.ctx.clone(), keys, start_ts, commit_ts);
@@ -455,27 +465,27 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn cleanup_ok(&self, key: &[u8], start_ts: u64) {
         self.store
-            .cleanup(self.ctx.clone(), make_key(key), start_ts)
+            .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts)
             .unwrap();
     }
 
     pub fn cleanup_err(&self, key: &[u8], start_ts: u64) {
         assert!(
             self.store
-                .cleanup(self.ctx.clone(), make_key(key), start_ts)
+                .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts)
                 .is_err()
         );
     }
 
     pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
-        let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         self.store
             .rollback(self.ctx.clone(), keys, start_ts)
             .unwrap();
     }
 
     pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: u64) {
-        let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         assert!(
             self.store
                 .rollback(self.ctx.clone(), keys, start_ts)
