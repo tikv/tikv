@@ -464,8 +464,9 @@ fn process_read_impl<E: Engine>(
                 None,
                 ctx.get_isolation_level(),
             );
-            let (lock, writes, values) = find_mvcc_infos_by_key(&mut reader, key, u64::MAX)?;
+            let result = find_mvcc_infos_by_key(&mut reader, key, u64::MAX);
             statistics.add(reader.get_statistics());
+            let (lock, writes, values) = result?;
             Ok(ProcessResult::MvccKey {
                 mvcc: MvccInfo {
                     lock,
@@ -485,9 +486,9 @@ fn process_read_impl<E: Engine>(
             );
             match reader.seek_ts(start_ts)? {
                 Some(key) => {
-                    let (lock, writes, values) =
-                        find_mvcc_infos_by_key(&mut reader, &key, u64::MAX)?;
+                    let result = find_mvcc_infos_by_key(&mut reader, &key, u64::MAX);
                     statistics.add(reader.get_statistics());
+                    let (lock, writes, values) = result?;
                     Ok(ProcessResult::MvccStartTs {
                         mvcc: Some((
                             key,
@@ -518,8 +519,9 @@ fn process_read_impl<E: Engine>(
                 None,
                 ctx.get_isolation_level(),
             );
-            let (kv_pairs, _) =
-                reader.scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit)?;
+            let result = reader.scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit);
+            statistics.add(reader.get_statistics());
+            let (kv_pairs, _) = result?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
             for (key, lock) in kv_pairs {
                 let mut lock_info = LockInfo::new();
@@ -528,7 +530,6 @@ fn process_read_impl<E: Engine>(
                 lock_info.set_key(key.raw()?);
                 locks.push(lock_info);
             }
-            statistics.add(reader.get_statistics());
             sched_ctx
                 .command_keyread_duration
                 .with_label_values(&[tag])
@@ -549,12 +550,13 @@ fn process_read_impl<E: Engine>(
                 None,
                 ctx.get_isolation_level(),
             );
-            let (kv_pairs, has_remain) = reader.scan_locks(
+            let result = reader.scan_locks(
                 scan_key.as_ref(),
                 |lock| txn_status.contains_key(&lock.ts),
                 RESOLVE_LOCK_BATCH_SIZE,
-            )?;
+            );
             statistics.add(reader.get_statistics());
+            let (kv_pairs, has_remain) = result?;
             sched_ctx
                 .command_keyread_duration
                 .with_label_values(&[tag])
