@@ -187,6 +187,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorIntToDec
             | ScalarFuncSig::FloorDecToDec
             | ScalarFuncSig::FloorDecToInt
+            | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::BitNegSig => (1, 1),
@@ -272,7 +273,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ConvertTz
             | ScalarFuncSig::Cos
             | ScalarFuncSig::Cot
-            | ScalarFuncSig::CRC32
             | ScalarFuncSig::CurrentDate
             | ScalarFuncSig::CurrentTime0Arg
             | ScalarFuncSig::CurrentTime1Arg
@@ -753,6 +753,7 @@ dispatch_call! {
         CeilDecToInt => ceil_dec_to_int,
         FloorIntToInt => floor_int_to_int,
         FloorDecToInt => floor_dec_to_int,
+        CRC32 => crc32,
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -1075,6 +1076,7 @@ mod test {
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
+                    ScalarFuncSig::CRC32,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::BitNegSig,
@@ -1205,7 +1207,6 @@ mod test {
             ScalarFuncSig::ConvertTz,
             ScalarFuncSig::Cos,
             ScalarFuncSig::Cot,
-            ScalarFuncSig::CRC32,
             ScalarFuncSig::CurrentDate,
             ScalarFuncSig::CurrentTime0Arg,
             ScalarFuncSig::CurrentTime1Arg,
