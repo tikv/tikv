@@ -579,13 +579,7 @@ fn process_write_impl<E: Engine>(
             ref options,
             ..
         } => {
-            let mut txn = MvccTxn::new(
-                snapshot,
-                start_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            )?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = mutations.len();
             for m in mutations {
@@ -598,7 +592,7 @@ fn process_write_impl<E: Engine>(
                 }
             }
 
-            statistics.add(txn.get_statistics());
+            statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
                 let modifies = txn.into_modifies();
@@ -622,19 +616,13 @@ fn process_write_impl<E: Engine>(
                     commit_ts,
                 });
             }
-            let mut txn = MvccTxn::new(
-                snapshot,
-                lock_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            )?;
+            let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?;
             let rows = keys.len();
             for k in keys {
                 txn.commit(k, commit_ts)?;
             }
 
-            statistics.add(txn.get_statistics());
+            statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows)
         }
         Command::Cleanup {
@@ -643,16 +631,10 @@ fn process_write_impl<E: Engine>(
             start_ts,
             ..
         } => {
-            let mut txn = MvccTxn::new(
-                snapshot,
-                start_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            )?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             txn.rollback(key)?;
 
-            statistics.add(txn.get_statistics());
+            statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1)
         }
         Command::Rollback {
@@ -661,19 +643,13 @@ fn process_write_impl<E: Engine>(
             start_ts,
             ..
         } => {
-            let mut txn = MvccTxn::new(
-                snapshot,
-                start_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            )?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let rows = keys.len();
             for k in keys {
                 txn.rollback(k)?;
             }
 
-            statistics.add(txn.get_statistics());
+            statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows)
         }
         Command::ResolveLock {
@@ -687,13 +663,8 @@ fn process_write_impl<E: Engine>(
             let mut write_size = 0;
             let rows = key_locks.len();
             for &(ref current_key, ref current_lock) in key_locks {
-                let mut txn = MvccTxn::new(
-                    snapshot.clone(),
-                    current_lock.ts,
-                    None,
-                    ctx.get_isolation_level(),
-                    !ctx.get_not_fill_cache(),
-                )?;
+                let mut txn =
+                    MvccTxn::new(snapshot.clone(), current_lock.ts, !ctx.get_not_fill_cache())?;
                 let status = txn_status.get(&current_lock.ts);
                 let commit_ts = match status {
                     Some(ts) => *ts,
@@ -712,7 +683,7 @@ fn process_write_impl<E: Engine>(
                 }
                 write_size += txn.write_size();
 
-                statistics.add(txn.get_statistics());
+                statistics.add(&txn.take_statistics());
                 modifies.append(&mut txn.into_modifies());
 
                 if write_size >= MAX_TXN_WRITE_SIZE {

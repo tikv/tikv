@@ -276,13 +276,7 @@ pub mod test {
 
             // do prewrite.
             let txn_motifies = {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    None,
-                    IsolationLevel::SI,
-                    true,
-                ).unwrap();
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 let mut pk = vec![];
                 for &(ref key, ref value) in kv_data {
                     if pk.is_empty() {
@@ -300,13 +294,7 @@ pub mod test {
 
             // do commit
             let txn_modifies = {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    None,
-                    IsolationLevel::SI,
-                    true,
-                ).unwrap();
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
