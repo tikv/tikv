@@ -160,9 +160,13 @@ impl<S: Snapshot> PointGetter<S> {
 
         let encoded_user_key = user_key.encoded();
 
-        // First seek to `${user_key}_${ts}`.
-        self.write_cursor
-            .near_seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
+        // First seek to `${user_key}_${ts}`. In multi-read mode, the keys may given out of
+        // order, so we allow re-seek.
+        self.write_cursor.near_seek(
+            &user_key.clone().append_ts(ts),
+            true,
+            &mut self.statistics.write,
+        )?;
 
         loop {
             if !self.write_cursor.valid() {
@@ -196,7 +200,7 @@ impl<S: Snapshot> PointGetter<S> {
                         None => {
                             // Value is in the default CF.
                             self.ensure_default_cursor()?;
-                            let value = super::util::load_data_by_write(
+                            let value = super::util::near_load_data_by_write(
                                 &mut self.default_cursor.as_mut().unwrap(),
                                 user_key,
                                 write,
