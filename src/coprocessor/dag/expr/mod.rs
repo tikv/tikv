@@ -19,6 +19,7 @@ mod builtin_json;
 mod builtin_like;
 mod builtin_math;
 mod builtin_op;
+mod builtin_string;
 mod builtin_time;
 mod column;
 mod constant;
