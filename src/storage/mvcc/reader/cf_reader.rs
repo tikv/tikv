@@ -14,8 +14,9 @@
 use storage::engine::ScanMode;
 use storage::mvcc::Result;
 use storage::mvcc::{Lock, Write, WriteType};
-use storage::{Cursor, Snapshot, Statistics, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{Cursor, CursorBuilder, Snapshot, Statistics};
 use storage::{Key, Value};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 /// `CFReader` factory.
 pub struct CFReaderBuilder<S: Snapshot> {
@@ -440,7 +441,7 @@ impl<S: Snapshot> CFReader<S> {
         if self.lock_cursor.is_some() {
             return Ok(());
         }
-        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_LOCK)
+        let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
             .fill_cache(self.fill_cache)
             .build()?;
         self.lock_cursor = Some(cursor);
@@ -452,7 +453,7 @@ impl<S: Snapshot> CFReader<S> {
         if self.write_cursor.is_some() {
             return Ok(());
         }
-        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
+        let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
             .build()?;
         self.write_cursor = Some(cursor);
@@ -464,7 +465,7 @@ impl<S: Snapshot> CFReader<S> {
         if self.reverse_write_cursor.is_some() {
             return Ok(());
         }
-        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
+        let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
@@ -477,7 +478,7 @@ impl<S: Snapshot> CFReader<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
             .fill_cache(self.fill_cache)
             .build()?;
         self.default_cursor = Some(cursor);

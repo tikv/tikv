@@ -28,12 +28,15 @@ use config;
 
 use util::rocksdb::CFOptions;
 
+mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
 mod rocksdb;
+
 use super::super::raftstore::store::engine::IterOption;
 
+pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 
 // only used for rocksdb without persistent.

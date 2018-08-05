@@ -18,7 +18,6 @@ mod txn;
 mod write;
 
 pub use self::lock::{Lock, LockType};
-pub use self::reader::util as readerUtil;
 pub use self::reader::{
     CFReader, CFReaderBuilder, ForwardScanner, ForwardScannerBuilder, MvccReader, PointGetter,
     PointGetterBuilder,

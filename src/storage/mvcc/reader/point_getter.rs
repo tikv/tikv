@@ -15,7 +15,8 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
-use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_WRITE};
+use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
+use storage::{CF_DEFAULT, CF_WRITE};
 use util::codec::number;
 
 /// `PointGetter` factory.
@@ -81,7 +82,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
-        let write_cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
+        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
             .prefix_seek(!self.multi)
             .build()?;
@@ -225,7 +226,7 @@ impl<S: Snapshot> PointGetter<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
             .fill_cache(self.fill_cache)
             .prefix_seek(!self.multi)
             .build()?;

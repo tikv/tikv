@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
+
 use kvproto::kvrpcpb::IsolationLevel;
 
-use super::util::CursorBuilder;
-use std::cmp::Ordering;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::{
-    slice_without_ts, Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
+use storage::types::truncate_ts;
+use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
 
 pub struct ForwardScannerBuilder<S: Snapshot> {
@@ -183,7 +183,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                     (None, None) => return Ok(None),
                     (None, Some(k)) => (Key::from_encoded(k.to_vec()), false, true),
                     (Some(k), None) => (Key::from_encoded(k.to_vec()).truncate_ts()?, true, false),
-                    (Some(wk), Some(lk)) => match slice_without_ts(wk).cmp(wk) {
+                    (Some(wk), Some(lk)) => match truncate_ts(wk).cmp(wk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
                         Ordering::Less => {
                             (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)

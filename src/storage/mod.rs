@@ -43,12 +43,13 @@ pub mod types;
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
-    new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
+    new_local_engine, CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
+    FlowStatistics, Iterator, Modify, RocksEngine, ScanMode, Snapshot, Statistics,
+    StatisticsSummary, TEMP_DIR,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
-pub use self::types::{decode_ts, make_key, slice_without_ts, Key, KvPair, MvccInfo, Value};
+pub use self::types::{decode_ts, make_key, Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;

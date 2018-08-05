@@ -14,7 +14,7 @@
 mod cf_reader;
 mod forward_scanner;
 mod point_getter;
-pub mod util;
+mod util;
 
 use super::lock::Lock;
 use super::write::{Write, WriteType};
