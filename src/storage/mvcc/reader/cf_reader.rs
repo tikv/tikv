@@ -18,14 +18,14 @@ use storage::{Cursor, CursorBuilder, Snapshot, Statistics};
 use storage::{Key, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
-/// `CFReader` factory.
-pub struct CFReaderBuilder<S: Snapshot> {
+/// `CfReader` factory.
+pub struct CfReaderBuilder<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
 }
 
-impl<S: Snapshot> CFReaderBuilder<S> {
-    /// Initialize a new `CFReaderBuilder`.
+impl<S: Snapshot> CfReaderBuilder<S> {
+    /// Initialize a new `CfReaderBuilder`.
     pub fn new(snapshot: S) -> Self {
         Self {
             snapshot,
@@ -42,9 +42,9 @@ impl<S: Snapshot> CFReaderBuilder<S> {
         self
     }
 
-    /// Build `CFReader` from the current configuration.
-    pub fn build(self) -> Result<CFReader<S>> {
-        Ok(CFReader {
+    /// Build `CfReader` from the current configuration.
+    pub fn build(self) -> Result<CfReader<S>> {
+        Ok(CfReader {
             snapshot: self.snapshot,
             fill_cache: self.fill_cache,
             statistics: Statistics::default(),
@@ -60,8 +60,8 @@ impl<S: Snapshot> CFReaderBuilder<S> {
 /// A handy utility around functions in `mvcc::reader::util`. This struct does not provide
 /// performance guarantee. Please carefully review each interface's requirement.
 ///
-/// Use `CFReaderBuilder` to build `CFReader`.
-pub struct CFReader<S: Snapshot> {
+/// Use `CfReaderBuilder` to build `CfReader`.
+pub struct CfReader<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
 
@@ -76,7 +76,7 @@ pub struct CFReader<S: Snapshot> {
     default_cursor: Option<Cursor<S::Iter>>,
 }
 
-impl<S: Snapshot> CFReader<S> {
+impl<S: Snapshot> CfReader<S> {
     /// Take out and reset the statistics collected so far.
     #[inline]
     pub fn take_statistics(&mut self) -> Statistics {

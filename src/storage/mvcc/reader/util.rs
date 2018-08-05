@@ -19,7 +19,7 @@ use storage::{Cursor, Iterator, Key, Snapshot, Statistics, Value, CF_LOCK};
 ///
 /// Internally, there is a db `get`.
 ///
-/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+/// You may want to use the wrapper `mvcc::reader::CfReader` instead.
 pub fn load_lock<S>(snapshot: &S, key: &Key, statistics: &mut Statistics) -> Result<Option<Lock>>
 where
     S: Snapshot,
@@ -42,7 +42,7 @@ where
 ///
 /// Internally, there is a db `get`.
 ///
-/// You may want to use the wrapper `mvcc::reader::CFReader` instead.
+/// You may want to use the wrapper `mvcc::reader::CfReader` instead.
 pub fn load_and_check_lock<S>(
     snapshot: &S,
     key: &Key,

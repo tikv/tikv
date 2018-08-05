@@ -13,7 +13,7 @@
 
 use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
-use super::mvcc::{CFReaderBuilder, MvccReader, MvccTxn};
+use super::mvcc::{CfReaderBuilder, MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
@@ -104,7 +104,7 @@ impl<E: Engine> GCRunner<E> {
             None,
             ctx.get_isolation_level(),
         );
-        let mut cf_reader = CFReaderBuilder::new(snapshot)
+        let mut cf_reader = CfReaderBuilder::new(snapshot)
             .fill_cache(ctx.get_not_fill_cache())
             .build()?;
 

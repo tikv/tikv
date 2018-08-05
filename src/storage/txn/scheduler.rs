@@ -46,7 +46,7 @@ use storage::engine::{
     self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
     Result as EngineResult,
 };
-use storage::mvcc::{CFReaderBuilder, Error as MvccError, MvccTxn, MAX_TXN_WRITE_SIZE};
+use storage::mvcc::{CfReaderBuilder, Error as MvccError, MvccTxn, MAX_TXN_WRITE_SIZE};
 use storage::{
     Command, Engine, Error as StorageError, Result as StorageResult, Statistics, StatisticsSummary,
     StorageCb,
@@ -427,7 +427,7 @@ fn process_read_impl<E: Engine>(
     let tag = cmd.tag();
     match cmd {
         Command::MvccByKey { ref ctx, ref key } => {
-            let mut cf_reader = CFReaderBuilder::new(snapshot)
+            let mut cf_reader = CfReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
             let writes = cf_reader.scan_writes(&key, u64::MAX)?;
@@ -443,7 +443,7 @@ fn process_read_impl<E: Engine>(
             })
         }
         Command::MvccByStartTs { ref ctx, start_ts } => {
-            let mut cf_reader = CFReaderBuilder::new(snapshot)
+            let mut cf_reader = CfReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
             match cf_reader.slowly_seek_key_by_start_ts(start_ts)? {
@@ -474,7 +474,7 @@ fn process_read_impl<E: Engine>(
             limit,
             ..
         } => {
-            let mut cf_reader = CFReaderBuilder::new(snapshot)
+            let mut cf_reader = CfReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
             let (kv_pairs, _) =
@@ -500,7 +500,7 @@ fn process_read_impl<E: Engine>(
             ref scan_key,
             ..
         } => {
-            let mut cf_reader = CFReaderBuilder::new(snapshot)
+            let mut cf_reader = CfReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
             let (kv_pairs, has_remain) = cf_reader.scan_locks(

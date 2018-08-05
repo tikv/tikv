@@ -13,7 +13,7 @@
 
 use super::lock::{Lock, LockType};
 use super::metrics::*;
-use super::reader::{CFReader, CFReaderBuilder};
+use super::reader::{CfReader, CfReaderBuilder};
 use super::write::{Write, WriteType};
 use super::{Error, Result};
 use std::fmt;
@@ -31,7 +31,7 @@ pub struct GcInfo {
 }
 
 pub struct MvccTxn<S: Snapshot> {
-    cf_reader: CFReader<S>,
+    cf_reader: CfReader<S>,
     start_ts: u64,
     writes: Vec<Modify>,
     write_size: usize,
@@ -48,7 +48,7 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 impl<S: Snapshot> MvccTxn<S> {
     pub fn new(snapshot: S, start_ts: u64, fill_cache: bool) -> Result<Self> {
         Ok(Self {
-            cf_reader: CFReaderBuilder::new(snapshot.clone())
+            cf_reader: CfReaderBuilder::new(snapshot.clone())
                 .fill_cache(fill_cache)
                 .build()?,
             start_ts,
@@ -365,7 +365,7 @@ impl<S: Snapshot> MvccTxn<S> {
 #[cfg(test)]
 mod tests {
     use super::super::write::{Write, WriteType};
-    use super::super::{CFReaderBuilder, PointGetterBuilder};
+    use super::super::{CfReaderBuilder, PointGetterBuilder};
     use super::MvccTxn;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, Modify, Snapshot, TEMP_DIR};
@@ -959,14 +959,14 @@ mod tests {
 
     fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let lock = cf_reader.load_lock(&make_key(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
     }
 
     fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         assert!(cf_reader.load_lock(&make_key(key)).unwrap().is_none());
     }
 
@@ -987,7 +987,7 @@ mod tests {
 
     fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         assert!(
             cf_reader
                 .near_seek_write(&make_key(key), ts, true)
@@ -1005,7 +1005,7 @@ mod tests {
         write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let (t, write) = cf_reader
             .near_seek_write(&make_key(key), ts, true)
             .unwrap()
@@ -1017,7 +1017,7 @@ mod tests {
 
     fn must_get_commit_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let (ts, write_type) = cf_reader
             .near_reverse_seek_write_type_by_start_ts(&make_key(key), start_ts, true)
             .unwrap()
@@ -1028,7 +1028,7 @@ mod tests {
 
     fn must_get_commit_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let some_commit_info = cf_reader
             .near_reverse_seek_write_type_by_start_ts(&make_key(key), start_ts, true)
             .unwrap();
@@ -1042,7 +1042,7 @@ mod tests {
 
     fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let (ts, write_type) = cf_reader
             .near_reverse_seek_write_type_by_start_ts(&make_key(key), start_ts, true)
             .unwrap()
@@ -1053,7 +1053,7 @@ mod tests {
 
     fn must_get_rollback_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let some_commit_info = cf_reader
             .near_reverse_seek_write_type_by_start_ts(&make_key(key), start_ts, true)
             .unwrap();
@@ -1072,7 +1072,7 @@ mod tests {
             next_start.map(|x| make_key(x).append_ts(0)),
         );
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         assert_eq!(
             cf_reader
                 .scan_keys(start.map(make_key).as_ref(), limit)
@@ -1124,7 +1124,7 @@ mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let v = cf_reader.scan_values(&make_key(&[3])).unwrap();
         assert_eq!(v.len(), 2);
         assert_eq!(v[1], (3, gen_value(b'a', SHORT_VALUE_MAX_LEN + 1)));
@@ -1162,7 +1162,7 @@ mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cf_reader = CFReaderBuilder::new(snapshot).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         assert_eq!(
             cf_reader.slowly_seek_key_by_start_ts(3).unwrap().unwrap(),
             make_key(&[2])
