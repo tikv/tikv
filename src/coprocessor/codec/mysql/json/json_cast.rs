@@ -84,7 +84,7 @@ mod test {
             (r#""hello""#, 0f64),
             (r#""1234""#, 1234f64),
         ];
-        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();
