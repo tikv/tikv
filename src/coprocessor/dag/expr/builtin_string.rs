@@ -112,6 +112,7 @@ mod test {
     fn test_bin() {
         let cases = vec![
             (Datum::I64(10), Datum::Bytes(b"1010".to_vec())),
+            (Datum::I64(0), Datum::Bytes(b"0".to_vec())),
             (Datum::I64(365), Datum::Bytes(b"101101101".to_vec())),
             (Datum::Null, Datum::Null),
             (
