@@ -191,6 +191,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::Length
+            | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig => (1, 1),
 
@@ -261,7 +262,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Asin
             | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Atan2Args
-            | ScalarFuncSig::Bin
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::CharLength
@@ -845,6 +845,7 @@ dispatch_call! {
         JsonUnquoteSig => json_unquote,
 
         DateFormatSig => date_format,
+        Bin => bin,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1082,6 +1083,7 @@ mod test {
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
+                    ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
@@ -1198,7 +1200,6 @@ mod test {
             ScalarFuncSig::Asin,
             ScalarFuncSig::Atan1Arg,
             ScalarFuncSig::Atan2Args,
-            ScalarFuncSig::Bin,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::CharLength,
