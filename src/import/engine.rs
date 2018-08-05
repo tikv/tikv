@@ -185,7 +185,7 @@ impl SSTWriter {
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let k = keys::data_key(key);
-        let (_, commit_ts) = Key::split_ts_encoded(key)?;
+        let (_, commit_ts) = Key::ts_encoded_split(key)?;
         if is_short_value(value) {
             let w = Write::new(WriteType::Put, commit_ts, Some(value.to_vec()));
             self.write.put(&k, &w.to_bytes())?;

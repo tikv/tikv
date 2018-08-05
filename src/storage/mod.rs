@@ -48,7 +48,7 @@ pub use self::engine::{
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
-pub use self::types::{decode_ts, Key, KvPair, MvccInfo, Value};
+pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;

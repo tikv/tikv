@@ -129,7 +129,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             return;
         }
 
-        let (k, ts) = match Key::split_ts_encoded(key) {
+        let (k, ts) = match Key::ts_encoded_split(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
                 self.num_errors += 1;

@@ -44,21 +44,6 @@ pub struct MvccInfo {
     pub values: Vec<(u64, Value)>,
 }
 
-/// The caller should ensure the key is a timestamped key.
-pub fn truncate_ts(key: &[u8]) -> &[u8] {
-    &key[..key.len() - number::U64_SIZE]
-}
-
-/// The caller should ensure the key is a timestamped key.
-pub fn decode_ts(key: &[u8]) -> Result<u64, codec::Error> {
-    let len = key.len();
-    if len < number::U64_SIZE {
-        return Err(codec::Error::KeyLength);
-    }
-    let mut ts = &key[len - number::U64_SIZE..];
-    number::decode_u64_desc(&mut ts)
-}
-
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw
@@ -111,7 +96,7 @@ impl Key {
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
     pub fn decode_ts(&self) -> Result<u64, codec::Error> {
-        Ok(decode_ts(&self.0)?)
+        Ok(Self::ts_encoded_decode_ts(&self.0)?)
     }
 
     /// Creates a new key by truncating the timestamp from this key.
@@ -132,12 +117,12 @@ impl Key {
             Err(codec::Error::KeyLength)
         } else {
             self.0.truncate(len - number::U64_SIZE);
-            Ok(Key(self.0))
+            Ok(self)
         }
     }
 
-    /// Splits ts encoded key, returns the user key and timestamp.
-    pub fn split_ts_encoded(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+    /// Split a ts encoded key, return the user key and timestamp.
+    pub fn ts_encoded_split(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
         if key.len() < number::U64_SIZE {
             Err(codec::Error::KeyLength)
         } else {
@@ -146,6 +131,25 @@ impl Key {
             let mut ts = &key[pos..];
             Ok((k, number::decode_u64_desc(&mut ts)?))
         }
+    }
+
+    /// Extract the user key from a ts encoded key.
+    pub fn ts_encoded_truncate_ts(key: &[u8]) -> Result<&[u8], codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(&key[..key.len() - number::U64_SIZE])
+    }
+
+    /// Decode the timestamp from a ts encoded key.
+    pub fn ts_encoded_decode_ts(key: &[u8]) -> Result<u64, codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        let mut ts = &key[len - number::U64_SIZE..];
+        number::decode_u64_desc(&mut ts)
     }
 }
 
@@ -194,9 +198,9 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = 123;
-        assert!(Key::split_ts_encoded(k).is_err());
+        assert!(Key::ts_encoded_split(k).is_err());
         let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
-        let res = Key::split_ts_encoded(enc.encoded()).unwrap();
+        let res = Key::ts_encoded_split(enc.encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
     }
 }
