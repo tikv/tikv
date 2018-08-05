@@ -125,11 +125,11 @@ impl<S: Snapshot> CFReader<S> {
         // TODO: We need to ensure that cursor is not prefix seek.
         assert!(limit > 0);
 
-        let ok = match start_key {
+        match start_key {
             Some(ref x) => write_cursor.seek(x, &mut self.statistics.write)?,
             None => write_cursor.seek_to_first(&mut self.statistics.write),
         };
-        if !ok {
+        if !write_cursor.valid() {
             return Ok((vec![], None));
         }
         let mut keys = Vec::with_capacity(limit);
@@ -180,11 +180,11 @@ impl<S: Snapshot> CFReader<S> {
         self.ensure_lock_cursor()?;
         let lock_cursor = self.lock_cursor.as_mut().unwrap();
 
-        let ok = match start_key {
+        match start_key {
             Some(ref start_key) => lock_cursor.seek(start_key, &mut self.statistics.lock)?,
             None => lock_cursor.seek_to_first(&mut self.statistics.lock),
         };
-        if !ok {
+        if !lock_cursor.valid() {
             return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
@@ -262,6 +262,7 @@ impl<S: Snapshot> CFReader<S> {
         // TODO: We need to ensure that cursor is not prefix seek.
 
         let mut values = vec![];
+
         default_cursor.seek(user_key, &mut self.statistics.data)?;
         while default_cursor.valid() {
             // TODO: We don't really need to copy slice to a vector here.
@@ -324,6 +325,9 @@ impl<S: Snapshot> CFReader<S> {
             allow_reseek,
             &mut self.statistics.write,
         )?;
+        if !write_cursor.valid() {
+            return Ok(None);
+        }
         let write_key = Key::from_encoded(write_cursor.key(&mut self.statistics.write).to_vec());
         let commit_ts = write_key.decode_ts()?;
         let current_user_key = write_key.truncate_ts()?;
