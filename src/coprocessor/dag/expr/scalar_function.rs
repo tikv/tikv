@@ -190,6 +190,8 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::Length
+            | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -263,7 +265,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitCount
-            | ScalarFuncSig::BitLength
             | ScalarFuncSig::Char
             | ScalarFuncSig::CharLength
             | ScalarFuncSig::Compress
@@ -346,7 +347,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Left
             | ScalarFuncSig::LeftBinary
             | ScalarFuncSig::LeftShift
-            | ScalarFuncSig::Length
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::LocateBinary2Args
@@ -771,6 +771,9 @@ dispatch_call! {
         BitNegSig => bit_neg,
         BitOrSig => bit_or,
         BitXorSig => bit_xor,
+
+        Length => length,
+        BitLength => bit_length,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1082,6 +1085,8 @@ mod test {
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::BitNegSig,
+                    ScalarFuncSig::BitLength,
+                    ScalarFuncSig::Length,
                 ],
                 1,
                 1,
@@ -1199,7 +1204,6 @@ mod test {
             ScalarFuncSig::Atan2Args,
             ScalarFuncSig::Bin,
             ScalarFuncSig::BitCount,
-            ScalarFuncSig::BitLength,
             ScalarFuncSig::Char,
             ScalarFuncSig::CharLength,
             ScalarFuncSig::Compress,
@@ -1282,7 +1286,6 @@ mod test {
             ScalarFuncSig::Left,
             ScalarFuncSig::LeftBinary,
             ScalarFuncSig::LeftShift,
-            ScalarFuncSig::Length,
             ScalarFuncSig::Locate2Args,
             ScalarFuncSig::Locate3Args,
             ScalarFuncSig::LocateBinary2Args,
