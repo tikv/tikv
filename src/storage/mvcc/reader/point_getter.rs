@@ -107,7 +107,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 /// smaller version will be tried. If the isolation level is SI, locks will be checked first.
 ///
 /// If `multi` is `false`, prefix filter will be used so that you can only call `read_next`
-/// once, otherwise there will be incorrect results.
+/// once. Subsequent calls will yield `None`.
 ///
 /// If `multi` is `true`, the instance can be re-used to get multiple keys. However it will
 /// be optimal if these keys are get in ascending order and are relatively close to each other.
@@ -142,8 +142,9 @@ impl<S: Snapshot> PointGetter<S> {
 
     /// Get the value of a user key. See `PointGetter` for details.
     pub fn read_next(&mut self, user_key: &Key, mut ts: u64) -> Result<Option<Value>> {
+        // Attempting to read multiple values when `multi == false`, directly returns `None`.
         if !self.multi && self.read_once {
-            panic!("PointGetter(multi=false) must not call `read_next` multiple times.");
+            return Ok(None);
         }
 
         self.read_once = true;

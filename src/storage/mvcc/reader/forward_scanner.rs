@@ -116,9 +116,10 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
     }
 }
 
-/// This struct can be used to find next key greater or equal to a given user key. Internally,
-/// rollbacks are ignored and smaller version will be tried. If the isolation level is SI, locks
-/// will be checked first.
+/// This struct can be used to scan keys starting from the given user key (greater than or equal).
+///
+/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
+/// isolation level is SI, locks will be checked first.
 ///
 /// Use `ForwardScannerBuilder` to build `ForwardScanner`.
 pub struct ForwardScanner<S: Snapshot> {
@@ -153,6 +154,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     }
 
     /// Get reference of the statics collected so far.
+    // TODO: Remove this function once `BackwardScanner` is landed.
     pub fn get_statistics(&self) -> &Statistics {
         &self.statistics
     }
@@ -165,7 +167,6 @@ impl<S: Snapshot> ForwardScanner<S> {
             self.is_started = true;
         }
 
-        // TODO: Add more comments to explain the logic.
         loop {
             let (key, has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid() {
