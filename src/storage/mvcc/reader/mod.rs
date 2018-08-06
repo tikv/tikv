@@ -14,7 +14,7 @@
 mod cf_reader;
 mod forward_scanner;
 mod point_getter;
-mod util;
+pub mod util;
 
 use super::lock::Lock;
 use super::write::{Write, WriteType};
@@ -24,13 +24,10 @@ use raftstore::store::engine::IterOption;
 use std::u64;
 use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
-use util::properties::MvccProperties;
 
 pub use self::cf_reader::{CfReader, CfReaderBuilder};
 pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
-
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -353,64 +350,6 @@ impl<S: Snapshot> MvccReader<S> {
             Ok(short_value)
         }
     }
-
-    // Returns true if it needs gc.
-    // This is for optimization purpose, does not mean to be accurate.
-    pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
-        // Always GC.
-        if ratio_threshold < 1.0 {
-            return true;
-        }
-
-        let props = match self.get_mvcc_properties(safe_point) {
-            Some(v) => v,
-            None => return true,
-        };
-
-        // No data older than safe_point to GC.
-        if props.min_ts > safe_point {
-            return false;
-        }
-
-        // Note: Since the properties are file-based, it can be false positive.
-        // For example, multiple files can have a different version of the same row.
-
-        // A lot of MVCC versions to GC.
-        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
-            return true;
-        }
-        // A lot of non-effective MVCC versions to GC.
-        if props.num_versions as f64 > props.num_puts as f64 * ratio_threshold {
-            return true;
-        }
-
-        // A lot of MVCC versions of a single row to GC.
-        props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
-    }
-
-    fn get_mvcc_properties(&self, safe_point: u64) -> Option<MvccProperties> {
-        let collection = match self.snapshot.get_properties_cf(CF_WRITE) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-        if collection.is_empty() {
-            return None;
-        }
-        // Aggregate MVCC properties.
-        let mut props = MvccProperties::new();
-        for (_, v) in &*collection {
-            let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-            // Filter out properties after safe_point.
-            if mvcc.min_ts > safe_point {
-                continue;
-            }
-            props.add(&mvcc);
-        }
-        Some(props)
-    }
 }
 
 #[cfg(test)]
@@ -424,7 +363,7 @@ mod tests {
     use std::u64;
     use storage::engine::{Modify, ScanMode};
     use storage::mvcc::write::WriteType;
-    use storage::mvcc::{CfReaderBuilder, MvccReader, MvccTxn};
+    use storage::mvcc::{self, CfReaderBuilder, MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
@@ -578,9 +517,8 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
-        assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
-        reader.get_mvcc_properties(safe_point)
+        assert_eq!(mvcc::reader::util::need_gc(&snap, safe_point, 1.0), need_gc);
+        mvcc::reader::util::get_mvcc_properties(&snap, safe_point)
     }
 
     #[test]

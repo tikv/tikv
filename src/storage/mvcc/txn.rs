@@ -300,7 +300,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut deleted_versions = 0;
         let mut latest_delete = None;
         let mut is_completed = true;
-        // TODO: Can be replaced
+        // Keys may not given in order, so `allow_reseek == true`.
         while let Some((commit, write)) = self.cf_reader.near_seek_write(key, ts, true)? {
             ts = commit - 1;
             found_versions += 1;

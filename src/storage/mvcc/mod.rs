@@ -13,7 +13,7 @@
 
 mod lock;
 mod metrics;
-mod reader;
+pub mod reader;
 mod txn;
 mod write;
 

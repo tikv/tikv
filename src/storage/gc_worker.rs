@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
+use super::engine::{Engine, Error as EngineError, StatisticsSummary};
 use super::metrics::*;
-use super::mvcc::{CfReaderBuilder, MvccReader, MvccTxn};
+use super::mvcc::{self, CfReaderBuilder, MvccTxn};
 use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
@@ -96,21 +96,14 @@ impl<E: Engine> GCRunner<E> {
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
         let snapshot = self.get_snapshot(ctx)?;
-        let reader = MvccReader::new(
-            snapshot.clone(),
-            Some(ScanMode::Forward),
-            !ctx.get_not_fill_cache(),
-            None,
-            None,
-            ctx.get_isolation_level(),
-        );
-        let mut cf_reader = CfReaderBuilder::new(snapshot)
+        let mut cf_reader = CfReaderBuilder::new(snapshot.clone())
             .fill_cache(ctx.get_not_fill_cache())
             .build()?;
 
         // If from.is_some(), it must not be the first scan of the region.
         // So we must continue doing GC.
-        let skip_gc = from.is_none() && !reader.need_gc(safe_point, self.ratio_threshold);
+        let skip_gc = from.is_none()
+            && !mvcc::reader::util::need_gc(&snapshot, safe_point, self.ratio_threshold);
         let res = if skip_gc {
             KV_GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
@@ -128,7 +121,6 @@ impl<E: Engine> GCRunner<E> {
                     Ok((keys, next))
                 })
         };
-        self.stats.add_statistics(reader.get_statistics());
         self.stats.add_statistics(&cf_reader.take_statistics());
         res
     }
