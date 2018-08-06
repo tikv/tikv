@@ -520,11 +520,13 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let err = resp.get_header().get_error();
-        if err.has_stale_command() {
+
+        if err.has_stale_command() || err.has_region_not_found() {
             // command got truncated, leadership may have changed.
             self.reset_leader_of_region(region_id);
             return true;
         }
+
         if !err.has_not_leader() {
             return false;
         }
@@ -830,6 +832,7 @@ impl<T: Simulator> Cluster<T> {
                         if error.has_stale_epoch()
                             || error.has_not_leader()
                             || error.has_stale_command()
+                            || error.has_region_not_found()
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
