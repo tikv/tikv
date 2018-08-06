@@ -15,7 +15,7 @@ mod backward_scanner;
 mod cf_reader;
 mod forward_scanner;
 mod point_getter;
-pub mod util;
+mod util;
 
 use super::lock::Lock;
 use super::write::{Write, WriteType};
@@ -27,7 +27,7 @@ use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
-pub use self::cf_reader::{CFReader, CFReaderBuilder};
+pub use self::cf_reader::{CfReader, CfReaderBuilder};
 pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
 
@@ -104,9 +104,9 @@ impl<S: Snapshot> MvccReader<S> {
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
-        let k = key.append_ts(ts);
+        let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.near_seek_get(&k, &mut self.statistics.data)? {
+            match cursor.near_seek_get(&k, false, &mut self.statistics.data)? {
                 None => panic!("key {} not found, ts {}", key, ts),
                 Some(v) => v.to_vec(),
             }
@@ -132,57 +132,6 @@ impl<S: Snapshot> MvccReader<S> {
             Some(ScanMode::Backward) if allow_backward => ScanMode::Backward,
             _ => ScanMode::Mixed,
         }
-    }
-
-    pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, false)
-    }
-
-    pub fn reverse_seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, true)
-    }
-
-    fn seek_write_impl(
-        &mut self,
-        key: &Key,
-        ts: u64,
-        reverse: bool,
-    ) -> Result<Option<(u64, Write)>> {
-        if self.scan_mode.is_some() {
-            if self.write_cursor.is_none() {
-                let iter_opt = IterOption::new(None, None, self.fill_cache);
-                let iter = self
-                    .snapshot
-                    .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
-                self.write_cursor = Some(iter);
-            }
-        } else {
-            // use prefix bloom filter
-            let iter_opt = IterOption::default()
-                .use_prefix_seek()
-                .set_prefix_same_as_start(true);
-            let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
-            self.write_cursor = Some(iter);
-        }
-
-        let cursor = self.write_cursor.as_mut().unwrap();
-        let ok = if reverse {
-            cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write)?
-        } else {
-            cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write)?
-        };
-        if !ok {
-            return Ok(None);
-        }
-        let write_key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec());
-        let commit_ts = write_key.decode_ts()?;
-        let k = write_key.truncate_ts()?;
-        if &k != key {
-            return Ok(None);
-        }
-        let write = Write::parse(cursor.value(&mut self.statistics.write))?;
-        self.statistics.write.processed += 1;
-        Ok(Some((commit_ts, write)))
     }
 
     fn create_write_cursor(&mut self) -> Result<()> {
@@ -227,7 +176,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
-                    if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
+                    if w_cur.near_reverse_seek(&key, false, &mut self.statistics.write)? {
                         w_key = Some(w_cur.key(&mut self.statistics.write));
                     } else {
                         w_key = None;
@@ -235,7 +184,7 @@ impl<S: Snapshot> MvccReader<S> {
                     }
                 }
                 if lock_valid {
-                    if l_cur.near_reverse_seek(&key, &mut self.statistics.lock)? {
+                    if l_cur.near_reverse_seek(&key, false, &mut self.statistics.lock)? {
                         l_key = Some(l_cur.key(&mut self.statistics.lock));
                     } else {
                         l_key = None;
@@ -341,7 +290,7 @@ impl<S: Snapshot> MvccReader<S> {
 
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        let key = user_key.append_ts(ts);
+        let key = user_key.clone().append_ts(ts);
         let valid = self
             .write_cursor
             .as_mut()
@@ -476,7 +425,7 @@ mod tests {
     use std::u64;
     use storage::engine::{Modify, ScanMode};
     use storage::mvcc::write::WriteType;
-    use storage::mvcc::{CFReaderBuilder, MvccReader, MvccTxn};
+    use storage::mvcc::{CfReaderBuilder, MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
@@ -517,7 +466,7 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -525,7 +474,7 @@ mod tests {
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.commit(&k, commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
@@ -533,7 +482,7 @@ mod tests {
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
             let k = make_key(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.collapse_rollback(false);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
@@ -543,8 +492,7 @@ mod tests {
             let k = make_key(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn =
-                    MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true).unwrap();
+                let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
                 txn.gc(&k, safe_point).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
@@ -974,9 +922,9 @@ mod tests {
     }
 
     #[test]
-    fn test_reverse_seek_write_by_start_ts() {
+    fn test_near_reverse_seek_write_by_start_ts() {
         let path =
-            TempDir::new("_test_storage_mvcc_reader_reverse_seek_write_by_start_ts").unwrap();
+            TempDir::new("_test_storage_mvcc_reader_near_reverse_seek_write_by_start_ts").unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
@@ -999,14 +947,14 @@ mod tests {
         engine.commit(k, 35, 40);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut cf_reader = CFReaderBuilder::new(snap).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snap).build().unwrap();
 
         // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
         // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = make_key(k);
         let (commit_ts, write) = cf_reader
-            .reverse_seek_write_by_start_ts(&key, 35)
+            .near_reverse_seek_write_by_start_ts(&key, 35, true)
             .unwrap()
             .unwrap();
         assert_eq!(commit_ts, 40);
@@ -1014,7 +962,7 @@ mod tests {
         assert_eq!(write.start_ts, 35);
 
         let (commit_ts, write) = cf_reader
-            .reverse_seek_write_by_start_ts(&key, 25)
+            .near_reverse_seek_write_by_start_ts(&key, 25, true)
             .unwrap()
             .unwrap();
         assert_eq!(commit_ts, 30);
@@ -1022,7 +970,7 @@ mod tests {
         assert_eq!(write.start_ts, 25);
 
         let (commit_ts, write) = cf_reader
-            .reverse_seek_write_by_start_ts(&key, 20)
+            .near_reverse_seek_write_by_start_ts(&key, 20, true)
             .unwrap()
             .unwrap();
         assert_eq!(commit_ts, 20);
@@ -1030,7 +978,7 @@ mod tests {
         assert_eq!(write.start_ts, 20);
 
         let (commit_ts, write) = cf_reader
-            .reverse_seek_write_by_start_ts(&key, 1)
+            .near_reverse_seek_write_by_start_ts(&key, 1, true)
             .unwrap()
             .unwrap();
         assert_eq!(commit_ts, 10);
@@ -1038,7 +986,7 @@ mod tests {
         assert_eq!(write.start_ts, 1);
 
         let (commit_ts, write) = cf_reader
-            .reverse_seek_write_by_start_ts(&key, 5)
+            .near_reverse_seek_write_by_start_ts(&key, 5, true)
             .unwrap()
             .unwrap();
         assert_eq!(commit_ts, 5);
@@ -1048,11 +996,11 @@ mod tests {
         cf_reader.take_statistics();
         assert!(
             cf_reader
-                .reverse_seek_write_by_start_ts(&key, 15)
+                .near_reverse_seek_write_by_start_ts(&key, 15, true)
                 .unwrap()
                 .is_none()
         );
-        // `reverse_seek_write_by_start_ts(&key, 15)` starts from `5_5 Rollback`,
+        // `near_reverse_seek_write_by_start_ts(&key, 15)` starts from `5_5 Rollback`,
         // stopped at `30_25 PUT`.
         assert_eq!(cf_reader.take_statistics().write.prev, 3);
     }

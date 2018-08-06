@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
+
 use kvproto::kvrpcpb::IsolationLevel;
 
-use super::util::CursorBuilder;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::{Cursor, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::types::truncate_ts;
+use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value, ScanMode, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
 
 pub struct BackwardScannerBuilder<S: Snapshot> {
@@ -90,13 +92,13 @@ impl<S: Snapshot> BackwardScannerBuilder<S> {
         let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
             .bound(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::BackwardNew)
+            .scan_mode(ScanMode::Backward)
             .build()?;
 
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .bound(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::BackwardNew)
+            .scan_mode(ScanMode::Backward)
             .build()?;
 
         Ok(BackwardScanner {
@@ -166,6 +168,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         }
 
         // TODO: Finish this
+        Ok(None)
     }
 
     /// Create the default cursor if it doesn't exist.
@@ -176,7 +179,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
             .bound(self.lower_bound.take(), self.upper_bound.take())
             .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::BackwardNew)
+            .scan_mode(ScanMode::Backward)
             .build()?;
         self.default_cursor = Some(cursor);
         Ok(())

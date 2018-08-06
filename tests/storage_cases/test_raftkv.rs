@@ -198,7 +198,9 @@ fn assert_seek_cf<E: Engine>(
 fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
     let mut statistics = CFStatistics::default();
     assert!(
-        cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
+        cursor
+            .near_seek(&make_key(key), false, &mut statistics)
+            .unwrap(),
         escape(key)
     );
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
@@ -209,7 +211,7 @@ fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pai
     let mut statistics = CFStatistics::default();
     assert!(
         cursor
-            .near_reverse_seek(&make_key(key), &mut statistics)
+            .near_reverse_seek(&make_key(key), false, &mut statistics)
             .unwrap(),
         escape(key)
     );
@@ -284,7 +286,7 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     let mut statistics = CFStatistics::default();
     assert!(
         !cursor
-            .near_seek(&make_key(b"z\x00"), &mut statistics)
+            .near_seek(&make_key(b"z\x00"), false, &mut statistics)
             .unwrap()
     );
     must_delete(ctx, engine, b"x");

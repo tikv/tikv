@@ -290,7 +290,7 @@ mod tests {
     use tempdir::TempDir;
 
     use raftstore::store::RegionSnapshot;
-    use storage::mvcc::{CFReaderBuilder, PointGetterBuilder};
+    use storage::mvcc::{CfReaderBuilder, PointGetterBuilder};
     use util::rocksdb::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
@@ -315,7 +315,7 @@ mod tests {
     }
 
     fn new_encoded_key(i: u8, ts: u64) -> Vec<u8> {
-        Key::from_raw(&[i]).append_ts(ts).encoded().to_owned()
+        Key::from_raw(&[i]).append_ts(ts).take_encoded()
     }
 
     #[test]
@@ -386,7 +386,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region);
 
-        let mut cf_reader = CFReaderBuilder::new(snap.clone()).build().unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snap.clone()).build().unwrap();
         let mut point_getter = PointGetterBuilder::new(snap.clone()).build().unwrap();
         // Make sure that all kvs are right.
         for i in 0..n {

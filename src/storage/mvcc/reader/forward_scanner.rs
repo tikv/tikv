@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
+
 use kvproto::kvrpcpb::IsolationLevel;
 
-use super::util::CursorBuilder;
-use std::cmp::Ordering;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::{
-    slice_without_ts, Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
+use storage::types::truncate_ts;
+use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
 
 pub struct ForwardScannerBuilder<S: Snapshot> {
@@ -181,9 +181,11 @@ impl<S: Snapshot> ForwardScanner<S> {
                 };
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(k)) => (Key::from_encoded(k.to_vec()), false, true),
-                    (Some(k), None) => (Key::from_encoded(k.to_vec()).truncate_ts()?, true, false),
-                    (Some(wk), Some(lk)) => match slice_without_ts(wk).cmp(wk) {
+                    (None, Some(lk)) => (Key::from_encoded(lk.to_vec()), false, true),
+                    (Some(wk), None) => {
+                        (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)
+                    }
+                    (Some(wk), Some(lk)) => match truncate_ts(wk).cmp(lk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
                         Ordering::Less => {
                             (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)
@@ -202,9 +204,9 @@ impl<S: Snapshot> ForwardScanner<S> {
             let res = self.get(&key, lock);
 
             if has_write {
-                let next_seek_key = key.append_ts(0);
+                let next_seek_key = key.clone().append_ts(0);
                 self.write_cursor
-                    .near_seek(&next_seek_key, &mut self.statistics.write)?;
+                    .near_seek(&next_seek_key, false, &mut self.statistics.write)?;
             }
             if has_lock {
                 self.lock_cursor.next(&mut self.statistics.lock);
@@ -235,8 +237,11 @@ impl<S: Snapshot> ForwardScanner<S> {
         let encoded_user_key = user_key.encoded();
 
         // First seek to `${user_key}_${ts}`.
-        self.write_cursor
-            .near_seek(&user_key.append_ts(ts), &mut self.statistics.write)?;
+        self.write_cursor.near_seek(
+            &user_key.clone().append_ts(ts),
+            false,
+            &mut self.statistics.write,
+        )?;
 
         loop {
             if !self.write_cursor.valid() {
@@ -270,7 +275,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                         None => {
                             // Value is in the default CF.
                             self.ensure_default_cursor()?;
-                            let value = super::util::load_data_by_write(
+                            let value = super::util::near_load_data_by_write(
                                 &mut self.default_cursor.as_mut().unwrap(),
                                 user_key,
                                 write,

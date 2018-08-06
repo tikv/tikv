@@ -18,9 +18,8 @@ mod txn;
 mod write;
 
 pub use self::lock::{Lock, LockType};
-pub use self::reader::util as readerUtil;
 pub use self::reader::{
-    CFReader, CFReaderBuilder, ForwardScanner, ForwardScannerBuilder, MvccReader, PointGetter,
+    CfReader, CfReaderBuilder, ForwardScanner, ForwardScannerBuilder, MvccReader, PointGetter,
     PointGetterBuilder,
 };
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};

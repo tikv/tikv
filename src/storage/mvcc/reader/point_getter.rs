@@ -15,7 +15,8 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
-use storage::{Cursor, Key, Snapshot, Statistics, Value, CF_DEFAULT, CF_WRITE};
+use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
+use storage::{CF_DEFAULT, CF_WRITE};
 use util::codec::number;
 
 /// `PointGetter` factory.
@@ -81,7 +82,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
 
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
-        let write_cursor = super::util::CursorBuilder::new(&self.snapshot, CF_WRITE)
+        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
             .prefix_seek(!self.multi)
             .build()?;
@@ -160,9 +161,13 @@ impl<S: Snapshot> PointGetter<S> {
 
         let encoded_user_key = user_key.encoded();
 
-        // First seek to `${user_key}_${ts}`.
-        self.write_cursor
-            .near_seek(&user_key.append_ts(ts), &mut self.statistics.write)?;
+        // First seek to `${user_key}_${ts}`. In multi-read mode, the keys may given out of
+        // order, so we allow re-seek.
+        self.write_cursor.near_seek(
+            &user_key.clone().append_ts(ts),
+            true,
+            &mut self.statistics.write,
+        )?;
 
         loop {
             if !self.write_cursor.valid() {
@@ -196,7 +201,7 @@ impl<S: Snapshot> PointGetter<S> {
                         None => {
                             // Value is in the default CF.
                             self.ensure_default_cursor()?;
-                            let value = super::util::load_data_by_write(
+                            let value = super::util::near_load_data_by_write(
                                 &mut self.default_cursor.as_mut().unwrap(),
                                 user_key,
                                 write,
@@ -221,7 +226,7 @@ impl<S: Snapshot> PointGetter<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let cursor = super::util::CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
             .fill_cache(self.fill_cache)
             .prefix_seek(!self.multi)
             .build()?;

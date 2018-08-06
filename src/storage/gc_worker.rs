@@ -13,7 +13,7 @@
 
 use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
-use super::mvcc::{CFReaderBuilder, MvccReader, MvccTxn};
+use super::mvcc::{CfReaderBuilder, MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result};
 use kvproto::kvrpcpb::Context;
 use std::fmt::{self, Display, Formatter};
@@ -104,7 +104,7 @@ impl<E: Engine> GCRunner<E> {
             None,
             ctx.get_isolation_level(),
         );
-        let mut cf_reader = CFReaderBuilder::new(snapshot)
+        let mut cf_reader = CfReaderBuilder::new(snapshot)
             .fill_cache(ctx.get_not_fill_cache())
             .build()?;
 
@@ -142,13 +142,7 @@ impl<E: Engine> GCRunner<E> {
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::new(
-            snapshot,
-            0,
-            Some(ScanMode::Forward),
-            ctx.get_isolation_level(),
-            !ctx.get_not_fill_cache(),
-        )?;
+        let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache())?;
         for k in keys {
             // TODO: Duplicated code in scheduler.rs
             let gc_info = txn.gc(&k, safe_point)?;
@@ -177,7 +171,7 @@ impl<E: Engine> GCRunner<E> {
                 break;
             }
         }
-        self.stats.add_statistics(txn.get_statistics());
+        self.stats.add_statistics(&txn.take_statistics());
 
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
