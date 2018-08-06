@@ -40,6 +40,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.invalid_zero() {
+            return Err(box_err!("Incorrect datetime value: '{}'", t));
+        }
         if t.is_zero() {
             return Err(box_err!("Incorrect datetime value: '{}'", t));
         }
