@@ -376,7 +376,7 @@ impl SnapManager {
     /// 2) Generated and have been used, and is not busy.
     pub fn gc_snapshots(&self) -> Result<()> {
         let snap_size = self.snap_size.load(Ordering::SeqCst);
-        info!("starting gc snapshots, total size: {}", snap_size);
+        debug!("starting gc snapshots, total size: {}", snap_size);
         let t = Instant::now_coarse();
 
         let mut removed = 0;
@@ -417,7 +417,7 @@ impl SnapManager {
         }
 
         let snap_size = self.snap_size.load(Ordering::SeqCst);
-        info!(
+        debug!(
             "gc snapshots success in {:?}, removed: {}, total size: {}",
             t.elapsed(),
             removed,

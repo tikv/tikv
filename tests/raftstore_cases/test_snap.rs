@@ -105,7 +105,8 @@ fn test_server_huge_snapshot() {
 fn test_server_snap_gc() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
-    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(1);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -137,8 +138,6 @@ fn test_server_snap_gc() {
     must_get_none(&engine3, b"k2");
 
     for _ in 0..30 {
-        // write many logs to force log GC for region 1 and region 2.
-        // and trigger snapshot more than one time.
         cluster.must_put(b"k1", b"v1");
         cluster.must_put(b"k2", b"v2");
     }
