@@ -40,7 +40,7 @@ use raftstore::store::{
 };
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
-use storage::types::{truncate_ts, Key};
+use storage::types::{decode_ts, truncate_ts, Key};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::codec::bytes;
 use util::collections::HashSet;
@@ -886,8 +886,7 @@ impl MvccChecker {
         if self.default_iter.valid()
             && truncate_ts(keys::origin_key(self.default_iter.key())) == key
         {
-            let record_key = Key::from_encoded(keys::origin_key(self.default_iter.key()).to_vec());
-            let start_ts = box_try!(record_key.decode_ts());
+            let start_ts = box_try!(decode_ts(keys::origin_key(self.default_iter.key())));
             self.default_iter.next();
             return Ok(Some(start_ts));
         }
@@ -896,9 +895,8 @@ impl MvccChecker {
 
     fn next_write(&mut self, key: &[u8]) -> Result<Option<(u64, Write)>> {
         if self.write_iter.valid() && truncate_ts(keys::origin_key(self.write_iter.key())) == key {
-            let record_key = Key::from_encoded(keys::origin_key(self.write_iter.key()).to_vec());
             let write = box_try!(Write::parse(self.write_iter.value()));
-            let commit_ts = box_try!(record_key.decode_ts());
+            let commit_ts = box_try!(decode_ts(keys::origin_key(self.write_iter.key())));
             self.write_iter.next();
             return Ok(Some((commit_ts, write)));
         }
@@ -907,11 +905,13 @@ impl MvccChecker {
 
     fn delete(&mut self, wb: &WriteBatch, cf: &str, key: &[u8], ts: Option<u64>) -> Result<()> {
         let handle = box_try!(get_cf_handle(self.db.as_ref(), cf));
-        let key = match ts {
-            Some(ts) => Key::from_encoded(key.to_vec()).append_ts(ts),
-            None => Key::from_encoded(key.to_vec()),
+        match ts {
+            Some(ts) => {
+                let key = Key::from_encoded(key.to_vec()).append_ts(ts);
+                box_try!(wb.delete_cf(handle, &keys::data_key(key.encoded())));
+            }
+            None => box_try!(wb.delete_cf(handle, &keys::data_key(key))),
         };
-        box_try!(wb.delete_cf(handle, &keys::data_key(key.encoded())));
         Ok(())
     }
 }
@@ -980,8 +980,8 @@ impl MvccInfoIterator {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let mut value_info = MvccValue::default();
-                let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
-                value_info.set_start_ts(box_try!(encoded_key.decode_ts()));
+                let start_ts = box_try!(decode_ts(keys::origin_key(&key)));
+                value_info.set_start_ts(start_ts);
                 value_info.set_value(value);
                 values.push(value_info);
             }
@@ -1003,8 +1003,8 @@ impl MvccInfoIterator {
                     WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                 }
                 write_info.set_start_ts(write.start_ts);
-                let encoded_key = Key::from_encoded(keys::origin_key(&key).to_owned());
-                write_info.set_commit_ts(box_try!(encoded_key.decode_ts()));
+                let commit_ts = box_try!(decode_ts(keys::origin_key(&key)));
+                write_info.set_commit_ts(commit_ts);
                 write_info.set_short_value(write.short_value.unwrap_or_default());
                 writes.push(write_info);
             }
