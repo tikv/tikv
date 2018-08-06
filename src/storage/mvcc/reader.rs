@@ -94,7 +94,7 @@ impl<S: Snapshot> MvccReader<S> {
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
-        let k = key.append_ts(ts);
+        let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
             match cursor.get(&k, &mut self.statistics.data)? {
                 None => panic!("key {} not found, ts {}", key, ts),
@@ -184,9 +184,9 @@ impl<S: Snapshot> MvccReader<S> {
 
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
-            cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek_for_prev(&key.clone().append_ts(ts), &mut self.statistics.write)?
         } else {
-            cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?
         };
         if !ok {
             return Ok(None);
@@ -503,7 +503,7 @@ impl<S: Snapshot> MvccReader<S> {
 
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        let key = user_key.append_ts(ts);
+        let key = user_key.clone().append_ts(ts);
         let valid = self
             .write_cursor
             .as_mut()
@@ -564,13 +564,14 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
+    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
+    /// remaining locks that can be scanned.
     pub fn scan_locks<F>(
         &mut self,
-        start: Option<Key>,
+        start: Option<&Key>,
         filter: F,
         limit: usize,
-    ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
         F: Fn(&Lock) -> bool,
     {
@@ -581,22 +582,23 @@ impl<S: Snapshot> MvccReader<S> {
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
-            return Ok((vec![], None));
+            return Ok((vec![], false));
         }
-        let mut locks = vec![];
+        let mut locks = Vec::with_capacity(limit);
         while cursor.valid() {
             let key = Key::from_encoded(cursor.key().to_vec());
             let lock = Lock::parse(cursor.value())?;
             if filter(&lock) {
-                locks.push((key.clone(), lock));
-                if limit > 0 && locks.len() >= limit {
-                    return Ok((locks, Some(key)));
+                locks.push((key, lock));
+                if limit > 0 && locks.len() == limit {
+                    return Ok((locks, true));
                 }
             }
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed += locks.len();
-        Ok((locks, None))
+        // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
+        Ok((locks, false))
     }
 
     pub fn scan_keys(
@@ -621,7 +623,7 @@ impl<S: Snapshot> MvccReader<S> {
                 return Ok((keys, start));
             }
             let key = Key::from_encoded(cursor.key().to_vec()).truncate_ts()?;
-            start = Some(key.append_ts(0));
+            start = Some(key.clone().append_ts(0));
             keys.push(key);
         }
     }
@@ -637,9 +639,10 @@ impl<S: Snapshot> MvccReader<S> {
         let mut v = vec![];
         while ok {
             let cur_key = Key::from_encoded(cursor.key().to_vec());
+            let ts = cur_key.decode_ts()?;
             let cur_key_without_ts = cur_key.truncate_ts()?;
             if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
-                v.push((cur_key.decode_ts()?, cursor.value().to_vec()));
+                v.push((ts, cursor.value().to_vec()));
             }
             if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
                 break;
