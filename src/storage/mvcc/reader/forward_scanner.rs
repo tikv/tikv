@@ -181,26 +181,25 @@ impl<S: Snapshot> ForwardScanner<S> {
                 };
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(lk)) => (Key::from_encoded(lk.to_vec()), false, true),
-                    (Some(wk), None) => {
-                        (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)
-                    }
+                    (None, Some(lk)) => (lk.to_vec(), false, true),
+                    (Some(wk), None) => (truncate_ts(wk).to_vec(), true, false),
                     (Some(wk), Some(lk)) => match truncate_ts(wk).cmp(lk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
-                        Ordering::Less => {
-                            (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)
-                        }
-                        Ordering::Greater => (Key::from_encoded(lk.to_vec()), false, true),
-                        Ordering::Equal => (Key::from_encoded(lk.to_vec()), true, true),
+                        Ordering::Less => (truncate_ts(wk).to_vec(), true, false),
+                        Ordering::Greater => (lk.to_vec(), false, true),
+                        Ordering::Equal => (lk.to_vec(), true, true),
                     },
                 }
             };
+
+            let key = Key::from_encoded(key);
 
             let lock = if has_lock {
                 Some(self.lock_cursor.value(&mut self.statistics.lock).to_vec())
             } else {
                 None
             };
+            // Don't return error here. We need to seek to the next position then.
             let res = self.get(&key, lock);
 
             if has_write {

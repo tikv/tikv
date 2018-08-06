@@ -15,10 +15,14 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use super::REVERSE_SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
 use storage::types::truncate_ts;
-use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value, ScanMode, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{
+    Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
+};
 use util::codec::number;
 
 pub struct BackwardScannerBuilder<S: Snapshot> {
@@ -162,13 +166,198 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            self.write_cursor.seek_to_first(&mut self.statistics.write);
-            self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+            self.write_cursor.seek_to_last(&mut self.statistics.write);
+            self.lock_cursor.seek_to_last(&mut self.statistics.lock);
             self.is_started = true;
         }
 
-        // TODO: Finish this
-        Ok(None)
+        loop {
+            let (key, has_write, has_lock) = {
+                let w_key = if self.write_cursor.valid() {
+                    Some(self.write_cursor.key(&mut self.statistics.write))
+                } else {
+                    None
+                };
+                let l_key = if self.lock_cursor.valid() {
+                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                } else {
+                    None
+                };
+                match (w_key, l_key) {
+                    (None, None) => return Ok(None),
+                    (None, Some(lk)) => (lk.to_vec(), false, true),
+                    (Some(wk), None) => (truncate_ts(wk).to_vec(), true, false),
+                    (Some(wk), Some(lk)) => match truncate_ts(wk).cmp(lk) {
+                        Ordering::Less => (lk.to_vec(), false, true),
+                        Ordering::Greater => (truncate_ts(wk).to_vec(), true, false),
+                        Ordering::Equal => (truncate_ts(wk).to_vec(), true, true),
+                    },
+                }
+            };
+
+            let key = Key::from_encoded(key);
+
+            let lock = if has_lock {
+                Some(self.lock_cursor.value(&mut self.statistics.lock).to_vec())
+            } else {
+                None
+            };
+            // Don't return error here. We need to seek to the next position then.
+            let res = self.get(&key, lock);
+
+            if has_write {
+                self.write_cursor
+                    .near_reverse_seek(&key, false, &mut self.statistics.write);
+            }
+            if has_lock {
+                self.lock_cursor.prev(&mut self.statistics.lock);
+            }
+
+            if let Some(v) = res? {
+                return Ok(Some((key, v)));
+            }
+        }
+    }
+
+    fn get(&mut self, user_key: &Key, lock: Option<Vec<u8>>) -> Result<Option<Value>> {
+        let mut ts = self.ts;
+
+        match self.isolation_level {
+            IsolationLevel::SI => {
+                // TODO: Ensure statistics.lock.processed is updated correctly
+                if let Some(lock) = lock {
+                    self.statistics.lock.processed += 1;
+                    let lock = Lock::parse(&lock)?;
+                    ts = super::util::check_lock(user_key, ts, &lock)?;
+                }
+            }
+            IsolationLevel::RC => {}
+        }
+
+        // Get value for this user key.
+        // At first, we use several prev to try to get the latest version.
+        let mut lastest_version = (None /* start_ts */, None /* short value */);
+        let mut last_handled_key: Option<Vec<u8>> = None;
+        for _ in 0..REVERSE_SEEK_BOUND {
+            if !self.write_cursor.valid() {
+                return self.get_value(user_key, lastest_version.0, lastest_version.1);
+            }
+
+            let mut write = {
+                let (commit_ts, key) = {
+                    last_handled_key =
+                        Some(self.write_cursor.key(&mut self.statistics.write).to_vec());
+                    let w_key = Key::from_encoded(
+                        self.write_cursor.key(&mut self.statistics.write).to_vec(),
+                    );
+                    (w_key.decode_ts()?, w_key.truncate_ts()?)
+                };
+
+                // reach neighbour user key or can't see this version.
+                if ts < commit_ts || &key != user_key {
+                    assert!(&key <= user_key);
+                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
+                }
+                self.statistics.write.processed += 1;
+                Write::parse(self.write_cursor.value(&mut self.statistics.write))?
+            };
+
+            match write.write_type {
+                WriteType::Put => {
+                    if write.short_value.is_some() {
+                        if self.omit_value {
+                            lastest_version = (None, Some(vec![]));
+                        } else {
+                            lastest_version = (None, write.short_value.take());
+                        }
+                    } else {
+                        lastest_version = (Some(write.start_ts), None);
+                    }
+                }
+                WriteType::Delete => lastest_version = (None, None),
+                WriteType::Lock | WriteType::Rollback => {}
+            }
+            self.write_cursor.prev(&mut self.statistics.write);
+        }
+
+        // After several prev, we still not get the latest version for the specified ts,
+        // use seek to locate the latest version.
+        let key = user_key.clone().append_ts(ts);
+        let valid = self
+            .write_cursor
+            .internal_seek(&key, &mut self.statistics.write)?;
+        assert!(valid);
+        loop {
+            let mut write = {
+                // If we reach the last handled key, it means we have checked all versions
+                // for this user key.
+                if self.write_cursor.key(&mut self.statistics.write)
+                    >= last_handled_key.as_ref().unwrap().as_slice()
+                {
+                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
+                }
+
+                let w_key =
+                    Key::from_encoded(self.write_cursor.key(&mut self.statistics.write).to_vec());
+                let commit_ts = w_key.decode_ts()?;
+                assert!(commit_ts <= ts);
+                let key = w_key.truncate_ts()?;
+                assert_eq!(&key, user_key);
+                self.statistics.write.processed += 1;
+                Write::parse(self.write_cursor.value(&mut self.statistics.write))?
+            };
+
+            match write.write_type {
+                WriteType::Put => {
+                    if write.short_value.is_some() {
+                        if self.omit_value {
+                            return Ok(Some(vec![]));
+                        } else {
+                            return Ok(write.short_value.take());
+                        }
+                    } else {
+                        return Ok(Some(self.load_data(user_key, write.start_ts)?));
+                    }
+                }
+                WriteType::Delete => return Ok(None),
+                WriteType::Lock | WriteType::Rollback => {
+                    let success = self.write_cursor.next(&mut self.statistics.write);
+                    assert!(success);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn get_value(
+        &mut self,
+        user_key: &Key,
+        start_ts: Option<u64>,
+        short_value: Option<Vec<u8>>,
+    ) -> Result<Option<Value>> {
+        if let Some(ts) = start_ts {
+            Ok(Some(self.load_data(user_key, ts)?))
+        } else {
+            Ok(short_value)
+        }
+    }
+
+    fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+        if self.omit_value {
+            return Ok(vec![]);
+        }
+        self.ensure_default_cursor();
+
+        let k = key.clone().append_ts(ts);
+        let res = self
+            .default_cursor
+            .as_mut()
+            .unwrap()
+            .near_seek_get(&k, false, &mut self.statistics.data)?
+            .unwrap_or_else(|| panic!("key {} not found, ts {}", key, ts))
+            .to_vec();
+        self.statistics.data.processed += 1;
+        Ok(res)
     }
 
     /// Create the default cursor if it doesn't exist.
