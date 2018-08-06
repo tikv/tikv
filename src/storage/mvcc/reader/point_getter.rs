@@ -17,7 +17,6 @@ use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_WRITE};
-use util::codec::number;
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -159,8 +158,6 @@ impl<S: Snapshot> PointGetter<S> {
             )?;
         }
 
-        let encoded_user_key = user_key.encoded();
-
         // First seek to `${user_key}_${ts}`. In multi-read mode, the keys may given out of
         // order, so we allow re-seek.
         self.write_cursor.near_seek(
@@ -177,9 +174,9 @@ impl<S: Snapshot> PointGetter<S> {
             // We may move forward / seek to another key. In this case, the scan ends.
             {
                 let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-                if cursor_key.len() != encoded_user_key.len() + number::U64_SIZE
-                    || !cursor_key.starts_with(encoded_user_key)
-                {
+                // TODO: if length is not equal, no need to truncate.
+                let current_user_key = Key::truncate_ts_for(cursor_key)?;
+                if user_key.encoded().as_slice() != current_user_key {
                     // Meet another key.
                     return Ok(None);
                 }

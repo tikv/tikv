@@ -136,11 +136,10 @@ impl<S: Snapshot> CfReader<S> {
         let mut keys = Vec::with_capacity(limit);
         let mut next_start_key;
         loop {
-            // TODO: We don't really need to copy slice to a vector here.
             let key = Key::from_encoded(write_cursor.key(&mut self.statistics.write).to_vec())
                 .truncate_ts()?;
             // Jump to the last version of the key. We assumed that there is no key that ts == 0.
-            next_start_key = Some(key.clone().append_ts(0)); // TODO: Eliminate clone (might not be possible?)
+            next_start_key = Some(key.clone().append_ts(0));
             keys.push(key);
             if !write_cursor.near_seek(
                 next_start_key.as_ref().unwrap(),
@@ -228,16 +227,16 @@ impl<S: Snapshot> CfReader<S> {
             &mut self.statistics.write,
         )?;
         while write_cursor.valid() {
-            // TODO: We don't really need to copy slice to a vector here.
-            let current_key =
-                Key::from_encoded(write_cursor.key(&mut self.statistics.write).to_vec());
-            let commit_ts = current_key.decode_ts()?;
-            let current_user_key = current_key.truncate_ts()?;
-            if *user_key != current_user_key {
-                // Meet another key: don't need to scan more.
-                break;
-            }
-
+            let commit_ts = {
+                let current_key = write_cursor.key(&mut self.statistics.write);
+                // TODO: if length is not equal, no need to truncate.
+                let current_user_key = Key::truncate_ts_for(current_key)?;
+                if user_key.encoded().as_slice() != current_user_key {
+                    // Meet another key: don't need to scan more.
+                    break;
+                }
+                Key::decode_ts_from(current_key)?
+            };
             let write = Write::parse(write_cursor.value(&mut self.statistics.write))?;
             writes.push((commit_ts, write));
             self.statistics.write.processed += 1;
@@ -266,16 +265,16 @@ impl<S: Snapshot> CfReader<S> {
 
         default_cursor.seek(user_key, &mut self.statistics.data)?;
         while default_cursor.valid() {
-            // TODO: We don't really need to copy slice to a vector here.
-            let current_key =
-                Key::from_encoded(default_cursor.key(&mut self.statistics.data).to_vec());
-            let start_ts = current_key.decode_ts()?;
-            let current_user_key = current_key.truncate_ts()?;
-            if *user_key != current_user_key {
-                // Meet another key: don't need to scan more.
-                break;
-            }
-
+            let start_ts = {
+                let current_key = default_cursor.key(&mut self.statistics.data);
+                // TODO: if length is not equal, no need to truncate.
+                let current_user_key = Key::truncate_ts_for(current_key)?;
+                if user_key.encoded().as_slice() != current_user_key {
+                    // Meet another key: don't need to scan more.
+                    break;
+                }
+                Key::decode_ts_from(current_key)?
+            };
             let value = default_cursor.value(&mut self.statistics.data).to_vec();
             self.statistics.data.processed += 1;
 
@@ -298,9 +297,8 @@ impl<S: Snapshot> CfReader<S> {
             let write = Write::parse(write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
             if write.start_ts == start_ts {
-                // TODO: We don't really need to copy slice to a vector here.
                 let write_key =
-                    Key::from_encoded(write_cursor.key(&mut self.statistics.write).to_vec());;
+                    Key::from_encoded(write_cursor.key(&mut self.statistics.write).to_vec());
                 return Ok(Some(write_key.truncate_ts()?));
             }
             write_cursor.next(&mut self.statistics.write);
@@ -329,12 +327,15 @@ impl<S: Snapshot> CfReader<S> {
         if !write_cursor.valid() {
             return Ok(None);
         }
-        let write_key = Key::from_encoded(write_cursor.key(&mut self.statistics.write).to_vec());
-        let commit_ts = write_key.decode_ts()?;
-        let current_user_key = write_key.truncate_ts()?;
-        if &current_user_key != user_key {
-            return Ok(None);
-        }
+        let commit_ts = {
+            let current_key = write_cursor.key(&mut self.statistics.write);
+            let current_user_key = Key::truncate_ts_for(current_key)?;
+            if user_key.encoded().as_slice() != current_user_key {
+                // Meet another key: don't need to scan more.
+                return Ok(None);
+            }
+            Key::decode_ts_from(current_key)?
+        };
         let write = Write::parse(write_cursor.value(&mut self.statistics.write))?;
         self.statistics.write.processed += 1;
         Ok(Some((commit_ts, write)))
@@ -385,15 +386,16 @@ impl<S: Snapshot> CfReader<S> {
             &mut self.statistics.write,
         )?;
         while write_cursor.valid() {
-            // TODO: We don't really need to copy slice to a vector here.
-            let current_key =
-                Key::from_encoded(write_cursor.key(&mut self.statistics.write).to_vec());
-            let commit_ts = current_key.decode_ts()?;
-            let current_user_key = current_key.truncate_ts()?;
-            if *user_key != current_user_key {
-                // Meet another key: don't need to scan more.
-                break;
-            }
+            let commit_ts = {
+                let current_key = write_cursor.key(&mut self.statistics.write);
+                // TODO: if length is not equal, no need to truncate.
+                let current_user_key = Key::truncate_ts_for(current_key)?;
+                if user_key.encoded().as_slice() != current_user_key {
+                    // Meet another key: don't need to scan more.
+                    break;
+                }
+                Key::decode_ts_from(current_key)?
+            };
             let write = Write::parse(write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
