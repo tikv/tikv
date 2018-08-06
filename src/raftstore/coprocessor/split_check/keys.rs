@@ -38,18 +38,18 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, row: &KeyEntry) -> bool {
-        if row.is_commit_version() {
+    fn on_kv(&mut self, _: &mut ObserverContext, key: &KeyEntry) -> bool {
+        if key.is_commit_version() {
             self.current_keys += 1;
         }
         if self.current_keys > self.split_keys && self.split_key.is_none() {
-            self.split_key = Some(row.key().to_vec());
+            self.split_key = Some(key.key().to_vec());
         }
         self.current_keys > self.max_keys
     }
 
     fn split_key(&mut self) -> Option<Vec<u8>> {
-        if self.current_keys >= self.max_keys {
+        if self.current_keys > self.max_keys {
             self.split_key.take()
         } else {
             None
@@ -150,7 +150,7 @@ mod tests {
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
     use storage::mvcc::{Write, WriteType};
     use storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
-    use util::properties::MvccPropertiesCollectorFactory;
+    use util::properties::RangePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
@@ -163,8 +163,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
 
         let cfs_opts = ALL_CFS
             .iter()
