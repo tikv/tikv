@@ -23,7 +23,7 @@ use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
 };
 use storage::mvcc::{Write, WriteType};
-use storage::types;
+use storage::types::Key;
 use util::codec::number::{self, NumberEncoder};
 use util::codec::{Error, Result};
 
@@ -129,7 +129,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             return;
         }
 
-        let (k, ts) = match types::split_encoded_key_on_ts(key) {
+        let (k, ts) = match Key::split_on_ts_for(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
                 self.num_errors += 1;
