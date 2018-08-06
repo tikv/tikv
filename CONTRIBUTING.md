@@ -83,12 +83,6 @@ git checkout -b myfeature
 
 You can now edit the code on the `myfeature` branch.
 
-#### Run stand-alone mode
-
-```sh
-$ make build
-```
-
 #### Run Test
 
 When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with clippy enabled, and run tests. This should run without failure before you create a PR.
