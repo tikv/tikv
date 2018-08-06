@@ -366,6 +366,7 @@ impl SnapManager {
                 self.receiving_count.fetch_sub(1, Ordering::SeqCst)
             };
             assert!(old_value > 0);
+            self.notify_stats();
         }
         res
     }

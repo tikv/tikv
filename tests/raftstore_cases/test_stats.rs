@@ -106,6 +106,7 @@ fn test_node_simple_store_stats() {
 fn test_server_store_snap_stats() {
     let mut cluster = new_server_cluster(0, 2);
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::secs(600);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
@@ -121,15 +122,11 @@ fn test_server_store_snap_stats() {
     }
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
-
     must_detect_snap(&pd_client, &[1, 2]);
 
-    // wait snapshot finish.
-    sleep_ms(100);
-
-    // remove the peer so we can't do any snapshot now.
-    pd_client.must_remove_peer(r1, new_peer(2, 2));
-    cluster.must_put(b"k2", b"v2");
+    let engine_2 = cluster.get_engine(2);
+    let test_kv = format!("{:01024}", 0);
+    must_get_equal(&engine_2, test_kv.as_bytes(), test_kv.as_bytes());
 
     must_not_detect_snap(&pd_client);
 }
