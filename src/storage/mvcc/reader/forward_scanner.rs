@@ -17,7 +17,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::types::truncate_ts;
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
@@ -183,7 +182,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                     (None, None) => return Ok(None),
                     (None, Some(k)) => (Key::from_encoded(k.to_vec()), false, true),
                     (Some(k), None) => (Key::from_encoded(k.to_vec()).truncate_ts()?, true, false),
-                    (Some(wk), Some(lk)) => match truncate_ts(wk).cmp(wk) {
+                    (Some(wk), Some(lk)) => match Key::truncate_ts_for(wk)?.cmp(lk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
                         Ordering::Less => {
                             (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)

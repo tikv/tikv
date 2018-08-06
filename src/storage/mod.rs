@@ -49,7 +49,7 @@ pub use self::engine::{
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
-pub use self::types::{decode_ts, make_key, Key, KvPair, MvccInfo, Value};
+pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -1514,13 +1514,13 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"x"), 100)
+                .async_get(Context::new(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -1534,13 +1534,13 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .async_get(Context::new(), make_key(b"x"), 101)
+                .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         storage
             .async_commit(
                 Context::new(),
-                vec![make_key(b"x")],
+                vec![Key::from_raw(b"x")],
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 3),
@@ -1549,13 +1549,13 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"x"), 100)
+                .async_get(Context::new(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), make_key(b"x"), 101)
+                .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         storage.stop().unwrap();
@@ -1574,9 +1574,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-                    Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-                    Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
                 ],
                 b"a".to_vec(),
                 1,
@@ -1595,15 +1595,8 @@ mod tests {
                 Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
-            storage.async_get(Context::new(), make_key(b"x"), 1).wait(),
-        );
-        expect_error(
-            |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
-                e => panic!("unexpected error chain: {:?}", e),
-            },
             storage
-                .async_scan(Context::new(), make_key(b"x"), 1000, 1, Options::default())
+                .async_get(Context::new(), Key::from_raw(b"x"), 1)
                 .wait(),
         );
         expect_error(
@@ -1612,7 +1605,26 @@ mod tests {
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
-                .async_batch_get(Context::new(), vec![make_key(b"c"), make_key(b"d")], 1)
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"x"),
+                    1000,
+                    1,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            storage
+                .async_batch_get(
+                    Context::new(),
+                    vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                    1,
+                )
                 .wait(),
         );
         storage.stop().unwrap();
@@ -1629,9 +1641,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-                    Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-                    Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
                 ],
                 b"a".to_vec(),
                 1,
@@ -1645,7 +1657,7 @@ mod tests {
             storage
                 .async_scan(
                     Context::new(),
-                    make_key(b"\x00"),
+                    Key::from_raw(b"\x00"),
                     1000,
                     5,
                     Options::default(),
@@ -1655,7 +1667,11 @@ mod tests {
         storage
             .async_commit(
                 Context::new(),
-                vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
+                vec![
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"b"),
+                    Key::from_raw(b"c"),
+                ],
                 1,
                 2,
                 expect_ok_callback(tx.clone(), 1),
@@ -1671,7 +1687,7 @@ mod tests {
             storage
                 .async_scan(
                     Context::new(),
-                    make_key(b"\x00"),
+                    Key::from_raw(b"\x00"),
                     1000,
                     5,
                     Options::default(),
@@ -1692,9 +1708,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-                    Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-                    Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
                 ],
                 b"a".to_vec(),
                 1,
@@ -1706,13 +1722,21 @@ mod tests {
         expect_multi_values(
             vec![None],
             storage
-                .async_batch_get(Context::new(), vec![make_key(b"c"), make_key(b"d")], 2)
+                .async_batch_get(
+                    Context::new(),
+                    vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
+                    2,
+                )
                 .wait(),
         );
         storage
             .async_commit(
                 Context::new(),
-                vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
+                vec![
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"b"),
+                    Key::from_raw(b"c"),
+                ],
                 1,
                 2,
                 expect_ok_callback(tx.clone(), 1),
@@ -1729,10 +1753,10 @@ mod tests {
                 .async_batch_get(
                     Context::new(),
                     vec![
-                        make_key(b"c"),
-                        make_key(b"x"),
-                        make_key(b"a"),
-                        make_key(b"b"),
+                        Key::from_raw(b"c"),
+                        Key::from_raw(b"x"),
+                        Key::from_raw(b"a"),
+                        Key::from_raw(b"b"),
                     ],
                     5,
                 )
@@ -1751,7 +1775,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -1761,7 +1785,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101,
                 Options::default(),
@@ -1773,7 +1797,7 @@ mod tests {
         storage
             .async_commit(
                 Context::new(),
-                vec![make_key(b"x")],
+                vec![Key::from_raw(b"x")],
                 100,
                 110,
                 expect_ok_callback(tx.clone(), 2),
@@ -1782,7 +1806,7 @@ mod tests {
         storage
             .async_commit(
                 Context::new(),
-                vec![make_key(b"y")],
+                vec![Key::from_raw(b"y")],
                 101,
                 111,
                 expect_ok_callback(tx.clone(), 3),
@@ -1793,19 +1817,19 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), make_key(b"x"), 120)
+                .async_get(Context::new(), Key::from_raw(b"x"), 120)
                 .wait(),
         );
         expect_value(
             b"101".to_vec(),
             storage
-                .async_get(Context::new(), make_key(b"y"), 120)
+                .async_get(Context::new(), Key::from_raw(b"y"), 120)
                 .wait(),
         );
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
                 b"x".to_vec(),
                 105,
                 Options::default(),
@@ -1829,13 +1853,13 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"x"), 100)
+                .async_get(Context::new(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -1845,7 +1869,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101,
                 Options::default(),
@@ -1857,7 +1881,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"z"), b"102".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
                 b"y".to_vec(),
                 102,
                 Options::default(),
@@ -1878,7 +1902,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -1889,7 +1913,7 @@ mod tests {
         storage
             .async_cleanup(
                 Context::new(),
-                make_key(b"x"),
+                Key::from_raw(b"x"),
                 100,
                 expect_ok_callback(tx.clone(), 1),
             )
@@ -1897,7 +1921,7 @@ mod tests {
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"x"), 105)
+                .async_get(Context::new(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
         storage.stop().unwrap();
@@ -1912,13 +1936,13 @@ mod tests {
         let (tx, rx) = channel();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
-        expect_none(storage.async_get(ctx, make_key(b"x"), 100).wait());
+        expect_none(storage.async_get(ctx, Key::from_raw(b"x"), 100).wait());
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
         storage
             .async_prewrite(
                 ctx,
-                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -1931,7 +1955,7 @@ mod tests {
         storage
             .async_commit(
                 ctx,
-                vec![make_key(b"x")],
+                vec![Key::from_raw(b"x")],
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 2),
@@ -1940,12 +1964,12 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
-        expect_none(storage.async_get(ctx, make_key(b"x"), 100).wait());
+        expect_none(storage.async_get(ctx, Key::from_raw(b"x"), 100).wait());
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            storage.async_get(ctx, make_key(b"x"), 101).wait(),
+            storage.async_get(ctx, Key::from_raw(b"x"), 101).wait(),
         );
         storage.stop().unwrap();
     }
@@ -1960,13 +1984,13 @@ mod tests {
         let (tx, rx) = channel();
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"x"), 100)
+                .async_get(Context::new(), Key::from_raw(b"x"), 100)
                 .wait(),
         );
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -1977,7 +2001,7 @@ mod tests {
         storage
             .async_commit(
                 Context::new(),
-                vec![make_key(b"x")],
+                vec![Key::from_raw(b"x")],
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 2),
@@ -1992,7 +2016,7 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            storage.async_get(ctx, make_key(b"x"), 101).wait(),
+            storage.async_get(ctx, Key::from_raw(b"x"), 101).wait(),
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
@@ -2012,9 +2036,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((make_key(b"x"), b"100".to_vec())),
-                    Mutation::Put((make_key(b"y"), b"100".to_vec())),
-                    Mutation::Put((make_key(b"z"), b"100".to_vec())),
+                    Mutation::Put((Key::from_raw(b"x"), b"100".to_vec())),
+                    Mutation::Put((Key::from_raw(b"y"), b"100".to_vec())),
+                    Mutation::Put((Key::from_raw(b"z"), b"100".to_vec())),
                 ],
                 b"x".to_vec(),
                 100,
@@ -2026,7 +2050,11 @@ mod tests {
         storage
             .async_commit(
                 Context::new(),
-                vec![make_key(b"x"), make_key(b"y"), make_key(b"z")],
+                vec![
+                    Key::from_raw(b"x"),
+                    Key::from_raw(b"y"),
+                    Key::from_raw(b"z"),
+                ],
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 1),
@@ -2036,19 +2064,19 @@ mod tests {
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), make_key(b"x"), 101)
+                .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), make_key(b"y"), 101)
+                .async_get(Context::new(), Key::from_raw(b"y"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), make_key(b"z"), 101)
+                .async_get(Context::new(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
 
@@ -2056,26 +2084,26 @@ mod tests {
         storage
             .async_delete_range(
                 Context::new(),
-                make_key(b"x"),
-                make_key(b"z"),
+                Key::from_raw(b"x"),
+                Key::from_raw(b"z"),
                 expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"x"), 101)
+                .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"y"), 101)
+                .async_get(Context::new(), Key::from_raw(b"y"), 101)
                 .wait(),
         );
         expect_value(
             b"100".to_vec(),
             storage
-                .async_get(Context::new(), make_key(b"z"), 101)
+                .async_get(Context::new(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
 
@@ -2083,15 +2111,15 @@ mod tests {
         storage
             .async_delete_range(
                 Context::new(),
-                make_key(b""),
-                make_key(b""),
+                Key::from_raw(b""),
+                Key::from_raw(b""),
                 expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();
         rx.recv().unwrap();
         expect_none(
             storage
-                .async_get(Context::new(), make_key(b"z"), 101)
+                .async_get(Context::new(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
         storage.stop().unwrap();
@@ -2672,9 +2700,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((make_key(b"x"), b"foo".to_vec())),
-                    Mutation::Put((make_key(b"y"), b"foo".to_vec())),
-                    Mutation::Put((make_key(b"z"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"z"), b"foo".to_vec())),
                 ],
                 b"x".to_vec(),
                 100,
@@ -2687,9 +2715,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((make_key(b"a"), b"foo".to_vec())),
-                    Mutation::Put((make_key(b"b"), b"foo".to_vec())),
-                    Mutation::Put((make_key(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
                 ],
                 b"c".to_vec(),
                 101,
@@ -2886,9 +2914,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((make_key(b"a"), b"foo".to_vec())),
-                    Mutation::Put((make_key(b"b"), b"foo".to_vec())),
-                    Mutation::Put((make_key(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
                 ],
                 b"c".to_vec(),
                 99,
@@ -2945,7 +2973,7 @@ mod tests {
                 let mut mutations = vec![];
                 for i in 0..scanned_locks {
                     mutations.push(Mutation::Put((
-                        make_key(format!("x{:08}", i).as_bytes()),
+                        Key::from_raw(format!("x{:08}", i).as_bytes()),
                         b"foo".to_vec(),
                     )));
                 }

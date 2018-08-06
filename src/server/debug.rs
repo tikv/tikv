@@ -40,7 +40,7 @@ use raftstore::store::{
 };
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
-use storage::types::{decode_ts, truncate_ts, Key};
+use storage::types::Key;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::codec::bytes;
 use util::collections::HashSet;
@@ -755,9 +755,11 @@ impl MvccChecker {
     pub fn check_mvcc(&mut self, wb: &WriteBatch) -> Result<()> {
         loop {
             // Find min key in the 3 CFs.
-            let mut key = MvccChecker::min_key(None, &self.default_iter, truncate_ts);
+            let mut key = MvccChecker::min_key(None, &self.default_iter, |k| {
+                Key::truncate_ts_for(k).unwrap()
+            });
             key = MvccChecker::min_key(key, &self.lock_iter, |k| k);
-            key = MvccChecker::min_key(key, &self.write_iter, truncate_ts);
+            key = MvccChecker::min_key(key, &self.write_iter, |k| Key::truncate_ts_for(k).unwrap());
 
             match key {
                 Some(key) => self.check_mvcc_key(wb, key.as_ref())?,
@@ -884,9 +886,13 @@ impl MvccChecker {
 
     fn next_default(&mut self, key: &[u8]) -> Result<Option<u64>> {
         if self.default_iter.valid()
-            && truncate_ts(keys::origin_key(self.default_iter.key())) == key
+            && box_try!(Key::truncate_ts_for(keys::origin_key(
+                self.default_iter.key()
+            ))) == key
         {
-            let start_ts = box_try!(decode_ts(keys::origin_key(self.default_iter.key())));
+            let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(
+                self.default_iter.key()
+            )));
             self.default_iter.next();
             return Ok(Some(start_ts));
         }
@@ -894,9 +900,13 @@ impl MvccChecker {
     }
 
     fn next_write(&mut self, key: &[u8]) -> Result<Option<(u64, Write)>> {
-        if self.write_iter.valid() && truncate_ts(keys::origin_key(self.write_iter.key())) == key {
+        if self.write_iter.valid()
+            && box_try!(Key::truncate_ts_for(keys::origin_key(
+                self.write_iter.key()
+            ))) == key
+        {
             let write = box_try!(Write::parse(self.write_iter.value()));
-            let commit_ts = box_try!(decode_ts(keys::origin_key(self.write_iter.key())));
+            let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(self.write_iter.key())));
             self.write_iter.next();
             return Ok(Some((commit_ts, write)));
         }
@@ -980,7 +990,7 @@ impl MvccInfoIterator {
             let mut values = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
                 let mut value_info = MvccValue::default();
-                let start_ts = box_try!(decode_ts(keys::origin_key(&key)));
+                let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
                 value_info.set_start_ts(start_ts);
                 value_info.set_value(value);
                 values.push(value_info);
@@ -1003,7 +1013,7 @@ impl MvccInfoIterator {
                     WriteType::Rollback => write_info.set_field_type(Op::Rollback),
                 }
                 write_info.set_start_ts(write.start_ts);
-                let commit_ts = box_try!(decode_ts(keys::origin_key(&key)));
+                let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
                 write_info.set_commit_ts(commit_ts);
                 write_info.set_short_value(write.short_value.unwrap_or_default());
                 writes.push(write_info);
@@ -1015,7 +1025,7 @@ impl MvccInfoIterator {
 
     fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
         if iter.valid() {
-            let prefix = truncate_ts(iter.key()).to_vec();
+            let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
             while iter.next() && iter.key().starts_with(&prefix) {
                 kvs.push((iter.key().to_vec(), iter.value().to_vec()));
@@ -1037,7 +1047,7 @@ impl MvccInfoIterator {
             (false, false) => return Ok(None),
             (true, true) => {
                 let prefix1 = self.lock_iter.key();
-                let prefix2 = truncate_ts(self.write_iter.key());
+                let prefix2 = box_try!(Key::truncate_ts_for(self.write_iter.key()));
                 match prefix1.cmp(prefix2) {
                     Ordering::Less => (true, false),
                     Ordering::Equal => (true, true),
@@ -1060,7 +1070,7 @@ impl MvccInfoIterator {
             }
         }
         if self.default_iter.valid() {
-            match truncate_ts(self.default_iter.key()).cmp(&min_prefix) {
+            match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
                 Ordering::Equal => if let Some((_, values)) = self.next_default()? {
                     mvcc_info.set_values(values);
                 },
@@ -1069,7 +1079,7 @@ impl MvccInfoIterator {
                     let err_msg = format!(
                         "scan_mvcc CF_DEFAULT corrupt: want {}, got {}",
                         escape(&min_prefix),
-                        escape(truncate_ts(self.default_iter.key()))
+                        escape(box_try!(Key::truncate_ts_for(self.default_iter.key())))
                     );
                     return Err(box_err!(err_msg));
                 }
