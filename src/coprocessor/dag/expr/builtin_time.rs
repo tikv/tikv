@@ -34,13 +34,13 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn eval_data<'a, 'b: 'a>(
+    pub fn date<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
-        if t.invalid_zero() {
+        if t.is_zero() {
             return Err(box_err!("Incorrect datetime value: '{}'", t));
         }
         let res = Time::new(

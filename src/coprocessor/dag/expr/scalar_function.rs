@@ -850,7 +850,7 @@ dispatch_call! {
         CastTimeAsTime => cast_time_as_time,
         CastDurationAsTime => cast_duration_as_time,
         CastJsonAsTime => cast_json_as_time,
-        Date => eval_data,
+        Date => date,
         IfNullTime => if_null_time,
         IfTime => if_time,
 
