@@ -11,11 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::{fs, io};
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::{Message, MessageType};
@@ -106,7 +107,6 @@ fn test_server_snap_gc() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(1);
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -116,75 +116,45 @@ fn test_server_snap_gc() {
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-    let (tx, rx) = mpsc::channel();
     // drop all the snapshot so we can detect stale snapfile.
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(3, box DropSnapshotFilter::new(tx));
+    let (tx, rx) = mpsc::channel();
+    let filter = box DropSnapshotFilter::new(tx);
+    cluster.sim.wl().add_recv_filter(3, filter);
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
-    let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-
-    cluster.must_put(b"k2", b"v2");
-
-    // node 1 and node 2 must have k2, but node 3 must not.
-    for i in 1..3 {
-        let engine = cluster.get_engine(i);
-        must_get_equal(&engine, b"k2", b"v2");
-    }
-
     let engine3 = cluster.get_engine(3);
-    must_get_none(&engine3, b"k2");
-
-    for _ in 0..30 {
-        cluster.must_put(b"k1", b"v1");
-        cluster.must_put(b"k2", b"v2");
-    }
-
-    let mut now = Instant::now();
-    loop {
-        let snap_index = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        if snap_index != first_snap_idx {
-            break;
-        }
-        if now.elapsed() >= Duration::from_secs(5) {
-            panic!("can't get any snap after {}", first_snap_idx);
-        }
-    }
-
     let snap_dir = cluster.get_snap_dir(3);
-    // it must have more than 2 snaps.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
-        .unwrap()
-        .map(|p| p.unwrap().path())
-        .collect();
-    assert!(snapfiles.len() >= 2);
 
+    let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(fs::read_dir(&snap_dir).unwrap().count(), 1);
+
+    // Trigger raft log gc.
+    (1..100).for_each(|_| cluster.must_put(b"k1", b"v1"));
+
+    // The second snapshot must be received.
+    let mut second_received = false;
+    for _ in 0..100 {
+        match rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(snap_index) if snap_index == first_snap_idx => continue,
+            Ok(_) => {
+                second_received = true;
+                break;
+            }
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(e) => panic!("receive fail: {}", e),
+        }
+    }
+    assert!(second_received, "the second snapshot should be received");
+    assert!(fs::read_dir(&snap_dir).unwrap().count() >= 2);
+
+    // After clear all filters, node 3 must have k1, k2.
     cluster.sim.wl().clear_recv_filters(3);
-    debug!("filters cleared.");
-
-    // node 3 must have k1, k2.
     must_get_equal(&engine3, b"k1", b"v1");
-    must_get_equal(&engine3, b"k2", b"v2");
 
-    now = Instant::now();
-    loop {
-        let mut snap_files = vec![];
-        for i in 1..4 {
-            let snap_dir = cluster.get_snap_dir(i);
-            // snapfiles should be gc.
-            snap_files.extend(fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()));
-        }
-        if snap_files.is_empty() {
-            return;
-        }
-        if now.elapsed() > Duration::from_secs(10) {
-            panic!("snap files is still not empty: {:?}", snap_files);
-        }
-        // trigger log compaction.
-        cluster.must_put(b"k2", b"v2");
-        sleep_ms(20);
+    for i in 1..4 {
+        // snapfiles should be gc.
+        let snap_dir = cluster.get_snap_dir(i);
+        must_empty_dir(&snap_dir);
     }
 }
 
@@ -431,11 +401,9 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine4, b"k1");
 
     let (tx, rx) = mpsc::channel();
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(4, box SnapshotAppendFilter::new(tx));
-    pd_client.add_peer(1, new_peer(4, 5));
+    let filter = box SnapshotAppendFilter::new(tx);
+    cluster.sim.wl().add_recv_filter(4, filter);
+    pd_client.must_add_peer(1, new_peer(4, 5));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&engine4, b"k2", b"v2");
@@ -451,4 +419,24 @@ fn test_node_snapshot_with_append() {
 fn test_server_snapshot_with_append() {
     let mut cluster = new_server_cluster(0, 4);
     test_snapshot_with_append(&mut cluster);
+}
+
+fn must_empty_dir<P: AsRef<Path>>(path: P) {
+    for _ in 0..500 {
+        sleep_ms(10);
+        if fs::read_dir(&path).unwrap().count() == 0 {
+            return;
+        }
+    }
+
+    let entries = fs::read_dir(&path)
+        .and_then(|dir| dir.collect::<io::Result<Vec<_>>>())
+        .unwrap();
+    if !entries.is_empty() {
+        panic!(
+            "the directory {:?} should be empty, but has entries: {:?}",
+            path.as_ref(),
+            entries
+        );
+    }
 }

@@ -19,7 +19,6 @@ use self::migration::*;
 pub use self::reader::SnapshotSender;
 use self::reader::{check_snapshot_with_meta, SnapshotApplyer};
 
-use std::collections::HashSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -379,37 +378,49 @@ impl SnapManager {
         debug!("starting gc snapshots, total size: {}", snap_size);
         let t = Instant::now_coarse();
 
-        let mut removed = 0;
-        let mut snap_keys = HashSet::<(bool, SnapKey)>::new();
+        let mut snap_keys = Vec::new();
         for p in fs::read_dir(&self.core.dir)?
             .filter_map(|p| p.ok())
             .filter(|p| p.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
         {
             if let Some(s) = p.file_name().to_str() {
                 if let Some((for_send, snap_key)) = get_snap_key_from_snap_dir(s) {
-                    snap_keys.insert((for_send, snap_key));
+                    snap_keys.push((for_send, snap_key));
                 }
             }
         }
 
-        for (for_send, key) in snap_keys {
+        let mut removed = 0;
+        let mut removed_index: HashMap<(bool, u64), u64> = map![];
+        snap_keys.retain(|&(for_send, key)| {
             let mut can_remove = false;
             if let Some(usage) = self.get_registry(for_send).get(&key) {
                 if !usage.is_busy() && usage.has_been_used() {
                     can_remove = true;
                 }
-            } else if for_send {
-                // Generated snapshots can be deleted if they are not registered.
-                can_remove = true;
-            }
-            if !can_remove && self.snapshot_is_stale(for_send, key).unwrap_or(true) {
+            } else if self.snapshot_is_stale(for_send, key).unwrap_or(true) {
                 // TODO: if the snapshot is just received and then TiKV restarts after
                 // a while, we can't gc it because TiKV could need to recover from it.
                 // Maybe can let `SnapManager` holds an engine to knows the snapshot is
                 // stale or not exactly.
                 can_remove = true;
             }
+
             if can_remove {
+                self.delete_snapshot(for_send, key);
+                self.deregister(for_send, key);
+                removed += 1;
+                if key.idx > *removed_index.get(&(for_send, key.region_id)).unwrap_or(&0) {
+                    removed_index.insert((for_send, key.region_id), key.idx);
+                }
+                return false;
+            }
+            true
+        });
+
+        for (for_send, key) in snap_keys {
+            // Delete all snapshots which index is less.
+            if *removed_index.get(&(for_send, key.region_id)).unwrap_or(&0) > key.idx {
                 self.delete_snapshot(for_send, key);
                 self.deregister(for_send, key);
                 removed += 1;
