@@ -423,7 +423,13 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
     cluster.run();
 
+    let engine4 = cluster.get_engine(4);
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&engine4, b"k1", b"v1");
+
     pd_client.must_remove_peer(1, new_peer(4, 4));
+    must_get_none(&engine4, b"k1");
 
     let (tx, rx) = mpsc::channel();
     cluster
@@ -432,10 +438,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
         .add_recv_filter(4, box SnapshotAppendFilter::new(tx));
     pd_client.add_peer(1, new_peer(4, 5));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
-    let engine4 = cluster.get_engine(4);
-    must_get_equal(&engine4, b"k1", b"v1");
     must_get_equal(&engine4, b"k2", b"v2");
 }
 
