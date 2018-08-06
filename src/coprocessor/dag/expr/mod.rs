@@ -19,6 +19,7 @@ mod builtin_json;
 mod builtin_like;
 mod builtin_math;
 mod builtin_op;
+mod builtin_string;
 mod builtin_time;
 mod column;
 mod constant;
@@ -424,7 +425,7 @@ mod test {
 
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
