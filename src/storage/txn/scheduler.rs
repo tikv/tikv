@@ -1376,7 +1376,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use storage::mvcc;
     use storage::txn::latch::*;
-    use storage::{make_key, Command, Mutation, Options};
+    use storage::{Command, Key, Mutation, Options};
     use util::collections::HashMap;
 
     #[test]
@@ -1398,7 +1398,7 @@ mod tests {
             },
             Command::MvccByKey {
                 ctx: Context::new(),
-                key: make_key(b"k"),
+                key: Key::from_raw(b"k"),
             },
             Command::MvccByStartTs {
                 ctx: Context::new(),
@@ -1408,25 +1408,25 @@ mod tests {
         let write_cmds = vec![
             Command::Prewrite {
                 ctx: Context::new(),
-                mutations: vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+                mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::Commit {
                 ctx: Context::new(),
-                keys: vec![make_key(b"k")],
+                keys: vec![Key::from_raw(b"k")],
                 lock_ts: 10,
                 commit_ts: 20,
             },
             Command::Cleanup {
                 ctx: Context::new(),
-                key: make_key(b"k"),
+                key: Key::from_raw(b"k"),
                 start_ts: 10,
             },
             Command::Rollback {
                 ctx: Context::new(),
-                keys: vec![make_key(b"k")],
+                keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
             },
             Command::ResolveLock {
@@ -1434,7 +1434,7 @@ mod tests {
                 txn_status: temp_map.clone(),
                 scan_key: None,
                 key_locks: vec![(
-                    make_key(b"k"),
+                    Key::from_raw(b"k"),
                     mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
                 )],
             },
