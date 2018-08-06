@@ -334,6 +334,7 @@ pub struct Cursor<I: Iterator> {
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
+    valid: bool, // whether or not the cursor is hitting the `min_key` and `max_key` bound
 
     is_key_read: bool,
     is_value_read: bool,
@@ -346,6 +347,7 @@ impl<I: Iterator> Cursor<I> {
             scan_mode: mode,
             min_key: None,
             max_key: None,
+            valid: true,
 
             is_key_read: false,
             is_value_read: false,
@@ -353,9 +355,12 @@ impl<I: Iterator> Cursor<I> {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.valid = true;
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             self.iter.validate_key(key)?;
+            self.valid = false;
             return Ok(false);
         }
 
@@ -383,6 +388,8 @@ impl<I: Iterator> Cursor<I> {
         allow_reseek: bool,
         statistics: &mut CFStatistics,
     ) -> Result<bool> {
+        self.valid = true;
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if !self.iter.valid() {
             return self.seek(key, statistics);
@@ -401,6 +408,7 @@ impl<I: Iterator> Cursor<I> {
         }
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             self.iter.validate_key(key)?;
+            self.valid = false;
             return Ok(false);
         }
         if ord == Ordering::Greater {
@@ -456,9 +464,12 @@ impl<I: Iterator> Cursor<I> {
     }
 
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.valid = true;
+
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             self.iter.validate_key(key)?;
+            self.valid = false;
             return Ok(false);
         }
 
@@ -483,6 +494,8 @@ impl<I: Iterator> Cursor<I> {
         allow_reseek: bool,
         statistics: &mut CFStatistics,
     ) -> Result<bool> {
+        self.valid = true;
+
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
@@ -501,6 +514,7 @@ impl<I: Iterator> Cursor<I> {
         }
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             self.iter.validate_key(key)?;
+            self.valid = false;
             return Ok(false);
         }
         if ord == Ordering::Less {
@@ -641,6 +655,9 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn valid(&self) -> bool {
+        if !self.valid {
+            return false;
+        }
         self.iter.valid()
     }
 }
@@ -707,7 +724,7 @@ impl Error {
 pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::super::super::raftstore::store::engine::IterOption;
     use super::SEEK_BOUND;
     use super::*;
@@ -718,6 +735,102 @@ mod tests {
     use util::escape;
 
     const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+
+    pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
+        engine
+            .put(&Context::new(), Key::from_raw(key), value.to_vec())
+            .unwrap();
+    }
+
+    pub fn must_put_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
+        engine
+            .put_cf(&Context::new(), cf, Key::from_raw(key), value.to_vec())
+            .unwrap();
+    }
+
+    pub fn must_delete<E: Engine>(engine: &E, key: &[u8]) {
+        engine.delete(&Context::new(), Key::from_raw(key)).unwrap();
+    }
+
+    pub fn must_delete_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
+        engine
+            .delete_cf(&Context::new(), cf, Key::from_raw(key))
+            .unwrap();
+    }
+
+    pub fn assert_has<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
+    }
+
+    pub fn assert_has_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(
+            snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
+            value
+        );
+    }
+
+    pub fn assert_none<E: Engine>(engine: &E, key: &[u8]) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
+    }
+
+    pub fn assert_none_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
+    }
+
+    pub fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
+        let mut statistics = CFStatistics::default();
+        iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
+        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(iter.value(&mut statistics), pair.1);
+    }
+
+    pub fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
+        let mut statistics = CFStatistics::default();
+        iter.reverse_seek(&Key::from_raw(key), &mut statistics)
+            .unwrap();
+        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(iter.value(&mut statistics), pair.1);
+    }
+
+    pub fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
+        let mut statistics = CFStatistics::default();
+        assert!(
+            cursor
+                .near_seek(&Key::from_raw(key), false, &mut statistics)
+                .unwrap(),
+            escape(key)
+        );
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
+    }
+
+    pub fn assert_near_reverse_seek<I: Iterator>(
+        cursor: &mut Cursor<I>,
+        key: &[u8],
+        pair: (&[u8], &[u8]),
+    ) {
+        let mut statistics = CFStatistics::default();
+        assert!(
+            cursor
+                .near_reverse_seek(&Key::from_raw(key), false, &mut statistics)
+                .unwrap(),
+            escape(key)
+        );
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
+    }
 
     #[test]
     fn rocksdb() {
@@ -745,102 +858,6 @@ mod tests {
             let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
             assert_has_cf(&engine, "cf", b"k", b"v1");
         }
-    }
-
-    fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
-        engine
-            .put(&Context::new(), Key::from_raw(key), value.to_vec())
-            .unwrap();
-    }
-
-    fn must_put_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
-        engine
-            .put_cf(&Context::new(), cf, Key::from_raw(key), value.to_vec())
-            .unwrap();
-    }
-
-    fn must_delete<E: Engine>(engine: &E, key: &[u8]) {
-        engine.delete(&Context::new(), Key::from_raw(key)).unwrap();
-    }
-
-    fn must_delete_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
-        engine
-            .delete_cf(&Context::new(), cf, Key::from_raw(key))
-            .unwrap();
-    }
-
-    fn assert_has<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
-    }
-
-    fn assert_has_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(
-            snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
-            value
-        );
-    }
-
-    fn assert_none<E: Engine>(engine: &E, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
-    }
-
-    fn assert_none_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
-    }
-
-    fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
-            .unwrap();
-        let mut statistics = CFStatistics::default();
-        iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(iter.value(&mut statistics), pair.1);
-    }
-
-    fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
-            .unwrap();
-        let mut statistics = CFStatistics::default();
-        iter.reverse_seek(&Key::from_raw(key), &mut statistics)
-            .unwrap();
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(iter.value(&mut statistics), pair.1);
-    }
-
-    fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
-        let mut statistics = CFStatistics::default();
-        assert!(
-            cursor
-                .near_seek(&Key::from_raw(key), false, &mut statistics)
-                .unwrap(),
-            escape(key)
-        );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
-    }
-
-    fn assert_near_reverse_seek<I: Iterator>(
-        cursor: &mut Cursor<I>,
-        key: &[u8],
-        pair: (&[u8], &[u8]),
-    ) {
-        let mut statistics = CFStatistics::default();
-        assert!(
-            cursor
-                .near_reverse_seek(&Key::from_raw(key), false, &mut statistics)
-                .unwrap(),
-            escape(key)
-        );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
     fn test_get_put<E: Engine>(engine: &E) {

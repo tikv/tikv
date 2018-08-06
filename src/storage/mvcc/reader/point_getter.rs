@@ -232,3 +232,445 @@ impl<S: Snapshot> PointGetter<S> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use storage::engine::{self, TEMP_DIR};
+    use storage::mvcc::tests::*;
+    use storage::ALL_CFS;
+    use storage::{Engine, Key};
+
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
+
+    #[test]
+    fn test_multi_true_one_key() {
+        fn new_point_getter<E: Engine>(engine: &E) -> PointGetter<E::Snap> {
+            let snapshot = engine.snapshot(&Context::new()).unwrap();
+            PointGetterBuilder::new(snapshot)
+                .isolation_level(IsolationLevel::RC)
+                .build()
+                .unwrap()
+        }
+
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        must_prewrite_put(&engine, b"foo1", b"bar1_1", b"foo1", 2);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .unwrap()
+                    .is_none()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .unwrap()
+                    .is_none()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        }
+        must_commit(&engine, b"foo1", 2, 3);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .unwrap()
+                    .is_none()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0); // short value, no data lookup
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            // current is foo1_3, seek for foo1_3, so no seek will be actually performed
+            assert_eq!(statistics.write.seek, 0);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            // current is foo1_3, seek for foo1_5, so there will be a re-seek
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        }
+        must_prewrite_put(&engine, b"foo1", b"bar1_2", b"foo1", 4);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+
+            point_getter.take_statistics();
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            // current is foo1_3, seek for foo1_3, so no seek will be actually performed
+            assert_eq!(statistics.write.seek, 0);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        }
+        must_commit(&engine, b"foo1", 4, 5);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+
+            point_getter.take_statistics();
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_2".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 7)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_2".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            assert_eq!(statistics.write.seek, 1);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .unwrap()
+                    .is_none()
+            );
+            let statistics = point_getter.take_statistics();
+            // hit upper bound, so no actual seek is performed
+            assert_eq!(statistics.write.seek, 0);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            // current is foo1_5, near_seek foo1_3 will be next * 1
+            assert_eq!(statistics.write.seek, 0);
+            assert_eq!(statistics.write.next, 1);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 1)
+                    .unwrap()
+                    .is_none()
+            );
+            let statistics = point_getter.take_statistics();
+            // hit upper bound, so no actual seek is performed
+            assert_eq!(statistics.write.seek, 0);
+            assert_eq!(statistics.write.next, 0);
+            assert_eq!(statistics.write.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        }
+        must_prewrite_delete(&engine, b"foo1", b"foo1", 6);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_2".to_vec()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 7)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_2".to_vec()
+            );
+
+            point_getter.take_statistics();
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            // current is foo1_5, near_seek foo1_3 will be next * 1
+            assert_eq!(statistics.write.seek, 0);
+            assert_eq!(statistics.write.next, 1);
+            assert_eq!(statistics.write.flow_stats.read_keys, 1);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        }
+        must_commit(&engine, b"foo1", 6, 7);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_2".to_vec()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 6)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_2".to_vec()
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 7)
+                    .unwrap()
+                    .is_none()
+            );
+
+            point_getter.take_statistics();
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .unwrap()
+                    .unwrap(),
+                b"bar1_1".to_vec()
+            );
+            let statistics = point_getter.take_statistics();
+            // current is foo1_7, near_seek foo1_3 will be next * 2
+            assert_eq!(statistics.write.seek, 0);
+            assert_eq!(statistics.write.next, 2);
+            assert_eq!(statistics.write.flow_stats.read_keys, 2);
+            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.next, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+        }
+    }
+
+    #[test]
+    fn test_multi_true_multi_key_single_version() {}
+
+    #[test]
+    fn test_multi_true_multi_key_multi_version() {}
+
+    #[test]
+    fn test_multi_false() {}
+
+    #[test]
+    fn test_omit_short_value() {}
+
+    #[test]
+    fn test_omit_long_value() {}
+
+    #[test]
+    fn test_isolation_si() {}
+
+    #[test]
+    fn test_long_value() {}
+
+    #[test]
+    fn test_get_rollback() {}
+
+    #[test]
+    fn test_get_delete() {}
+
+    #[test]
+    fn test_get_value() {}
+
+    #[test]
+    fn test_default_data_missing() {}
+
+}
