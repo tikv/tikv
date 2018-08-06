@@ -129,7 +129,7 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
-        
+
         // test NULL case
         let input = datum_expr(Datum::Null);
         let exp = Datum::Null;
