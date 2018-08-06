@@ -152,7 +152,7 @@ impl Time {
         })
     }
 
-    pub fn get_time(&self) -> DateTime<FixedOffset> {
+    pub fn get_time(&self) -> DateTime<Tz> {
         self.time
     }
 
