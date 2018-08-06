@@ -230,7 +230,9 @@ impl ScalarFunc {
             | ScalarFuncSig::InDecimal
             | ScalarFuncSig::InTime
             | ScalarFuncSig::InDuration
-            | ScalarFuncSig::InJson => (2, usize::MAX),
+            | ScalarFuncSig::InJson
+            | ScalarFuncSig::IntervalInt
+            | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
             | ScalarFuncSig::JsonInsertSig
@@ -329,8 +331,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::IntervalInt
-            | ScalarFuncSig::IntervalReal
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
@@ -718,6 +718,8 @@ dispatch_call! {
         InTime => in_time,
         InDuration => in_duration,
         InJson => in_json,
+        IntervalInt => interval_int,
+        IntervalReal => interval_real,
 
         PlusInt => plus_int,
         MinusInt => minus_int,
@@ -1142,6 +1144,8 @@ mod test {
                     ScalarFuncSig::InTime,
                     ScalarFuncSig::InDuration,
                     ScalarFuncSig::InJson,
+                    ScalarFuncSig::IntervalInt,
+                    ScalarFuncSig::IntervalReal,
                 ],
                 2,
                 usize::MAX,
@@ -1267,8 +1271,6 @@ mod test {
             ScalarFuncSig::Instr,
             ScalarFuncSig::InstrBinary,
             ScalarFuncSig::IntAnyValue,
-            ScalarFuncSig::IntervalInt,
-            ScalarFuncSig::IntervalReal,
             ScalarFuncSig::IsIPv4,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,

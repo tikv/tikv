@@ -202,6 +202,58 @@ impl ScalarFunc {
     pub fn in_json(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(r)))
     }
+
+    pub fn interval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let target = match self.children[0].eval_int(ctx, row)? {
+            None => return Ok(Some(-1)),
+            Some(v) => v,
+        };
+        let tus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+
+        let mut left = 1;
+        let mut right = self.children.len();
+        while left < right {
+            let mid = left + (right - left) / 2;
+            let m = self.children[mid].eval_int(ctx, row)?.unwrap_or(target);
+
+            let mus = mysql::has_unsigned_flag(self.children[mid].get_tp().get_flag());
+
+            let cmp = match (tus, mus) {
+                (false, false) => target < m,
+                (true, true) => (target as u64) < (m as u64),
+                (false, true) => target < 0 || (target as u64) < (m as u64),
+                (true, false) => m > 0 && (target as u64) < (m as u64),
+            };
+
+            if !cmp {
+                left = mid + 1
+            } else {
+                right = mid
+            }
+        }
+        Ok(Some((left - 1) as i64))
+    }
+
+    pub fn interval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let target = match self.children[0].eval_real(ctx, row)? {
+            None => return Ok(Some(-1)),
+            Some(v) => v,
+        };
+
+        let mut left = 1;
+        let mut right = self.children.len();
+        while left < right {
+            let mid = left + (right - left) / 2;
+            let m = self.children[mid].eval_real(ctx, row)?.unwrap_or(target);
+
+            if target >= m {
+                left = mid + 1
+            } else {
+                right = mid
+            }
+        }
+        Ok(Some((left - 1) as i64))
+    }
 }
 
 fn do_compare<T, E, F>(mut e: E, op: CmpOp, get_order: F) -> Result<Option<i64>>
@@ -527,6 +579,197 @@ mod test {
                     Datum::Time(t1.clone()),
                 ],
                 Datum::I64(1),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (sig, row, exp) in cases {
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::new();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(sig);
+
+            expr.set_children(RepeatedField::from_vec(children));
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &row).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_interval() {
+        let cases = vec![
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::Null, Datum::Null],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::Null, Datum::I64(3)],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(3), Datum::Null],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(1), Datum::I64(2), Datum::I64(3)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(2), Datum::I64(1), Datum::I64(3)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(3), Datum::I64(1), Datum::I64(2)],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(23),
+                    Datum::I64(1),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(30),
+                    Datum::I64(44),
+                    Datum::I64(200),
+                ],
+                Datum::I64(4),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(200),
+                    Datum::I64(1),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(30),
+                    Datum::I64(44),
+                    Datum::I64(200),
+                ],
+                Datum::I64(7),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(201),
+                    Datum::I64(1),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(30),
+                    Datum::I64(44),
+                    Datum::I64(200),
+                ],
+                Datum::I64(7),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::Null, Datum::Null],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::Null, Datum::F64(3.0)],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(3.0), Datum::Null],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(1.0), Datum::F64(2.0), Datum::F64(3.0)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(2.0), Datum::F64(1.0), Datum::F64(3.0)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(3.0), Datum::F64(1.0), Datum::F64(2.0)],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![
+                    Datum::F64(23.0),
+                    Datum::F64(1.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(30.0),
+                    Datum::F64(44.0),
+                    Datum::F64(200.0),
+                ],
+                Datum::I64(4),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![
+                    Datum::F64(200.0),
+                    Datum::F64(1.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(30.0),
+                    Datum::F64(44.0),
+                    Datum::F64(200.0),
+                ],
+                Datum::I64(7),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![
+                    Datum::F64(200.0),
+                    Datum::F64(1.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(30.0),
+                    Datum::F64(44.0),
+                    Datum::F64(200.0),
+                ],
+                Datum::I64(7),
             ),
         ];
 
