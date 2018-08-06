@@ -103,7 +103,7 @@ impl Key {
     /// key.
     #[inline]
     pub fn decode_ts(&self) -> Result<u64, codec::Error> {
-        Ok(Self::ts_encoded_decode_ts(&self.0)?)
+        Ok(Self::decode_ts_from(&self.0)?)
     }
 
     /// Creates a new key by truncating the timestamp from this key.
@@ -131,7 +131,7 @@ impl Key {
 
     /// Split a ts encoded key, return the user key and timestamp.
     #[inline]
-    pub fn ts_encoded_split(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
         if key.len() < number::U64_SIZE {
             Err(codec::Error::KeyLength)
         } else {
@@ -144,7 +144,7 @@ impl Key {
 
     /// Extract the user key from a ts encoded key.
     #[inline]
-    pub fn ts_encoded_truncate_ts(key: &[u8]) -> Result<&[u8], codec::Error> {
+    pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
         let len = key.len();
         if len < number::U64_SIZE {
             return Err(codec::Error::KeyLength);
@@ -154,7 +154,7 @@ impl Key {
 
     /// Decode the timestamp from a ts encoded key.
     #[inline]
-    pub fn ts_encoded_decode_ts(key: &[u8]) -> Result<u64, codec::Error> {
+    pub fn decode_ts_from(key: &[u8]) -> Result<u64, codec::Error> {
         let len = key.len();
         if len < number::U64_SIZE {
             return Err(codec::Error::KeyLength);
@@ -209,9 +209,9 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = 123;
-        assert!(Key::ts_encoded_split(k).is_err());
+        assert!(Key::split_on_ts_for(k).is_err());
         let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
-        let res = Key::ts_encoded_split(enc.encoded()).unwrap();
+        let res = Key::split_on_ts_for(enc.encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
     }
 }
