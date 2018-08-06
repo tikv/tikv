@@ -430,15 +430,16 @@ fn process_read_impl<E: Engine>(
             let mut cf_reader = CfReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            let writes = cf_reader.scan_writes(&key, u64::MAX)?;
-            let values = cf_reader.scan_values(&key)?;
-            let lock = cf_reader.load_lock(&key)?;
+            // TODO: Can be simplified by catch_expr (rust #31436).
+            let writes_result = cf_reader.scan_writes(&key, u64::MAX);
+            let values_result = cf_reader.scan_values(&key);
+            let lock_result = cf_reader.load_lock(&key);
             statistics.add(&cf_reader.take_statistics());
             Ok(ProcessResult::MvccKey {
                 mvcc: MvccInfo {
-                    lock,
-                    writes,
-                    values,
+                    lock: lock_result?,
+                    writes: writes_result?,
+                    values: values_result?,
                 },
             })
         }
@@ -448,22 +449,26 @@ fn process_read_impl<E: Engine>(
                 .build()?;
             match cf_reader.slowly_seek_key_by_start_ts(start_ts)? {
                 Some(key) => {
-                    let writes = cf_reader.scan_writes(&key, u64::MAX)?;
-                    let values = cf_reader.scan_values(&key)?;
-                    let lock = cf_reader.load_lock(&key)?;
+                    // TODO: Can be simplified by catch_expr (rust #31436).
+                    let writes_result = cf_reader.scan_writes(&key, u64::MAX);
+                    let values_result = cf_reader.scan_values(&key);
+                    let lock_result = cf_reader.load_lock(&key);
                     statistics.add(&cf_reader.take_statistics());
                     Ok(ProcessResult::MvccStartTs {
                         mvcc: Some((
                             key,
                             MvccInfo {
-                                lock,
-                                writes,
-                                values,
+                                lock: lock_result?,
+                                writes: writes_result?,
+                                values: values_result?,
                             },
                         )),
                     })
                 }
-                None => Ok(ProcessResult::MvccStartTs { mvcc: None }),
+                None => {
+                    statistics.add(&cf_reader.take_statistics());
+                    Ok(ProcessResult::MvccStartTs { mvcc: None })
+                }
             }
         }
         // Scans locks with timestamp <= `max_ts`
@@ -477,8 +482,9 @@ fn process_read_impl<E: Engine>(
             let mut cf_reader = CfReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            let (kv_pairs, _) =
-                cf_reader.scan_locks(|lock| lock.ts <= max_ts, start_key.as_ref(), limit)?;
+            let result = cf_reader.scan_locks(|lock| lock.ts <= max_ts, start_key.as_ref(), limit);
+            statistics.add(&cf_reader.take_statistics());
+            let (kv_pairs, _) = result?;
             let mut locks = Vec::with_capacity(kv_pairs.len());
             for (key, lock) in kv_pairs {
                 let mut lock_info = LockInfo::new();
@@ -487,7 +493,6 @@ fn process_read_impl<E: Engine>(
                 lock_info.set_key(key.raw()?);
                 locks.push(lock_info);
             }
-            statistics.add(&cf_reader.take_statistics());
             sched_ctx
                 .command_keyread_duration
                 .with_label_values(&[tag])
@@ -503,12 +508,13 @@ fn process_read_impl<E: Engine>(
             let mut cf_reader = CfReaderBuilder::new(snapshot)
                 .fill_cache(!ctx.get_not_fill_cache())
                 .build()?;
-            let (kv_pairs, has_remain) = cf_reader.scan_locks(
+            let result = cf_reader.scan_locks(
                 |lock| txn_status.contains_key(&lock.ts),
                 scan_key.as_ref(),
                 RESOLVE_LOCK_BATCH_SIZE,
-            )?;
+            );
             statistics.add(&cf_reader.take_statistics());
+            let (kv_pairs, has_remain) = result?;
             sched_ctx
                 .command_keyread_duration
                 .with_label_values(&[tag])

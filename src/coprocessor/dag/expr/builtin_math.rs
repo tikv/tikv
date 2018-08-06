@@ -14,6 +14,7 @@
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
+use crc::{crc32, Hasher32};
 use std::borrow::Cow;
 use std::i64;
 
@@ -105,6 +106,14 @@ impl ScalarFunc {
     #[inline]
     pub fn floor_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
+    }
+
+    #[inline]
+    pub fn crc32(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let d = try_opt!(self.children[0].eval_string(ctx, row));
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        digest.write(&d);
+        Ok(Some(i64::from(digest.sum32())))
     }
 }
 
@@ -214,7 +223,7 @@ mod test {
         ];
 
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -282,7 +291,7 @@ mod test {
             ),
         ];
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -295,6 +304,29 @@ mod test {
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
             let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_crc32() {
+        let cases: Vec<(&'static str, i64)> = vec![
+            ("", 0),
+            ("-1", 808273962),
+            ("mysql", 2501908538),
+            ("MySQL", 3259397556),
+            ("hello", 907060870),
+            ("❤️", 4067711813),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (arg, exp) in cases {
+            let arg = datum_expr(Datum::Bytes(arg.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::CRC32, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::I64(exp);
             assert_eq!(got, exp);
         }
     }

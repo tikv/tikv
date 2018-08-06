@@ -1088,7 +1088,7 @@ mod test {
             let rhs = datum_expr(right);
             let scalar_func = scalar_func_expr(sig, &[lhs, rhs]);
             for (flag, sql_mode, strict_sql_mode, is_ok, has_warning) in &cases {
-                let mut cfg = EvalConfig::new(0, *flag).unwrap();
+                let mut cfg = EvalConfig::new(*flag).unwrap();
                 cfg.set_sql_mode(*sql_mode);
                 cfg.set_strict_sql_mode(*strict_sql_mode);
                 let mut ctx = EvalContext::new(Arc::new(cfg));
