@@ -370,6 +370,7 @@ mod test {
             let f = scalar_func_expr(sig, &[arg]);
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 
