@@ -116,6 +116,8 @@ pub struct Config {
 
     pub cleanup_import_sst_interval: ReadableDuration,
 
+    pub concurrency: usize,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -178,6 +180,7 @@ impl Default for Config {
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
+            concurrency: 2,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

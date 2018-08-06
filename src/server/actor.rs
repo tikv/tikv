@@ -336,8 +336,8 @@ where
         let mailboxes = self.mailboxes.clone();
 
         let poller = Builder::new()
-            .pool_size(2)
-            .name_prefix(thd_name!(format!("raftstore-{}", store_id)))
+            .pool_size(self.store_cfg.concurrency)
+            .name_prefix(thd_name!(format!("raftstore-{}.", store_id)))
             .create();
         let store = match Store::new(
             mailboxes,
