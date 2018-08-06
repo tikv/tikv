@@ -34,6 +34,7 @@ extern crate backtrace;
 extern crate bitflags;
 extern crate byteorder;
 extern crate chrono;
+extern crate chrono_tz;
 extern crate crc;
 extern crate crossbeam;
 #[macro_use]

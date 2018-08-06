@@ -68,14 +68,9 @@ impl AggrFunc {
     }
 }
 
-// HashAggExecutor deals with the aggregate functions.
-// When Next() is called, it reads all the data from src
-// and updates all the values in group_key_aggrs, then returns a result.
-pub struct HashAggExecutor {
+struct AggExecutor {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggFuncExpr>,
-    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
-    cursor: usize,
     executed: bool,
     ctx: EvalContext,
     related_cols_offset: Vec<usize>, // offset of related columns
@@ -83,24 +78,21 @@ pub struct HashAggExecutor {
     first_collect: bool,
 }
 
-impl HashAggExecutor {
-    pub fn new(
-        mut meta: Aggregation,
+impl AggExecutor {
+    fn new(
+        group_by: Vec<Expr>,
+        aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
         src: Box<Executor + Send>,
-    ) -> Result<HashAggExecutor> {
+    ) -> Result<AggExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
-        let group_by = meta.take_group_by().into_vec();
         visitor.batch_visit(&group_by)?;
-        let aggr_func = meta.take_agg_func().into_vec();
         visitor.batch_visit(&aggr_func)?;
         let mut ctx = EvalContext::new(eval_config);
-        Ok(HashAggExecutor {
+        Ok(AggExecutor {
             group_by: Expression::batch_build(&mut ctx, group_by)?,
             aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
-            group_key_aggrs: OrderMap::new(),
-            cursor: 0,
             executed: false,
             ctx,
             related_cols_offset: visitor.column_offsets(),
@@ -109,39 +101,105 @@ impl HashAggExecutor {
         })
     }
 
-    fn get_group_key(&mut self, row: &[Datum]) -> Result<Vec<u8>> {
+    fn next(&mut self) -> Result<Option<Vec<Datum>>> {
+        if let Some(row) = self.src.next()? {
+            let row = row.take_origin();
+            row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)
+                .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn get_group_by_cols(&mut self, row: &[Datum]) -> Result<Vec<Datum>> {
         if self.group_by.is_empty() {
-            let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
-            return Ok(box_try!(datum::encode_value(&[single_group])));
+            return Ok(Vec::default());
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
         for expr in &self.group_by {
             let v = expr.eval(&mut self.ctx, row)?;
             vals.push(v);
         }
-        let res = box_try!(datum::encode_value(&vals));
+        Ok(vals)
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.src.collect_output_counts(counts);
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            metrics.executor_count.aggregation += 1;
+            self.first_collect = false;
+        }
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            warnings.merge(self.ctx.take_warnings());
+            Some(warnings)
+        } else {
+            Some(self.ctx.take_warnings())
+        }
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+}
+// HashAggExecutor deals with the aggregate functions.
+// When Next() is called, it reads all the data from src
+// and updates all the values in group_key_aggrs, then returns a result.
+pub struct HashAggExecutor {
+    inner: AggExecutor,
+    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
+    cursor: usize,
+}
+
+impl HashAggExecutor {
+    pub fn new(
+        mut meta: Aggregation,
+        eval_config: Arc<EvalConfig>,
+        src: Box<Executor + Send>,
+    ) -> Result<HashAggExecutor> {
+        let group_bys = meta.take_group_by().into_vec();
+        let aggs = meta.take_agg_func().into_vec();
+        let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
+        Ok(HashAggExecutor {
+            inner,
+            group_key_aggrs: OrderMap::new(),
+            cursor: 0,
+        })
+    }
+
+    fn get_group_key(&mut self, row: &[Datum]) -> Result<Vec<u8>> {
+        let group_by_cols = self.inner.get_group_by_cols(row)?;
+        if group_by_cols.is_empty() {
+            let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
+            return Ok(box_try!(datum::encode_value(&[single_group])));
+        }
+        let res = box_try!(datum::encode_value(&group_by_cols));
         Ok(res)
     }
 
     fn aggregate(&mut self) -> Result<()> {
-        while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
-            let cols = row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)?;
+        while let Some(cols) = self.inner.next()? {
             let group_key = self.get_group_key(&cols)?;
             match self.group_key_aggrs.entry(group_key) {
                 OrderMapEntry::Vacant(e) => {
-                    let mut aggrs = Vec::with_capacity(self.aggr_func.len());
-                    for expr in &self.aggr_func {
+                    let mut aggrs = Vec::with_capacity(self.inner.aggr_func.len());
+                    for expr in &self.inner.aggr_func {
                         let mut aggr = aggregate::build_aggr_func(expr.tp)?;
-                        aggr.update_with_expr(&mut self.ctx, expr, &cols)?;
+                        aggr.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
                         aggrs.push(aggr);
                     }
                     e.insert(aggrs);
                 }
                 OrderMapEntry::Occupied(e) => {
                     let aggrs = e.into_mut();
-                    for (expr, aggr) in self.aggr_func.iter().zip(aggrs) {
-                        aggr.update_with_expr(&mut self.ctx, expr, &cols)?;
+                    for (expr, aggr) in self.inner.aggr_func.iter().zip(aggrs) {
+                        aggr.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
                     }
                 }
             }
@@ -152,22 +210,22 @@ impl HashAggExecutor {
 
 impl Executor for HashAggExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        if !self.executed {
+        if !self.inner.executed {
             self.aggregate()?;
-            self.executed = true;
+            self.inner.executed = true;
         }
 
         match self.group_key_aggrs.get_index_mut(self.cursor) {
             Some((mut group_key, aggrs)) => {
                 self.cursor += 1;
-                let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
+                let mut aggr_cols = Vec::with_capacity(2 * self.inner.aggr_func.len());
 
                 // calc all aggr func
                 for aggr in aggrs {
                     aggr.calc(&mut aggr_cols)?;
                 }
 
-                if !self.group_by.is_empty() {
+                if !self.inner.group_by.is_empty() {
                     Ok(Some(Row::agg(
                         aggr_cols,
                         mem::replace(&mut group_key, Vec::new()),
@@ -181,40 +239,29 @@ impl Executor for HashAggExecutor {
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.src.collect_output_counts(counts);
+        self.inner.collect_output_counts(counts);
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.src.collect_metrics_into(metrics);
-        if self.first_collect {
-            metrics.executor_count.aggregation += 1;
-            self.first_collect = false;
-        }
+        self.inner.collect_metrics_into(metrics)
     }
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        if let Some(mut warnings) = self.src.take_eval_warnings() {
-            warnings.merge(self.ctx.take_warnings());
-            Some(warnings)
-        } else {
-            Some(self.ctx.take_warnings())
-        }
+        self.inner.take_eval_warnings()
     }
 
     fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
+        self.inner.get_len_of_columns()
     }
 }
 
 impl Executor for StreamAggExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        if self.executed {
+        if self.inner.executed {
             return Ok(None);
         }
 
-        while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
-            let cols = row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)?;
+        while let Some(cols) = self.inner.next()? {
             self.has_data = true;
             let new_group = self.meet_new_group(&cols)?;
             let mut ret = if new_group {
@@ -222,46 +269,37 @@ impl Executor for StreamAggExecutor {
             } else {
                 None
             };
-            for (expr, func) in self.agg_exprs.iter().zip(&mut self.agg_funcs) {
-                func.update_with_expr(&mut self.ctx, expr, &cols)?;
+            for (expr, func) in self.inner.aggr_func.iter().zip(&mut self.agg_funcs) {
+                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
             }
             if new_group {
                 return Ok(ret);
             }
         }
-        self.executed = true;
+        self.inner.executed = true;
         // If there is no data in the t, then whether there is 'group by' that can affect the result.
         // e.g. select count(*) from t. Result is 0.
         // e.g. select count(*) from t group by c. Result is empty.
-        if !self.has_data && !self.group_by_exprs.is_empty() {
+        if !self.has_data && !self.inner.group_by.is_empty() {
             return Ok(None);
         }
         Ok(Some(self.get_partial_result()?))
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
-        self.src.collect_output_counts(counts);
+        self.inner.collect_output_counts(counts);
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.src.collect_metrics_into(metrics);
-        if self.first_collect {
-            metrics.executor_count.aggregation += 1;
-            self.first_collect = false;
-        }
+        self.inner.collect_metrics_into(metrics)
     }
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        if let Some(mut warnings) = self.src.take_eval_warnings() {
-            warnings.merge(self.ctx.take_warnings());
-            Some(warnings)
-        } else {
-            Some(self.ctx.take_warnings())
-        }
+        self.inner.take_eval_warnings()
     }
 
     fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
+        self.inner.get_len_of_columns()
     }
 }
 
@@ -269,19 +307,12 @@ impl Executor for StreamAggExecutor {
 // It assumes all the input data is sorted by group by key.
 // When next() is called, it finds a group and returns a result for the same group.
 pub struct StreamAggExecutor {
-    ctx: EvalContext,
-    src: Box<Executor + Send>,
-
-    executed: bool,
-    group_by_exprs: Vec<Expression>,
-    agg_exprs: Vec<AggFuncExpr>,
+    inner: AggExecutor,
+    // save partial agg result
     agg_funcs: Vec<Box<AggrFunc>>,
-    related_cols_offset: Vec<usize>,
     cur_group_row: Vec<Datum>,
     next_group_row: Vec<Datum>,
-    is_first_group: bool,
     count: i64,
-    first_collect: bool,
     has_data: bool,
 }
 
@@ -291,62 +322,49 @@ impl StreamAggExecutor {
         src: Box<Executor + Send>,
         mut meta: Aggregation,
     ) -> Result<StreamAggExecutor> {
-        let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         let group_bys = meta.take_group_by().into_vec();
-        visitor.batch_visit(&group_bys)?;
         let aggs = meta.take_agg_func().into_vec();
-        visitor.batch_visit(&aggs)?;
         let group_len = group_bys.len();
-        let mut ctx = EvalContext::new(eval_config);
-        let exprs = AggFuncExpr::batch_build(&mut ctx, aggs)?;
+        let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
         // Get aggregation functions.
-        let mut funcs = Vec::with_capacity(exprs.len());
-        for expr in &exprs {
+        let mut funcs = Vec::with_capacity(inner.aggr_func.len());
+        for expr in &inner.aggr_func {
             let agg = aggregate::build_aggr_func(expr.tp)?;
             funcs.push(agg);
         }
 
         Ok(StreamAggExecutor {
-            src,
-            executed: false,
-            agg_exprs: exprs,
+            inner,
             agg_funcs: funcs,
-            group_by_exprs: Expression::batch_build(&mut ctx, group_bys)?,
-            ctx,
-            related_cols_offset: visitor.column_offsets(),
             cur_group_row: Vec::with_capacity(group_len),
             next_group_row: Vec::with_capacity(group_len),
-            is_first_group: true,
             count: 0,
-            first_collect: true,
             has_data: false,
         })
     }
 
     fn meet_new_group(&mut self, row: &[Datum]) -> Result<bool> {
-        if self.group_by_exprs.is_empty() {
+        let mut cur_group_by_cols = self.inner.get_group_by_cols(row)?;
+        if cur_group_by_cols.is_empty() {
             return Ok(false);
         }
 
-        let mut tmp_group_row = Vec::with_capacity(self.group_by_exprs.len());
-        let mut matched = !self.is_first_group;
-        for (i, expr) in self.group_by_exprs.iter().enumerate() {
-            let v = expr.eval(&mut self.ctx, row)?;
-            if matched && v.cmp(&mut self.ctx, &self.cur_group_row[i])? != Ordering::Equal {
-                matched = false;
+        // first group
+        if self.cur_group_row.is_empty() {
+            mem::swap(&mut self.cur_group_row, &mut cur_group_by_cols);
+            return Ok(false);
+        }
+        let mut meet_new_group = false;
+        for (prev, cur) in self.cur_group_row.iter().zip(cur_group_by_cols.iter()) {
+            if prev.cmp(&mut self.inner.ctx, cur)? != Ordering::Equal {
+                meet_new_group = true;
+                break;
             }
-            tmp_group_row.push(v);
         }
-        if self.is_first_group {
-            mem::swap(&mut self.cur_group_row, &mut tmp_group_row);
-            self.is_first_group = false;
-            return Ok(false);
+        if meet_new_group {
+            mem::swap(&mut self.next_group_row, &mut cur_group_by_cols);
         }
-        if matched {
-            return Ok(false);
-        }
-        mem::swap(&mut self.next_group_row, &mut tmp_group_row);
-        Ok(true)
+        Ok(meet_new_group)
     }
 
     // get_partial_result gets a result for the same group.
@@ -355,12 +373,12 @@ impl StreamAggExecutor {
         // Calculate all aggregation funcutions.
         for (i, agg_func) in self.agg_funcs.iter_mut().enumerate() {
             agg_func.calc(&mut cols)?;
-            let agg = aggregate::build_aggr_func(self.agg_exprs[i].tp)?;
+            let agg = aggregate::build_aggr_func(self.inner.aggr_func[i].tp)?;
             *agg_func = agg;
         }
 
         // Get the values of 'group by'.
-        if !self.group_by_exprs.is_empty() {
+        if !self.inner.group_by.is_empty() {
             cols.extend_from_slice(self.cur_group_row.as_slice());
             mem::swap(&mut self.cur_group_row, &mut self.next_group_row);
         }

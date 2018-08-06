@@ -510,11 +510,11 @@ fn process_read<E: Engine>(
                 ctx.get_isolation_level(),
             );
             let res = reader
-                .scan_locks(start_key.take(), |lock| lock.ts <= max_ts, limit)
+                .scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit)
                 .map_err(Error::from)
-                .and_then(|(v, _)| {
-                    let mut locks = vec![];
-                    for (key, lock) in v {
+                .and_then(|(kv_pairs, _)| {
+                    let mut locks = Vec::with_capacity(kv_pairs.len());
+                    for (key, lock) in kv_pairs {
                         let mut lock_info = LockInfo::new();
                         lock_info.set_primary_lock(lock.primary);
                         lock_info.set_lock_version(lock.ts);
@@ -536,7 +536,7 @@ fn process_read<E: Engine>(
         Command::ResolveLock {
             ref ctx,
             ref mut txn_status,
-            ref mut scan_key,
+            ref scan_key,
             ..
         } => {
             let mut reader = MvccReader::new(
@@ -549,25 +549,31 @@ fn process_read<E: Engine>(
             );
             let res = reader
                 .scan_locks(
-                    scan_key.take(),
+                    scan_key.as_ref(),
                     |lock| txn_status.contains_key(&lock.ts),
                     RESOLVE_LOCK_BATCH_SIZE,
                 )
                 .map_err(Error::from)
-                .and_then(|(v, next_scan_key)| {
-                    let key_locks: Vec<_> = v.into_iter().map(|x| x).collect();
+                .and_then(|(kv_pairs, is_remain)| {
                     sched_ctx
                         .command_keyread_duration
                         .with_label_values(&[tag])
-                        .observe(key_locks.len() as f64);
-                    if key_locks.is_empty() {
+                        .observe(kv_pairs.len() as f64);
+                    if kv_pairs.is_empty() {
                         Ok(None)
                     } else {
+                        let next_scan_key = if is_remain {
+                            // There might be more locks.
+                            kv_pairs.last().map(|(k, _lock)| k.clone())
+                        } else {
+                            // All locks are scanned
+                            None
+                        };
                         Ok(Some(Command::ResolveLock {
                             ctx: ctx.clone(),
                             txn_status: mem::replace(txn_status, Default::default()),
                             scan_key: next_scan_key,
-                            key_locks,
+                            key_locks: kv_pairs,
                         }))
                     }
                 });

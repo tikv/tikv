@@ -91,8 +91,8 @@ impl Error {
         Error::Eval(msg.into(), ERR_UNKNOWN)
     }
 
-    pub fn unknown_timezone(tz: i64) -> Error {
-        let msg = format!("unknown or incorrect time zone: {}", tz);
+    pub fn invalid_timezone(given_time_zone: &str) -> Error {
+        let msg = format!("unknown or incorrect time zone: {}", given_time_zone);
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
     }
 

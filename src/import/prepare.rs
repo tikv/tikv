@@ -281,7 +281,7 @@ mod tests {
         if k.is_empty() {
             vec![]
         } else {
-            Key::from_raw(k).encoded().to_owned()
+            Key::from_raw(k).take_encoded()
         }
     }
 
