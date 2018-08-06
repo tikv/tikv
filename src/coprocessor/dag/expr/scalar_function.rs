@@ -190,6 +190,8 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::Log10
+            | ScalarFuncSig::Log2
             | ScalarFuncSig::Length
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig => (1, 1),
@@ -352,9 +354,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary2Args
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
-            | ScalarFuncSig::Log10
             | ScalarFuncSig::Log1Arg
-            | ScalarFuncSig::Log2
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Lpad
@@ -800,6 +800,9 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+
+        Log2 => log2,
+        Log10 => log10,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -1085,6 +1088,8 @@ mod test {
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::BitNegSig,
+                    ScalarFuncSig::Log10,
+                    ScalarFuncSig::Log2,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
                 ],
@@ -1291,9 +1296,7 @@ mod test {
             ScalarFuncSig::LocateBinary2Args,
             ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
-            ScalarFuncSig::Log10,
             ScalarFuncSig::Log1Arg,
-            ScalarFuncSig::Log2,
             ScalarFuncSig::Log2Args,
             ScalarFuncSig::Lower,
             ScalarFuncSig::Lpad,
