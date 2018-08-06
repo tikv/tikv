@@ -108,10 +108,6 @@ fn test_batch_snapshot() {
     }
 }
 
-pub fn make_key(k: &[u8]) -> Key {
-    Key::from_raw(k)
-}
-
 fn must_batch_snapshot<E: Engine>(batch: Vec<Context>, engine: &E) -> BatchResults<E::Snap> {
     let (tx, rx) = channel();
     let on_finished = box move |snapshots| {
@@ -122,31 +118,31 @@ fn must_batch_snapshot<E: Engine>(batch: Vec<Context>, engine: &E) -> BatchResul
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
-    engine.put(ctx, make_key(key), value.to_vec()).unwrap();
+    engine.put(ctx, Key::from_raw(key), value.to_vec()).unwrap();
 }
 
 fn must_put_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
     engine
-        .put_cf(ctx, cf, make_key(key), value.to_vec())
+        .put_cf(ctx, cf, Key::from_raw(key), value.to_vec())
         .unwrap();
 }
 
 fn must_delete<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
-    engine.delete(ctx, make_key(key)).unwrap();
+    engine.delete(ctx, Key::from_raw(key)).unwrap();
 }
 
 fn must_delete_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) {
-    engine.delete_cf(ctx, cf, make_key(key)).unwrap();
+    engine.delete_cf(ctx, cf, Key::from_raw(key)).unwrap();
 }
 
 fn assert_has<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
+    assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
 }
 
 fn can_read<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) -> bool {
     if let Ok(s) = engine.snapshot(ctx) {
-        assert_eq!(s.get(&make_key(key)).unwrap().unwrap(), value);
+        assert_eq!(s.get(&Key::from_raw(key)).unwrap().unwrap(), value);
         return true;
     }
     false
@@ -154,17 +150,20 @@ fn can_read<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) -> b
 
 fn assert_has_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap().unwrap(), value);
+    assert_eq!(
+        snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
+        value
+    );
 }
 
 fn assert_none<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get(&make_key(key)).unwrap(), None);
+    assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
 }
 
 fn assert_none_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap(), None);
+    assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
 }
 
 fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
@@ -173,7 +172,7 @@ fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    iter.seek(&make_key(key), &mut statistics).unwrap();
+    iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
     assert_eq!(
         (iter.key(), iter.value()),
         (&*bytes::encode_bytes(pair.0), pair.1)
@@ -192,7 +191,7 @@ fn assert_seek_cf<E: Engine>(
         .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    iter.seek(&make_key(key), &mut statistics).unwrap();
+    iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
     assert_eq!(
         (iter.key(), iter.value()),
         (&*bytes::encode_bytes(pair.0), pair.1)
@@ -202,7 +201,9 @@ fn assert_seek_cf<E: Engine>(
 fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
     let mut statistics = CFStatistics::default();
     assert!(
-        cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
+        cursor
+            .near_seek(&Key::from_raw(key), &mut statistics)
+            .unwrap(),
         escape(key)
     );
     assert_eq!(
@@ -215,7 +216,7 @@ fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pai
     let mut statistics = CFStatistics::default();
     assert!(
         cursor
-            .near_reverse_seek(&make_key(key), &mut statistics)
+            .near_reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap(),
         escape(key)
     );
@@ -238,8 +239,8 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
         .write(
             ctx,
             vec![
-                Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
-                Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec()),
+                Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
+                Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
             ],
         )
         .unwrap();
@@ -250,8 +251,8 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
         .write(
             ctx,
             vec![
-                Modify::Delete(CF_DEFAULT, make_key(b"x")),
-                Modify::Delete(CF_DEFAULT, make_key(b"y")),
+                Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
+                Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
             ],
         )
         .unwrap();
@@ -271,7 +272,11 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
+    assert!(
+        !iter
+            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap()
+    );
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
 }
@@ -292,7 +297,7 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     let mut statistics = CFStatistics::default();
     assert!(
         !cursor
-            .near_seek(&make_key(b"z\x00"), &mut statistics)
+            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
             .unwrap()
     );
     must_delete(ctx, engine, b"x");
