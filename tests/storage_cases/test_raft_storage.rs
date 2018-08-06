@@ -21,8 +21,8 @@ use raftstore::cluster::Cluster;
 use raftstore::server::new_server_cluster;
 use raftstore::server::{ServerCluster, SimulateEngine};
 use raftstore::util::*;
-use tikv::storage::{self, make_key, Mutation};
-use tikv::storage::{engine, mvcc, txn, Engine, Key};
+use tikv::storage::{self, Key, Mutation};
+use tikv::storage::{engine, mvcc, txn, Engine};
 use tikv::util::HandyRwLock;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
@@ -32,7 +32,7 @@ fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, C
 #[test]
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
-    let key = make_key(b"key");
+    let key = Key::from_raw(b"key");
     assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
     storage
         .prewrite(
@@ -103,11 +103,11 @@ fn test_raft_storage_get_after_lease() {
 #[test]
 fn test_raft_storage_rollback_before_prewrite() {
     let (_cluster, storage, ctx) = new_raft_storage();
-    let ret = storage.rollback(ctx.clone(), vec![make_key(b"key")], 10);
+    let ret = storage.rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10);
     assert!(ret.is_ok());
     let ret = storage.prewrite(
         ctx.clone(),
-        vec![Mutation::Put((make_key(b"key"), b"value".to_vec()))],
+        vec![Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()))],
         b"key".to_vec(),
         10,
     );
@@ -125,7 +125,7 @@ fn test_raft_storage_rollback_before_prewrite() {
 fn test_raft_storage_store_not_match() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
 
-    let key = make_key(b"key");
+    let key = Key::from_raw(b"key");
     assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
     storage
         .prewrite(

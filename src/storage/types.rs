@@ -44,21 +44,6 @@ pub struct MvccInfo {
     pub values: Vec<(u64, Value)>,
 }
 
-/// The caller should ensure the key is a timestamped key.
-pub fn truncate_ts(key: &[u8]) -> &[u8] {
-    &key[..key.len() - number::U64_SIZE]
-}
-
-/// The caller should ensure the key is a timestamped key.
-pub fn decode_ts(key: &[u8]) -> Result<u64, codec::Error> {
-    let len = key.len();
-    if len < number::U64_SIZE {
-        return Err(codec::Error::KeyLength);
-    }
-    let mut ts = &key[len - number::U64_SIZE..];
-    number::decode_u64_desc(&mut ts)
-}
-
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw
@@ -75,31 +60,37 @@ pub struct Key(Vec<u8>);
 /// Core functions for `Key`.
 impl Key {
     /// Creates a key from raw bytes.
+    #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
         Key(codec::bytes::encode_bytes(key))
     }
 
     /// Gets the raw representation of this key.
+    #[inline]
     pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
         bytes::decode_bytes(&mut self.0.as_slice(), false)
     }
 
     /// Creates a key from encoded bytes.
+    #[inline]
     pub fn from_encoded(encoded_key: Vec<u8>) -> Key {
         Key(encoded_key)
     }
 
     /// Gets the encoded representation of this key.
+    #[inline]
     pub fn encoded(&self) -> &Vec<u8> {
         &self.0
     }
 
     /// Gets and moves the encoded representation of this key.
+    #[inline]
     pub fn take_encoded(self) -> Vec<u8> {
         self.0
     }
 
     /// Creates a new key by appending a `u64` timestamp to this key.
+    #[inline]
     pub fn append_ts(self, ts: u64) -> Key {
         let mut encoded = self.0;
         encoded.encode_u64_desc(ts).unwrap();
@@ -110,13 +101,15 @@ impl Key {
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
+    #[inline]
     pub fn decode_ts(&self) -> Result<u64, codec::Error> {
-        Ok(decode_ts(&self.0)?)
+        Ok(Self::decode_ts_from(&self.0)?)
     }
 
     /// Creates a new key by truncating the timestamp from this key.
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped key.
+    #[inline]
     pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
         if len < number::U64_SIZE {
@@ -132,8 +125,42 @@ impl Key {
             Err(codec::Error::KeyLength)
         } else {
             self.0.truncate(len - number::U64_SIZE);
-            Ok(Key(self.0))
+            Ok(self)
         }
+    }
+
+    /// Split a ts encoded key, return the user key and timestamp.
+    #[inline]
+    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+        if key.len() < number::U64_SIZE {
+            Err(codec::Error::KeyLength)
+        } else {
+            let pos = key.len() - number::U64_SIZE;
+            let k = &key[..pos];
+            let mut ts = &key[pos..];
+            Ok((k, number::decode_u64_desc(&mut ts)?))
+        }
+    }
+
+    /// Extract the user key from a ts encoded key.
+    #[inline]
+    pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(&key[..key.len() - number::U64_SIZE])
+    }
+
+    /// Decode the timestamp from a ts encoded key.
+    #[inline]
+    pub fn decode_ts_from(key: &[u8]) -> Result<u64, codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        let mut ts = &key[len - number::U64_SIZE..];
+        number::decode_u64_desc(&mut ts)
     }
 }
 
@@ -174,24 +201,6 @@ impl PartialOrd for Key {
     }
 }
 
-/// Creates a new key from raw bytes.
-pub fn make_key(k: &[u8]) -> Key {
-    Key::from_raw(k)
-}
-
-/// Splits encoded key on timestamp.
-/// Returns the split key and timestamp.
-pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
-    if key.len() < number::U64_SIZE {
-        Err(codec::Error::KeyLength)
-    } else {
-        let pos = key.len() - number::U64_SIZE;
-        let k = &key[..pos];
-        let mut ts = &key[pos..];
-        Ok((k, number::decode_u64_desc(&mut ts)?))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,9 +209,9 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = 123;
-        assert!(split_encoded_key_on_ts(k).is_err());
+        assert!(Key::split_on_ts_for(k).is_err());
         let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
-        let res = split_encoded_key_on_ts(enc.encoded()).unwrap();
+        let res = Key::split_on_ts_for(enc.encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
     }
 }
