@@ -250,34 +250,30 @@ impl<S: Snapshot> ForwardScanner<S> {
             }
 
             // Attempt to read specified version of the key. Note that we may get `None`
-            // indicating that no desired version is found (or when `has_write == false`).
-            // We may also get `Err` due to key lock. We need to ensure that the scanner keeps
-            // working for future calls even when meeting key lock errors (why??), so we don't
-            // apply `?` operator to the result here thus iterators can be moved forward.
+            // indicating that no desired version is found, or a DELETE version is found, or
+            // when `has_write == false`. We may also get `Err` due to key lock. We need to
+            // ensure that the scanner keeps working for future calls even when meeting key
+            // lock errors (why??), so we don't apply `?` operator to the result here thus
+            // iterators can be moved forward.
             let result = self.get(&current_user_key, has_write, has_lock);
 
-            // Before returning the result, we step the cursor for next read.
             if has_write {
                 // After `self.get()`, our write cursor may be pointing to current user key (if we
                 // found a desired version), or next user key (if there is no desired version), or
-                // out of bound. If it is pointing to current user key, we need
-                // to step it until we meet a new key.
+                // out of bound.
 
-                // If the result is `None`, our write cursor must be either pointing to the next
-                // user key, or out of bound. If the result is `Some`, our write cursor must be
-                // pointing to current user key. So we only need to deal with `result == Some`.
-                if let Ok(Some(_)) = result {
-                    // Pointing to current user key. Let's move cursor to the next user key.
-                    let mut needs_seek = true;
+                // If it is pointing to current user key, we need to step it until we meet a new
+                // key. We first try to `next()` a few times. If still not reaching another user
+                // key, we `seek()`.
 
-                    // We `next()` for a few times first, then we directly `seek()`.
-                    for _ in 0..SEEK_BOUND {
-                        self.write_cursor.next(&mut self.statistics.write);
-                        if !self.write_cursor.valid() {
-                            // Key space ended, don't need to seek again.
-                            needs_seek = false;
-                            break;
-                        }
+                let mut needs_seek = true;
+                for _ in 0..SEEK_BOUND {
+                    if !self.write_cursor.valid() {
+                        // Key space ended don't need to seek again.
+                        needs_seek = false;
+                        break;
+                    }
+                    {
                         let current_key = self.write_cursor.key(&mut self.statistics.write);
                         if Key::truncate_ts_for(current_key)?
                             != current_user_key.encoded().as_slice()
@@ -287,15 +283,16 @@ impl<S: Snapshot> ForwardScanner<S> {
                             break;
                         }
                     }
+                    self.write_cursor.next(&mut self.statistics.write);
+                }
 
-                    // We have not found another user key for now, so we directly `seek()`.
-                    // After that, we must pointing to another key, or out of bound.
-                    if needs_seek {
-                        self.write_cursor.seek(
-                            &current_user_key.clone().append_ts(0),
-                            &mut self.statistics.write,
-                        )?;
-                    }
+                // We have not found another user key for now, so we directly `seek()`.
+                // After that, we must pointing to another key, or out of bound.
+                if needs_seek {
+                    self.write_cursor.seek(
+                        &current_user_key.clone().append_ts(0),
+                        &mut self.statistics.write,
+                    )?;
                 }
             }
             if has_lock {
