@@ -15,11 +15,11 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use util::codec::number;
 
 pub struct ForwardScannerBuilder<S: Snapshot> {
     snapshot: S,
@@ -167,8 +167,28 @@ impl<S: Snapshot> ForwardScanner<S> {
             self.is_started = true;
         }
 
+        // The general idea is to simultaneously step write cursor and lock cursor.
+
+        // TODO: We don't need to seek lock CF if isolation level is RC.
+
         loop {
-            let (key, has_write, has_lock) = {
+            // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
+            // the encoded user key we are currently dealing with. It may not have a write, or
+            // may not have a lock.
+            let current_user_key;
+
+            // `has_write` indicates whether `current_user_key` has at least one corresponding
+            // `write`. If there is one, it is what current write cursor pointing to. The pointed
+            // `write` must be the most recent (i.e. largest `commit_ts`) write of
+            // `current_user_key`.
+            let has_write;
+
+            // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
+            // there is one, it is what current lock cursor pointing to.
+            let has_lock;
+
+            {
+                let current_user_key_slice;
                 let w_key = if self.write_cursor.valid() {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
@@ -180,83 +200,181 @@ impl<S: Snapshot> ForwardScanner<S> {
                     None
                 };
                 match (w_key, l_key) {
-                    (None, None) => return Ok(None),
-                    (None, Some(k)) => (Key::from_encoded(k.to_vec()), false, true),
-                    (Some(k), None) => (Key::from_encoded(k.to_vec()).truncate_ts()?, true, false),
+                    (None, None) => {
+                        // Both cursors yield `None`: we know that there is nothing remaining.
+                        return Ok(None);
+                    }
+                    (None, Some(k)) => {
+                        // Write cursor yields `None` but lock cursor yields something:
+                        // In RC, it means we got nothing.
+                        // In SI, we need to check if the lock will cause conflict.
+                        current_user_key_slice = k;
+                        has_write = false;
+                        has_lock = true;
+                    }
+                    (Some(k), None) => {
+                        // Write cursor yields something but lock cursor yields `None`:
+                        // We need to further step write cursor to our desired version
+                        current_user_key_slice = Key::truncate_ts_for(k)?;
+                        has_write = true;
+                        has_lock = false;
+                    }
                     (Some(wk), Some(lk)) => match Key::truncate_ts_for(wk)?.cmp(lk) {
-                        // Lock greater than `wk`, so `wk` must not have lock.
                         Ordering::Less => {
-                            (Key::from_encoded(wk.to_vec()).truncate_ts()?, true, false)
+                            // Write cursor user key < lock cursor, it means the lock of the
+                            // current key that write cursor is pointing to does not exist.
+                            current_user_key_slice = Key::truncate_ts_for(wk)?;
+                            has_write = true;
+                            has_lock = false;
                         }
-                        Ordering::Greater => (Key::from_encoded(lk.to_vec()), false, true),
-                        Ordering::Equal => (Key::from_encoded(lk.to_vec()), true, true),
+                        Ordering::Greater => {
+                            // Write cursor user key > lock cursor, it means we first got a lock
+                            // of a key that does not have a write. In SI, we need to check if
+                            // the lock will cause conflict.
+                            current_user_key_slice = lk;
+                            has_write = false;
+                            has_lock = true;
+                        }
+                        Ordering::Equal => {
+                            // Write cursor user key == lock cursor, it means the lock of the
+                            // current key that write cursor is pointing to *exists*.
+                            current_user_key_slice = lk;
+                            has_write = true;
+                            has_lock = true;
+                        }
                     },
-                }
-            };
+                };
+                // Convert the key into a `Vec`, to avoid data being invalidated after cursor
+                // moving.
+                current_user_key = Key::from_encoded(current_user_key_slice.to_vec());
+            }
 
-            let lock = if has_lock {
-                Some(self.lock_cursor.value(&mut self.statistics.lock).to_vec())
-            } else {
-                None
-            };
-            let res = self.get(&key, lock);
+            // Attempt to read specified version of the key. Note that we may get `None`
+            // indicating that no desired version is found (or when `has_write == false`).
+            // We may also get `Err` due to key lock. We need to keep scanning when meeting
+            // key lock errors (why??), so we don't apply `?` operator to the result here.
+            let result = self.get(&current_user_key, has_write, has_lock);
 
+            // Before returning the result, we step the cursor for next read.
             if has_write {
-                let next_seek_key = key.clone().append_ts(0);
-                self.write_cursor
-                    .near_seek(&next_seek_key, false, &mut self.statistics.write)?;
+                // After `self.get()`, our write cursor may be pointing to current user key (if we
+                // found a desired version), or next user key (if there is no desired version), or
+                // out of bound. If it is pointing to current user key, we need
+                // to step it until we meet a new key.
+
+                // If the result is `None`, our write cursor must be either pointing to the next
+                // user key, or out of bound. If the result is `Some`, our write cursor must be
+                // pointing to current user key. So we only need to deal with `result == Some`.
+                if let Ok(Some(_)) = result {
+                    // Pointing to current user key. Let's move cursor to the next user key.
+                    let mut needs_seek = true;
+
+                    // We `next()` for a few times first, then we directly `seek()`.
+                    for _ in 0..SEEK_BOUND {
+                        self.write_cursor.next(&mut self.statistics.write);
+                        if !self.write_cursor.valid() {
+                            // Key space ended, don't need to seek again.
+                            needs_seek = false;
+                            break;
+                        }
+                        let current_key = self.write_cursor.key(&mut self.statistics.write);
+                        if Key::truncate_ts_for(current_key)?
+                            != current_user_key.encoded().as_slice()
+                        {
+                            // Found another user key, don't need to seek again.
+                            needs_seek = false;
+                            break;
+                        }
+                    }
+
+                    // We have not found another user key for now, so we directly `seek()`.
+                    // After that, we must pointing to another key, or out of bound.
+                    if needs_seek {
+                        self.write_cursor.seek(
+                            &current_user_key.clone().append_ts(0),
+                            &mut self.statistics.write,
+                        )?;
+                    }
+                }
             }
             if has_lock {
                 self.lock_cursor.next(&mut self.statistics.lock);
             }
 
-            if let Some(v) = res? {
-                return Ok(Some((key, v)));
+            // If we got something, it can be just used as the return value. Otherwise, we need
+            // to continue stepping the cursor.
+            if let Some(v) = result? {
+                return Ok(Some((current_user_key, v)));
             }
         }
     }
 
-    /// Try to get the value of a key. Returns empty value if `omit_value` is set. Returns `None` if
-    /// No valid value on this key.
-    fn get(&mut self, user_key: &Key, lock: Option<Vec<u8>>) -> Result<Option<Value>> {
-        let mut ts = self.ts;
-
+    /// Attempt to get the value of a key specified by `encoded_current_user_key` and `self.ts`.
+    fn get(&mut self, user_key: &Key, has_write: bool, has_lock: bool) -> Result<Option<Value>> {
+        let mut safe_ts = self.ts;
         match self.isolation_level {
             IsolationLevel::SI => {
-                if let Some(lock) = lock {
-                    let lock = Lock::parse(&lock)?;
-                    ts = super::util::check_lock(user_key, ts, &lock)?
+                if has_lock {
+                    let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                    let lock = Lock::parse(lock_value)?;
+                    safe_ts = super::util::check_lock(user_key, safe_ts, &lock)?
                 }
             }
             IsolationLevel::RC => {}
         }
 
-        // TODO: following code is very similar with PointGetter::read_next but different
-        let encoded_user_key = user_key.encoded();
+        if !has_write {
+            return Ok(None);
+        }
+        assert!(self.write_cursor.valid());
 
-        // First seek to `${user_key}_${ts}`.
-        self.write_cursor.near_seek(
-            &user_key.clone().append_ts(ts),
-            false,
-            &mut self.statistics.write,
-        )?;
+        // The logic starting from here is similar to `PointGetter`.
 
-        loop {
+        // Try to iterate to `${user_key}_${safe_ts}`. We first `next()` for a few times,
+        // and if we have not reached where we want, we use `seek()`.
+
+        // Whether we have *not* reached where we want by `next()`.
+        let mut needs_seek = true;
+
+        for _ in 0..SEEK_BOUND {
+            {
+                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                if Key::truncate_ts_for(current_key)? != user_key.encoded().as_slice() {
+                    // Meet another key.
+                    return Ok(None);
+                }
+                if Key::decode_ts_from(current_key)? <= safe_ts {
+                    // Founded, don't need to seek again.
+                    needs_seek = false;
+                    break;
+                }
+            }
+            self.write_cursor.next(&mut self.statistics.write);
             if !self.write_cursor.valid() {
                 // Key space ended.
                 return Ok(None);
             }
-            // We may move forward / seek to another key. In this case, the scan ends.
-            {
-                let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-                if cursor_key.len() != encoded_user_key.len() + number::U64_SIZE
-                    || !cursor_key.starts_with(encoded_user_key)
-                {
-                    // Meet another key.
-                    return Ok(None);
-                }
+        }
+        // If we have not found `${user_key}_${safe_ts}` in a few `next()`, directly `seek()`.
+        if needs_seek {
+            self.write_cursor.seek(
+                &user_key.clone().append_ts(safe_ts),
+                &mut self.statistics.write,
+            )?;
+            if !self.write_cursor.valid() {
+                // Key space ended.
+                return Ok(None);
             }
+            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            if Key::truncate_ts_for(current_key)? != user_key.encoded().as_slice() {
+                // Meet another key.
+                return Ok(None);
+            }
+        }
 
+        // Now we must have reached the first key >= `${user_key}_${safe_ts}`. However, we may
+        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
+        loop {
             let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
@@ -290,6 +408,16 @@ impl<S: Snapshot> ForwardScanner<S> {
             }
 
             self.write_cursor.next(&mut self.statistics.write);
+
+            if !self.write_cursor.valid() {
+                // Key space ended.
+                return Ok(None);
+            }
+            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            if Key::truncate_ts_for(current_key)? != user_key.encoded().as_slice() {
+                // Meet another key.
+                return Ok(None);
+            }
         }
     }
 
