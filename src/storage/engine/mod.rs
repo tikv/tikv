@@ -313,30 +313,22 @@ impl StatisticsSummary {
     }
 }
 
-pub struct Cursor<I: Iterator> {
-    iter: I,
+/// Naive cursor wraps over an `Iterator`, provides extra functionality and statistics.
+struct NaiveCursor<I: Iterator> {
+    pub iter: I,
     scan_mode: ScanMode,
-    // the data cursor can be seen will be
-    min_key: Option<Vec<u8>>,
-    max_key: Option<Vec<u8>>,
 }
 
-impl<I: Iterator> Cursor<I> {
+impl<I: Iterator> NaiveCursor<I> {
     pub fn new(iter: I, mode: ScanMode) -> Self {
         Self {
             iter,
             scan_mode: mode,
-            min_key: None,
-            max_key: None,
         }
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
-            self.iter.validate_key(key)?;
-            return Ok(false);
-        }
 
         if self.scan_mode == ScanMode::Forward
             && self.valid()
@@ -346,12 +338,7 @@ impl<I: Iterator> Cursor<I> {
         }
 
         statistics.seek += 1;
-
-        if !self.iter.seek(key)? {
-            self.max_key = Some(key.encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
+        self.iter.seek(key)
     }
 
     /// Seek the specified key.
@@ -368,10 +355,6 @@ impl<I: Iterator> Cursor<I> {
             || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
             return Ok(true);
-        }
-        if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
-            self.iter.validate_key(key)?;
-            return Ok(false);
         }
         if ord == Ordering::Greater {
             near_loop!(
@@ -395,11 +378,7 @@ impl<I: Iterator> Cursor<I> {
                 statistics
             );
         }
-        if !self.iter.valid() {
-            self.max_key = Some(key.encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(self.iter.valid())
     }
 
     /// Get the value of specified key.
@@ -419,12 +398,8 @@ impl<I: Iterator> Cursor<I> {
         Ok(None)
     }
 
-    fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
-            self.iter.validate_key(key)?;
-            return Ok(false);
-        }
 
         if self.scan_mode == ScanMode::Backward
             && self.valid()
@@ -434,11 +409,7 @@ impl<I: Iterator> Cursor<I> {
         }
 
         statistics.seek_for_prev += 1;
-        if !self.iter.seek_for_prev(key)? {
-            self.min_key = Some(key.encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
+        self.iter.seek_for_prev(key)
     }
 
     /// Find the largest key that is not greater than the specific key.
@@ -451,11 +422,6 @@ impl<I: Iterator> Cursor<I> {
         if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
-        }
-
-        if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
-            self.iter.validate_key(key)?;
-            return Ok(false);
         }
 
         if ord == Ordering::Less {
@@ -479,12 +445,7 @@ impl<I: Iterator> Cursor<I> {
                 statistics
             );
         }
-
-        if !self.iter.valid() {
-            self.min_key = Some(key.encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(self.iter.valid())
     }
 
     pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
@@ -560,6 +521,202 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn valid(&self) -> bool {
         self.iter.valid()
+    }
+}
+
+/// A wrapper over `NaiveCursor` that provides fast fail for out of bound seeks.
+///
+/// Once `seek` family got `false`, we update the valid bound of this bounded cursor
+/// so that next time out of bound seeks will fast fail (directly return `false` without
+/// actual seek).
+pub struct Cursor<I: Iterator> {
+    cursor: NaiveCursor<I>,
+    /// When bound is None, it means Infinity.
+    min_bound: Option<Vec<u8>>,
+    max_bound: Option<Vec<u8>>,
+    in_bound: bool,
+}
+
+impl<I: Iterator> Cursor<I> {
+    fn fast_fail_max_bound(&mut self, key: &Key) -> Result<bool> {
+        if let Some(ref max_bound) = &self.max_bound {
+            if key.encoded() >= max_bound {
+                // The key may exceed underlying range without this fast fail.
+                // So we need to re-run the validation.
+                self.cursor.iter.validate_key(key)?;
+                // We are seeking a key known to be out of bound, so after that `in_bound`
+                // is `false`.
+                self.in_bound = false;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn fast_fail_min_bound(&mut self, key: &Key) -> Result<bool> {
+        if let Some(ref min_bound) = &self.min_bound {
+            if key.encoded() <= min_bound {
+                self.cursor.iter.validate_key(key)?;
+                self.in_bound = false;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn narrow_min_bound(&mut self, new_bound: Vec<u8>) {
+        if let Some(ref min_bound) = &self.min_bound {
+            assert!(new_bound >= *min_bound);
+        }
+        self.min_bound = Some(new_bound);
+    }
+
+    fn narrow_max_bound(&mut self, new_bound: Vec<u8>) {
+        if let Some(ref max_bound) = &self.max_bound {
+            assert!(new_bound <= *max_bound);
+        }
+        self.max_bound = Some(new_bound);
+    }
+}
+
+impl<I: Iterator> Cursor<I> {
+    #[inline]
+    pub fn new(iter: I, mode: ScanMode) -> Self {
+        Self {
+            cursor: NaiveCursor::new(iter, mode),
+            min_bound: None,
+            max_bound: None,
+            in_bound: true,
+        }
+    }
+
+    #[inline]
+    pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
+        // If we are out of bound, next / prev is forbidden.
+        // Only seek / seek_for_prev is allowed.
+        assert!(self.in_bound);
+        self.cursor.next(statistics)
+    }
+
+    #[inline]
+    pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
+        assert!(self.in_bound);
+        self.cursor.prev(statistics)
+    }
+
+    #[inline]
+    pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        if self.fast_fail_max_bound(key)? {
+            return Ok(false);
+        }
+        // If we are already out of bound, we may seek to a new position in bound.
+        // So we need to update `in_bound` status according to latest seek status.
+        self.in_bound = self.cursor.seek(key, statistics)?;
+        if !self.in_bound {
+            // Make bound narrower.
+            self.narrow_max_bound(key.encoded().clone());
+        }
+        Ok(self.in_bound)
+    }
+
+    #[inline]
+    pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        if self.fast_fail_max_bound(key)? {
+            return Ok(false);
+        }
+        self.in_bound = self.cursor.near_seek(key, statistics)?;
+        if !self.in_bound {
+            self.narrow_max_bound(key.encoded().clone());
+        }
+        Ok(self.in_bound)
+    }
+
+    #[inline]
+    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        if self.fast_fail_min_bound(key)? {
+            return Ok(false);
+        }
+        self.in_bound = self.cursor.seek_for_prev(key, statistics)?;
+        if !self.in_bound {
+            self.narrow_min_bound(key.encoded().clone());
+        }
+        Ok(self.in_bound)
+    }
+
+    #[inline]
+    pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        if self.fast_fail_min_bound(key)? {
+            return Ok(false);
+        }
+        self.in_bound = self.cursor.near_seek_for_prev(key, statistics)?;
+        if !self.in_bound {
+            self.narrow_min_bound(key.encoded().clone());
+        }
+        Ok(self.in_bound)
+    }
+
+    #[inline]
+    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        if self.fast_fail_min_bound(key)? {
+            return Ok(false);
+        }
+        self.in_bound = self.cursor.reverse_seek(key, statistics)?;
+        Ok(self.in_bound)
+        // We must not update min bound, since reverse_seek == false only indicates that
+        // there is no key < specified key. But there could be key == specified key.
+    }
+
+    #[inline]
+    pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        if self.fast_fail_min_bound(key)? {
+            return Ok(false);
+        }
+        self.in_bound = self.cursor.near_reverse_seek(key, statistics)?;
+        Ok(self.in_bound)
+    }
+
+    #[inline]
+    pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
+        // We don't mix this in_bound status with the underlying range.
+        // So in_bound status will not be updated if `seek_to_first` fails.
+        self.in_bound = true;
+        self.cursor.seek_to_first(statistics)
+    }
+
+    #[inline]
+    pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
+        self.in_bound = true;
+        self.cursor.seek_to_last(statistics)
+    }
+
+    #[inline]
+    pub fn valid(&self) -> bool {
+        if !self.in_bound {
+            return false;
+        }
+        self.cursor.valid()
+    }
+
+    #[inline]
+    pub fn key(&self) -> &[u8] {
+        assert!(self.in_bound);
+        self.cursor.key()
+    }
+
+    #[inline]
+    pub fn value(&self) -> &[u8] {
+        assert!(self.in_bound);
+        self.cursor.value()
+    }
+
+    #[inline]
+    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.cursor.internal_seek(key, statistics)
+    }
+
+    #[inline]
+    pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
+        self.cursor.get(key, statistics)
     }
 }
 
@@ -1135,5 +1292,227 @@ mod tests {
         assert_eq!(iter.value(), b"bar1");
         assert_eq!(statistics.prev, 3);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+    }
+
+    #[test]
+    fn test_bound_valid() {
+        let dir = TempDir::new("rocksdb_valid_test").unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+
+        must_put(&engine, b"3", b"foo3");
+        must_put(&engine, b"5", b"foo5");
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
+
+        let mut statistics = CFStatistics::default();
+
+        // Initially, invalid
+        assert_eq!(iter.valid(), false);
+
+        // From invalid, seek a valid
+        assert_eq!(iter.seek(&make_key(b"0"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // From valid, seek over upper bound (first time)
+        assert_eq!(iter.seek(&make_key(b"7"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // When there is a upper bound, seek over upper bound
+        assert_eq!(iter.seek(&make_key(b"7"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // When there is a upper bound, seek a valid
+        assert_eq!(iter.seek(&make_key(b"4"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"5"));
+        assert_eq!(iter.value(), b"foo5");
+
+        // When there is a upper bound, previously valid, seek over upper bound
+        assert_eq!(iter.seek(&make_key(b"7"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // Again
+        assert_eq!(iter.seek(&make_key(b"7"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // When there is a upper bound, seek a valid (again)
+        assert_eq!(iter.seek(&make_key(b"4"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"5"));
+        assert_eq!(iter.value(), b"foo5");
+
+        // When there is a upper bound, previously valid, prev_seek a valid
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"4"), &mut statistics)
+                .unwrap(),
+            true
+        );
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // When there is a upper bound, previously prev_seek valid, seek over upper bound
+        assert_eq!(iter.seek(&make_key(b"7"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // When there is a upper bound, previously invalid, prev_seek a valid
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"4"), &mut statistics)
+                .unwrap(),
+            true
+        );
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // When there is a upper bound, previously valid, prev_seek over lower bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // When there is a lower bound, previously invalid, prev_seek over lower bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // When there is a lower bound, previously invalid, seek a valid
+        assert_eq!(iter.seek(&make_key(b"4"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"5"));
+        assert_eq!(iter.value(), b"foo5");
+
+        // When there is a lower bound, previously valid, prev_seek over lower bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"1"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // Again
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"1"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // When there is a lower bound & upper bound, previously prev seek invalid,
+        // seek over upper bound
+        assert_eq!(iter.seek(&make_key(b"7"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // When there is a lower bound & upper bound, previously seek invalid,
+        // seek over lower bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"1"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // When there is a lower bound & upper bound, previously prev seek invalid,
+        // seek over upper bound
+        assert_eq!(iter.seek(&make_key(b"7"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // Seek for prev upper bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"7"), &mut statistics)
+                .unwrap(),
+            true
+        );
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"5"));
+        assert_eq!(iter.value(), b"foo5");
+
+        // Seek lower bound
+        assert_eq!(iter.seek(&make_key(b"2"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // Narrow lower bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // Seek in bound
+        assert_eq!(iter.seek(&make_key(b"0"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // Seek over narrowed lower bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // Seek in bound
+        assert_eq!(iter.seek(&make_key(b"0"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // Seek over narrowed lower bound
+        assert_eq!(
+            iter.seek_for_prev(&make_key(b"0"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(iter.valid(), false);
+
+        // Seek in bound
+        assert_eq!(iter.seek(&make_key(b"0"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // Narrow upper bound
+        assert_eq!(iter.seek(&make_key(b"6"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // Seek in bound
+        assert_eq!(iter.seek(&make_key(b"0"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // Seek over narrowed upper bound
+        assert_eq!(iter.seek(&make_key(b"6"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // Seek in bound
+        assert_eq!(iter.seek(&make_key(b"0"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
+
+        // Seek over narrowed upper bound
+        assert_eq!(iter.seek(&make_key(b"8"), &mut statistics).unwrap(), false);
+        assert_eq!(iter.valid(), false);
+
+        // Seek in bound
+        assert_eq!(iter.seek(&make_key(b"0"), &mut statistics).unwrap(), true);
+        assert_eq!(iter.valid(), true);
+        assert_eq!(iter.key(), &*bytes::encode_bytes(b"3"));
+        assert_eq!(iter.value(), b"foo3");
     }
 }
