@@ -424,7 +424,7 @@ mod tests {
     use std::u64;
     use storage::engine::{Modify, ScanMode};
     use storage::mvcc::write::WriteType;
-    use storage::mvcc::{CfReaderBuilder, MvccReader, MvccTxn};
+    use storage::mvcc::{BackwardScannerBuilder, CfReaderBuilder, MvccReader, MvccTxn};
     use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
@@ -681,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mvcc_reader_reverse_seek_many_tombstones() {
+    fn test_mvcc_reader_reverse_scan_many_tombstones() {
         let path =
             TempDir::new("_test_storage_mvcc_reader_reverse_seek_many_tombstones").expect("");
         let path = path.path().to_str().unwrap();
@@ -713,26 +713,23 @@ mod tests {
             engine.prewrite(m, pk, start_ts);
         }
 
-        //        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        //        let mut reader = MvccReader::new(
-        //            snap,
-        //            Some(ScanMode::Backward),
-        //            false,
-        //            None,
-        //            None,
-        //            IsolationLevel::SI,
-        //        );
-        //        let row = &[255 as u8];
-        //        let k = make_key(row);
-        //
-        //        // Call reverse seek
-        //        let ts = 2;
-        //        assert_eq!(reader.reverse_seek(k, ts).unwrap(), None);
-        //        let statistics = reader.get_statistics();
-        //        assert_eq!(statistics.lock.prev, 256);
-        //        assert_eq!(statistics.write.prev, 1);
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let row = &[255 as u8];
+        let k = make_key(row);
+
+        // Call reverse scan
+        let ts = 2;
+        let mut scanner = BackwardScannerBuilder::new(snap, ts)
+            .range(None, Some(k.take_encoded()))
+            .build()
+            .unwrap();
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.get_statistics();
+        assert_eq!(statistics.lock.prev, 255);
+        assert_eq!(statistics.write.prev, 1);
     }
 
+    // TODO: Fix this test
     //    #[test]
     //    fn test_mvcc_reader_reverse_seek_basic() {
     //        let path = TempDir::new("_test_storage_mvcc_reader_reverse_seek_basic").expect("");
