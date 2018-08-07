@@ -581,10 +581,7 @@ impl Lease {
             return None;
         }
         let expired_time = match self.bound {
-            Some(Either::Right(ts)) => {
-                self.last_update = ts;
-                timespec_to_u64(ts)
-            }
+            Some(Either::Right(ts)) => timespec_to_u64(ts),
             _ => 0,
         };
         let remote = RemoteLease {

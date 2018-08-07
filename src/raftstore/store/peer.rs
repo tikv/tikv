@@ -530,17 +530,13 @@ impl Peer {
     /// This will update the region of the peer, caller must ensure the region
     /// has been preserved in a durable device.
     pub fn set_region(&mut self, region: metapb::Region) {
+        if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
-            let new_epoch = region.get_region_epoch();
-            let epoch = self.raft_group.get_store().region().get_region_epoch();
-            if epoch.get_version() < new_epoch.get_version() {
-                // Epoch version changed, disable read on the localreader for this region.
-                self.leader_lease.expire_remote_lease();
-            }
+            // Epoch version changed, disable read on the localreader for this region.
+            self.leader_lease.expire_remote_lease();
         }
         self.mut_store().set_region(region.clone());
-        let mut progress = ReadProgress::new();
-        progress.set_region(region);
+        let progress = ReadProgress::region(region);
         self.maybe_update_read_progress(progress);
     }
 
@@ -798,6 +794,9 @@ impl Peer {
                     self.read_scheduler
                         .schedule(ReadTask::register(self))
                         .unwrap();
+                    let progress = ReadProgress::term(self.term());
+                    self.maybe_update_read_progress(progress);
+
                     self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
@@ -1152,8 +1151,7 @@ impl Peer {
         self.pending_reads.gc();
 
         if progress_to_be_updated {
-            let mut progress = ReadProgress::new();
-            progress.set_applied_index_term(applied_index_term);
+            let progress = ReadProgress::applied_index_term(applied_index_term);
             self.maybe_update_read_progress(progress);
         }
     }
@@ -1186,15 +1184,13 @@ impl Peer {
         }
         self.leader_lease.renew(ts);
         if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease() {
-            let mut progress = ReadProgress::new();
-            progress.set_leader_lease(remote_lease);
+            let progress = ReadProgress::leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);
         }
     }
 
-    fn maybe_update_read_progress(&self, mut progress: ReadProgress) {
+    fn maybe_update_read_progress(&self, progress: ReadProgress) {
         if self.is_leader() {
-            progress.set_term(self.term());
             let update = ReadTask::update(self.region_id, progress);
             debug!("{} update {}", self.tag, update);
             self.read_scheduler.schedule(update).unwrap();
