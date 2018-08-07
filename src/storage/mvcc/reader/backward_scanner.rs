@@ -23,6 +23,7 @@ use storage::{
     CF_WRITE,
 };
 
+/// `BackwardScanner` factory.
 pub struct BackwardScannerBuilder<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
@@ -33,7 +34,6 @@ pub struct BackwardScannerBuilder<S: Snapshot> {
     ts: u64,
 }
 
-/// `BackwardScanner` factory.
 impl<S: Snapshot> BackwardScannerBuilder<S> {
     /// Initialize a new `BackwardScanner`
     pub fn new(snapshot: S, ts: u64) -> Self {
@@ -78,8 +78,8 @@ impl<S: Snapshot> BackwardScannerBuilder<S> {
         self
     }
 
-    /// Limit the range in which the `BackwardScanner` should seek. `None` means unbounded.
-    /// TODO: Is the range `[lower_bound, upper_bound)`?
+    /// Limit the range to `[lower_bound, upper_bound)` in which the `BackwardScanner` should scan.
+    /// `None` means unbounded.
     ///
     /// Default is `(None, None)`.
     #[inline]
@@ -201,7 +201,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 None
             };
             // Don't return error here. We need to seek to the next position then.
-            let res = self.get(&key, lock);
+            let res = self.reverse_get(&key, lock);
 
             if has_write {
                 self.write_cursor
@@ -217,7 +217,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         }
     }
 
-    fn get(&mut self, user_key: &Key, lock: Option<Vec<u8>>) -> Result<Option<Value>> {
+    fn reverse_get(&mut self, user_key: &Key, lock: Option<Vec<u8>>) -> Result<Option<Value>> {
         let mut ts = self.ts;
 
         match self.isolation_level {

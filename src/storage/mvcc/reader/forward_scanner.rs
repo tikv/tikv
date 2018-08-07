@@ -76,7 +76,7 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
         self
     }
 
-    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should seek.
+    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should scan.
     /// `None` means unbounded.
     ///
     /// Default is `(None, None)`.

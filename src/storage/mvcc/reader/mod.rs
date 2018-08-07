@@ -17,14 +17,6 @@ mod forward_scanner;
 mod point_getter;
 pub mod util;
 
-//use super::lock::Lock;
-use super::Result;
-//use kvproto::kvrpcpb::IsolationLevel;
-use raftstore::store::engine::IterOption;
-use std::u64;
-use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
-use storage::{Key, Value};
-
 pub use self::backward_scanner::{BackwardScanner, BackwardScannerBuilder};
 pub use self::cf_reader::{CfReader, CfReaderBuilder};
 pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
@@ -37,99 +29,6 @@ pub use self::point_getter::{PointGetter, PointGetterBuilder};
 // iterator's direction from forward to backward is as expensive as seek in
 // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
 const REVERSE_SEEK_BOUND: u64 = 32;
-
-pub struct MvccReader<S: Snapshot> {
-    snapshot: S,
-    statistics: Statistics,
-    // cursors are used for speeding up scans.
-    data_cursor: Option<Cursor<S::Iter>>,
-    //    lock_cursor: Option<Cursor<S::Iter>>,
-    //    write_cursor: Option<Cursor<S::Iter>>,
-    scan_mode: Option<ScanMode>,
-    key_only: bool,
-
-    fill_cache: bool,
-    //    lower_bound: Option<Vec<u8>>,
-    //    upper_bound: Option<Vec<u8>>,
-    //    isolation_level: IsolationLevel,
-}
-
-impl<S: Snapshot> MvccReader<S> {
-    pub fn new(
-        snapshot: S,
-        scan_mode: Option<ScanMode>,
-        fill_cache: bool,
-        //        lower_bound: Option<Vec<u8>>,
-        //        upper_bound: Option<Vec<u8>>,
-        //        isolation_level: IsolationLevel,
-    ) -> Self {
-        Self {
-            snapshot,
-            statistics: Statistics::default(),
-            data_cursor: None,
-            //            lock_cursor: None,
-            //            write_cursor: None,
-            scan_mode,
-            //            isolation_level,
-            key_only: false,
-            fill_cache,
-            //            lower_bound,
-            //            upper_bound,
-        }
-    }
-
-    pub fn get_statistics(&self) -> &Statistics {
-        &self.statistics
-    }
-
-    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
-        stats.add(&self.statistics);
-        self.statistics = Statistics::default();
-    }
-
-    pub fn set_key_only(&mut self, key_only: bool) {
-        self.key_only = key_only;
-    }
-
-    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
-        if self.key_only {
-            return Ok(vec![]);
-        }
-        if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, self.fill_cache);
-            self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
-        }
-
-        let k = key.clone().append_ts(ts);
-        let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.near_seek_get(&k, false, &mut self.statistics.data)? {
-                None => panic!("key {} not found, ts {}", key, ts),
-                Some(v) => v.to_vec(),
-            }
-        } else {
-            self.statistics.data.get += 1;
-            let value = match self.snapshot.get(&k)? {
-                None => panic!("key {} not found, ts: {}", key, ts),
-                Some(v) => v,
-            };
-            self.statistics.data.flow_stats.read_bytes +=
-                k.raw().unwrap_or_default().len() + value.len();
-            self.statistics.data.flow_stats.read_keys += 1;
-            value
-        };
-
-        self.statistics.data.processed += 1;
-        Ok(res)
-    }
-
-    fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
-        match self.scan_mode {
-            Some(ScanMode::Forward) => ScanMode::Forward,
-            Some(ScanMode::Backward) if allow_backward => ScanMode::Backward,
-            _ => ScanMode::Mixed,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -136,35 +136,19 @@ fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key
 }
 
 impl<S: Snapshot> StoreScanner<S> {
+    #[inline]
     pub fn next(&mut self) -> Result<Option<(Key, Value)>> {
-        Ok(self.forward_scanner.as_mut().unwrap().read_next()?)
-    }
-
-    pub fn prev(&mut self) -> Result<Option<(Key, Value)>> {
-        Ok(self.backward_scanner.as_mut().unwrap().read_next()?)
+        if let Some(scanner) = self.forward_scanner.as_mut() {
+            Ok(scanner.read_next()?)
+        } else {
+            Ok(self.backward_scanner.as_mut().unwrap().read_next()?)
+        }
     }
 
     pub fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
             match self.next() {
-                Ok(Some((k, v))) => {
-                    results.push(Ok((k.raw()?, v)));
-                }
-                Ok(None) => break,
-                Err(Error::Mvcc(e)) => {
-                    handle_mvcc_err(e, &mut results)?;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(results)
-    }
-
-    pub fn reverse_scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
-        let mut results = vec![];
-        while results.len() < limit {
-            match self.prev() {
                 Ok(Some((k, v))) => {
                     results.push(Ok((k.raw()?, v)));
                 }
@@ -357,7 +341,7 @@ mod test {
             )
             .unwrap();
 
-        let result = scanner.reverse_scan(half).unwrap();
+        let result = scanner.scan(half).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
@@ -409,7 +393,7 @@ mod test {
             )
             .unwrap();
 
-        let result = scanner.prev().unwrap();
+        let result = scanner.next().unwrap();
         let expect_key = format!("{}{}", KEY_PREFIX, START_ID);
         let expect_value = expect_key.clone().into_bytes();
         let expect = Some((Key::from_raw(expect_key.as_bytes()), expect_value as Value));
@@ -456,7 +440,7 @@ mod test {
 
         // Collect all scanned keys
         let mut result = Vec::new();
-        while let Some((k, _)) = scanner.prev().unwrap() {
+        while let Some((k, _)) = scanner.next().unwrap() {
             result.push(k);
         }
         assert_eq!(result, expected.into_iter().rev().collect::<Vec<_>>());
