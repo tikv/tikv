@@ -17,8 +17,11 @@ use coprocessor::codec::mysql::{
     types, Decimal, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time, TimeEncoder,
 };
 use coprocessor::codec::Datum;
+use std::io::Write;
 use tipb::expression::FieldType;
 use util::codec::number::{self, NumberEncoder};
+#[cfg(test)]
+use util::codec::BytesSlice;
 
 #[derive(Default)]
 pub struct Column {
@@ -291,7 +294,60 @@ impl Column {
     pub fn len(&self) -> usize {
         self.length
     }
+
+    #[cfg(test)]
+    pub fn decode(buf: &mut BytesSlice, tp: &FieldType) -> Result<Column> {
+        use util::codec::read_slice;
+        let length = number::decode_u32_le(buf)? as usize;
+        let mut col = Column::new(tp, length);
+        col.length = length;
+        col.null_cnt = number::decode_u32_le(buf)? as usize;
+        let null_length = (col.length + 7) / 8 as usize;
+        if col.null_cnt > 0 {
+            col.null_bitmap = read_slice(buf, null_length)?.to_vec();
+        } else {
+            col.null_bitmap = vec![0xFF; null_length];
+        }
+
+        let data_length = if col.is_fixed() {
+            col.fixed_len * col.length
+        } else {
+            col.var_offsets.clear();
+            for _ in 0..length + 1 {
+                col.var_offsets.push(number::decode_i32_le(buf)? as usize);
+            }
+            col.var_offsets[col.length]
+        };
+        col.data = read_slice(buf, data_length)?.to_vec();
+        Ok(col)
+    }
 }
+
+pub trait ColumnEncoder: NumberEncoder {
+    fn encode_column(&mut self, col: &Column) -> Result<()> {
+        // length
+        self.encode_u32_le(col.length as u32)?;
+        // null_cnt
+        self.encode_u32_le(col.null_cnt as u32)?;
+        // bitmap
+        if col.null_cnt > 0 {
+            let length = (col.length + 7) / 8;
+            self.write_all(&col.null_bitmap[0..length])?;
+        }
+        // offsets
+        if !col.is_fixed() {
+            //let length = (col.length+1)*4;
+            for v in &col.var_offsets {
+                self.encode_i32_le(*v as i32)?;
+            }
+        }
+        // data
+        self.write_all(&col.data)?;
+        Ok(())
+    }
+}
+
+impl<T: Write> ColumnEncoder for T {}
 
 #[cfg(test)]
 mod test {

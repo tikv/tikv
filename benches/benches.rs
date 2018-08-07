@@ -31,6 +31,7 @@ extern crate tempdir;
 extern crate test;
 extern crate tikv;
 extern crate time;
+extern crate tipb;
 
 mod channel;
 mod coprocessor;

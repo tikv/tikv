@@ -28,15 +28,16 @@ use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::iter::FromIterator;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
@@ -52,7 +53,7 @@ use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
-use tikv::server::debug::{Debugger, RegionInfo};
+use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb as rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
@@ -104,18 +105,19 @@ fn new_debug_executor(
                 Arc::new(raft_db),
             ))) as Box<DebugExecutor>
         }
-        (Some(remote), None) => {
-            let env = Arc::new(Environment::new(1));
-            let cb = ChannelBuilder::new(env)
-                .max_receive_message_len(1 << 30) // 1G.
-                .max_send_message_len(1 << 30);
-
-            let channel = mgr.connect(cb, remote);
-            let client = DebugClient::new(channel);
-            Box::new(client) as Box<DebugExecutor>
-        }
+        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<DebugExecutor>,
         _ => unreachable!(),
     }
+}
+
+fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
+    let env = Arc::new(Environment::new(1));
+    let cb = ChannelBuilder::new(env)
+            .max_receive_message_len(1 << 30) // 1G.
+            .max_send_message_len(1 << 30);
+
+    let channel = mgr.connect(cb, host);
+    DebugClient::new(channel)
 }
 
 trait DebugExecutor {
@@ -387,10 +389,11 @@ trait DebugExecutor {
         from: Option<Vec<u8>>,
         to: Option<Vec<u8>>,
         threads: u32,
+        bottommost: BottommostLevelCompaction,
     ) {
         let from = from.unwrap_or_default();
         let to = to.unwrap_or_default();
-        self.do_compaction(db, cf, &from, &to, threads);
+        self.do_compaction(db, cf, &from, &to, threads, bottommost);
         println!(
             "store:{:?} compact db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -408,12 +411,13 @@ trait DebugExecutor {
         cf: &str,
         region_id: u64,
         threads: u32,
+        bottommost: BottommostLevelCompaction,
     ) {
         let region_local = self.get_region_info(region_id).region_local_state.unwrap();
         let r = region_local.get_region();
         let from = keys::data_key(r.get_start_key());
         let to = keys::data_end_key(r.get_end_key());
-        self.do_compaction(db, cf, &from, &to, threads);
+        self.do_compaction(db, cf, &from, &to, threads, bottommost);
         println!(
             "store:{:?} compact_region db:{:?} cf:{} range:[{:?}, {:?}) success!",
             address.unwrap_or("local"),
@@ -507,7 +511,15 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32);
+    fn do_compaction(
+        &self,
+        db: DBType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    );
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
@@ -600,13 +612,22 @@ impl DebugExecutor for DebugClient {
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
+    fn do_compaction(
+        &self,
+        db: DBType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) {
         let mut req = CompactRequest::new();
         req.set_db(db);
         req.set_cf(cf.to_owned());
         req.set_from_key(from.to_owned());
         req.set_to_key(to.to_owned());
         req.set_threads(threads);
+        req.set_bottommost_level_compaction(bottommost.into());
         self.compact(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
     }
@@ -730,8 +751,16 @@ impl DebugExecutor for Debugger {
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
-    fn do_compaction(&self, db: DBType, cf: &str, from: &[u8], to: &[u8], threads: u32) {
-        self.compact(db, cf, from, to, threads)
+    fn do_compaction(
+        &self,
+        db: DBType,
+        cf: &str,
+        from: &[u8],
+        to: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) {
+        self.compact(db, cf, from, to, threads, bottommost)
             .unwrap_or_else(|e| perror_and_exit("Debugger::compact", e));
     }
 
@@ -1174,6 +1203,15 @@ fn main() {
                     .long("region")
                     .takes_value(true)
                     .help("set the region id"),
+                )
+                .arg(
+                    Arg::with_name("bottommost")
+                        .short("b")
+                        .long("bottommost")
+                        .takes_value(true)
+                        .default_value("default")
+                        .possible_values(&["skip", "force", "default"])
+                        .help("how to compact the bottommost level"),
                 ),
         )
         .subcommand(
@@ -1233,26 +1271,36 @@ fn main() {
                 .about("unsafe recover the cluster when majority replicas are failed")
                 .subcommand(
                     SubCommand::with_name("remove-fail-stores")
-                    .arg(
-                        Arg::with_name("stores")
-                            .required(true)
-                            .short("s")
-                            .takes_value(true)
-                            .multiple(true)
-                            .use_delimiter(true)
-                            .require_delimiter(true)
-                            .value_delimiter(",")
-                            .help("failed store id list"),
-                    )
-                    .arg(
-                        Arg::with_name("regions")
-                            .takes_value(true)
-                            .short("r")
-                            .multiple(true)
-                            .use_delimiter(true)
-                            .require_delimiter(true)
-                            .value_delimiter(",")
-                            .help("only for these regions"),
+                        .arg(
+                            Arg::with_name("stores")
+                                .required(true)
+                                .short("s")
+                                .takes_value(true)
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("stores to be removed"),
+                        )
+                        .arg(
+                            Arg::with_name("regions")
+                                .required_unless("all-regions")
+                                .conflicts_with("all-regions")
+                                .takes_value(true)
+                                .short("r")
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .help("only for these regions"),
+                        )
+                        .arg(
+                            Arg::with_name("all-regions")
+                                .required_unless("regions")
+                                .conflicts_with("regions")
+                                .long("all-regions")
+                                .takes_value(false)
+                                .help("do the command for all regions"),
                         )
                 ),
         )
@@ -1392,6 +1440,15 @@ fn main() {
                         .takes_value(true)
                         .default_value("8")
                         .help("number of threads in one compaction")
+                )
+                .arg(
+                    Arg::with_name("bottommost")
+                        .short("b")
+                        .long("bottommost")
+                        .takes_value(true)
+                        .default_value("default")
+                        .possible_values(&["skip", "force", "default"])
+                        .help("how to compact the bottommost level"),
                 ),
         )
         .subcommand(
@@ -1422,6 +1479,46 @@ fn main() {
                         .takes_value(true)
                         .help("the key to split it, in unecoded escaped format")
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("fail")
+                .about("injecting failures to TiKV and recovery")
+                .subcommand(
+                    SubCommand::with_name("inject")
+                    .about("Inject failures")
+                    .arg(
+                        Arg::with_name("args")
+                            .multiple(true)
+                            .takes_value(true)
+                            .help(
+                                "Inject fail point and actions pairs.\
+                                E.g. tikv-fail inject fail::a=off fail::b=panic",
+                            ),
+                    )
+                    .arg(
+                        Arg::with_name("file")
+                            .short("f")
+                            .takes_value(true)
+                            .help("Read a file of fail points and actions to inject"),
+                    ),
+                )
+                .subcommand(
+                    SubCommand::with_name("recover")
+                        .about("Recover failures")
+                        .arg(
+                            Arg::with_name("args")
+                                .multiple(true)
+                                .takes_value(true)
+                                .help("Recover fail points. Eg. tikv-fail recover fail::a fail::b"),
+                        )
+                        .arg(
+                            Arg::with_name("file")
+                                .short("f")
+                                .takes_value(true)
+                                .help("Recover from a file of fail points"),
+                        ),
+                )
+                .subcommand(SubCommand::with_name("list").about("List all fail points"))
         );
 
     let matches = app.clone().get_matches();
@@ -1461,7 +1558,10 @@ fn main() {
             let from_key = matches.value_of("from").map(|k| unescape(k));
             let to_key = matches.value_of("to").map(|k| unescape(k));
             let threads = value_t_or_exit!(matches.value_of("threads"), u32);
-            return compact_whole_cluster(pd, db_type, cfs, from_key, to_key, threads, mgr);
+            let bottommost = BottommostLevelCompaction::from(matches.value_of("bottommost"));
+            return compact_whole_cluster(
+                pd, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
+            );
         }
         if let Some(matches) = matches.subcommand_matches("split-region") {
             let region_id = value_t_or_exit!(matches.value_of("region"), u64);
@@ -1546,10 +1646,18 @@ fn main() {
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
         let threads = value_t_or_exit!(matches.value_of("threads"), u32);
+        let bottommost = BottommostLevelCompaction::from(matches.value_of("bottommost"));
         if let Some(region) = matches.value_of("region") {
-            debug_executor.compact_region(host, db_type, cf, region.parse().unwrap(), threads);
+            debug_executor.compact_region(
+                host,
+                db_type,
+                cf,
+                region.parse().unwrap(),
+                threads,
+                bottommost,
+            );
         } else {
-            debug_executor.compact(host, db_type, cf, from_key, to_key, threads);
+            debug_executor.compact(host, db_type, cf, from_key, to_key, threads, bottommost);
         }
     } else if let Some(matches) = matches.subcommand_matches("tombstone") {
         let regions = matches
@@ -1581,17 +1689,13 @@ fn main() {
         debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
+            let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
             let region_ids = matches.values_of("regions").map(|ids| {
                 ids.map(|r| r.parse())
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
-            let stores = matches.values_of("stores").unwrap();
-
-            match stores.map(|s| s.parse()).collect::<Result<Vec<u64>, _>>() {
-                Ok(store_ids) => debug_executor.remove_fail_stores(store_ids, region_ids),
-                Err(e) => perror_and_exit("parse store id list", e),
-            }
+            debug_executor.remove_fail_stores(store_ids, region_ids);
         } else {
             eprintln!("{}", matches.usage());
         }
@@ -1616,6 +1720,58 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("fail") {
+        if host.is_none() {
+            eprintln!("command fail requires host");
+            process::exit(-1);
+        }
+        let client = new_debug_client(host.unwrap(), mgr);
+        if let Some(matches) = matches.subcommand_matches("inject") {
+            let mut list = matches
+                .value_of("file")
+                .map_or_else(Vec::new, read_fail_file);
+            if let Some(ps) = matches.values_of("args") {
+                for pair in ps {
+                    let mut parts = pair.split('=');
+                    list.push((
+                        parts.next().unwrap().to_owned(),
+                        parts.next().unwrap_or("").to_owned(),
+                    ))
+                }
+            }
+            for (name, actions) in list {
+                if actions.is_empty() {
+                    println!("No action for fail point {}", name);
+                    continue;
+                }
+                let mut inject_req = InjectFailPointRequest::new();
+                inject_req.set_name(name);
+                inject_req.set_actions(actions);
+
+                let option = CallOption::default().timeout(Duration::from_secs(10));
+                client.inject_fail_point_opt(&inject_req, option).unwrap();
+            }
+        } else if let Some(matches) = matches.subcommand_matches("recover") {
+            let mut list = matches
+                .value_of("file")
+                .map_or_else(Vec::new, read_fail_file);
+            if let Some(fps) = matches.values_of("args") {
+                for fp in fps {
+                    list.push((fp.to_owned(), "".to_owned()))
+                }
+            }
+            for (name, _) in list {
+                let mut recover_req = RecoverFailPointRequest::new();
+                recover_req.set_name(name);
+                let option = CallOption::default().timeout(Duration::from_secs(10));
+                client.recover_fail_point_opt(&recover_req, option).unwrap();
+            }
+        } else if matches.is_present("list") {
+            let list_req = ListFailPointsRequest::new();
+            let option = CallOption::default().timeout(Duration::from_secs(10));
+            let resp = client.list_fail_points_opt(&list_req, option).unwrap();
+            println!("{:?}", resp.get_entries());
+        }
     } else {
         let _ = app.print_help();
     }
@@ -1759,12 +1915,13 @@ fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager
 
 fn compact_whole_cluster(
     pd: &str,
+    mgr: Arc<SecurityManager>,
     db_type: DBType,
     cfs: Vec<&str>,
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,
     threads: u32,
-    mgr: Arc<SecurityManager>,
+    bottommost: BottommostLevelCompaction,
 ) {
     let mut cfg = PdConfig::default();
     cfg.endpoints.push(pd.to_owned());
@@ -1795,6 +1952,7 @@ fn compact_whole_cluster(
                     from.clone(),
                     to.clone(),
                     threads,
+                    bottommost,
                 );
             }
         });
@@ -1804,4 +1962,20 @@ fn compact_whole_cluster(
     for h in handles {
         h.join().unwrap();
     }
+}
+
+fn read_fail_file(path: &str) -> Vec<(String, String)> {
+    let f = File::open(path).unwrap();
+    let f = BufReader::new(f);
+
+    let mut list = vec![];
+    for line in f.lines() {
+        let line = line.unwrap();
+        let mut parts = line.split('=');
+        list.push((
+            parts.next().unwrap().to_owned(),
+            parts.next().unwrap_or("").to_owned(),
+        ))
+    }
+    list
 }

@@ -324,30 +324,6 @@ impl<L, R> Either<L, R> {
     }
 }
 
-/// `build_info` returns a tuple of Strings that contains build utc time and commit hash.
-pub fn build_info() -> (String, String, String, String) {
-    let raw = include_str!(concat!(env!("OUT_DIR"), "/build-info.txt"));
-    let mut parts = raw.split('\n');
-
-    (
-        parts.next().unwrap_or("None").to_owned(),
-        parts.next().unwrap_or("None").to_owned(),
-        parts.next().unwrap_or("None").to_owned(),
-        parts.next().unwrap_or("None").to_owned(),
-    )
-}
-
-/// `print_tikv_info` prints the tikv version information to the standard output.
-pub fn print_tikv_info() {
-    let (hash, branch, date, rustc) = build_info();
-    info!("Welcome to TiKV.");
-    info!("Release Version:   {}", env!("CARGO_PKG_VERSION"));
-    info!("Git Commit Hash:   {}", hash);
-    info!("Git Commit Branch: {}", branch);
-    info!("UTC Build Time:    {}", date);
-    info!("Rustc Version:     {}", rustc);
-}
-
 /// A simple ring queue with fixed capacity.
 pub struct RingQueue<T> {
     buf: VecDeque<T>,

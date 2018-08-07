@@ -14,6 +14,7 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use std::iter::Peekable;
 use std::mem;
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 use kvproto::coprocessor::KeyRange;
@@ -34,6 +35,7 @@ pub struct IndexScanExecutor<S: Snapshot> {
     store: SnapshotStore<S>,
     desc: bool,
     col_ids: Vec<i64>,
+    cols: Arc<Vec<ColumnInfo>>,
     pk_col: Option<ColumnInfo>,
     key_ranges: Peekable<IntoIter<KeyRange>>,
     // The current `KeyRange` scanning on, used to build `scan_range`.
@@ -62,6 +64,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
         if desc {
             key_ranges.reverse();
         }
+        let arc_cols = Arc::new(meta.get_columns().to_vec());
         let cols = meta.mut_columns();
         if cols.last().map_or(false, |c| c.get_pk_handle()) {
             pk_col = Some(cols.pop().unwrap());
@@ -72,6 +75,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
             store,
             desc,
             col_ids,
+            cols: arc_cols,
             pk_col,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
@@ -95,6 +99,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
             store,
             desc: false,
             col_ids,
+            cols: Arc::new(vec![]), //TODO:do not need cols info
             pk_col: None,
             key_ranges: key_ranges.into_iter().peekable(),
             current_range: None,
@@ -140,7 +145,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
             let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
             values.append(pk_col.get_column_id(), &mut bytes);
         }
-        Ok(Some(Row::new(handle, values)))
+        Ok(Some(Row::origin(handle, values, self.cols.clone())))
     }
 
     fn get_row_from_point(&mut self, mut range: KeyRange) -> Result<Option<Row>> {
@@ -259,6 +264,10 @@ impl<S: Snapshot> Executor for IndexScanExecutor<S> {
             self.first_collect = false;
         }
     }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.cols.len()
+    }
 }
 
 #[cfg(test)]
@@ -331,7 +340,6 @@ pub mod test {
         unique: bool,
     ) -> Data {
         let cols = vec![
-            new_col_info(1, types::LONG_LONG),
             new_col_info(2, types::VARCHAR),
             new_col_info(3, types::NEW_DECIMAL),
         ];
@@ -373,7 +381,7 @@ pub mod test {
             let unique = false;
             let test_data = prepare_index_data(KEY_NUMBER, TABLE_ID, INDEX_ID, unique);
             let mut wrapper = IndexTestWrapper::new(unique, test_data);
-            let mut cols = wrapper.data.get_index_cols();
+            let mut cols = wrapper.data.cols.clone();
             cols.push(wrapper.data.get_col_pk());
             wrapper
                 .scan
@@ -386,7 +394,7 @@ pub mod test {
             let test_store = TestStore::new(&test_data.kv_data);
             let mut scan = IndexScan::new();
             // prepare cols
-            let cols = test_data.get_index_cols();
+            let cols = test_data.cols.clone();
             let col_req = RepeatedField::from_vec(cols.clone());
             scan.set_columns(col_req);
             // prepare range
@@ -445,7 +453,7 @@ pub mod test {
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, false, false).unwrap();
 
         for handle in 0..KEY_NUMBER / 2 {
-            let row = scanner.next().unwrap().unwrap();
+            let row = scanner.next().unwrap().unwrap().take_origin();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -498,7 +506,7 @@ pub mod test {
         let mut scanner =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
         for handle in 0..KEY_NUMBER {
-            let row = scanner.next().unwrap().unwrap();
+            let row = scanner.next().unwrap().unwrap().take_origin();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -552,7 +560,7 @@ pub mod test {
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
-            let row = scanner.next().unwrap().unwrap();
+            let row = scanner.next().unwrap().unwrap().take_origin();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -575,7 +583,7 @@ pub mod test {
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, false, false).unwrap();
 
         for handle in 0..KEY_NUMBER {
-            let row = scanner.next().unwrap().unwrap();
+            let row = scanner.next().unwrap().unwrap().take_origin();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];

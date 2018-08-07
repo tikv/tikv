@@ -16,12 +16,12 @@ use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::future::{err, ok, result};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
-use tokio_timer::Timer;
+use tokio_timer::timer::Handle;
 
 use super::util::*;
 use kvproto::metapb::{self, Region};
@@ -29,8 +29,9 @@ use kvproto::pdpb;
 use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
-use tikv::raftstore::store::util::{check_key_in_region, RegionApproximateStat};
+use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::collections::{HashMap, HashSet};
+use tikv::util::timer::GLOBAL_TIMER_HANDLE;
 use tikv::util::{escape, Either, HandyRwLock};
 
 struct Store {
@@ -211,7 +212,8 @@ struct Cluster {
     stores: HashMap<u64, Store>,
     regions: BTreeMap<Key, metapb::Region>,
     region_id_keys: HashMap<u64, Key>,
-    region_approximate_stat: HashMap<u64, RegionApproximateStat>,
+    region_approximate_size: HashMap<u64, u64>,
+    region_approximate_keys: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
@@ -239,7 +241,8 @@ impl Cluster {
             stores: HashMap::default(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::default(),
-            region_approximate_stat: HashMap::default(),
+            region_approximate_size: HashMap::default(),
+            region_approximate_keys: HashMap::default(),
             base_id: AtomicUsize::new(1000),
             store_stats: HashMap::default(),
             split_count: 0,
@@ -308,8 +311,8 @@ impl Cluster {
             .and_then(|k| self.regions.get(k).cloned()))
     }
 
-    fn get_region_approximate_stat(&self, region_id: u64) -> Option<RegionApproximateStat> {
-        self.region_approximate_stat.get(&region_id).cloned()
+    fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
+        self.region_approximate_size.get(&region_id).cloned()
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -570,8 +573,10 @@ impl Cluster {
         }
         self.leaders.insert(region.get_id(), leader.clone());
 
-        self.region_approximate_stat
-            .insert(region.get_id(), region_stat.approximate_stat);
+        self.region_approximate_size
+            .insert(region.get_id(), region_stat.approximate_size);
+        self.region_approximate_keys
+            .insert(region.get_id(), region_stat.approximate_keys);
 
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
@@ -635,7 +640,7 @@ pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
 pub struct TestPdClient {
     cluster_id: u64,
     cluster: Arc<RwLock<Cluster>>,
-    timer: Timer,
+    timer: Handle,
 }
 
 impl TestPdClient {
@@ -643,7 +648,7 @@ impl TestPdClient {
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
-            timer: Timer::default(),
+            timer: GLOBAL_TIMER_HANDLE.clone(),
         }
     }
 
@@ -877,8 +882,8 @@ impl TestPdClient {
         self.cluster.wl().set_bootstrap(is_bootstraped);
     }
 
-    pub fn get_region_approximate_stat(&self, region_id: u64) -> Option<RegionApproximateStat> {
-        self.cluster.rl().get_region_approximate_stat(region_id)
+    pub fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_approximate_size(region_id)
     }
 }
 
@@ -983,7 +988,7 @@ impl PdClient for TestPdClient {
             rx.map(|resp| vec![resp])
                 .select(
                     stream::unfold(timer, |timer| {
-                        let interval = timer.sleep(Duration::from_millis(500));
+                        let interval = timer.delay(Instant::now() + Duration::from_millis(500));
                         Some(interval.then(|_| Ok(((), timer))))
                     }).map(move |_| {
                         let mut cluster = cluster1.wl();

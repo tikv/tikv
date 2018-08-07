@@ -158,7 +158,7 @@ impl<E: Engine> SyncStorage<E> {
         wait_op!(|cb| self.store.async_rollback(ctx, keys, start_ts, cb)).unwrap()
     }
 
-    pub fn scan_lock(
+    pub fn scan_locks(
         &self,
         ctx: Context,
         max_ts: u64,
@@ -167,7 +167,7 @@ impl<E: Engine> SyncStorage<E> {
     ) -> Result<Vec<LockInfo>> {
         wait_op!(|cb| self
             .store
-            .async_scan_lock(ctx, max_ts, start_key, limit, cb))
+            .async_scan_locks(ctx, max_ts, start_key, limit, cb))
             .unwrap()
     }
 

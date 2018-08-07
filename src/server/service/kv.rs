@@ -405,7 +405,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
 
         let (cb, future) = paired_future_callback();
-        let res = self.storage.async_scan_lock(
+        let res = self.storage.async_scan_locks(
             req.take_context(),
             req.get_max_version(),
             req.take_start_key(),
@@ -1127,7 +1127,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let req = StoreMessage::SplitRegion {
             region_id: req.get_context().get_region_id(),
             region_epoch: req.take_context().take_region_epoch(),
-            split_key: Key::from_raw(req.get_split_key()).encoded().clone(),
+            split_key: Key::from_raw(req.get_split_key()).take_encoded(),
             callback: Callback::Write(cb),
         };
 

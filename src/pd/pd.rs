@@ -29,7 +29,9 @@ use super::metrics::*;
 use pd::{PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raftstore::store::store::StoreInfo;
-use raftstore::store::util::{is_epoch_stale, RegionApproximateStat};
+use raftstore::store::util::{
+    get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
+};
 use raftstore::store::Callback;
 use raftstore::store::Msg;
 use storage::FlowStatistics;
@@ -57,7 +59,8 @@ pub enum Task {
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
         written_keys: u64,
-        approximate_stat: Option<RegionApproximateStat>,
+        approximate_size: Option<u64>,
+        approximate_keys: Option<u64>,
     },
     StoreHeartbeat {
         stats: pdpb::StoreStats,
@@ -473,8 +476,11 @@ impl<T: PdClient> Runner<T> {
                     PD_HEARTBEAT_COUNTER_VEC
                         .with_label_values(&["split region"])
                         .inc();
+
+                    let split_region = resp.take_split_region();
                     info!("[region {}] try to split {:?}", region_id, epoch);
-                    let msg = Msg::new_half_split_region(region_id, epoch);
+                    let msg =
+                        Msg::new_half_split_region(region_id, epoch, split_region.get_policy());
                     if let Err(e) = ch.try_send(msg) {
                         error!("[region {}] send halfsplit request err {:?}", region_id, e);
                     }
@@ -544,12 +550,15 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 pending_peers,
                 written_bytes,
                 written_keys,
-                approximate_stat,
+                approximate_size,
+                approximate_keys,
             } => {
-                let approximate_stat = match approximate_stat {
-                    Some(stat) => stat,
-                    None => RegionApproximateStat::new(&self.db, &region).unwrap_or_default(),
-                };
+                let approximate_size = approximate_size.unwrap_or_else(|| {
+                    get_region_approximate_size(&self.db, &region).unwrap_or_default()
+                });
+                let approximate_keys = approximate_keys.unwrap_or_else(|| {
+                    get_region_approximate_keys(&self.db, &region).unwrap_or_default()
+                });
                 let (
                     read_bytes_delta,
                     read_keys_delta,
@@ -590,7 +599,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
-                        approximate_stat,
+                        approximate_size,
+                        approximate_keys,
                         last_report_ts,
                     },
                 )
