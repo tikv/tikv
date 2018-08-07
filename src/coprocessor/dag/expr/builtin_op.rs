@@ -177,6 +177,11 @@ impl ScalarFunc {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(!lhs))
     }
+
+    pub fn bit_count(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        Ok(Some(lhs.count_ones() as i64))
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +496,28 @@ mod test {
         for (arg, exp) in cases {
             let args = &[datum_expr(arg)];
             let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitNegSig, args))
+                .unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+    #[test]
+    fn test_big_count() {
+        let cases = vec![
+            (Datum::I64(8), Datum::I64(1)),
+            (Datum::I64(29), Datum::I64(4)),
+            (Datum::I64(0), Datum::I64(0)),
+            (Datum::I64(-1), Datum::I64(64)),
+            (Datum::I64(-11), Datum::I64(62)),
+            (Datum::I64(-1000), Datum::I64(56)),
+            (Datum::I64(29), Datum::I64(4)),
+            (Datum::I64(i64::MAX), Datum::I64(63)),
+            (Datum::I64(i64::MIN), Datum::I64(1)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let args = &[datum_expr(arg)];
+            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitCount, args))
                 .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
