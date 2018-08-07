@@ -332,8 +332,8 @@ pub struct Cursor<I: Iterator> {
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
 
-    is_key_read: bool,
-    is_value_read: bool,
+    cur_key_has_read: bool,
+    cur_value_has_read: bool,
 }
 
 impl<I: Iterator> Cursor<I> {
@@ -344,9 +344,15 @@ impl<I: Iterator> Cursor<I> {
             min_key: None,
             max_key: None,
 
-            is_key_read: false,
-            is_value_read: false,
+            cur_key_has_read: false,
+            cur_value_has_read: false,
         }
+    }
+
+    /// Mark key and value as unread. It will be invoked once cursor is moved.
+    fn mark_unread(&mut self) {
+        self.cur_key_has_read = false;
+        self.cur_value_has_read = false;
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
@@ -535,8 +541,8 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn key(&mut self, statistics: &mut CFStatistics) -> &[u8] {
         let key = self.iter.key();
-        if !self.is_key_read {
-            self.is_key_read = true;
+        if !self.cur_key_has_read {
+            self.cur_key_has_read = true;
             statistics.flow_stats.read_bytes += key.len();
             statistics.flow_stats.read_keys += 1;
         }
@@ -546,8 +552,8 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn value(&mut self, statistics: &mut CFStatistics) -> &[u8] {
         let value = self.iter.value();
-        if !self.is_value_read {
-            self.is_value_read = true;
+        if !self.cur_value_has_read {
+            self.cur_value_has_read = true;
             statistics.flow_stats.read_bytes += value.len();
         }
         value
@@ -556,24 +562,21 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
-        self.is_key_read = false;
-        self.is_value_read = false;
+        self.mark_unread();
         self.iter.seek_to_first()
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
-        self.is_key_read = false;
-        self.is_value_read = false;
+        self.mark_unread();
         self.iter.seek_to_last()
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.seek += 1;
-        self.is_key_read = false;
-        self.is_value_read = false;
+        self.mark_unread();
         self.iter.seek(key)
     }
 
@@ -584,24 +587,21 @@ impl<I: Iterator> Cursor<I> {
         statistics: &mut CFStatistics,
     ) -> Result<bool> {
         statistics.seek_for_prev += 1;
-        self.is_key_read = false;
-        self.is_value_read = false;
+        self.mark_unread();
         self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
-        self.is_key_read = false;
-        self.is_value_read = false;
+        self.mark_unread();
         self.iter.next()
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.prev += 1;
-        self.is_key_read = false;
-        self.is_value_read = false;
+        self.mark_unread();
         self.iter.prev()
     }
 
