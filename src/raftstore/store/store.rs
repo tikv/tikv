@@ -1377,6 +1377,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.apply_worker
                 .schedule(ApplyTask::destroy(job.region_id))
                 .unwrap();
+            self.local_reader
+                .schedule(ReadTask::destroy(job.region_id))
+                .unwrap();
         }
         if job.async_remove {
             info!(
@@ -1632,7 +1635,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 } else {
                     new_peer.size_diff_hint = self.cfg.region_split_check_diff.0;
                 }
-                new_peer.register_apply_delegate();
+                new_peer.register_delegates();
                 self.region_peers.insert(new_region_id, new_peer);
             }
         }
