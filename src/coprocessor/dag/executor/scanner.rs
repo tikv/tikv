@@ -73,8 +73,8 @@ impl<S: Snapshot> Scanner<S> {
         key_only: bool,
         range: &KeyRange,
     ) -> Result<StoreScanner<S>> {
-        let lower_bound = Some(Key::from_raw(range.get_start()).encoded().to_vec());
-        let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
+        let lower_bound = Some(Key::from_raw(range.get_start()).take_encoded());
+        let upper_bound = Some(Key::from_raw(range.get_end()).take_encoded());
         store.scanner(scan_mode, key_only, lower_bound, upper_bound)
     }
 
@@ -173,7 +173,7 @@ pub mod test {
     use coprocessor::util;
     use storage::engine::{self, Engine, Modify, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, Options, SnapshotStore, ALL_CFS};
+    use storage::{Key, Mutation, Options, SnapshotStore, ALL_CFS};
     use util::collections::HashMap;
 
     use super::*;
@@ -289,7 +289,7 @@ pub mod test {
                         pk = key.clone();
                     }
                     txn.prewrite(
-                        Mutation::Put((make_key(key), value.to_vec())),
+                        Mutation::Put((Key::from_raw(key), value.to_vec())),
                         &pk,
                         &Options::default(),
                     ).unwrap();
@@ -308,7 +308,7 @@ pub mod test {
                     true,
                 );
                 for &(ref key, _) in kv_data {
-                    txn.commit(&make_key(key), COMMIT_TS).unwrap();
+                    txn.commit(&Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 txn.into_modifies()
             };
