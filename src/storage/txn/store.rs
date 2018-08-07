@@ -15,7 +15,7 @@ use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 use storage::mvcc::{
     BackwardScanner, BackwardScannerBuilder, Error as MvccError, ForwardScanner,
-    ForwardScannerBuilder, MvccReader, PointGetterBuilder,
+    ForwardScannerBuilder, PointGetterBuilder,
 };
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
@@ -110,7 +110,6 @@ impl<S: Snapshot> SnapshotStore<S> {
         Ok(StoreScanner {
             forward_scanner,
             backward_scanner,
-            start_ts: self.start_ts,
         })
     }
 }
@@ -118,7 +117,6 @@ impl<S: Snapshot> SnapshotStore<S> {
 pub struct StoreScanner<S: Snapshot> {
     forward_scanner: Option<ForwardScanner<S>>,
     backward_scanner: Option<BackwardScanner<S>>,
-    start_ts: u64,
 }
 
 #[inline]

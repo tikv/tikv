@@ -23,7 +23,6 @@ use storage::{
     Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
 };
-use util::codec::number;
 
 pub struct BackwardScannerBuilder<S: Snapshot> {
     snapshot: S,
@@ -207,7 +206,7 @@ impl<S: Snapshot> BackwardScanner<S> {
 
             if has_write {
                 self.write_cursor
-                    .near_reverse_seek(&key, false, &mut self.statistics.write);
+                    .near_reverse_seek(&key, false, &mut self.statistics.write)?;
             }
             if has_lock {
                 self.lock_cursor.prev(&mut self.statistics.lock);

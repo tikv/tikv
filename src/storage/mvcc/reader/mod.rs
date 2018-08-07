@@ -17,14 +17,13 @@ mod forward_scanner;
 mod point_getter;
 mod util;
 
-use super::lock::Lock;
-use super::write::{Write, WriteType};
+//use super::lock::Lock;
 use super::Result;
-use kvproto::kvrpcpb::IsolationLevel;
+//use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::store::engine::IterOption;
 use std::u64;
 use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
-use storage::{Key, Value, CF_LOCK, CF_WRITE};
+use storage::{Key, Value, CF_WRITE};
 use util::properties::MvccProperties;
 
 pub use self::backward_scanner::{BackwardScanner, BackwardScannerBuilder};
@@ -47,16 +46,15 @@ pub struct MvccReader<S: Snapshot> {
     statistics: Statistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<S::Iter>>,
-    lock_cursor: Option<Cursor<S::Iter>>,
-    write_cursor: Option<Cursor<S::Iter>>,
-
+    //    lock_cursor: Option<Cursor<S::Iter>>,
+    //    write_cursor: Option<Cursor<S::Iter>>,
     scan_mode: Option<ScanMode>,
     key_only: bool,
 
     fill_cache: bool,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
-    isolation_level: IsolationLevel,
+    //    lower_bound: Option<Vec<u8>>,
+    //    upper_bound: Option<Vec<u8>>,
+    //    isolation_level: IsolationLevel,
 }
 
 impl<S: Snapshot> MvccReader<S> {
@@ -64,22 +62,22 @@ impl<S: Snapshot> MvccReader<S> {
         snapshot: S,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
-        lower_bound: Option<Vec<u8>>,
-        upper_bound: Option<Vec<u8>>,
-        isolation_level: IsolationLevel,
+        //        lower_bound: Option<Vec<u8>>,
+        //        upper_bound: Option<Vec<u8>>,
+        //        isolation_level: IsolationLevel,
     ) -> Self {
         Self {
             snapshot,
             statistics: Statistics::default(),
             data_cursor: None,
-            lock_cursor: None,
-            write_cursor: None,
+            //            lock_cursor: None,
+            //            write_cursor: None,
             scan_mode,
-            isolation_level,
+            //            isolation_level,
             key_only: false,
             fill_cache,
-            lower_bound,
-            upper_bound,
+            //            lower_bound,
+            //            upper_bound,
         }
     }
 
@@ -135,35 +133,35 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    fn create_write_cursor(&mut self) -> Result<()> {
-        if self.write_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                self.fill_cache,
-            );
-            let iter = self
-                .snapshot
-                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
-            self.write_cursor = Some(iter);
-        }
-        Ok(())
-    }
+    //    fn create_write_cursor(&mut self) -> Result<()> {
+    //        if self.write_cursor.is_none() {
+    //            let iter_opt = IterOption::new(
+    //                self.lower_bound.as_ref().cloned(),
+    //                self.upper_bound.as_ref().cloned(),
+    //                self.fill_cache,
+    //            );
+    //            let iter = self
+    //                .snapshot
+    //                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
+    //            self.write_cursor = Some(iter);
+    //        }
+    //        Ok(())
+    //    }
 
-    fn create_lock_cursor(&mut self) -> Result<()> {
-        if self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                true,
-            );
-            let iter = self
-                .snapshot
-                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
-            self.lock_cursor = Some(iter);
-        }
-        Ok(())
-    }
+    //    fn create_lock_cursor(&mut self) -> Result<()> {
+    //        if self.lock_cursor.is_none() {
+    //            let iter_opt = IterOption::new(
+    //                self.lower_bound.as_ref().cloned(),
+    //                self.upper_bound.as_ref().cloned(),
+    //                true,
+    //            );
+    //            let iter = self
+    //                .snapshot
+    //                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
+    //            self.lock_cursor = Some(iter);
+    //        }
+    //        Ok(())
+    //    }
 
     //    pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
     //        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Backward);
@@ -580,7 +578,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let reader = MvccReader::new(snap, None, false);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }
