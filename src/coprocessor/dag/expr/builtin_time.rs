@@ -44,7 +44,7 @@ impl ScalarFunc {
             return Err(box_err!("Incorrect datetime value: '{}'", t));
         }
         if t.is_zero() {
-            return Err(box_err!("Incorrect datetime value: '{}'", t));
+            return Err(box_err!("Datetime value is zero timestamp: '{}'", t));
         }
         let res = Time::new(
             t.get_time().date().and_hms(0, 0, 0),
@@ -57,7 +57,7 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::mysql::{self, Time};
+    use coprocessor::codec::mysql::Time;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
@@ -129,7 +129,7 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
-        
+
         // test NULL case
         let input = datum_expr(Datum::Null);
         let exp = Datum::Null;
