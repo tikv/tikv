@@ -346,7 +346,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         if self.omit_value {
             return Ok(vec![]);
         }
-        self.ensure_default_cursor();
+        self.ensure_default_cursor()?;
 
         let k = key.clone().append_ts(ts);
         let res = self

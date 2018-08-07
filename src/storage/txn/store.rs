@@ -14,7 +14,8 @@
 use super::{Error, Result};
 use kvproto::kvrpcpb::IsolationLevel;
 use storage::mvcc::{
-    Error as MvccError, ForwardScanner, ForwardScannerBuilder, MvccReader, PointGetterBuilder,
+    BackwardScanner, BackwardScannerBuilder, Error as MvccError, ForwardScanner,
+    ForwardScannerBuilder, MvccReader, PointGetterBuilder,
 };
 use storage::{Key, KvPair, ScanMode, Snapshot, Statistics, Value};
 
@@ -83,7 +84,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         lower_bound: Option<Vec<u8>>,
         upper_bound: Option<Vec<u8>>,
     ) -> Result<StoreScanner<S>> {
-        let (forward_scanner, reader) = match mode {
+        let (forward_scanner, backward_scanner) = match mode {
             ScanMode::Forward => {
                 let forward_scanner =
                     ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -95,22 +96,20 @@ impl<S: Snapshot> SnapshotStore<S> {
                 (Some(forward_scanner), None)
             }
             ScanMode::Backward => {
-                let mut reader = MvccReader::new(
-                    self.snapshot.clone(),
-                    Some(mode),
-                    self.fill_cache,
-                    lower_bound,
-                    upper_bound,
-                    self.isolation_level,
-                );
-                reader.set_key_only(key_only);
-                (None, Some(reader))
+                let backward_scanner =
+                    BackwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+                        .range(lower_bound, upper_bound)
+                        .omit_value(key_only)
+                        .fill_cache(self.fill_cache)
+                        .isolation_level(self.isolation_level)
+                        .build()?;
+                (None, Some(backward_scanner))
             }
             _ => unreachable!(),
         };
         Ok(StoreScanner {
             forward_scanner,
-            reader,
+            backward_scanner,
             start_ts: self.start_ts,
         })
     }
@@ -118,7 +117,7 @@ impl<S: Snapshot> SnapshotStore<S> {
 
 pub struct StoreScanner<S: Snapshot> {
     forward_scanner: Option<ForwardScanner<S>>,
-    reader: Option<MvccReader<S>>,
+    backward_scanner: Option<BackwardScanner<S>>,
     start_ts: u64,
 }
 
@@ -139,25 +138,12 @@ fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key
 }
 
 impl<S: Snapshot> StoreScanner<S> {
-    //    pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-    //        Ok(self
-    //            .forward_scanner
-    //            .as_mut()
-    //            .unwrap()
-    //            .read_next(key, self.start_ts)?)
-    //        unimplemented!();
-    //    }
-
     pub fn next(&mut self) -> Result<Option<(Key, Value)>> {
         Ok(self.forward_scanner.as_mut().unwrap().read_next()?)
     }
 
-    pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(self
-            .reader
-            .as_mut()
-            .unwrap()
-            .reverse_seek(key, self.start_ts)?)
+    pub fn prev(&mut self) -> Result<Option<(Key, Value)>> {
+        Ok(self.backward_scanner.as_mut().unwrap().read_next()?)
     }
 
     pub fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
@@ -166,30 +152,28 @@ impl<S: Snapshot> StoreScanner<S> {
             match self.next() {
                 Ok(Some((k, v))) => {
                     results.push(Ok((k.raw()?, v)));
-                    //                    key = k;
                 }
                 Ok(None) => break,
                 Err(Error::Mvcc(e)) => {
-                    // key =
                     handle_mvcc_err(e, &mut results)?;
                 }
                 Err(e) => return Err(e),
             }
-            //            key = key.append_ts(0);
         }
         Ok(results)
     }
 
-    pub fn reverse_scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+    pub fn reverse_scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
-            match self.reverse_seek(key) {
+            match self.prev() {
                 Ok(Some((k, v))) => {
                     results.push(Ok((k.raw()?, v)));
-                    key = k;
                 }
                 Ok(None) => break,
-                Err(Error::Mvcc(e)) => key = handle_mvcc_err(e, &mut results)?,
+                Err(Error::Mvcc(e)) => {
+                    handle_mvcc_err(e, &mut results)?;
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -197,19 +181,19 @@ impl<S: Snapshot> StoreScanner<S> {
     }
 
     pub fn get_statistics(&self) -> &Statistics {
-        match (self.forward_scanner.as_ref(), self.reader.as_ref()) {
-            (Some(forward_scanner), None) => forward_scanner.get_statistics(),
-            (None, Some(reader)) => reader.get_statistics(),
-            _ => unreachable!(),
-        }
+        self.forward_scanner
+            .as_ref()
+            .map(|scanner| scanner.get_statistics())
+            .unwrap_or_else(|| self.backward_scanner.as_ref().unwrap().get_statistics())
     }
 
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
-        match (self.forward_scanner.as_mut(), self.reader.as_mut()) {
-            (Some(forward_scanner), None) => stats.add(&forward_scanner.take_statistics()),
-            (None, Some(reader)) => reader.collect_statistics_into(stats),
-            _ => unreachable!(),
-        }
+        let res = self
+            .forward_scanner
+            .as_mut()
+            .map(|scanner| scanner.take_statistics())
+            .unwrap_or_else(|| self.backward_scanner.as_mut().unwrap().take_statistics());
+        stats.add(&res);
     }
 }
 
@@ -359,15 +343,21 @@ mod test {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut scanner = snapshot_store
-            .scanner(ScanMode::Backward, false, None, None)
-            .unwrap();
 
         let half = (key_num / 2) as usize;
         let key = format!("{}{}", KEY_PREFIX, START_ID + (half as u64) - 1);
         let start_key = make_key(key.as_bytes());
         let expect = &store.keys[0..half - 1];
-        let result = scanner.reverse_scan(start_key, half).unwrap();
+        let mut scanner = snapshot_store
+            .scanner(
+                ScanMode::Backward,
+                false,
+                None,
+                Some(start_key.take_encoded()),
+            )
+            .unwrap();
+
+        let result = scanner.reverse_scan(half).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
@@ -408,13 +398,18 @@ mod test {
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
 
-        let mut scanner = snapshot_store
-            .scanner(ScanMode::Backward, false, None, None)
-            .unwrap();
-
         let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
         let start_key = make_key(key.as_bytes());
-        let result = scanner.reverse_seek(start_key).unwrap();
+        let mut scanner = snapshot_store
+            .scanner(
+                ScanMode::Backward,
+                false,
+                None,
+                Some(start_key.take_encoded()),
+            )
+            .unwrap();
+
+        let result = scanner.prev().unwrap();
         let expect_key = format!("{}{}", KEY_PREFIX, START_ID);
         let expect_value = expect_key.clone().into_bytes();
         let expect = Some((make_key(expect_key.as_bytes()), expect_value as Value));
@@ -422,38 +417,48 @@ mod test {
     }
 
     #[test]
-    fn test_seek_with_bound() {
+    fn test_scan_with_bound() {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
 
-        let lower_bound = format!("{}{}", KEY_PREFIX, START_ID).into_bytes();
-        let upper_bound = format!("{}{}", KEY_PREFIX, START_ID + 10).into_bytes();
+        let lower_bound = make_key(format!("{}{}", KEY_PREFIX, START_ID + 10).as_bytes());
+        let upper_bound = make_key(format!("{}{}", KEY_PREFIX, START_ID + 20).as_bytes());
+
+        let expected: Vec<_> = (10..20)
+            .map(|i| make_key(format!("{}{}", KEY_PREFIX, START_ID + i).as_bytes()))
+            .collect();
 
         let mut scanner = snapshot_store
             .scanner(
                 ScanMode::Forward,
                 false,
-                Some(lower_bound.clone()),
-                Some(upper_bound.clone()),
+                Some(lower_bound.encoded().to_vec()),
+                Some(upper_bound.encoded().to_vec()),
             )
             .unwrap();
 
-        // Seek with upper bound should returns None.
-        let result = scanner.next().unwrap();
-        assert!(result.is_none());
+        // Collect all scanned keys
+        let mut result = Vec::new();
+        while let Some((k, _)) = scanner.next().unwrap() {
+            result.push(k);
+        }
+        assert_eq!(result, expected);
 
         let mut scanner = snapshot_store
             .scanner(
                 ScanMode::Backward,
                 false,
-                Some(lower_bound.clone()),
-                Some(upper_bound.clone()),
+                Some(lower_bound.take_encoded()),
+                Some(upper_bound.take_encoded()),
             )
             .unwrap();
 
-        // Reverse seek with lower bound should returns None.
-        let result = scanner.reverse_seek(make_key(&lower_bound)).unwrap();
-        assert!(result.is_none());
+        // Collect all scanned keys
+        let mut result = Vec::new();
+        while let Some((k, _)) = scanner.prev().unwrap() {
+            result.push(k);
+        }
+        assert_eq!(result, expected.into_iter().rev().collect::<Vec<_>>());
     }
 }

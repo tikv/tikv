@@ -658,8 +658,13 @@ impl<E: Engine> Storage<E> {
 
                     let mut scanner;
                     let res = if options.reverse_scan {
-                        scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
-                        scanner.reverse_scan(start_key, limit)
+                        scanner = snap_store.scanner(
+                            scan_mode,
+                            options.key_only,
+                            None,
+                            Some(start_key.take_encoded()),
+                        )?;
+                        scanner.reverse_scan(limit)
                     } else {
                         scanner = snap_store.scanner(
                             scan_mode,

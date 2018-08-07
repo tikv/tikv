@@ -98,7 +98,7 @@ impl<S: Snapshot> Scanner<S> {
         }
 
         let kv = match self.scan_mode {
-            ScanMode::Backward => self.scanner.reverse_seek(Key::from_raw(&self.seek_key))?,
+            ScanMode::Backward => self.scanner.prev()?,
             ScanMode::Forward => self.scanner.next()?,
             _ => unreachable!(),
         };
