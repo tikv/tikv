@@ -15,6 +15,7 @@ use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
 use crc::{crc32, Hasher32};
+use num::traits::Pow;
 use std::borrow::Cow;
 use std::i64;
 
@@ -114,6 +115,13 @@ impl ScalarFunc {
         let mut digest = crc32::Digest::new(crc32::IEEE);
         digest.write(&d);
         Ok(Some(i64::from(digest.sum32())))
+    }
+
+    #[inline]
+    pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let x = try_opt!(self.children[0].eval_real(ctx, row));
+        let y = try_opt!(self.children[1].eval_real(ctx, row));
+        Ok(Some(x.pow(y)))
     }
 }
 
@@ -327,6 +335,24 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::I64(exp);
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_pow() {
+        let tests = vec![
+            (ScalarFuncSig::Pow, Datum::F64(1.0), Datum::F64(3.0), Datum::F64(1.0)),
+            (ScalarFuncSig::Pow, Datum::F64(3.0), Datum::F64(0.0), Datum::F64(1.0)),
+            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(3.0), Datum::F64(8.0))
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1, exp) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let mut f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
