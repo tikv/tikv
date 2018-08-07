@@ -723,7 +723,7 @@ mod tests {
     use storage::engine::{Modify, ScanMode};
     use storage::mvcc::write::WriteType;
     use storage::mvcc::{MvccReader, MvccTxn};
-    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
@@ -744,19 +744,19 @@ mod tests {
         }
 
         pub fn put(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Put((make_key(pk), vec![]));
+            let m = Mutation::Put((Key::from_raw(pk), vec![]));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
 
         pub fn lock(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Lock(make_key(pk));
+            let m = Mutation::Lock(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
 
         pub fn delete(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Delete(make_key(pk));
+            let m = Mutation::Delete(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -769,7 +769,7 @@ mod tests {
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
@@ -777,7 +777,7 @@ mod tests {
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.collapse_rollback(false);
@@ -786,7 +786,7 @@ mod tests {
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
                 let mut txn = MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true);
@@ -993,7 +993,7 @@ mod tests {
         for i in 0..256 {
             for y in 0..256 {
                 let pk = &[i as u8, y as u8];
-                let m = Mutation::Put((make_key(pk), vec![]));
+                let m = Mutation::Put((Key::from_raw(pk), vec![]));
                 engine.prewrite(m, pk, start_ts);
                 engine.rollback(pk, start_ts);
                 // Generate 65534 RocksDB tombstones between [0,0] and [255,255].
@@ -1007,7 +1007,7 @@ mod tests {
         let start_ts = 3;
         for i in 0..256 {
             let pk = &[i as u8];
-            let m = Mutation::Put((make_key(pk), vec![]));
+            let m = Mutation::Put((Key::from_raw(pk), vec![]));
             engine.prewrite(m, pk, start_ts);
         }
 
@@ -1021,7 +1021,7 @@ mod tests {
             IsolationLevel::SI,
         );
         let row = &[255 as u8];
-        let k = make_key(row);
+        let k = Key::from_raw(row);
 
         // Call reverse seek
         let ts = 2;
@@ -1042,7 +1042,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
         let k = &[10 as u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1050,7 +1050,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
         let k = &[9 as u8];
         for ts in 0..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1058,7 +1058,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback for key [8].
         let k = &[8 as u8];
         for ts in 0..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             if ts < REVERSE_SEEK_BOUND / 2 {
                 engine.commit(k, ts, ts);
@@ -1070,18 +1070,18 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND / 2 Put 1 delete and REVERSE_SEEK_BOUND/2 Rollback for key [7].
         let k = &[7 as u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
         {
             let ts = REVERSE_SEEK_BOUND / 2;
-            let m = Mutation::Delete(make_key(k));
+            let m = Mutation::Delete(Key::from_raw(k));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
         for ts in REVERSE_SEEK_BOUND / 2 + 1..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.rollback(k, ts);
         }
@@ -1089,7 +1089,7 @@ mod tests {
         // Generate 1 PUT for key [6].
         let k = &[6 as u8];
         for ts in 0..1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1097,7 +1097,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND + 1 Rollback for key [5].
         let k = &[5 as u8];
         for ts in 0..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.rollback(k, ts);
         }
@@ -1106,7 +1106,7 @@ mod tests {
         // with ts = REVERSE_SEEK_BOUND + 1 for key [4].
         let k = &[4 as u8];
         for ts in REVERSE_SEEK_BOUND..REVERSE_SEEK_BOUND + 2 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1124,9 +1124,9 @@ mod tests {
         let ts = REVERSE_SEEK_BOUND;
         // Use REVERSE_SEEK_BOUND / 2 prev to get key [10].
         assert_eq!(
-            reader.reverse_seek(make_key(&[11 as u8]), ts).unwrap(),
+            reader.reverse_seek(Key::from_raw(&[11 as u8]), ts).unwrap(),
             Some((
-                make_key(&[10 as u8]),
+                Key::from_raw(&[10 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
             ))
         );
@@ -1142,8 +1142,8 @@ mod tests {
         // Use REVERSE_SEEK_BOUND prev and 1 seek to get key [9].
         // So the total prev += REVERSE_SEEK_BOUND, total seek = 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[10 as u8]), ts).unwrap(),
-            Some((make_key(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+            reader.reverse_seek(Key::from_raw(&[10 as u8]), ts).unwrap(),
+            Some((Key::from_raw(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         total_prev += REVERSE_SEEK_BOUND as usize;
         total_seek += 1;
@@ -1157,9 +1157,9 @@ mod tests {
         // in reverse_get_impl), 1 seek and 1 next to get key [8].
         // So the total prev += REVERSE_SEEK_BOUND + 1, total next += 1, total seek += 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[9 as u8]), ts).unwrap(),
+            reader.reverse_seek(Key::from_raw(&[9 as u8]), ts).unwrap(),
             Some((
-                make_key(&[8 as u8]),
+                Key::from_raw(&[8 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
             ))
         );
@@ -1177,8 +1177,8 @@ mod tests {
         // key [6] will cause 3 prev (2 in near_reverse_seek and 1 in reverse_get_impl).
         // So the total prev += REVERSE_SEEK_BOUND + 6, total next += 1, total seek += 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[8 as u8]), ts).unwrap(),
-            Some((make_key(&[6 as u8]), vec![0 as u8]))
+            reader.reverse_seek(Key::from_raw(&[8 as u8]), ts).unwrap(),
+            Some((Key::from_raw(&[6 as u8]), vec![0 as u8]))
         );
         total_prev += REVERSE_SEEK_BOUND as usize + 5;
         total_seek += 1;
@@ -1196,8 +1196,8 @@ mod tests {
         // key [4] will cause 1 prev.
         // So the total prev += REVERSE_SEEK_BOUND + 3, total next += 1, total seek += 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[6 as u8]), ts).unwrap(),
-            Some((make_key(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+            reader.reverse_seek(Key::from_raw(&[6 as u8]), ts).unwrap(),
+            Some((Key::from_raw(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         total_prev += REVERSE_SEEK_BOUND as usize + 3;
         total_seek += 1;
@@ -1209,7 +1209,10 @@ mod tests {
         assert_eq!(reader.get_statistics().write.get, 0);
 
         // Use a prev and reach the very beginning.
-        assert_eq!(reader.reverse_seek(make_key(&[4 as u8]), ts).unwrap(), None);
+        assert_eq!(
+            reader.reverse_seek(Key::from_raw(&[4 as u8]), ts).unwrap(),
+            None
+        );
         total_prev += 1;
         assert_eq!(reader.get_statistics().write.prev, total_prev);
         assert_eq!(reader.get_statistics().write.seek, total_seek);
@@ -1227,18 +1230,18 @@ mod tests {
         let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((make_key(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 10);
 
         engine.rollback(k, 5);
         engine.rollback(k, 20);
 
-        let m = Mutation::Put((make_key(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 25);
         engine.commit(k, 25, 30);
 
-        let m = Mutation::Put((make_key(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
@@ -1248,7 +1251,7 @@ mod tests {
         // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
         // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
-        let key = make_key(k);
+        let key = Key::from_raw(k);
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
         assert_eq!(commit_ts, 40);
         assert_eq!(write_type, WriteType::Put);
