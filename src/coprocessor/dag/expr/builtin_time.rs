@@ -137,5 +137,15 @@ mod test {
         let op = Expression::build(&mut ctx, f).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, exp);
+
+        // test zero case
+        let arg = datum_expr(Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()));
+        let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "zero timestamp should not wrong"),
+            Err(_) => assert!(true),
+        }
     }
 }
