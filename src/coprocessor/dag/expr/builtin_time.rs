@@ -144,7 +144,7 @@ mod test {
         let op = Expression::build(&mut ctx, f).unwrap();
         let got = op.eval(&mut ctx, &[]);
         match got {
-            Ok(_) => assert!(false, "zero timestamp should not wrong"),
+            Ok(_) => assert!(false, "zero timestamp should be wrong"),
             Err(_) => assert!(true),
         }
     }
