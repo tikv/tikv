@@ -603,6 +603,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
+        self.valid = true;
         statistics.seek += 1;
         self.is_key_read = false;
         self.is_value_read = false;
@@ -611,6 +612,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
+        self.valid = true;
         statistics.seek += 1;
         self.is_key_read = false;
         self.is_value_read = false;
@@ -619,6 +621,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.valid = true;
         statistics.seek += 1;
         self.is_key_read = false;
         self.is_value_read = false;
@@ -631,6 +634,7 @@ impl<I: Iterator> Cursor<I> {
         key: &Key,
         statistics: &mut CFStatistics,
     ) -> Result<bool> {
+        self.valid = true;
         statistics.seek_for_prev += 1;
         self.is_key_read = false;
         self.is_value_read = false;
@@ -639,6 +643,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
+        assert!(self.valid);
         statistics.next += 1;
         self.is_key_read = false;
         self.is_value_read = false;
@@ -647,6 +652,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
+        assert!(self.valid);
         statistics.prev += 1;
         self.is_key_read = false;
         self.is_value_read = false;
