@@ -360,19 +360,22 @@ fn test_node_merge_brain_split() {
 
     cluster.must_split(&region, b"k2");
     cluster.must_put(b"k11", b"v11");
-    util::must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
-    util::must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
-
-    // Wait for all peers of the another region catching up logs and then isolate peer 3.
-    // So that the min_progress will never be 0 when merge.
     cluster.must_put(b"k21", b"v21");
-    util::must_get_equal(&cluster.get_engine(2), b"k21", b"v21");
-    util::must_get_equal(&cluster.get_engine(3), b"k21", b"v21");
-
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    for i in 1..4 {
+        util::must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
+        util::must_get_equal(&cluster.get_engine(i), b"k21", b"v21");
+    }
 
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k3").unwrap();
+
+    // Splited regions' leaders could be at store 3, so transfer them to peer 1.
+    let left_peer_1 = find_peer(&left, 1).cloned().unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_peer_1);
+    let right_peer_1 = find_peer(&right, 1).cloned().unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_peer_1);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
     pd_client.must_merge(left.get_id(), right.get_id());
 
     for i in 0..100 {
