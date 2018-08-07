@@ -173,7 +173,7 @@ pub mod test {
     use coprocessor::util;
     use storage::engine::{self, Engine, Modify, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, Options, SnapshotStore, ALL_CFS};
+    use storage::{Key, Mutation, Options, SnapshotStore, ALL_CFS};
     use util::collections::HashMap;
 
     use super::*;
@@ -283,7 +283,7 @@ pub mod test {
                         pk = key.clone();
                     }
                     txn.prewrite(
-                        Mutation::Put((make_key(key), value.to_vec())),
+                        Mutation::Put((Key::from_raw(key), value.to_vec())),
                         &pk,
                         &Options::default(),
                     ).unwrap();
@@ -296,7 +296,7 @@ pub mod test {
             let txn_modifies = {
                 let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 for &(ref key, _) in kv_data {
-                    txn.commit(&make_key(key), COMMIT_TS).unwrap();
+                    txn.commit(&Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 txn.into_modifies()
             };

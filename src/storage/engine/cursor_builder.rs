@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ use storage::engine::Result;
 use storage::{CfName, Cursor, ScanMode, Snapshot};
 
 /// A handy utility to build a snapshot cursor according to various configurations.
-// TODO: Move to `storage::engine`.
 pub struct CursorBuilder<'a, S: 'a + Snapshot> {
     snapshot: &'a S,
     cf: CfName,

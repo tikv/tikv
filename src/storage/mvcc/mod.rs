@@ -13,7 +13,7 @@
 
 mod lock;
 mod metrics;
-mod reader;
+pub mod reader;
 mod txn;
 mod write;
 
@@ -125,3 +125,273 @@ impl Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+#[cfg(test)]
+pub mod tests {
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
+
+    use storage::CF_WRITE;
+    use storage::{Engine, Key, Modify, Mutation, Options, Snapshot};
+
+    use super::*;
+
+    fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
+        if !modifies.is_empty() {
+            engine.write(ctx, modifies).unwrap();
+        }
+    }
+
+    pub fn must_get<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
+        assert_eq!(
+            point_getter
+                .read_next(&Key::from_raw(key), ts)
+                .unwrap()
+                .unwrap(),
+            expect
+        );
+    }
+
+    pub fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot.clone())
+            .isolation_level(IsolationLevel::RC)
+            .build()
+            .unwrap();
+        assert_eq!(
+            point_getter
+                .read_next(&Key::from_raw(key), ts)
+                .unwrap()
+                .unwrap(),
+            expect
+        )
+    }
+
+    pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(key), ts)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
+        assert!(point_getter.read_next(&Key::from_raw(key), ts).is_err());
+    }
+
+    pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        txn.prewrite(
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            pk,
+            &Options::default(),
+        ).unwrap();
+        write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        txn.prewrite(
+            Mutation::Delete(Key::from_raw(key)),
+            pk,
+            &Options::default(),
+        ).unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
+    }
+
+    pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+            .unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
+    }
+
+    pub fn must_prewrite_lock_err<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        assert!(
+            txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+                .is_err()
+        );
+    }
+
+    pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.commit(&Key::from_raw(key), commit_ts).unwrap();
+        write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_commit_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        assert!(txn.commit(&Key::from_raw(key), commit_ts).is_err());
+    }
+
+    pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.rollback(&Key::from_raw(key)).unwrap();
+        write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        assert!(txn.rollback(&Key::from_raw(key)).is_err());
+    }
+
+    pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, 0, true).unwrap();
+        txn.gc(&Key::from_raw(key), safe_point).unwrap();
+        write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        let lock = cf_reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(lock.ts, start_ts);
+    }
+
+    pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        assert!(cf_reader.load_lock(&Key::from_raw(key)).unwrap().is_none());
+    }
+
+    pub fn must_written<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
+        tp: WriteType,
+    ) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let k = Key::from_raw(key).append_ts(commit_ts);
+        let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
+        let write = Write::parse(&v).unwrap();
+        assert_eq!(write.start_ts, start_ts);
+        assert_eq!(write.write_type, tp);
+    }
+
+    pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        assert!(
+            cf_reader
+                .near_seek_write(&Key::from_raw(key), ts, true)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    pub fn must_seek_write<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        ts: u64,
+        start_ts: u64,
+        commit_ts: u64,
+        write_type: WriteType,
+    ) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        let (t, write) = cf_reader
+            .near_seek_write(&Key::from_raw(key), ts, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(t, commit_ts);
+        assert_eq!(write.start_ts, start_ts);
+        assert_eq!(write.write_type, write_type);
+    }
+
+    pub fn must_get_commit_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        let (ts, write_type) = cf_reader
+            .near_reverse_seek_write_type_by_start_ts(&Key::from_raw(key), start_ts, true)
+            .unwrap()
+            .unwrap();
+        assert_ne!(write_type, WriteType::Rollback);
+        assert_eq!(ts, commit_ts);
+    }
+
+    pub fn must_get_commit_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        let some_commit_info = cf_reader
+            .near_reverse_seek_write_type_by_start_ts(&Key::from_raw(key), start_ts, true)
+            .unwrap();
+        match some_commit_info {
+            None => {}
+            Some((_, write_type)) => {
+                assert_eq!(write_type, WriteType::Rollback);
+            }
+        }
+    }
+
+    pub fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        let (ts, write_type) = cf_reader
+            .near_reverse_seek_write_type_by_start_ts(&Key::from_raw(key), start_ts, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ts, start_ts);
+        assert_eq!(write_type, WriteType::Rollback);
+    }
+
+    pub fn must_get_rollback_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        let some_commit_info = cf_reader
+            .near_reverse_seek_write_type_by_start_ts(&Key::from_raw(key), start_ts, true)
+            .unwrap();
+        assert_eq!(some_commit_info, None);
+    }
+
+    pub fn must_scan_keys<E: Engine>(
+        engine: &E,
+        start: Option<&[u8]>,
+        limit: usize,
+        keys: Vec<&[u8]>,
+        next_start: Option<&[u8]>,
+    ) {
+        let expect = (
+            keys.into_iter().map(Key::from_raw).collect(),
+            next_start.map(|x| Key::from_raw(x).append_ts(0)),
+        );
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+        assert_eq!(
+            cf_reader
+                .scan_keys(start.map(Key::from_raw).as_ref(), limit)
+                .unwrap(),
+            expect
+        );
+    }
+
+}

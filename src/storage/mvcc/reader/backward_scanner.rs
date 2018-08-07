@@ -18,7 +18,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 use super::REVERSE_SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::types::truncate_ts;
 use storage::{
     Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
@@ -185,11 +184,11 @@ impl<S: Snapshot> BackwardScanner<S> {
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
                     (None, Some(lk)) => (lk.to_vec(), false, true),
-                    (Some(wk), None) => (truncate_ts(wk).to_vec(), true, false),
-                    (Some(wk), Some(lk)) => match truncate_ts(wk).cmp(lk) {
+                    (Some(wk), None) => (Key::truncate_ts_for(wk)?.to_vec(), true, false),
+                    (Some(wk), Some(lk)) => match Key::truncate_ts_for(wk)?.cmp(lk) {
                         Ordering::Less => (lk.to_vec(), false, true),
-                        Ordering::Greater => (truncate_ts(wk).to_vec(), true, false),
-                        Ordering::Equal => (truncate_ts(wk).to_vec(), true, true),
+                        Ordering::Greater => (Key::truncate_ts_for(wk)?.to_vec(), true, false),
+                        Ordering::Equal => (Key::truncate_ts_for(wk)?.to_vec(), true, true),
                     },
                 }
             };

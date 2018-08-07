@@ -17,7 +17,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
-use storage::types::truncate_ts;
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::number;
@@ -117,9 +116,10 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
     }
 }
 
-/// This struct can be used to find next key greater or equal to a given user key. Internally,
-/// rollbacks are ignored and smaller version will be tried. If the isolation level is SI, locks
-/// will be checked first.
+/// This struct can be used to scan keys starting from the given user key (greater than or equal).
+///
+/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
+/// isolation level is SI, locks will be checked first.
 ///
 /// Use `ForwardScannerBuilder` to build `ForwardScanner`.
 pub struct ForwardScanner<S: Snapshot> {
@@ -154,6 +154,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     }
 
     /// Get reference of the statics collected so far.
+    // TODO: Remove this function once `BackwardScanner` is landed.
     pub fn get_statistics(&self) -> &Statistics {
         &self.statistics
     }
@@ -166,7 +167,6 @@ impl<S: Snapshot> ForwardScanner<S> {
             self.is_started = true;
         }
 
-        // TODO: Add more comments to explain the logic.
         loop {
             let (key, has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid() {
@@ -182,10 +182,10 @@ impl<S: Snapshot> ForwardScanner<S> {
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
                     (None, Some(lk)) => (lk.to_vec(), false, true),
-                    (Some(wk), None) => (truncate_ts(wk).to_vec(), true, false),
-                    (Some(wk), Some(lk)) => match truncate_ts(wk).cmp(lk) {
+                    (Some(wk), None) => (Key::truncate_ts_for(wk)?.to_vec(), true, false),
+                    (Some(wk), Some(lk)) => match Key::truncate_ts_for(wk)?.cmp(lk) {
                         // Lock greater than `wk`, so `wk` must not have lock.
-                        Ordering::Less => (truncate_ts(wk).to_vec(), true, false),
+                        Ordering::Less => (Key::truncate_ts_for(wk)?.to_vec(), true, false),
                         Ordering::Greater => (lk.to_vec(), false, true),
                         Ordering::Equal => (lk.to_vec(), true, true),
                     },

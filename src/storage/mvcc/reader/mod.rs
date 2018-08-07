@@ -15,7 +15,7 @@ mod backward_scanner;
 mod cf_reader;
 mod forward_scanner;
 mod point_getter;
-mod util;
+pub mod util;
 
 //use super::lock::Lock;
 use super::Result;
@@ -23,15 +23,12 @@ use super::Result;
 use raftstore::store::engine::IterOption;
 use std::u64;
 use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
-use storage::{Key, Value, CF_WRITE};
-use util::properties::MvccProperties;
+use storage::{Key, Value};
 
 pub use self::backward_scanner::{BackwardScanner, BackwardScannerBuilder};
 pub use self::cf_reader::{CfReader, CfReaderBuilder};
 pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
-
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -132,305 +129,26 @@ impl<S: Snapshot> MvccReader<S> {
             _ => ScanMode::Mixed,
         }
     }
-
-    //    fn create_write_cursor(&mut self) -> Result<()> {
-    //        if self.write_cursor.is_none() {
-    //            let iter_opt = IterOption::new(
-    //                self.lower_bound.as_ref().cloned(),
-    //                self.upper_bound.as_ref().cloned(),
-    //                self.fill_cache,
-    //            );
-    //            let iter = self
-    //                .snapshot
-    //                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
-    //            self.write_cursor = Some(iter);
-    //        }
-    //        Ok(())
-    //    }
-
-    //    fn create_lock_cursor(&mut self) -> Result<()> {
-    //        if self.lock_cursor.is_none() {
-    //            let iter_opt = IterOption::new(
-    //                self.lower_bound.as_ref().cloned(),
-    //                self.upper_bound.as_ref().cloned(),
-    //                true,
-    //            );
-    //            let iter = self
-    //                .snapshot
-    //                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
-    //            self.lock_cursor = Some(iter);
-    //        }
-    //        Ok(())
-    //    }
-
-    //    pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
-    //        assert!(*self.scan_mode.as_ref().unwrap() == ScanMode::Backward);
-    //        self.create_write_cursor()?;
-    //        self.create_lock_cursor()?;
-    //
-    //        let (mut write_valid, mut lock_valid) = (true, true);
-    //        loop {
-    //            key = {
-    //                let w_cur = self.write_cursor.as_mut().unwrap();
-    //                let l_cur = self.lock_cursor.as_mut().unwrap();
-    //                let (mut w_key, mut l_key) = (None, None);
-    //                if write_valid {
-    //                    if w_cur.near_reverse_seek(&key, false, &mut self.statistics.write)? {
-    //                        w_key = Some(w_cur.key(&mut self.statistics.write));
-    //                    } else {
-    //                        w_key = None;
-    //                        write_valid = false;
-    //                    }
-    //                }
-    //                if lock_valid {
-    //                    if l_cur.near_reverse_seek(&key, false, &mut self.statistics.lock)? {
-    //                        l_key = Some(l_cur.key(&mut self.statistics.lock));
-    //                    } else {
-    //                        l_key = None;
-    //                        lock_valid = false;
-    //                    }
-    //                }
-    //                match (w_key, l_key) {
-    //                    (None, None) => return Ok(None),
-    //                    (None, Some(k)) => Key::from_encoded(k.to_vec()),
-    //                    (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
-    //                    (Some(wk), Some(lk)) => if wk < lk {
-    //                        Key::from_encoded(lk.to_vec())
-    //                    } else {
-    //                        Key::from_encoded(wk.to_vec()).truncate_ts()?
-    //                    },
-    //                }
-    //            };
-    //
-    //            if let Some(v) = self.reverse_get_impl(&key, ts)? {
-    //                return Ok(Some((key, v)));
-    //            }
-    //
-    //            // reverse_get_impl may call write_cursor's prev.
-    //            if !self.write_cursor.as_ref().unwrap().valid() {
-    //                write_valid = false;
-    //            }
-    //        }
-    //    }
-
-    //    fn reverse_get_impl(&mut self, user_key: &Key, ts: u64) -> Result<Option<Value>> {
-    //        assert!(self.lock_cursor.is_some());
-    //        assert!(self.write_cursor.is_some());
-    //
-    //        // Check lock.
-    //        match self.isolation_level {
-    //            IsolationLevel::SI => {
-    //                let l_cur = self.lock_cursor.as_mut().unwrap();
-    //                if l_cur.valid()
-    //                    && l_cur.key(&mut self.statistics.lock) == user_key.encoded().as_slice()
-    //                {
-    //                    self.statistics.lock.processed += 1;
-    //                    self::util::check_lock(
-    //                        user_key,
-    //                        ts,
-    //                        &Lock::parse(l_cur.value(&mut self.statistics.lock))?,
-    //                    )?;
-    //                }
-    //            }
-    //            IsolationLevel::RC => {}
-    //        }
-    //
-    //        // Get value for this user key.
-    //        // At first, we use several prev to try to get the latest version.
-    //        let mut lastest_version = (None /* start_ts */, None /* short value */);
-    //        let mut last_handled_key: Option<Vec<u8>> = None;
-    //        for _ in 0..REVERSE_SEEK_BOUND {
-    //            if !self.write_cursor.as_mut().unwrap().valid() {
-    //                return self.get_value(user_key, lastest_version.0, lastest_version.1);
-    //            }
-    //
-    //            let mut write = {
-    //                let (commit_ts, key) = {
-    //                    let w_cur = self.write_cursor.as_mut().unwrap();
-    //                    last_handled_key = Some(w_cur.key(&mut self.statistics.write).to_vec());
-    //                    let w_key = Key::from_encoded(w_cur.key(&mut self.statistics.write).to_vec());
-    //                    (w_key.decode_ts()?, w_key.truncate_ts()?)
-    //                };
-    //
-    //                // reach neighbour user key or can't see this version.
-    //                if ts < commit_ts || &key != user_key {
-    //                    assert!(&key <= user_key);
-    //                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
-    //                }
-    //                self.statistics.write.processed += 1;
-    //                Write::parse(
-    //                    self.write_cursor
-    //                        .as_mut()
-    //                        .unwrap()
-    //                        .value(&mut self.statistics.write),
-    //                )?
-    //            };
-    //
-    //            match write.write_type {
-    //                WriteType::Put => {
-    //                    if write.short_value.is_some() {
-    //                        if self.key_only {
-    //                            lastest_version = (None, Some(vec![]));
-    //                        } else {
-    //                            lastest_version = (None, write.short_value.take());
-    //                        }
-    //                    } else {
-    //                        lastest_version = (Some(write.start_ts), None);
-    //                    }
-    //                }
-    //                WriteType::Delete => lastest_version = (None, None),
-    //                WriteType::Lock | WriteType::Rollback => {}
-    //            }
-    //            self.write_cursor
-    //                .as_mut()
-    //                .unwrap()
-    //                .prev(&mut self.statistics.write);
-    //        }
-    //
-    //        // After several prev, we still not get the latest version for the specified ts,
-    //        // use seek to locate the latest version.
-    //        let key = user_key.clone().append_ts(ts);
-    //        let valid = self
-    //            .write_cursor
-    //            .as_mut()
-    //            .unwrap()
-    //            .internal_seek(&key, &mut self.statistics.write)?;
-    //        assert!(valid);
-    //        loop {
-    //            let mut write = {
-    //                // If we reach the last handled key, it means we have checked all versions
-    //                // for this user key.
-    //                if self
-    //                    .write_cursor
-    //                    .as_mut()
-    //                    .unwrap()
-    //                    .key(&mut self.statistics.write)
-    //                    >= last_handled_key.as_ref().unwrap().as_slice()
-    //                {
-    //                    return self.get_value(user_key, lastest_version.0, lastest_version.1);
-    //                }
-    //
-    //                let w_cur = self.write_cursor.as_mut().unwrap();
-    //                let w_key = Key::from_encoded(w_cur.key(&mut self.statistics.write).to_vec());
-    //                let commit_ts = w_key.decode_ts()?;
-    //                assert!(commit_ts <= ts);
-    //                let key = w_key.truncate_ts()?;
-    //                assert_eq!(&key, user_key);
-    //                self.statistics.write.processed += 1;
-    //                Write::parse(w_cur.value(&mut self.statistics.write))?
-    //            };
-    //
-    //            match write.write_type {
-    //                WriteType::Put => {
-    //                    if write.short_value.is_some() {
-    //                        if self.key_only {
-    //                            return Ok(Some(vec![]));
-    //                        } else {
-    //                            return Ok(write.short_value.take());
-    //                        }
-    //                    } else {
-    //                        return Ok(Some(self.load_data(user_key, write.start_ts)?));
-    //                    }
-    //                }
-    //                WriteType::Delete => return Ok(None),
-    //                WriteType::Lock | WriteType::Rollback => {
-    //                    let w_cur = self.write_cursor.as_mut().unwrap();
-    //                    assert!(w_cur.next(&mut self.statistics.write));
-    //                }
-    //            }
-    //        }
-    //    }
-
-    //    fn get_value(
-    //        &mut self,
-    //        user_key: &Key,
-    //        start_ts: Option<u64>,
-    //        short_value: Option<Vec<u8>>,
-    //    ) -> Result<Option<Value>> {
-    //        if let Some(ts) = start_ts {
-    //            Ok(Some(self.load_data(user_key, ts)?))
-    //        } else {
-    //            Ok(short_value)
-    //        }
-    //    }
-
-    // Returns true if it needs gc.
-    // This is for optimization purpose, does not mean to be accurate.
-    pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
-        // Always GC.
-        if ratio_threshold < 1.0 {
-            return true;
-        }
-
-        let props = match self.get_mvcc_properties(safe_point) {
-            Some(v) => v,
-            None => return true,
-        };
-
-        // No data older than safe_point to GC.
-        if props.min_ts > safe_point {
-            return false;
-        }
-
-        // Note: Since the properties are file-based, it can be false positive.
-        // For example, multiple files can have a different version of the same row.
-
-        // A lot of MVCC versions to GC.
-        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
-            return true;
-        }
-        // A lot of non-effective MVCC versions to GC.
-        if props.num_versions as f64 > props.num_puts as f64 * ratio_threshold {
-            return true;
-        }
-
-        // A lot of MVCC versions of a single row to GC.
-        props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
-    }
-
-    fn get_mvcc_properties(&self, safe_point: u64) -> Option<MvccProperties> {
-        let collection = match self.snapshot.get_properties_cf(CF_WRITE) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-        if collection.is_empty() {
-            return None;
-        }
-        // Aggregate MVCC properties.
-        let mut props = MvccProperties::new();
-        for (_, v) in &*collection {
-            let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-            // Filter out properties after safe_point.
-            if mvcc.min_ts > safe_point {
-                continue;
-            }
-            props.add(&mvcc);
-        }
-        Some(props)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvrpcpb::IsolationLevel;
+    //    use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::keys;
     use raftstore::store::RegionSnapshot;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;
-    use storage::engine::{Modify, ScanMode};
+    use storage::engine::Modify;
     use storage::mvcc::write::WriteType;
-    use storage::mvcc::{BackwardScannerBuilder, CfReaderBuilder, MvccReader, MvccTxn};
-    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use storage::mvcc::{self, BackwardScannerBuilder, CfReaderBuilder, MvccTxn};
+    use storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
 
-    use super::REVERSE_SEEK_BOUND;
+    //    use super::REVERSE_SEEK_BOUND;
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -446,19 +164,19 @@ mod tests {
         }
 
         pub fn put(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Put((make_key(pk), vec![]));
+            let m = Mutation::Put((Key::from_raw(pk), vec![]));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
 
         pub fn lock(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Lock(make_key(pk));
+            let m = Mutation::Lock(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
 
         pub fn delete(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Delete(make_key(pk));
+            let m = Mutation::Delete(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -471,7 +189,7 @@ mod tests {
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.commit(&k, commit_ts).unwrap();
@@ -479,7 +197,7 @@ mod tests {
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.collapse_rollback(false);
@@ -488,7 +206,7 @@ mod tests {
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
                 let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
@@ -578,9 +296,8 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(snap, None, false);
-        assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
-        reader.get_mvcc_properties(safe_point)
+        assert_eq!(mvcc::reader::util::need_gc(&snap, safe_point, 1.0), need_gc);
+        mvcc::reader::util::get_mvcc_properties(&snap, safe_point)
     }
 
     #[test]
@@ -695,7 +412,7 @@ mod tests {
         for i in 0..256 {
             for y in 0..256 {
                 let pk = &[i as u8, y as u8];
-                let m = Mutation::Put((make_key(pk), vec![]));
+                let m = Mutation::Put((Key::from_raw(pk), vec![]));
                 engine.prewrite(m, pk, start_ts);
                 engine.rollback(pk, start_ts);
                 // Generate 65534 RocksDB tombstones between [0,0] and [255,255].
@@ -709,13 +426,13 @@ mod tests {
         let start_ts = 3;
         for i in 0..256 {
             let pk = &[i as u8];
-            let m = Mutation::Put((make_key(pk), vec![]));
+            let m = Mutation::Put((Key::from_raw(pk), vec![]));
             engine.prewrite(m, pk, start_ts);
         }
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let row = &[255 as u8];
-        let k = make_key(row);
+        let k = Key::from_raw(row);
 
         // Call reverse scan
         let ts = 2;
@@ -741,7 +458,7 @@ mod tests {
     //        // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
     //        let k = &[10 as u8];
     //        for ts in 0..REVERSE_SEEK_BOUND / 2 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            engine.commit(k, ts, ts);
     //        }
@@ -749,7 +466,7 @@ mod tests {
     //        // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
     //        let k = &[9 as u8];
     //        for ts in 0..REVERSE_SEEK_BOUND + 1 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            engine.commit(k, ts, ts);
     //        }
@@ -757,7 +474,7 @@ mod tests {
     //        // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback for key [8].
     //        let k = &[8 as u8];
     //        for ts in 0..REVERSE_SEEK_BOUND + 1 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            if ts < REVERSE_SEEK_BOUND / 2 {
     //                engine.commit(k, ts, ts);
@@ -769,18 +486,18 @@ mod tests {
     //        // Generate REVERSE_SEEK_BOUND / 2 Put 1 delete and REVERSE_SEEK_BOUND/2 Rollback for key [7].
     //        let k = &[7 as u8];
     //        for ts in 0..REVERSE_SEEK_BOUND / 2 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            engine.commit(k, ts, ts);
     //        }
     //        {
     //            let ts = REVERSE_SEEK_BOUND / 2;
-    //            let m = Mutation::Delete(make_key(k));
+    //            let m = Mutation::Delete(Key::from_raw(k));
     //            engine.prewrite(m, k, ts);
     //            engine.commit(k, ts, ts);
     //        }
     //        for ts in REVERSE_SEEK_BOUND / 2 + 1..REVERSE_SEEK_BOUND + 1 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            engine.rollback(k, ts);
     //        }
@@ -788,7 +505,7 @@ mod tests {
     //        // Generate 1 PUT for key [6].
     //        let k = &[6 as u8];
     //        for ts in 0..1 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            engine.commit(k, ts, ts);
     //        }
@@ -796,7 +513,7 @@ mod tests {
     //        // Generate REVERSE_SEEK_BOUND + 1 Rollback for key [5].
     //        let k = &[5 as u8];
     //        for ts in 0..REVERSE_SEEK_BOUND + 1 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            engine.rollback(k, ts);
     //        }
@@ -805,7 +522,7 @@ mod tests {
     //        // with ts = REVERSE_SEEK_BOUND + 1 for key [4].
     //        let k = &[4 as u8];
     //        for ts in REVERSE_SEEK_BOUND..REVERSE_SEEK_BOUND + 2 {
-    //            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+    //            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
     //            engine.prewrite(m, k, ts);
     //            engine.commit(k, ts, ts);
     //        }
@@ -823,9 +540,9 @@ mod tests {
     //        let ts = REVERSE_SEEK_BOUND;
     //        // Use REVERSE_SEEK_BOUND / 2 prev to get key [10].
     //        assert_eq!(
-    //            reader.reverse_seek(make_key(&[11 as u8]), ts).unwrap(),
+    //            reader.reverse_seek(Key::from_raw(&[11 as u8]), ts).unwrap(),
     //            Some((
-    //                make_key(&[10 as u8]),
+    //                Key::from_raw(&[10 as u8]),
     //                vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
     //            ))
     //        );
@@ -841,8 +558,8 @@ mod tests {
     //        // Use REVERSE_SEEK_BOUND prev and 1 seek to get key [9].
     //        // So the total prev += REVERSE_SEEK_BOUND, total seek = 1.
     //        assert_eq!(
-    //            reader.reverse_seek(make_key(&[10 as u8]), ts).unwrap(),
-    //            Some((make_key(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+    //            reader.reverse_seek(Key::from_raw(&[10 as u8]), ts).unwrap(),
+    //            Some((Key::from_raw(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
     //        );
     //        total_prev += REVERSE_SEEK_BOUND as usize;
     //        total_seek += 1;
@@ -856,9 +573,9 @@ mod tests {
     //        // in reverse_get_impl), 1 seek and 1 next to get key [8].
     //        // So the total prev += REVERSE_SEEK_BOUND + 1, total next += 1, total seek += 1.
     //        assert_eq!(
-    //            reader.reverse_seek(make_key(&[9 as u8]), ts).unwrap(),
+    //            reader.reverse_seek(Key::from_raw(&[9 as u8]), ts).unwrap(),
     //            Some((
-    //                make_key(&[8 as u8]),
+    //                Key::from_raw(&[8 as u8]),
     //                vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
     //            ))
     //        );
@@ -876,8 +593,8 @@ mod tests {
     //        // key [6] will cause 3 prev (2 in near_reverse_seek and 1 in reverse_get_impl).
     //        // So the total prev += REVERSE_SEEK_BOUND + 6, total next += 1, total seek += 1.
     //        assert_eq!(
-    //            reader.reverse_seek(make_key(&[8 as u8]), ts).unwrap(),
-    //            Some((make_key(&[6 as u8]), vec![0 as u8]))
+    //            reader.reverse_seek(Key::from_raw(&[8 as u8]), ts).unwrap(),
+    //            Some((Key::from_raw(&[6 as u8]), vec![0 as u8]))
     //        );
     //        total_prev += REVERSE_SEEK_BOUND as usize + 5;
     //        total_seek += 1;
@@ -895,8 +612,8 @@ mod tests {
     //        // key [4] will cause 1 prev.
     //        // So the total prev += REVERSE_SEEK_BOUND + 3, total next += 1, total seek += 1.
     //        assert_eq!(
-    //            reader.reverse_seek(make_key(&[6 as u8]), ts).unwrap(),
-    //            Some((make_key(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+    //            reader.reverse_seek(Key::from_raw(&[6 as u8]), ts).unwrap(),
+    //            Some((Key::from_raw(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
     //        );
     //        total_prev += REVERSE_SEEK_BOUND as usize + 3;
     //        total_seek += 1;
@@ -908,7 +625,10 @@ mod tests {
     //        assert_eq!(reader.get_statistics().write.get, 0);
     //
     //        // Use a prev and reach the very beginning.
-    //        assert_eq!(reader.reverse_seek(make_key(&[4 as u8]), ts).unwrap(), None);
+    //        assert_eq!(
+    //            reader.reverse_seek(Key::from_raw(&[4 as u8]), ts).unwrap(),
+    //            None
+    //        );
     //        total_prev += 1;
     //        assert_eq!(reader.get_statistics().write.prev, total_prev);
     //        assert_eq!(reader.get_statistics().write.seek, total_seek);
@@ -927,18 +647,18 @@ mod tests {
         let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((make_key(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 10);
 
         engine.rollback(k, 5);
         engine.rollback(k, 20);
 
-        let m = Mutation::Put((make_key(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 25);
         engine.commit(k, 25, 30);
 
-        let m = Mutation::Put((make_key(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
@@ -948,7 +668,7 @@ mod tests {
         // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
         // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
-        let key = make_key(k);
+        let key = Key::from_raw(k);
         let (commit_ts, write) = cf_reader
             .near_reverse_seek_write_by_start_ts(&key, 35, true)
             .unwrap()
