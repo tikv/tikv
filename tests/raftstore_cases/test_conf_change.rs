@@ -638,6 +638,12 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.transfer_leader(r1, new_peer(4, 12));
     pd_client.region_leader_must_be(r1, new_peer(4, 12));
 
+    // Transfer leader to (1, 1) to avoid "region not found".
+    pd_client.transfer_leader(r1, new_peer(1, 1));
+    pd_client.region_leader_must_be(r1, new_peer(1, 1));
+    // To avoid using stale leader.
+    cluster.reset_leader_of_region(r1);
+
     let mut add_peer = |peer: metapb::Peer| {
         let conf_type = if peer.get_is_learner() {
             ConfChangeType::AddLearnerNode
@@ -656,10 +662,6 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Add peer with different id on store which already has learner.
     pd_client.must_remove_peer(r1, new_peer(4, 12));
     pd_client.must_add_peer(r1, new_learner_peer(4, 13));
-
-    // Transfer leader to (1, 1) to avoid "region not found".
-    pd_client.transfer_leader(r1, new_peer(1, 1));
-    pd_client.region_leader_must_be(r1, new_peer(1, 1));
 
     let resp = add_peer(new_learner_peer(4, 14));
     let err_msg = resp.get_header().get_error().get_message();

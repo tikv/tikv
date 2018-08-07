@@ -343,7 +343,7 @@ fn test_node_merge_dist_isolation() {
 /// way behind others so others have to send it a snapshot.
 #[test]
 fn test_node_merge_brain_split() {
-    // ::util::init_log();
+    // ::util::ci_setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
@@ -357,12 +357,21 @@ fn test_node_merge_brain_split() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-    let left = pd_client.get_region(b"k1").unwrap();
 
+    cluster.must_split(&region, b"k2");
     cluster.must_put(b"k11", b"v11");
+    util::must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
     util::must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+
+    // Wait for all peers of the another region catching up logs and then isolate peer 3.
+    // So that the min_progress will never be 0 when merge.
+    cluster.must_put(b"k21", b"v21");
+    util::must_get_equal(&cluster.get_engine(2), b"k21", b"v21");
+    util::must_get_equal(&cluster.get_engine(3), b"k21", b"v21");
+
     cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k3").unwrap();
     pd_client.must_merge(left.get_id(), right.get_id());
 
