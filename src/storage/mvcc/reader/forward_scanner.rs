@@ -228,9 +228,9 @@ impl<S: Snapshot> ForwardScanner<S> {
                             has_lock = false;
                         }
                         Ordering::Greater => {
-                            // Write cursor user key > lock cursor, it means we first got a lock
-                            // of a key that does not have a write. In SI, we need to check if
-                            // the lock will cause conflict.
+                            // Write cursor user key > lock cursor, it means we got a lock of a
+                            // key that does not have a write. In SI, we need to check if the
+                            // lock will cause conflict.
                             current_user_key_slice = lk;
                             has_write = false;
                             has_lock = true;
@@ -244,15 +244,16 @@ impl<S: Snapshot> ForwardScanner<S> {
                         }
                     },
                 };
-                // Convert the key into a `Vec`, to avoid data being invalidated after cursor
+                // Convert the key into a `Vec` to avoid data being invalidated after cursor
                 // moving.
                 current_user_key = Key::from_encoded(current_user_key_slice.to_vec());
             }
 
             // Attempt to read specified version of the key. Note that we may get `None`
             // indicating that no desired version is found (or when `has_write == false`).
-            // We may also get `Err` due to key lock. We need to keep scanning when meeting
-            // key lock errors (why??), so we don't apply `?` operator to the result here.
+            // We may also get `Err` due to key lock. We need to ensure that the scanner keeps
+            // working for future calls even when meeting key lock errors (why??), so we don't
+            // apply `?` operator to the result here thus iterators can be moved forward.
             let result = self.get(&current_user_key, has_write, has_lock);
 
             // Before returning the result, we step the cursor for next read.
@@ -309,7 +310,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `encoded_current_user_key` and `self.ts`.
+    /// Attempt to get the value of a key specified by `user_key` and `self.ts`.
     fn get(&mut self, user_key: &Key, has_write: bool, has_lock: bool) -> Result<Option<Value>> {
         let mut safe_ts = self.ts;
         match self.isolation_level {
