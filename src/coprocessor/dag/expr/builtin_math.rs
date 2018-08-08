@@ -123,7 +123,7 @@ impl ScalarFunc {
         let y = try_opt!(self.children[1].eval_real(ctx, row));
         let pow = x.pow(y);
         if pow.is_infinite() || pow.is_nan() {
-           return Ok(Some(0.0));
+            return Err(Error::overflow("DOUBLE", &format!("{}.pow({})", x, y)));
         }
         Ok(Some(pow))
     }
@@ -348,8 +348,7 @@ mod test {
         let tests = vec![
             (ScalarFuncSig::Pow, Datum::F64(1.0), Datum::F64(3.0), Datum::F64(1.0)),
             (ScalarFuncSig::Pow, Datum::F64(3.0), Datum::F64(0.0), Datum::F64(1.0)),
-            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(3.0), Datum::F64(8.0)),
-            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(300000000.0), Datum::F64(0.0))
+            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(3.0), Datum::F64(8.0))
         ];
         let mut ctx = EvalContext::default();
         for (sig, arg0, arg1, exp) in tests {
@@ -359,6 +358,22 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_pow_overflow() {
+        let tests = vec![
+            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(300000000.0))
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let mut f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
     }
 }
