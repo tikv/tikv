@@ -128,18 +128,22 @@ impl<S: Snapshot> Scanner<S> {
     pub fn start_scan(&self, range: &mut KeyRange) {
         assert!(!self.no_more);
         match self.scan_mode {
-            ScanMode::Forward => range.set_start(util::prefix_next(&self.seek_key)),
+            ScanMode::Forward => range.set_start(self.seek_key.clone()),
             ScanMode::Backward => range.set_end(self.seek_key.clone()),
             _ => unreachable!(),
         };
     }
 
-    pub fn stop_scan(&self, range: &mut KeyRange) -> bool {
+    pub fn stop_scan(&mut self, range: &mut KeyRange) -> bool {
         if self.no_more {
             return false;
         }
+
         match self.scan_mode {
-            ScanMode::Forward => range.set_end(util::prefix_next(&self.seek_key)),
+            ScanMode::Forward => {
+                self.seek_key = util::prefix_next(&self.seek_key);
+                range.set_end(self.seek_key.clone())
+            }
             ScanMode::Backward => range.set_start(self.seek_key.clone()),
             _ => unreachable!(),
         };
