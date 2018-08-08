@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::cmp::Ordering;
+use std::cmp::{max, min, Ordering};
 use std::i64;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
@@ -203,6 +203,54 @@ impl ScalarFunc {
         do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(r)))
     }
 
+    pub fn greatest_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_greatest_or_least(self, |v| v.eval_int(ctx, row), max)
+    }
+
+    pub fn greatest_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        do_greatest_or_least(self, |v| v.eval_real(ctx, row), |l, r| l.max(r))
+    }
+
+    pub fn greatest_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        do_greatest_or_least(self, |v| v.eval_decimal(ctx, row), max)
+    }
+
+    pub fn greatest_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        do_greatest_or_least(self, |v| v.eval_string(ctx, row), max)
+    }
+
+    pub fn least_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        do_greatest_or_least(self, |v| v.eval_int(ctx, row), min)
+    }
+
+    pub fn least_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        do_greatest_or_least(self, |v| v.eval_real(ctx, row), |l, r| l.min(r))
+    }
+
+    pub fn least_decimal<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        do_greatest_or_least(self, |v| v.eval_decimal(ctx, row), min)
+    }
+
+    pub fn least_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        do_greatest_or_least(self, |v| v.eval_string(ctx, row), min)
+    }
+
     pub fn interval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = match self.children[0].eval_int(ctx, row)? {
             None => return Ok(Some(-1)),
@@ -325,6 +373,25 @@ where
         }
     }
     Ok(None)
+}
+
+fn do_greatest_or_least<'a, F, T, E>(
+    expr: &'a ScalarFunc,
+    mut f: F,
+    compare: E,
+) -> Result<Option<T>>
+where
+    F: FnMut(&'a Expression) -> Result<Option<T>>,
+    E: Fn(T, T) -> T,
+{
+    let (first, others) = expr.children.split_first().unwrap();
+    let mut res = try_opt!(f(first));
+
+    for exp in others {
+        let val = try_opt!(f(exp));
+        res = compare(res, val)
+    }
+    Ok(Some(res))
 }
 
 fn do_in<'a, T, E, F>(expr: &'a ScalarFunc, mut f: F, get_order: E) -> Result<Option<i64>>
@@ -579,6 +646,157 @@ mod test {
                     Datum::Time(t1.clone()),
                 ],
                 Datum::I64(1),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (sig, row, exp) in cases {
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::new();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(sig);
+
+            expr.set_children(RepeatedField::from_vec(children));
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &row).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_greatest_and_least() {
+        let dec1 = "0.1".parse::<Decimal>().unwrap();
+        let dec2 = "1.1".parse::<Decimal>().unwrap();
+
+        let s1 = "你好".as_bytes().to_owned();
+        let s2 = "你好啊".as_bytes().to_owned();
+
+        let cases = vec![
+            (
+                ScalarFuncSig::GreatestInt,
+                vec![Datum::Null, Datum::I64(0)],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestInt,
+                vec![Datum::I64(0), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestInt,
+                vec![Datum::I64(0), Datum::I64(1)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::GreatestInt,
+                vec![Datum::I64(0), Datum::I64(1), Datum::I64(2)],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::GreatestReal,
+                vec![Datum::Null, Datum::F64(0.1)],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestReal,
+                vec![Datum::F64(0.1), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestReal,
+                vec![Datum::F64(0.1), Datum::F64(1.1), Datum::F64(2.1)],
+                Datum::F64(2.1),
+            ),
+            (
+                ScalarFuncSig::GreatestDecimal,
+                vec![Datum::Null, Datum::Dec(dec1.clone())],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestDecimal,
+                vec![Datum::Dec(dec1.clone()), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestDecimal,
+                vec![Datum::Dec(dec1.clone()), Datum::Dec(dec2.clone())],
+                Datum::Dec(dec2.clone()),
+            ),
+            (
+                ScalarFuncSig::GreatestString,
+                vec![Datum::Null, Datum::Bytes(s1.clone())],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestString,
+                vec![Datum::Bytes(s1.clone()), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::GreatestString,
+                vec![Datum::Bytes(s1.clone()), Datum::Bytes(s2.clone())],
+                Datum::Bytes(s2.clone()),
+            ),
+            (
+                ScalarFuncSig::LeastInt,
+                vec![Datum::Null, Datum::I64(0)],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastInt,
+                vec![Datum::I64(0), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastInt,
+                vec![Datum::I64(0), Datum::I64(1), Datum::I64(2)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::LeastReal,
+                vec![Datum::Null, Datum::F64(0.1)],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastReal,
+                vec![Datum::F64(0.1), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastReal,
+                vec![Datum::F64(0.1), Datum::F64(1.1), Datum::F64(2.1)],
+                Datum::F64(0.1),
+            ),
+            (
+                ScalarFuncSig::LeastDecimal,
+                vec![Datum::Null, Datum::Dec(dec1.clone())],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastDecimal,
+                vec![Datum::Dec(dec1.clone()), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastDecimal,
+                vec![Datum::Dec(dec1.clone()), Datum::Dec(dec2.clone())],
+                Datum::Dec(dec1.clone()),
+            ),
+            (
+                ScalarFuncSig::LeastString,
+                vec![Datum::Null, Datum::Bytes(s1.clone())],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastString,
+                vec![Datum::Bytes(s1.clone()), Datum::Null],
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::LeastString,
+                vec![Datum::Bytes(s1.clone()), Datum::Bytes(s2.clone())],
+                Datum::Bytes(s1.clone()),
             ),
         ];
 
