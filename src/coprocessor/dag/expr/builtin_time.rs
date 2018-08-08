@@ -12,9 +12,21 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
+use coprocessor::codec::error::{self, Error};
 use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
+
+fn handle_invalid_time_error(ctx: &mut EvalContext, err: Error) -> Option<Error> {
+    if ctx.take_warnings().warnings[0].get_code() == error::ERR_TRUNCATE_WRONG_VALUE {
+        return Some(err);
+    }
+    if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
+        return Some(err);
+    }
+    ctx.warnings.append_warning(err);
+    return None;
+}
 
 impl ScalarFunc {
     #[inline]
@@ -40,11 +52,12 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
-        if t.invalid_zero() {
-            return Err(box_err!("Incorrect datetime value: '{}'", t));
-        }
         if t.is_zero() {
-            return Err(box_err!("Datetime value is zero timestamp: '{}'", t));
+            match handle_invalid_time_error(ctx, Error::incorrect_datetime_value(&format!("{}", t)))
+            {
+                Some(err) => return Err(err),
+                None => return Ok(None),
+            }
         }
         let res = Time::new(
             t.get_time().date().and_hms(0, 0, 0),
@@ -57,6 +70,7 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use coprocessor::codec::mysql::Time;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
@@ -139,13 +153,18 @@ mod test {
         assert_eq!(got, exp);
 
         // test zero case
-        let arg = datum_expr(Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()));
+        let arg = datum_expr(Datum::Time(
+            Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
+        ));
         let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
         let op = Expression::build(&mut ctx, f).unwrap();
         let got = op.eval(&mut ctx, &[]);
         match got {
             Ok(_) => assert!(false, "zero timestamp should be wrong"),
-            Err(_) => assert!(true),
+            Err(_) => assert_eq!(
+                ctx.take_warnings().warnings[0].get_code(),
+                ERR_TRUNCATE_WRONG_VALUE
+            ),
         }
     }
 }

@@ -123,6 +123,16 @@ impl Error {
     pub fn unexpected_eof() -> Error {
         util::codec::Error::unexpected_eof().into()
     }
+
+    pub fn invalid_time_format(val: &str) -> Error {
+        let msg = format!("invalid time format: '{}'", val);
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
+    }
+
+    pub fn incorrect_datetime_value(val: &str) -> Error {
+        let msg = format!("Incorrect datetime value: '{}'", val);
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
+    }
 }
 
 impl Into<select::Error> for Error {
