@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
+use std::{i64, str};
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
@@ -36,6 +36,28 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let i = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(Cow::Owned(format!("{:b}", i).into_bytes())))
+    }
+
+    pub fn left<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let i = try_opt!(self.children[1].eval_int(ctx, row));
+        let s = str::from_utf8(&s)?;
+        let slen = s.chars().count();
+        let l = match (i < 0, slen > i as usize) {
+            (true, _) => 0,
+            (false, true) => i as usize,
+            _ => slen,
+        };
+        let t = s
+            .chars()
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>();
+        Ok(Some(Cow::Owned(t[0..l].concat().into_bytes())))
     }
 }
 
@@ -147,6 +169,49 @@ mod test {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Bin, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_left() {
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::I64(2),
+                Datum::Bytes("数据".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::Bytes("忠犬ハ".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::I64(100),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (Datum::Null, Datum::I64(-1), Datum::Null),
+            (Datum::Bytes(b"hello".to_vec()), Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let arg1 = datum_expr(arg1);
+            let arg2 = datum_expr(arg2);
+            let op = scalar_func_expr(ScalarFuncSig::Left, &[arg1, arg2]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);

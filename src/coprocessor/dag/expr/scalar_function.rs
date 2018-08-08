@@ -90,6 +90,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IfNullTime
             | ScalarFuncSig::IfNullDuration
             | ScalarFuncSig::IfNullJson
+            | ScalarFuncSig::Left
             | ScalarFuncSig::LogicalAnd
             | ScalarFuncSig::LogicalOr
             | ScalarFuncSig::LogicalXor
@@ -346,7 +347,6 @@ impl ScalarFunc {
             | ScalarFuncSig::LeastReal
             | ScalarFuncSig::LeastString
             | ScalarFuncSig::LeastTime
-            | ScalarFuncSig::Left
             | ScalarFuncSig::LeftBinary
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::Locate2Args
@@ -848,6 +848,7 @@ dispatch_call! {
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
+        Left => left,
         DateFormatSig => date_format,
         Bin => bin,
     }
@@ -984,6 +985,7 @@ mod test {
                     ScalarFuncSig::IfNullTime,
                     ScalarFuncSig::IfNullDuration,
                     ScalarFuncSig::IfNullJson,
+                    ScalarFuncSig::Left,
                     ScalarFuncSig::LogicalAnd,
                     ScalarFuncSig::LogicalOr,
                     ScalarFuncSig::LogicalXor,
@@ -1287,7 +1289,6 @@ mod test {
             ScalarFuncSig::LeastReal,
             ScalarFuncSig::LeastString,
             ScalarFuncSig::LeastTime,
-            ScalarFuncSig::Left,
             ScalarFuncSig::LeftBinary,
             ScalarFuncSig::LeftShift,
             ScalarFuncSig::Locate2Args,
