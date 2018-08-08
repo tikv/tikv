@@ -157,6 +157,8 @@ mod tests {
 
     use raftstore::coprocessor::{Config, CoprocessorHost};
 
+    use super::super::size::tests::must_split_at;
+
     #[test]
     fn test_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -236,29 +238,7 @@ mod tests {
         }
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        loop {
-            match rx.try_recv() {
-                Ok(Msg::SplitRegion {
-                    region_id,
-                    region_epoch,
-                    split_key,
-                    ..
-                }) => {
-                    assert_eq!(region_id, region.get_id());
-                    assert_eq!(&region_epoch, region.get_region_epoch());
-                    assert_eq!(&split_key, Key::from_raw(b"0080").append_ts(2).encoded());
-                    break;
-                }
-                Ok(Msg::RegionApproximateSize { region_id, .. })
-                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                    assert_eq!(region_id, region.get_id());
-                }
-                others => panic!(
-                    "expect split check result or region's stat, but got {:?}",
-                    others
-                ),
-            }
-        }
+        must_split_at(&rx, &region, Key::from_raw(b"0080").append_ts(2).encoded());
 
         drop(rx);
         // It should be safe even the result can't be sent back.

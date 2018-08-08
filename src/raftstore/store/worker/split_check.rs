@@ -51,10 +51,6 @@ impl KeyEntry {
         }
     }
 
-    fn replace_with(&mut self, other: &mut KeyEntry) {
-        mem::swap(self, other);
-    }
-
     pub fn key(&self) -> &[u8] {
         self.key.as_ref()
     }
@@ -123,7 +119,7 @@ impl<'a> MergedIterator<'a> {
             // TODO: avoid copy key.
             let mut e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len(), cf);
             let mut front = self.heap.peek_mut().unwrap();
-            front.replace_with(&mut e);
+            mem::swap(&mut e, &mut front);
             Some(e)
         } else {
             self.heap.pop()

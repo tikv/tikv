@@ -135,7 +135,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
@@ -155,6 +155,29 @@ mod tests {
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
+
+    pub fn must_split_at(rx: &mpsc::Receiver<Msg>, exp_region: &Region, exp_split_key: &[u8]) {
+        loop {
+            match rx.try_recv() {
+                Ok(Msg::RegionApproximateSize { region_id, .. })
+                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                }
+                Ok(Msg::SplitRegion {
+                    region_id,
+                    region_epoch,
+                    split_key,
+                    ..
+                }) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                    assert_eq!(&region_epoch, exp_region.get_region_epoch());
+                    assert_eq!(split_key, exp_split_key);
+                    break;
+                }
+                others => panic!("expect split check result, but got {:?}", others),
+            }
+        }
+    }
 
     #[test]
     fn test_split_check() {
@@ -216,26 +239,7 @@ mod tests {
         engine.flush(true).unwrap();
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        loop {
-            match rx.try_recv() {
-                Ok(Msg::RegionApproximateSize { region_id, .. })
-                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                    assert_eq!(region_id, region.get_id());
-                }
-                Ok(Msg::SplitRegion {
-                    region_id,
-                    region_epoch,
-                    split_key,
-                    ..
-                }) => {
-                    assert_eq!(region_id, region.get_id());
-                    assert_eq!(&region_epoch, region.get_region_epoch());
-                    assert_eq!(split_key, b"0006");
-                    break;
-                }
-                others => panic!("expect split check result, but got {:?}", others),
-            }
-        }
+        must_split_at(&rx, &region, b"0006");
 
         // So split key will be z0003
         for i in 0..6 {
@@ -251,27 +255,7 @@ mod tests {
         }
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        loop {
-            match rx.try_recv() {
-                Ok(Msg::RegionApproximateSize { region_id, .. })
-                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                    assert_eq!(region_id, region.get_id());
-                }
-                Ok(Msg::SplitRegion {
-                    region_id,
-                    region_epoch,
-                    split_key,
-                    ..
-                }) => {
-                    assert_eq!(region_id, region.get_id());
-                    assert_eq!(&region_epoch, region.get_region_epoch());
-                    assert_eq!(split_key, b"0003");
-                    break;
-                }
-                others => panic!("expect split check result, but got {:?}", others),
-            }
-        }
-
+        must_split_at(&rx, &region, b"0003");
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));

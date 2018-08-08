@@ -108,15 +108,15 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
     use storage::{Key, ALL_CFS, CF_DEFAULT};
     use util::config::ReadableSize;
-    use util::escape;
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
 
+    use super::super::size::tests::must_split_at;
     use super::*;
     use raftstore::coprocessor::{Config, CoprocessorHost};
 
@@ -161,40 +161,18 @@ mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
-
-        let check = || loop {
-            match rx.try_recv() {
-                Ok(Msg::SplitRegion {
-                    region_id,
-                    region_epoch,
-                    split_key,
-                    ..
-                }) => {
-                    assert_eq!(region_id, region.get_id());
-                    assert_eq!(&region_epoch, region.get_region_epoch());
-                    let split_key = Key::from_encoded(split_key).raw().unwrap();
-                    assert_eq!(escape(&split_key), "0005");
-                    break;
-                }
-                Ok(Msg::RegionApproximateSize { region_id, .. })
-                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                    assert_eq!(region_id, region.get_id());
-                    continue;
-                }
-                others => panic!("expect split check result, but got {:?}", others),
-            }
-        };
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
             CheckPolicy::SCAN,
         ));
-        check();
+        let split_key = Key::from_raw(b"0005");
+        must_split_at(&rx, &region, split_key.encoded());
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
             CheckPolicy::APPROXIMATE,
         ));
-        check();
+        must_split_at(&rx, &region, split_key.encoded());
     }
 }

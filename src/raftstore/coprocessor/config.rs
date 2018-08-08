@@ -27,9 +27,9 @@ pub struct Config {
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: ReadableSize,
     pub region_split_size: ReadableSize,
-    /// When the number of keys in region [a,b) meets the region_max_rows,
-    /// it will be split into two regions [a,c),[c,b). And the keys of [a,c)
-    /// will be region_split_keys(or a little bit smaller).
+    /// When the number of keys in region [a,d) meets the region_max_keys,
+    /// it will be split into two regions [a,c),[c,d). And the keys of [a,c)
+    /// will be region_split_keys.
     pub region_max_keys: u64,
     pub region_split_keys: u64,
 }
