@@ -19,8 +19,8 @@ mod write;
 
 pub use self::lock::{Lock, LockType};
 pub use self::reader::{
-    CfReader, CfReaderBuilder, ForwardScanner, ForwardScannerBuilder, MvccReader, PointGetter,
-    PointGetterBuilder,
+    BackwardScanner, BackwardScannerBuilder, CfReader, CfReaderBuilder, ForwardScanner,
+    ForwardScannerBuilder, PointGetter, PointGetterBuilder,
 };
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};

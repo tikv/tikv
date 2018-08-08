@@ -97,11 +97,7 @@ impl<S: Snapshot> Scanner<S> {
             return Ok(None);
         }
 
-        let kv = match self.scan_mode {
-            ScanMode::Backward => self.scanner.reverse_seek(Key::from_raw(&self.seek_key))?,
-            ScanMode::Forward => self.scanner.next()?,
-            _ => unreachable!(),
-        };
+        let kv = self.scanner.next()?;
 
         let (key, value) = match kv {
             Some((k, v)) => (box_try!(k.raw()), v),

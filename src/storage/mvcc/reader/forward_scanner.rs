@@ -76,7 +76,7 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
         self
     }
 
-    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should seek.
+    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should scan.
     /// `None` means unbounded.
     ///
     /// Default is `(None, None)`.
@@ -159,7 +159,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         &self.statistics
     }
 
-    /// Get the next key-value pair.
+    /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
             self.write_cursor.seek_to_first(&mut self.statistics.write);

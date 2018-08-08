@@ -657,9 +657,13 @@ impl<E: Engine> Storage<E> {
                     };
 
                     let mut scanner;
-                    let res = if options.reverse_scan {
-                        scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
-                        scanner.reverse_scan(start_key, limit)
+                    if options.reverse_scan {
+                        scanner = snap_store.scanner(
+                            scan_mode,
+                            options.key_only,
+                            None,
+                            Some(start_key.take_encoded()),
+                        )?;
                     } else {
                         scanner = snap_store.scanner(
                             scan_mode,
@@ -667,8 +671,8 @@ impl<E: Engine> Storage<E> {
                             Some(start_key.take_encoded()),
                             None,
                         )?;
-                        scanner.scan(limit)
                     };
+                    let res = scanner.scan(limit);
 
                     let statistics = scanner.get_statistics();
                     thread_ctx.collect_scan_count(CMD, statistics);
