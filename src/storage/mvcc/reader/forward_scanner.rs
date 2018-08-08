@@ -21,6 +21,7 @@ use storage::mvcc::{Lock, Result};
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
+/// `ForwardScanner` factory.
 pub struct ForwardScannerBuilder<S: Snapshot> {
     snapshot: S,
     fill_cache: bool,
@@ -31,7 +32,6 @@ pub struct ForwardScannerBuilder<S: Snapshot> {
     ts: u64,
 }
 
-/// `ForwardScanner` factory.
 impl<S: Snapshot> ForwardScannerBuilder<S> {
     /// Initialize a new `ForwardScanner`
     pub fn new(snapshot: S, ts: u64) -> Self {
@@ -128,8 +128,8 @@ pub struct ForwardScanner<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
 
-    /// `lower_bound` and `upper_bound` is only used to create `default_cursor`. It will be consumed
-    /// after default_cursor's being created.
+    /// `lower_bound` and `upper_bound` is only used to create `default_cursor`. It will be
+    /// consumed after `default_cursor` is being created.
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
 
@@ -256,13 +256,15 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.ts`.
+    /// Attempt to get the value of a key specified by `user_key` and `self.ts`. This function
+    /// requires that the write cursor is currently pointing to the latest version of `user_key`.
     #[inline]
     fn get(&mut self, user_key: &Key, has_write: bool, has_lock: bool) -> Result<Option<Value>> {
         let mut safe_ts = self.ts;
         match self.isolation_level {
             IsolationLevel::SI => {
                 if has_lock {
+                    assert!(self.lock_cursor.valid());
                     let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                     let lock = Lock::parse(lock_value)?;
                     safe_ts = super::util::check_lock(user_key, safe_ts, &lock)?
