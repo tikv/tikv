@@ -286,7 +286,14 @@ impl<S: Snapshot> ForwardScanner<S> {
         // Whether we have *not* reached where we want by `next()`.
         let mut needs_seek = true;
 
-        for _ in 0..SEEK_BOUND {
+        for i in 0..SEEK_BOUND {
+            if i > 0 {
+                self.write_cursor.next(&mut self.statistics.write);
+                if !self.write_cursor.valid() {
+                    // Key space ended.
+                    return Ok(None);
+                }
+            }
             {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
@@ -298,11 +305,6 @@ impl<S: Snapshot> ForwardScanner<S> {
                     needs_seek = false;
                     break;
                 }
-            }
-            self.write_cursor.next(&mut self.statistics.write);
-            if !self.write_cursor.valid() {
-                // Key space ended.
-                return Ok(None);
             }
         }
         // If we have not found `${user_key}_${safe_ts}` in a few `next()`, directly `seek()`.
@@ -387,7 +389,10 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// key, we `seek()`.
     #[inline]
     fn move_write_cursor_to_next_user_key(&mut self, current_user_key: &Key) -> Result<()> {
-        for _ in 0..SEEK_BOUND {
+        for i in 0..SEEK_BOUND {
+            if i > 0 {
+                self.write_cursor.next(&mut self.statistics.write);
+            }
             if !self.write_cursor.valid() {
                 // Key space ended. We are done here.
                 return Ok(());
@@ -399,7 +404,6 @@ impl<S: Snapshot> ForwardScanner<S> {
                     return Ok(());
                 }
             }
-            self.write_cursor.next(&mut self.statistics.write);
         }
 
         // We have not found another user key for now, so we directly `seek()`.

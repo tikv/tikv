@@ -551,6 +551,7 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
+    // TODO: Can be removed.
     pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         if !self.seek_for_prev(key, statistics)? {
             return Ok(false);
@@ -569,6 +570,7 @@ impl<I: Iterator> Cursor<I> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
+    // TODO: Can be removed.
     pub fn near_reverse_seek(
         &mut self,
         key: &Key,

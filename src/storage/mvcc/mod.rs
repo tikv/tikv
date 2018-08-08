@@ -251,6 +251,7 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.collapse_rollback(false);
         txn.rollback(&Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
