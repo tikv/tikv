@@ -165,6 +165,15 @@ impl Key {
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
     /// user key `user_key`.
+    ///
+    /// There is an optimziation in this function, which is to compare the last 8 encoded bytes
+    /// first before comparing the rest. It is because in TiDB many records are ended with an 8
+    /// byte row id and in many situations only this part is different when calling this function.
+    //
+    // TODO: If the last 8 byte is memory aligned, it would be better.
+    // TODO: It may be UB to do like this. We should investigate whether `==` is smart enough
+    //       to optimize an 8-byte compare. Note that `==` will result in `memcmp` and `memcmp`
+    //       might be very smart.
     #[inline]
     #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
