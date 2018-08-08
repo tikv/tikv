@@ -191,6 +191,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::Length
+            | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig => (1, 1),
 
@@ -229,7 +230,9 @@ impl ScalarFunc {
             | ScalarFuncSig::InDecimal
             | ScalarFuncSig::InTime
             | ScalarFuncSig::InDuration
-            | ScalarFuncSig::InJson => (2, usize::MAX),
+            | ScalarFuncSig::InJson
+            | ScalarFuncSig::IntervalInt
+            | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
             | ScalarFuncSig::JsonInsertSig
@@ -261,7 +264,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Asin
             | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Atan2Args
-            | ScalarFuncSig::Bin
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::CharLength
@@ -329,8 +331,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::IntervalInt
-            | ScalarFuncSig::IntervalReal
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
@@ -718,6 +718,8 @@ dispatch_call! {
         InTime => in_time,
         InDuration => in_duration,
         InJson => in_json,
+        IntervalInt => interval_int,
+        IntervalReal => interval_real,
 
         PlusInt => plus_int,
         MinusInt => minus_int,
@@ -845,6 +847,7 @@ dispatch_call! {
         JsonUnquoteSig => json_unquote,
 
         DateFormatSig => date_format,
+        Bin => bin,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1082,6 +1085,7 @@ mod test {
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
+                    ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
@@ -1140,6 +1144,8 @@ mod test {
                     ScalarFuncSig::InTime,
                     ScalarFuncSig::InDuration,
                     ScalarFuncSig::InJson,
+                    ScalarFuncSig::IntervalInt,
+                    ScalarFuncSig::IntervalReal,
                 ],
                 2,
                 usize::MAX,
@@ -1198,7 +1204,6 @@ mod test {
             ScalarFuncSig::Asin,
             ScalarFuncSig::Atan1Arg,
             ScalarFuncSig::Atan2Args,
-            ScalarFuncSig::Bin,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::CharLength,
@@ -1266,8 +1271,6 @@ mod test {
             ScalarFuncSig::Instr,
             ScalarFuncSig::InstrBinary,
             ScalarFuncSig::IntAnyValue,
-            ScalarFuncSig::IntervalInt,
-            ScalarFuncSig::IntervalReal,
             ScalarFuncSig::IsIPv4,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
