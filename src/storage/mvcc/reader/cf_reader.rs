@@ -480,3 +480,90 @@ impl<S: Snapshot> CfReader<S> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use storage::engine::{self, TEMP_DIR};
+    use storage::mvcc::tests::*;
+    use storage::ALL_CFS;
+    use storage::{Engine, Key};
+
+    use kvproto::kvrpcpb::Context;
+
+    #[test]
+    fn test_near_reverse_seek_write_by_start_ts() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        let (k, v) = (b"k", b"v");
+        must_prewrite_put(&engine, k, v, k, 1);
+        must_commit(&engine, k, 1, 10);
+
+        must_rollback(&engine, k, 5);
+        must_rollback(&engine, k, 20);
+
+        must_prewrite_put(&engine, k, v, k, 25);
+        must_commit(&engine, k, 25, 30);
+
+        must_prewrite_put(&engine, k, v, k, 35);
+        must_commit(&engine, k, 35, 40);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
+
+        // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
+        // is 40.
+        // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        let key = Key::from_raw(k);
+        let (commit_ts, write) = cf_reader
+            .near_reverse_seek_write_by_start_ts(&key, 35, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(commit_ts, 40);
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 35);
+
+        let (commit_ts, write) = cf_reader
+            .near_reverse_seek_write_by_start_ts(&key, 25, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(commit_ts, 30);
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 25);
+
+        let (commit_ts, write) = cf_reader
+            .near_reverse_seek_write_by_start_ts(&key, 20, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(commit_ts, 20);
+        assert_eq!(write.write_type, WriteType::Rollback);
+        assert_eq!(write.start_ts, 20);
+
+        let (commit_ts, write) = cf_reader
+            .near_reverse_seek_write_by_start_ts(&key, 1, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(commit_ts, 10);
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1);
+
+        let (commit_ts, write) = cf_reader
+            .near_reverse_seek_write_by_start_ts(&key, 5, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(commit_ts, 5);
+        assert_eq!(write.write_type, WriteType::Rollback);
+        assert_eq!(write.start_ts, 5);
+
+        cf_reader.take_statistics();
+        assert!(
+            cf_reader
+                .near_reverse_seek_write_by_start_ts(&key, 15, true)
+                .unwrap()
+                .is_none()
+        );
+        // `near_reverse_seek_write_by_start_ts(&key, 15)` starts from `5_5 Rollback`,
+        // stopped at `30_25 PUT`.
+        assert_eq!(cf_reader.take_statistics().write.prev, 3);
+    }
+}

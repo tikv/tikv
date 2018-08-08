@@ -24,7 +24,6 @@ pub use self::point_getter::{PointGetter, PointGetterBuilder};
 
 #[cfg(test)]
 mod tests {
-    //    use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::keys;
     use raftstore::store::RegionSnapshot;
@@ -32,14 +31,11 @@ mod tests {
     use std::sync::Arc;
     use std::u64;
     use storage::engine::Modify;
-    use storage::mvcc::write::WriteType;
-    use storage::mvcc::{self, CfReaderBuilder, MvccTxn};
+    use storage::mvcc::{self, MvccTxn};
     use storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
-
-    //    use super::REVERSE_SEEK_BOUND;
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -84,15 +80,6 @@ mod tests {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.commit(&k, commit_ts).unwrap();
-            self.write(txn.into_modifies());
-        }
-
-        fn rollback(&mut self, pk: &[u8], start_ts: u64) {
-            let k = Key::from_raw(pk);
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
-            txn.collapse_rollback(false);
-            txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -286,89 +273,5 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 5);
         assert_eq!(props.max_row_versions, 1);
-    }
-
-    #[test]
-    fn test_near_reverse_seek_write_by_start_ts() {
-        let path =
-            TempDir::new("_test_storage_mvcc_reader_near_reverse_seek_write_by_start_ts").unwrap();
-        let path = path.path().to_str().unwrap();
-        let region = make_region(1, vec![], vec![]);
-        let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
-
-        let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 1);
-        engine.commit(k, 1, 10);
-
-        engine.rollback(k, 5);
-        engine.rollback(k, 20);
-
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 25);
-        engine.commit(k, 25, 30);
-
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 35);
-        engine.commit(k, 35, 40);
-
-        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut cf_reader = CfReaderBuilder::new(snap).build().unwrap();
-
-        // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
-        // is 40.
-        // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
-        let key = Key::from_raw(k);
-        let (commit_ts, write) = cf_reader
-            .near_reverse_seek_write_by_start_ts(&key, 35, true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(commit_ts, 40);
-        assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 35);
-
-        let (commit_ts, write) = cf_reader
-            .near_reverse_seek_write_by_start_ts(&key, 25, true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(commit_ts, 30);
-        assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 25);
-
-        let (commit_ts, write) = cf_reader
-            .near_reverse_seek_write_by_start_ts(&key, 20, true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(commit_ts, 20);
-        assert_eq!(write.write_type, WriteType::Rollback);
-        assert_eq!(write.start_ts, 20);
-
-        let (commit_ts, write) = cf_reader
-            .near_reverse_seek_write_by_start_ts(&key, 1, true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(commit_ts, 10);
-        assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 1);
-
-        let (commit_ts, write) = cf_reader
-            .near_reverse_seek_write_by_start_ts(&key, 5, true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(commit_ts, 5);
-        assert_eq!(write.write_type, WriteType::Rollback);
-        assert_eq!(write.start_ts, 5);
-
-        cf_reader.take_statistics();
-        assert!(
-            cf_reader
-                .near_reverse_seek_write_by_start_ts(&key, 15, true)
-                .unwrap()
-                .is_none()
-        );
-        // `near_reverse_seek_write_by_start_ts(&key, 15)` starts from `5_5 Rollback`,
-        // stopped at `30_25 PUT`.
-        assert_eq!(cf_reader.take_statistics().write.prev, 3);
     }
 }
