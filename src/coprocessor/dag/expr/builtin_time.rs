@@ -12,21 +12,10 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::error::{self, Error};
+use coprocessor::codec::error::Error;
 use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
-
-fn handle_invalid_time_error(ctx: &mut EvalContext, err: Error) -> Option<Error> {
-    if ctx.take_warnings().warnings[0].get_code() == error::ERR_TRUNCATE_WRONG_VALUE {
-        return Some(err);
-    }
-    if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
-        return Some(err);
-    }
-    ctx.warnings.append_warning(err);
-    return None;
-}
 
 impl ScalarFunc {
     #[inline]
@@ -51,10 +40,26 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let t = try_opt!(self.children[0].eval_time(ctx, row));
+        let t;
+        match self.children[0].eval_time(ctx, row) {
+            Err(err) => match Error::handle_invalid_time_error(ctx, err) {
+                Some(err) => return Err(err),
+                None => return Ok(None),
+            },
+            Ok(None) => {
+                match Error::handle_invalid_time_error(ctx, Error::incorrect_datetime_value("None"))
+                {
+                    Some(err) => return Err(err),
+                    None => return Ok(None),
+                }
+            }
+            Ok(Some(res)) => t = res,
+        }
         if t.is_zero() {
-            match handle_invalid_time_error(ctx, Error::incorrect_datetime_value(&format!("{}", t)))
-            {
+            match Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ) {
                 Some(err) => return Err(err),
                 None => return Ok(None),
             }
@@ -70,11 +75,12 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use coprocessor::codec::mysql::Time;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::*;
     use coprocessor::dag::expr::{EvalContext, Expression};
+    use std::sync::Arc;
     use tipb::expression::ScalarFuncSig;
     #[test]
     fn test_date_format() {
@@ -153,6 +159,10 @@ mod test {
         assert_eq!(got, exp);
 
         // test zero case
+        let mut cfg = EvalConfig::new(FLAG_IN_UPDATE_OR_DELETE_STMT).unwrap();
+        cfg.set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO);
+        cfg.set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
         let arg = datum_expr(Datum::Time(
             Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
         ));
@@ -161,10 +171,7 @@ mod test {
         let got = op.eval(&mut ctx, &[]);
         match got {
             Ok(_) => assert!(false, "zero timestamp should be wrong"),
-            Err(_) => assert_eq!(
-                ctx.take_warnings().warnings[0].get_code(),
-                ERR_TRUNCATE_WRONG_VALUE
-            ),
+            Err(_) => assert!(true),
         }
     }
 }
