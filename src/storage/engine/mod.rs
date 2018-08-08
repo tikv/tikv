@@ -446,29 +446,6 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
-    /// Get the value of specified key by using `near_seek_get`.
-    ///
-    /// This method assume the current position of cursor is
-    /// around `key`, otherwise you should `seek` first.
-    ///
-    /// TODO: Remove this function.
-    pub fn near_seek_get(
-        &mut self,
-        key: &Key,
-        allow_reseek: bool,
-        statistics: &mut CFStatistics,
-    ) -> Result<Option<&[u8]>> {
-        let seek_result = match self.scan_mode {
-            ScanMode::Forward | ScanMode::Mixed => self.near_seek(key, allow_reseek, statistics),
-            ScanMode::Backward => self.near_seek_for_prev(key, allow_reseek, statistics),
-        };
-        if seek_result? && self.key(statistics) == &**key.encoded() {
-            Ok(Some(self.value(statistics)))
-        } else {
-            Ok(None)
-        }
-    }
-
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         self.valid = true;
 
@@ -548,43 +525,6 @@ impl<I: Iterator> Cursor<I> {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
         }
-        Ok(true)
-    }
-
-    // TODO: Can be removed.
-    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        if !self.seek_for_prev(key, statistics)? {
-            return Ok(false);
-        }
-
-        if self.key(statistics) == &**key.encoded() {
-            // should not update min_key here. otherwise reverse_seek_le may not
-            // work as expected.
-            return Ok(self.prev(statistics));
-        }
-
-        Ok(true)
-    }
-
-    /// Reverse seek the specified key.
-    ///
-    /// This method assume the current position of cursor is
-    /// around `key`, otherwise you should use `reverse_seek` instead.
-    // TODO: Can be removed.
-    pub fn near_reverse_seek(
-        &mut self,
-        key: &Key,
-        allow_reseek: bool,
-        statistics: &mut CFStatistics,
-    ) -> Result<bool> {
-        if !self.near_seek_for_prev(key, allow_reseek, statistics)? {
-            return Ok(false);
-        }
-
-        if self.key(statistics) == &**key.encoded() {
-            return Ok(self.prev(statistics));
-        }
-
         Ok(true)
     }
 
@@ -800,13 +740,13 @@ pub mod tests {
         assert_eq!(iter.value(&mut statistics), pair.1);
     }
 
-    pub fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+    pub fn assert_seek_for_prev<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        iter.reverse_seek(&Key::from_raw(key), &mut statistics)
+        iter.seek_for_prev(&Key::from_raw(key), &mut statistics)
             .unwrap();
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(pair.0));
         assert_eq!(iter.value(&mut statistics), pair.1);
@@ -824,7 +764,7 @@ pub mod tests {
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
-    pub fn assert_near_reverse_seek<I: Iterator>(
+    pub fn assert_near_seek_for_prev<I: Iterator>(
         cursor: &mut Cursor<I>,
         key: &[u8],
         pair: (&[u8], &[u8]),
@@ -832,7 +772,7 @@ pub mod tests {
         let mut statistics = CFStatistics::default();
         assert!(
             cursor
-                .near_reverse_seek(&Key::from_raw(key), false, &mut statistics)
+                .near_seek_for_prev(&Key::from_raw(key), false, &mut statistics)
                 .unwrap(),
             escape(key)
         );
@@ -906,12 +846,16 @@ pub mod tests {
         must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
-        assert_reverse_seek(engine, b"x1", (b"x", b"1"));
+        assert_seek_for_prev(engine, b"x1", (b"x", b"1"));
+        assert_seek_for_prev(engine, b"x", (b"x", b"1"));
+        assert_seek_for_prev(engine, b"x\x00", (b"x", b"1"));
         must_put(engine, b"z", b"2");
         assert_seek(engine, b"y", (b"z", b"2"));
         assert_seek(engine, b"x\x00", (b"z", b"2"));
-        assert_reverse_seek(engine, b"y", (b"x", b"1"));
-        assert_reverse_seek(engine, b"z", (b"x", b"1"));
+        assert_seek_for_prev(engine, b"y", (b"x", b"1"));
+        assert_seek_for_prev(engine, b"y0", (b"x", b"1"));
+        assert_seek_for_prev(engine, b"z", (b"z", b"2"));
+        assert_seek_for_prev(engine, b"z0", (b"z", b"2"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
@@ -924,7 +868,7 @@ pub mod tests {
         );
         assert!(
             !iter
-                .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+                .seek_for_prev(&Key::from_raw(b"w"), &mut statistics)
                 .unwrap()
         );
         must_delete(engine, b"x");
@@ -940,8 +884,10 @@ pub mod tests {
             .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
-        assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
-        assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
+        assert_near_seek_for_prev(&mut cursor, b"z1", (b"z", b"2"));
+        assert_near_seek_for_prev(&mut cursor, b"z", (b"z", b"2"));
+        assert_near_seek_for_prev(&mut cursor, b"x1", (b"x", b"1"));
+        assert_near_seek_for_prev(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
@@ -978,17 +924,17 @@ pub mod tests {
         let mut statistics = CFStatistics::default();
         assert!(
             !cursor
-                .near_reverse_seek(&Key::from_raw(b"x"), false, &mut statistics)
+                .near_seek_for_prev(&Key::from_raw(b"x"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
             !cursor
-                .near_reverse_seek(&Key::from_raw(b"z"), false, &mut statistics)
+                .near_seek_for_prev(&Key::from_raw(b"z"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
             !cursor
-                .near_reverse_seek(&Key::from_raw(b"w"), false, &mut statistics)
+                .near_seek_for_prev(&Key::from_raw(b"w"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
@@ -1051,7 +997,6 @@ pub mod tests {
     #[derive(PartialEq, Eq, Clone, Copy)]
     enum SeekMode {
         Normal,
-        Reverse,
         ForPrev,
     }
 
@@ -1078,19 +1023,13 @@ pub mod tests {
             let seek_key = Key::from_raw(key.as_bytes());
             let exp_kv = if i <= 100 {
                 match seek_mode {
-                    SeekMode::Reverse => None,
                     SeekMode::ForPrev if i < 100 => None,
                     SeekMode::Normal | SeekMode::ForPrev => {
                         Some(("key_100".to_owned(), "value_50".to_owned()))
                     }
                 }
             } else if i <= limit {
-                if seek_mode == SeekMode::Reverse {
-                    Some((
-                        format!("key_{}", (i - 1) / 2 * 2),
-                        format!("value_{}", (i - 1) / 2),
-                    ))
-                } else if seek_mode == SeekMode::ForPrev {
+                if seek_mode == SeekMode::ForPrev {
                     Some((format!("key_{}", i / 2 * 2), format!("value_{}", i / 2)))
                 } else {
                     Some((
@@ -1108,10 +1047,6 @@ pub mod tests {
             };
 
             match seek_mode {
-                SeekMode::Reverse => {
-                    assert_seek!(cursor, reverse_seek, seek_key, exp_kv);
-                    assert_near_seek!(near_cursor, near_reverse_seek, seek_key, exp_kv);
-                }
                 SeekMode::Normal => {
                     assert_seek!(cursor, seek, seek_key, exp_kv);
                     assert_near_seek!(near_cursor, near_seek, seek_key, exp_kv);
@@ -1148,20 +1083,13 @@ pub mod tests {
                 test_linear_seek(
                     &snapshot,
                     ScanMode::Backward,
-                    SeekMode::Reverse,
-                    start * SEEK_BOUND,
-                    step,
-                );
-                test_linear_seek(
-                    &snapshot,
-                    ScanMode::Backward,
                     SeekMode::ForPrev,
                     start * SEEK_BOUND,
                     step,
                 );
             }
         }
-        for &seek_mode in &[SeekMode::Reverse, SeekMode::Normal, SeekMode::ForPrev] {
+        for &seek_mode in &[SeekMode::Normal, SeekMode::ForPrev] {
             for step in 1..SEEK_BOUND * 3 {
                 for start in 0..10 {
                     test_linear_seek(

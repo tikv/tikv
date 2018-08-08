@@ -325,7 +325,7 @@ mod tests {
     use raftstore::store::keys::*;
     use raftstore::store::{CacheQueryStats, Engines, PeerStorage};
     use raftstore::Result;
-    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
+    use storage::{ALL_CFS, CF_DEFAULT};
     use util::{escape, rocksdb, worker};
 
     use super::*;
@@ -519,117 +519,6 @@ mod tests {
             }
         }
         assert_eq!(res, base_data[0..2].to_vec());
-    }
-
-    #[test]
-    fn test_reverse_iterate() {
-        let path = TempDir::new("test-raftstore").unwrap();
-        let engines = new_temp_engine(&path);
-        let (store, test_data) = load_default_dataset(engines.clone());
-
-        let snap = RegionSnapshot::new(&store);
-        let mut statistics = CFStatistics::default();
-        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics)
-                .unwrap()
-        );
-        let mut pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
-        assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics)
-                .unwrap()
-        );
-        pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
-        assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
-                .is_err()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics)
-                .is_err()
-        );
-
-        assert!(iter.seek_to_last(&mut statistics));
-        let mut res = vec![];
-        loop {
-            res.push((
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            ));
-            if !iter.prev(&mut statistics) {
-                break;
-            }
-        }
-        let mut expect = test_data[1..3].to_vec();
-        expect.reverse();
-        assert_eq!(res, expect);
-
-        // test last region
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
-        let store = new_peer_storage(engines, &region);
-        let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
-                .unwrap()
-        );
-        let pair = (
-            iter.key(&mut statistics).to_vec(),
-            iter.value(&mut statistics).to_vec(),
-        );
-        assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        for kv_pairs in test_data.windows(2) {
-            let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
-            assert!(
-                iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
-                "{}",
-                seek_key
-            );
-            let pair = (
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            );
-            assert_eq!(pair, kv_pairs[0]);
-        }
-
-        assert!(iter.seek_to_last(&mut statistics));
-        let mut res = vec![];
-        loop {
-            res.push((
-                iter.key(&mut statistics).to_vec(),
-                iter.value(&mut statistics).to_vec(),
-            ));
-            if !iter.prev(&mut statistics) {
-                break;
-            }
-        }
-        let mut expect = test_data.clone();
-        expect.reverse();
-        assert_eq!(res, expect);
     }
 
     #[test]

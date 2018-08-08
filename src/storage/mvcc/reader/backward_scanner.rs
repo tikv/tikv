@@ -339,7 +339,9 @@ impl<S: Snapshot> BackwardScanner<S> {
             self.statistics.write.processed += 1;
 
             match write.write_type {
-                WriteType::Put => return Ok(Some(self.load_data_by_write(write, user_key)?)),
+                WriteType::Put => {
+                    return Ok(Some(self.reverse_load_data_by_write(write, user_key)?))
+                }
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
                     // Continue iterate next `write`.
@@ -361,7 +363,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         match some_write {
             None => Ok(None),
             Some(write) => match write.write_type {
-                WriteType::Put => Ok(Some(self.load_data_by_write(write, user_key)?)),
+                WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
                 WriteType::Delete => Ok(None),
                 _ => unreachable!(),
             },
@@ -371,9 +373,9 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// Load the value by the given `some_write`. If value is carried in `some_write`, it will be
     /// returned directly. Otherwise there will be a default CF look up.
     ///
-    /// The implementation is the same as `PointGetter::load_data_by_write`.
+    /// The implementation is similar to `PointGetter::load_data_by_write`.
     #[inline]
-    fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
+    fn reverse_load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
         if self.omit_value {
             return Ok(vec![]);
         }
@@ -385,7 +387,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             None => {
                 // Value is in the default CF.
                 self.ensure_default_cursor()?;
-                let value = super::util::near_load_data_by_write(
+                let value = super::util::near_reverse_load_data_by_write(
                     &mut self.default_cursor.as_mut().unwrap(),
                     user_key,
                     write,

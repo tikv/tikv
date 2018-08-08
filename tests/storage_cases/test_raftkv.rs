@@ -206,11 +206,15 @@ fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8
     assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
-fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
+fn assert_near_seek_for_prev<I: Iterator>(
+    cursor: &mut Cursor<I>,
+    key: &[u8],
+    pair: (&[u8], &[u8]),
+) {
     let mut statistics = CFStatistics::default();
     assert!(
         cursor
-            .near_reverse_seek(&Key::from_raw(key), false, &mut statistics)
+            .near_seek_for_prev(&Key::from_raw(key), false, &mut statistics)
             .unwrap(),
         escape(key)
     );
@@ -282,8 +286,10 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
         .unwrap();
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
-    assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
-    assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
+    assert_near_seek_for_prev(&mut cursor, b"z1", (b"z", b"2"));
+    assert_near_seek_for_prev(&mut cursor, b"z", (b"z", b"2"));
+    assert_near_seek_for_prev(&mut cursor, b"x1", (b"x", b"1"));
+    assert_near_seek_for_prev(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
     assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
     let mut statistics = CFStatistics::default();
