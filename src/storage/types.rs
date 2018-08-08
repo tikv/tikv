@@ -18,11 +18,12 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::u64;
 
+use byteorder::{ByteOrder, NativeEndian};
+
+use storage::mvcc::{Lock, Write};
 use util::codec::bytes;
 use util::codec::number::{self, NumberEncoder};
 use util::{codec, escape};
-
-use storage::mvcc::{Lock, Write};
 
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
@@ -171,9 +172,6 @@ impl Key {
     /// byte row id and in many situations only this part is different when calling this function.
     //
     // TODO: If the last 8 byte is memory aligned, it would be better.
-    // TODO: It may be UB to do like this. We should investigate whether `==` is smart enough
-    //       to optimize an 8-byte compare. Note that `==` will result in `memcmp` and `memcmp`
-    //       might be very smart.
     #[inline]
     #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
@@ -183,12 +181,12 @@ impl Key {
         }
         if user_key_len >= number::U64_SIZE {
             // We compare last 8 bytes as u64 first, then compare the rest.
-            unsafe {
-                let ks_ptr = ts_encoded_key[user_key_len - 8..].as_ptr() as *const u64;
-                let rs_ptr = user_key[user_key_len - 8..].as_ptr() as *const u64;
-                if *ks_ptr != *rs_ptr {
-                    return false;
-                }
+            // TODO: Can we just use == to check the left part and right part? memcpy might be
+            //       smart enough.
+            let left = NativeEndian::read_u64(&ts_encoded_key[user_key_len - 8..]);
+            let right = NativeEndian::read_u64(&user_key[user_key_len - 8..]);
+            if left != right {
+                return false;
             }
             ts_encoded_key[..user_key_len - 8] == user_key[..user_key_len - 8]
         } else {
