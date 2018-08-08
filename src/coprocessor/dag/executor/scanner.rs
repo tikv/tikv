@@ -117,9 +117,8 @@ impl<S: Snapshot> Scanner<S> {
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
-            (ScanMode::Forward, _) => util::prefix_next(&key), // Where is this thing useful?????
+            (ScanMode::Forward, _) | (ScanMode::Backward, ScanOn::Index) => key.clone(),
             (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
-            (ScanMode::Backward, ScanOn::Index) => key.clone(),
             _ => unreachable!(),
         };
 
@@ -128,10 +127,9 @@ impl<S: Snapshot> Scanner<S> {
 
     pub fn start_scan(&self, range: &mut KeyRange) {
         assert!(!self.no_more);
-        let cur_seek_key = self.seek_key.clone();
         match self.scan_mode {
-            ScanMode::Forward => range.set_start(cur_seek_key),
-            ScanMode::Backward => range.set_end(cur_seek_key),
+            ScanMode::Forward => range.set_start(util::prefix_next(&self.seek_key)),
+            ScanMode::Backward => range.set_end(self.seek_key.clone()),
             _ => unreachable!(),
         };
     }
@@ -140,10 +138,9 @@ impl<S: Snapshot> Scanner<S> {
         if self.no_more {
             return false;
         }
-        let cur_seek_key = self.seek_key.clone();
         match self.scan_mode {
-            ScanMode::Forward => range.set_end(cur_seek_key),
-            ScanMode::Backward => range.set_start(cur_seek_key),
+            ScanMode::Forward => range.set_end(util::prefix_next(&self.seek_key)),
+            ScanMode::Backward => range.set_start(self.seek_key.clone()),
             _ => unreachable!(),
         };
         true
