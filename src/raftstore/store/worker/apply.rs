@@ -236,14 +236,6 @@ impl ApplyCallback {
     }
 }
 
-/// Stash keeps the informations that are needed to restore an appropriate
-/// applying context for the `ApplyContextCore::stash` call.
-pub struct Stash {
-    region: Option<Region>,
-    exec_ctx: Option<ExecContext>,
-    last_applied_index: u64,
-}
-
 pub struct ApplyContext {
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
