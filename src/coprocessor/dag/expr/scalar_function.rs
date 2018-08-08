@@ -231,6 +231,14 @@ impl ScalarFunc {
             | ScalarFuncSig::InTime
             | ScalarFuncSig::InDuration
             | ScalarFuncSig::InJson
+            | ScalarFuncSig::GreatestInt
+            | ScalarFuncSig::GreatestReal
+            | ScalarFuncSig::GreatestDecimal
+            | ScalarFuncSig::GreatestString
+            | ScalarFuncSig::LeastInt
+            | ScalarFuncSig::LeastReal
+            | ScalarFuncSig::LeastDecimal
+            | ScalarFuncSig::LeastString
             | ScalarFuncSig::IntervalInt
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
@@ -314,10 +322,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetFormat
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
-            | ScalarFuncSig::GreatestDecimal
-            | ScalarFuncSig::GreatestInt
-            | ScalarFuncSig::GreatestReal
-            | ScalarFuncSig::GreatestString
             | ScalarFuncSig::GreatestTime
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
@@ -339,10 +343,6 @@ impl ScalarFunc {
             | ScalarFuncSig::LastDay
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
-            | ScalarFuncSig::LeastDecimal
-            | ScalarFuncSig::LeastInt
-            | ScalarFuncSig::LeastReal
-            | ScalarFuncSig::LeastString
             | ScalarFuncSig::LeastTime
             | ScalarFuncSig::Left
             | ScalarFuncSig::LeftBinary
@@ -774,6 +774,9 @@ dispatch_call! {
 
         Length => length,
         BitLength => bit_length,
+
+        GreatestInt => greatest_int,
+        LeastInt => least_int,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -800,6 +803,9 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+
+        GreatestReal => greatest_real,
+        LeastReal => least_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -828,6 +834,9 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
+
+        GreatestDecimal => greatest_decimal,
+        LeastDecimal => least_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
@@ -848,6 +857,9 @@ dispatch_call! {
 
         DateFormatSig => date_format,
         Bin => bin,
+
+        GreatestString => greatest_string,
+        LeastString => least_string,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1144,6 +1156,14 @@ mod test {
                     ScalarFuncSig::InTime,
                     ScalarFuncSig::InDuration,
                     ScalarFuncSig::InJson,
+                    ScalarFuncSig::GreatestDecimal,
+                    ScalarFuncSig::GreatestInt,
+                    ScalarFuncSig::GreatestReal,
+                    ScalarFuncSig::GreatestString,
+                    ScalarFuncSig::LeastDecimal,
+                    ScalarFuncSig::LeastInt,
+                    ScalarFuncSig::LeastReal,
+                    ScalarFuncSig::LeastString,
                     ScalarFuncSig::IntervalInt,
                     ScalarFuncSig::IntervalReal,
                 ],
@@ -1254,10 +1274,6 @@ mod test {
             ScalarFuncSig::GetFormat,
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
-            ScalarFuncSig::GreatestDecimal,
-            ScalarFuncSig::GreatestInt,
-            ScalarFuncSig::GreatestReal,
-            ScalarFuncSig::GreatestString,
             ScalarFuncSig::GreatestTime,
             ScalarFuncSig::HexIntArg,
             ScalarFuncSig::HexStrArg,
@@ -1279,10 +1295,6 @@ mod test {
             ScalarFuncSig::LastDay,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
-            ScalarFuncSig::LeastDecimal,
-            ScalarFuncSig::LeastInt,
-            ScalarFuncSig::LeastReal,
-            ScalarFuncSig::LeastString,
             ScalarFuncSig::LeastTime,
             ScalarFuncSig::Left,
             ScalarFuncSig::LeftBinary,
