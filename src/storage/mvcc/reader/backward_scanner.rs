@@ -427,7 +427,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     #[test]
-    fn test_basic() {
+    fn test_basic_1() {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
@@ -555,8 +555,6 @@ mod tests {
         assert_eq!(statistics.write.next, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
 
-        println!("case 3");
-
         // Before get key [8]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                                   ^cursor
@@ -593,8 +591,6 @@ mod tests {
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
         assert_eq!(statistics.write.seek_for_prev, 0);
-
-        println!("case 4");
 
         // Before get key [7]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
