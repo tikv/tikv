@@ -11,11 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+extern crate rand;
+extern crate time;
+
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
+use rand::{Rng, SeedableRng, XorShiftRng};
 use std::borrow::Cow;
 use std::{f64, i64};
 
@@ -112,6 +116,36 @@ impl ScalarFunc {
     #[inline]
     pub fn pi(&self, _ctx: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
         Ok(Some(f64::consts::PI))
+    }
+
+    #[inline]
+    pub fn rand(&self, _: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
+        let x = rand::thread_rng().gen::<f64>();
+        Ok(Some(x))
+    }
+
+    #[inline]
+    pub fn rand_with_seed(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let seed = match self.children[0].eval_int(ctx, row)? {
+            None => {
+                let current_time = time::get_time();
+                let nsec = current_time.nsec as u64;
+                let sec = (current_time.sec * 1000000000) as u64;
+                sec + nsec
+            }
+            Some(v) => v as u64,
+        };
+
+        let seeds: [u32; 4] = [
+            (seed & 0x0000_0000_0000_FFFF) as u32,
+            ((seed & 0x0000_0000_FFFF_0000) >> 16) as u32,
+            ((seed & 0x0000_FFFF_0000_0000) >> 32) as u32,
+            ((seed & 0xFFFF_0000_0000_0000) >> 48) as u32,
+        ];
+
+        let mut rng: XorShiftRng = SeedableRng::from_seed(seeds);
+        let x = rng.gen::<f64>();
+        Ok(Some(x))
     }
 
     #[inline]
@@ -378,6 +412,36 @@ mod test {
         let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::PI, &[])).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::F64(f64::consts::PI));
+    }
+
+    #[test]
+    fn test_rand() {
+        let mut ctx = EvalContext::default();
+        let arg = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::Rand, &[arg]);
+
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval_real(&mut ctx, &[]).unwrap();
+
+        assert_eq!(got.is_some(), true);
+        assert_eq!(got.unwrap() < 1.0, true);
+        assert_eq!(got.unwrap() >= 0.0, true);
+    }
+
+    #[test]
+    fn test_rand_with_seed() {
+        let seed: i64 = 20160101;
+        let mut ctx = EvalContext::default();
+
+        for _ in 1..3 {
+            let arg = datum_expr(Datum::I64(seed));
+            let op = scalar_func_expr(ScalarFuncSig::RandWithSeed, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval_real(&mut ctx, &[]).unwrap();
+
+            assert_eq!(got.is_some(), true);
+            assert_eq!(got.unwrap().to_bits(), (0.4545469470152683f64).to_bits());
+        }
     }
 
     #[test]
