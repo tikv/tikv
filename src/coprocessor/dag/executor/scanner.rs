@@ -87,7 +87,7 @@ impl<S: Snapshot> Scanner<S> {
             _ => unreachable!(),
         };
 
-        self.statistics_cache.add(self.scanner.get_statistics());
+        self.statistics_cache.add(&self.scanner.take_statistics());
         self.scanner = Self::range_scanner(store, self.scan_mode, self.key_only, &self.range)?;
         Ok(())
     }
@@ -151,8 +151,7 @@ impl<S: Snapshot> Scanner<S> {
 
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
         stats.add(&self.statistics_cache);
-        self.statistics_cache = Statistics::default();
-        self.scanner.collect_statistics_into(stats);
+        stats.add(&self.scanner.take_statistics());
     }
 }
 

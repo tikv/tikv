@@ -163,11 +163,6 @@ impl<S: Snapshot> BackwardScanner<S> {
         ::std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
-    /// Get reference of the statics collected so far.
-    pub fn get_statistics(&self) -> &Statistics {
-        &self.statistics
-    }
-
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {

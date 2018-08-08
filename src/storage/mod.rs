@@ -674,9 +674,9 @@ impl<E: Engine> Storage<E> {
                     };
                     let res = scanner.scan(limit);
 
-                    let statistics = scanner.get_statistics();
-                    thread_ctx.collect_scan_count(CMD, statistics);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
+                    let statistics = scanner.take_statistics();
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     res.map_err(Error::from).map(|results| {
                         thread_ctx.collect_key_reads(CMD, results.len() as u64);
