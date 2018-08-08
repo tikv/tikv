@@ -188,6 +188,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToDec
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::CRC32
+            | ScalarFuncSig::Cos
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::Length
@@ -276,7 +277,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Conv
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
-            | ScalarFuncSig::Cos
             | ScalarFuncSig::Cot
             | ScalarFuncSig::CurrentDate
             | ScalarFuncSig::CurrentTime0Arg
@@ -802,6 +802,8 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+
+        Cos => cos,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -1085,6 +1087,7 @@ mod test {
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
                     ScalarFuncSig::CRC32,
+                    ScalarFuncSig::Cos,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::Bin,
@@ -1217,7 +1220,6 @@ mod test {
             ScalarFuncSig::Conv,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
-            ScalarFuncSig::Cos,
             ScalarFuncSig::Cot,
             ScalarFuncSig::CurrentDate,
             ScalarFuncSig::CurrentTime0Arg,
