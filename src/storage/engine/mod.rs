@@ -195,7 +195,6 @@ macro_rules! near_loop {
 pub enum ScanMode {
     Forward,
     Backward,
-    Mixed,
 }
 
 /// Statistics collects the ops taken when fetching data.
@@ -380,11 +379,8 @@ impl<I: Iterator> Cursor<I> {
     /// Seek the specified key.
     ///
     /// When specified key < current key:
-    ///     In forward mode:
-    ///         `allow_reseek == true`: There will be a `seek()`.
-    ///         `allow_reseek == false`: No operation will be performed.
-    ///     In mixed mode:
-    ///         There will be some `prev()` first, then a `seek()`.
+    ///     `allow_reseek == true`: There will be a `seek()`.
+    ///     `allow_reseek == false`: No operation will be performed.
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
@@ -396,7 +392,7 @@ impl<I: Iterator> Cursor<I> {
     ) -> Result<bool> {
         self.valid = true;
 
-        assert_ne!(self.scan_mode, ScanMode::Backward);
+        assert_eq!(self.scan_mode, ScanMode::Forward);
         if !self.iter.valid() {
             return self.seek(key, statistics);
         }
@@ -404,7 +400,7 @@ impl<I: Iterator> Cursor<I> {
         if ord == Ordering::Equal {
             return Ok(true);
         }
-        if ord == Ordering::Greater && self.scan_mode == ScanMode::Forward {
+        if ord == Ordering::Greater {
             // current key > specified key
             if allow_reseek {
                 return self.seek(key, statistics);
@@ -417,28 +413,12 @@ impl<I: Iterator> Cursor<I> {
             self.valid = false;
             return Ok(false);
         }
-        if ord == Ordering::Greater {
-            near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.encoded().as_slice(),
-                self.seek(key, statistics),
-                statistics
-            );
-            if self.iter.valid() {
-                if self.key(statistics) < key.encoded().as_slice() {
-                    self.next(statistics);
-                }
-            } else {
-                assert!(self.seek_to_first(statistics));
-                return Ok(true);
-            }
-        } else {
-            // ord == Less
-            near_loop!(
-                self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
-                self.seek(key, statistics),
-                statistics
-            );
-        }
+        // ord == Less
+        near_loop!(
+            self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
+            self.seek(key, statistics),
+            statistics
+        );
         if !self.iter.valid() {
             self.max_key = Some(key.encoded().to_owned());
             return Ok(false);
@@ -466,11 +446,11 @@ impl<I: Iterator> Cursor<I> {
     /// Find the largest key that is not greater than the specific key.
     ///
     /// When specified key > current key:
-    ///     In backward mode:
-    ///         `allow_reseek == true`: There will be a `seek_for_prev()`.
-    ///         `allow_reseek == false`: No operation will be performed.
-    ///     In mixed mode:
-    ///         There will be some `next()` first, then a `seek_for_prev()`.
+    ///     `allow_reseek == true`: There will be a `seek_for_prev()`.
+    ///     `allow_reseek == false`: No operation will be performed.
+    ///
+    /// This method assume the current position of cursor is
+    /// around `key`, otherwise you should use `seek_for_prev` instead.
     pub fn near_seek_for_prev(
         &mut self,
         key: &Key,
@@ -479,7 +459,7 @@ impl<I: Iterator> Cursor<I> {
     ) -> Result<bool> {
         self.valid = true;
 
-        assert_ne!(self.scan_mode, ScanMode::Forward);
+        assert_eq!(self.scan_mode, ScanMode::Backward);
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
         }
@@ -487,7 +467,7 @@ impl<I: Iterator> Cursor<I> {
         if ord == Ordering::Equal {
             return Ok(true);
         }
-        if ord == Ordering::Less && self.scan_mode == ScanMode::Backward {
+        if ord == Ordering::Less {
             // current key < specified key
             if allow_reseek {
                 return self.seek_for_prev(key, statistics);
@@ -500,27 +480,11 @@ impl<I: Iterator> Cursor<I> {
             self.valid = false;
             return Ok(false);
         }
-        if ord == Ordering::Less {
-            near_loop!(
-                self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
-                self.seek_for_prev(key, statistics),
-                statistics
-            );
-            if self.iter.valid() {
-                if self.key(statistics) > key.encoded().as_slice() {
-                    self.prev(statistics);
-                }
-            } else {
-                assert!(self.seek_to_last(statistics));
-                return Ok(true);
-            }
-        } else {
-            near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.encoded().as_slice(),
-                self.seek_for_prev(key, statistics),
-                statistics
-            );
-        }
+        near_loop!(
+            self.prev(statistics) && self.key(statistics) > key.encoded().as_slice(),
+            self.seek_for_prev(key, statistics),
+            statistics
+        );
         if !self.iter.valid() {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
@@ -673,10 +637,9 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 pub mod tests {
-    use super::super::super::raftstore::store::engine::IterOption;
-    use super::SEEK_BOUND;
     use super::*;
     use kvproto::kvrpcpb::Context;
+    use raftstore::store::engine::IterOption;
     use storage::{CfName, Key, CF_DEFAULT};
     use tempdir::TempDir;
     use util::codec::bytes;
@@ -732,7 +695,7 @@ pub mod tests {
     pub fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
         let mut statistics = CFStatistics::default();
         iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -743,7 +706,7 @@ pub mod tests {
     pub fn assert_seek_for_prev<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOption::default(), ScanMode::Backward)
             .unwrap();
         let mut statistics = CFStatistics::default();
         iter.seek_for_prev(&Key::from_raw(key), &mut statistics)
@@ -752,32 +715,42 @@ pub mod tests {
         assert_eq!(iter.value(&mut statistics), pair.1);
     }
 
-    pub fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
-        let mut statistics = CFStatistics::default();
-        assert!(
-            cursor
-                .near_seek(&Key::from_raw(key), false, &mut statistics)
-                .unwrap(),
-            escape(key)
-        );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
-    }
-
-    pub fn assert_near_seek_for_prev<I: Iterator>(
-        cursor: &mut Cursor<I>,
+    pub fn assert_near_seek<I: Iterator>(
+        forward_cursor: &mut Cursor<I>,
         key: &[u8],
         pair: (&[u8], &[u8]),
     ) {
         let mut statistics = CFStatistics::default();
         assert!(
-            cursor
+            forward_cursor
+                .near_seek(&Key::from_raw(key), false, &mut statistics)
+                .unwrap(),
+            escape(key)
+        );
+        assert_eq!(
+            forward_cursor.key(&mut statistics),
+            &*bytes::encode_bytes(pair.0)
+        );
+        assert_eq!(forward_cursor.value(&mut statistics), pair.1);
+    }
+
+    pub fn assert_near_seek_for_prev<I: Iterator>(
+        backward_cursor: &mut Cursor<I>,
+        key: &[u8],
+        pair: (&[u8], &[u8]),
+    ) {
+        let mut statistics = CFStatistics::default();
+        assert!(
+            backward_cursor
                 .near_seek_for_prev(&Key::from_raw(key), false, &mut statistics)
                 .unwrap(),
             escape(key)
         );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(cursor.value(&mut statistics), pair.1);
+        assert_eq!(
+            backward_cursor.key(&mut statistics),
+            &*bytes::encode_bytes(pair.0)
+        );
+        assert_eq!(backward_cursor.value(&mut statistics), pair.1);
     }
 
     #[test]
@@ -858,7 +831,7 @@ pub mod tests {
         assert_seek_for_prev(engine, b"z0", (b"z", b"2"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+            .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
         let mut statistics = CFStatistics::default();
         assert!(
@@ -866,6 +839,9 @@ pub mod tests {
                 .seek(&Key::from_raw(b"z\x00"), &mut statistics)
                 .unwrap()
         );
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Backward)
+            .unwrap();
         assert!(
             !iter
                 .seek_for_prev(&Key::from_raw(b"w"), &mut statistics)
@@ -879,20 +855,23 @@ pub mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+        let mut forward_cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
-        assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
-        assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
-        assert_near_seek_for_prev(&mut cursor, b"z1", (b"z", b"2"));
-        assert_near_seek_for_prev(&mut cursor, b"z", (b"z", b"2"));
-        assert_near_seek_for_prev(&mut cursor, b"x1", (b"x", b"1"));
-        assert_near_seek_for_prev(&mut cursor, b"x", (b"x", b"1"));
-        assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
-        assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
+        let mut backward_cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Backward)
+            .unwrap();
+        assert_near_seek(&mut forward_cursor, b"x", (b"x", b"1"));
+        assert_near_seek(&mut forward_cursor, b"a", (b"x", b"1"));
+        assert_near_seek_for_prev(&mut backward_cursor, b"z1", (b"z", b"2"));
+        assert_near_seek_for_prev(&mut backward_cursor, b"z", (b"z", b"2"));
+        assert_near_seek_for_prev(&mut backward_cursor, b"x1", (b"x", b"1"));
+        assert_near_seek_for_prev(&mut backward_cursor, b"x", (b"x", b"1"));
+        assert_near_seek(&mut forward_cursor, b"y", (b"z", b"2"));
+        assert_near_seek(&mut forward_cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
         assert!(
-            !cursor
+            !forward_cursor
                 .near_seek(&Key::from_raw(b"z\x00"), false, &mut statistics)
                 .unwrap()
         );
@@ -902,11 +881,11 @@ pub mod tests {
             must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+        let mut forward_cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
-        assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
-        assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
+        assert_near_seek(&mut forward_cursor, b"x", (b"x", b"1"));
+        assert_near_seek(&mut forward_cursor, b"z", (b"z", b"2"));
 
         must_delete(engine, b"x");
         must_delete(engine, b"z");
@@ -918,42 +897,46 @@ pub mod tests {
 
     fn test_empty_seek<E: Engine>(engine: &E) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot
-            .iter(IterOption::default(), ScanMode::Mixed)
+        let mut forward_cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Forward)
+            .unwrap();
+        let mut backward_cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Backward)
             .unwrap();
         let mut statistics = CFStatistics::default();
         assert!(
-            !cursor
+            !backward_cursor
                 .near_seek_for_prev(&Key::from_raw(b"x"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
-            !cursor
+            !backward_cursor
                 .near_seek_for_prev(&Key::from_raw(b"z"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
-            !cursor
+            !backward_cursor
                 .near_seek_for_prev(&Key::from_raw(b"w"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
-            !cursor
+            !forward_cursor
                 .near_seek(&Key::from_raw(b"x"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
-            !cursor
+            !forward_cursor
                 .near_seek(&Key::from_raw(b"z"), false, &mut statistics)
                 .unwrap()
         );
         assert!(
-            !cursor
+            !forward_cursor
                 .near_seek(&Key::from_raw(b"w"), false, &mut statistics)
                 .unwrap()
         );
     }
 
+    /*
     macro_rules! assert_seek {
         ($cursor:ident, $func:ident, $k:expr, $res:ident) => {{
             let mut statistics = CFStatistics::default();
@@ -1103,6 +1086,7 @@ pub mod tests {
             }
         }
     }
+    */
 
     fn test_cf<E: Engine>(engine: &E) {
         assert_none_cf(engine, "cf", b"key");

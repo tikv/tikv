@@ -169,7 +169,7 @@ fn assert_none_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
 fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut iter = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOption::default(), ScanMode::Forward)
         .unwrap();
     let mut statistics = CFStatistics::default();
     iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -186,7 +186,7 @@ fn assert_seek_cf<E: Engine>(
 ) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut iter = snapshot
-        .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
+        .iter_cf(cf, IterOption::default(), ScanMode::Forward)
         .unwrap();
     let mut statistics = CFStatistics::default();
     iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
@@ -265,7 +265,7 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
     assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut iter = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+        .iter(IterOption::default(), ScanMode::Forward)
         .unwrap();
     let mut statistics = CFStatistics::default();
     assert!(
@@ -281,20 +281,23 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     must_put(ctx, engine, b"x", b"1");
     must_put(ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut cursor = snapshot
-        .iter(IterOption::default(), ScanMode::Mixed)
+    let mut forward_cursor = snapshot
+        .iter(IterOption::default(), ScanMode::Forward)
         .unwrap();
-    assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
-    assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
-    assert_near_seek_for_prev(&mut cursor, b"z1", (b"z", b"2"));
-    assert_near_seek_for_prev(&mut cursor, b"z", (b"z", b"2"));
-    assert_near_seek_for_prev(&mut cursor, b"x1", (b"x", b"1"));
-    assert_near_seek_for_prev(&mut cursor, b"x", (b"x", b"1"));
-    assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
-    assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
+    let mut backward_cursor = snapshot
+        .iter(IterOption::default(), ScanMode::Backward)
+        .unwrap();
+    assert_near_seek(&mut forward_cursor, b"x", (b"x", b"1"));
+    assert_near_seek(&mut forward_cursor, b"a", (b"x", b"1"));
+    assert_near_seek_for_prev(&mut backward_cursor, b"z1", (b"z", b"2"));
+    assert_near_seek_for_prev(&mut backward_cursor, b"z", (b"z", b"2"));
+    assert_near_seek_for_prev(&mut backward_cursor, b"x1", (b"x", b"1"));
+    assert_near_seek_for_prev(&mut backward_cursor, b"x", (b"x", b"1"));
+    assert_near_seek(&mut forward_cursor, b"y", (b"z", b"2"));
+    assert_near_seek(&mut forward_cursor, b"x\x00", (b"z", b"2"));
     let mut statistics = CFStatistics::default();
     assert!(
-        !cursor
+        !forward_cursor
             .near_seek(&Key::from_raw(b"z\x00"), false, &mut statistics)
             .unwrap()
     );

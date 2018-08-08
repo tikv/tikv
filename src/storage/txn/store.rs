@@ -105,7 +105,6 @@ impl<S: Snapshot> SnapshotStore<S> {
                         .build()?;
                 (None, Some(backward_scanner))
             }
-            _ => unreachable!(),
         };
         Ok(StoreScanner {
             forward_scanner,

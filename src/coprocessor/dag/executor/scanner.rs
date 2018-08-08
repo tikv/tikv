@@ -84,7 +84,6 @@ impl<S: Snapshot> Scanner<S> {
         match self.scan_mode {
             ScanMode::Backward => self.seek_key = self.range.get_end().to_vec(),
             ScanMode::Forward => self.seek_key = self.range.get_start().to_vec(),
-            _ => unreachable!(),
         };
 
         self.statistics_cache.add(&self.scanner.take_statistics());
@@ -120,7 +119,6 @@ impl<S: Snapshot> Scanner<S> {
             (ScanMode::Forward, _) => util::prefix_next(&key), // Where is this thing useful?????
             (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
             (ScanMode::Backward, ScanOn::Index) => key.clone(),
-            _ => unreachable!(),
         };
 
         Ok(Some((key, value)))
@@ -132,7 +130,6 @@ impl<S: Snapshot> Scanner<S> {
         match self.scan_mode {
             ScanMode::Forward => range.set_start(cur_seek_key),
             ScanMode::Backward => range.set_end(cur_seek_key),
-            _ => unreachable!(),
         };
     }
 
@@ -144,7 +141,6 @@ impl<S: Snapshot> Scanner<S> {
         match self.scan_mode {
             ScanMode::Forward => range.set_end(cur_seek_key),
             ScanMode::Backward => range.set_start(cur_seek_key),
-            _ => unreachable!(),
         };
         true
     }
