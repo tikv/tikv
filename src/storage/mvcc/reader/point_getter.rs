@@ -175,9 +175,7 @@ impl<S: Snapshot> PointGetter<S> {
             // We may move forward / seek to another key. In this case, the scan ends.
             {
                 let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-                // TODO: if length is not equal, no need to truncate.
-                let current_user_key = Key::truncate_ts_for(cursor_key)?;
-                if user_key.encoded().as_slice() != current_user_key {
+                if !Key::is_user_key_eq(cursor_key, user_key.encoded().as_slice()) {
                     // Meet another key.
                     return Ok(None);
                 }
@@ -187,28 +185,7 @@ impl<S: Snapshot> PointGetter<S> {
             self.statistics.write.processed += 1;
 
             match write.write_type {
-                WriteType::Put => {
-                    if self.omit_value {
-                        return Ok(Some(vec![]));
-                    }
-                    match write.short_value {
-                        Some(value) => {
-                            // Value is carried in `write`.
-                            return Ok(Some(value));
-                        }
-                        None => {
-                            // Value is in the default CF.
-                            self.ensure_default_cursor()?;
-                            let value = super::util::near_load_data_by_write(
-                                &mut self.default_cursor.as_mut().unwrap(),
-                                user_key,
-                                write,
-                                &mut self.statistics,
-                            )?;
-                            return Ok(Some(value));
-                        }
-                    }
-                }
+                WriteType::Put => return Ok(Some(self.load_data_by_write(write, user_key)?)),
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
                     // Continue iterate next `write`.
@@ -219,7 +196,34 @@ impl<S: Snapshot> PointGetter<S> {
         }
     }
 
+    /// Load the value by the given `write`. If value is carried in `write`, it will be returned
+    /// directly. Otherwise there will be a default CF look up.
+    #[inline]
+    fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
+        if self.omit_value {
+            return Ok(vec![]);
+        }
+        match write.short_value {
+            Some(value) => {
+                // Value is carried in `write`.
+                Ok(value)
+            }
+            None => {
+                // Value is in the default CF.
+                self.ensure_default_cursor()?;
+                let value = super::util::near_load_data_by_write(
+                    &mut self.default_cursor.as_mut().unwrap(),
+                    user_key,
+                    write,
+                    &mut self.statistics,
+                )?;
+                Ok(value)
+            }
+        }
+    }
+
     /// Create the default cursor if it doesn't exist.
+    #[inline]
     fn ensure_default_cursor(&mut self) -> Result<()> {
         if self.default_cursor.is_some() {
             return Ok(());
