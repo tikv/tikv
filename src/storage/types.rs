@@ -181,8 +181,8 @@ impl Key {
         }
         if user_key_len >= number::U64_SIZE {
             // We compare last 8 bytes as u64 first, then compare the rest.
-            // TODO: Can we just use == to check the left part and right part? memcpy might be
-            //       smart enough.
+            // TODO: Can we just use == to check the left part and right part? `memcmp` might
+            //       be smart enough.
             let left = NativeEndian::read_u64(&ts_encoded_key[user_key_len - 8..]);
             let right = NativeEndian::read_u64(&user_key[user_key_len - 8..]);
             if left != right {
