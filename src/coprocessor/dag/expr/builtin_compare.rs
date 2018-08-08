@@ -187,7 +187,7 @@ impl ScalarFunc {
         for exp in &self.children {
             let val = try_opt!(exp.eval_string(ctx, row));
             let s = str::from_utf8(&val)?;
-            match Time::parse_datetime(s, self.tp.get_decimal() as i8, &ctx.cfg.tz) {
+            match Time::parse_datetime(s, Time::parse_fsp(s), ctx.cfg.tz) {
                 Ok(t) => greatest = max(greatest, t),
                 Err(_) => {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(s)) {
@@ -231,7 +231,10 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let mut res = Cow::from(vec![]);
         let mut least = Time::new(
-            ctx.cfg.tz.timestamp(mysql::time::MAX_TIMESTAMP, mysql::time::MAX_TIME_NANOSECONDS),
+            ctx.cfg.tz.timestamp(
+                mysql::time::MAX_TIMESTAMP,
+                mysql::time::MAX_TIME_NANOSECONDS,
+            ),
             mysql::types::DATETIME,
             mysql::MAX_FSP,
         )?;
@@ -240,7 +243,7 @@ impl ScalarFunc {
         for exp in &self.children {
             let val = try_opt!(exp.eval_string(ctx, row));
             let s = str::from_utf8(&val)?;
-            match Time::parse_datetime(s, self.tp.get_decimal() as i8, &ctx.cfg.tz) {
+            match Time::parse_datetime(s, Time::parse_fsp(s), ctx.cfg.tz) {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(s)) {
                     Err(e) => return Err(e),
@@ -458,7 +461,11 @@ where
 }
 
 #[inline]
-fn do_get_extremum<'a, T, E, F>(expr: &'a FnCall, mut evaluator: F, chooser: E) -> Result<Option<T>>
+fn do_get_extremum<'a, T, E, F>(
+    expr: &'a ScalarFunc,
+    mut evaluator: F,
+    chooser: E,
+) -> Result<Option<T>>
 where
     F: FnMut(&'a Expression) -> Result<Option<T>>,
     E: Fn(T, T) -> T,
@@ -476,6 +483,7 @@ where
 mod test {
     use super::super::{EvalConfig, FLAG_IN_INSERT_STMT};
     use super::*;
+    use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{col_expr, str2dec};
@@ -731,6 +739,10 @@ mod test {
         let t2 = b"2012-12-24 12:00:39".to_owned().to_vec();
         let t3 = b"2012-12-31 12:00:39".to_owned().to_vec();
         let t4 = b"invalid_time".to_owned().to_vec();
+        let t5 = b"2012-12-12 12:00:38.12003800000".to_owned().to_vec();
+        let t6 = b"2012-12-31 12:00:39.120050".to_owned().to_vec();
+        let t7 = b"2018-04-03.invalid".to_owned().to_vec();
+        let t8 = b"2012-12-31 12:00:40.invalid".to_owned().to_vec();
 
         let int_cases = vec![
             (vec![Datum::Null, Datum::Null], Datum::Null, Datum::Null),
@@ -871,6 +883,20 @@ mod test {
                 Datum::Bytes(t3.clone()),
                 Datum::Bytes(t4.clone()),
             ),
+            (
+                vec![
+                    Datum::Bytes(t1.clone()),
+                    Datum::Bytes(t2.clone()),
+                    Datum::Bytes(t3.clone()),
+                    Datum::Bytes(t4.clone()),
+                    Datum::Bytes(t5.clone()),
+                    Datum::Bytes(t6.clone()),
+                    Datum::Bytes(t7.clone()),
+                    Datum::Bytes(t8.clone()),
+                ],
+                Datum::Bytes(t6.clone()),
+                Datum::Bytes(t4.clone()),
+            ),
         ];
 
         fn do_test(
@@ -936,7 +962,7 @@ mod test {
         );
 
         {
-            let mut eval_config = EvalConfig::new(0, FLAG_IN_INSERT_STMT).unwrap();
+            let mut eval_config = EvalConfig::new(FLAG_IN_INSERT_STMT).unwrap();
             eval_config.set_strict_sql_mode(true);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![
@@ -953,7 +979,7 @@ mod test {
             expr.set_children(RepeatedField::from_vec(children));
             let e = Expression::build(&mut ctx, expr).unwrap();
             let err = e.eval(&mut ctx, &row).unwrap_err();
-            assert_eq!(err.code(), super::super::ERR_TRUNCATE_WRONG_VALUE);
+            assert_eq!(err.code(), ERR_TRUNCATE_WRONG_VALUE);
         }
     }
 }

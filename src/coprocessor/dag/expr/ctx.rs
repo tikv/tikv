@@ -295,7 +295,7 @@ impl EvalContext {
     }
 
     pub fn handle_invalid_time_error(&mut self, err: Error) -> Result<()> {
-        if err.code() != super::super::ERR_TRUNCATE_WRONG_VALUE {
+        if err.code() != super::codec::error::ERR_TRUNCATE_WRONG_VALUE {
             return Err(err);
         }
         let cfg = &self.cfg;
@@ -434,7 +434,7 @@ mod test {
         ];
         for (flag, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");
-            let mut cfg = EvalConfig::new(0, flag).unwrap();
+            let mut cfg = EvalConfig::new(flag).unwrap();
             cfg.set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_invalid_time_error(err).is_ok(), is_ok);

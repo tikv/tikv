@@ -108,6 +108,8 @@ impl ScalarFunc {
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
             | ScalarFuncSig::Atan2Args
+            | ScalarFuncSig::RegexpSig
+            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -355,6 +357,8 @@ impl ScalarFunc {
             | ScalarFuncSig::GreatestReal
             | ScalarFuncSig::GreatestString
             | ScalarFuncSig::GreatestTime
+            | ScalarFuncSig::HexIntArg
+            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -373,6 +377,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeastReal
             | ScalarFuncSig::LeastString
             | ScalarFuncSig::LeastTime
+            | ScalarFuncSig::Left
             | ScalarFuncSig::LeftBinary
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::Locate3Args
@@ -778,6 +783,8 @@ dispatch_call! {
         LeastInt => least_int,
 
         LikeSig => like,
+        RegexpSig => regexp,
+        RegexpBinarySig => regexp_binary,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
@@ -1339,6 +1346,8 @@ mod test {
             ScalarFuncSig::GreatestReal,
             ScalarFuncSig::GreatestString,
             ScalarFuncSig::GreatestTime,
+            ScalarFuncSig::HexIntArg,
+            ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
@@ -1357,6 +1366,7 @@ mod test {
             ScalarFuncSig::LeastReal,
             ScalarFuncSig::LeastString,
             ScalarFuncSig::LeastTime,
+            ScalarFuncSig::Left,
             ScalarFuncSig::LeftBinary,
             ScalarFuncSig::Locate2Args,
             ScalarFuncSig::Locate3Args,
