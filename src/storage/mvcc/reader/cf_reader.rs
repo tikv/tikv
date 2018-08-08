@@ -229,9 +229,7 @@ impl<S: Snapshot> CfReader<S> {
         while write_cursor.valid() {
             let commit_ts = {
                 let current_key = write_cursor.key(&mut self.statistics.write);
-                // TODO: if length is not equal, no need to truncate.
-                let current_user_key = Key::truncate_ts_for(current_key)?;
-                if user_key.encoded().as_slice() != current_user_key {
+                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                     // Meet another key: don't need to scan more.
                     break;
                 }
@@ -267,9 +265,7 @@ impl<S: Snapshot> CfReader<S> {
         while default_cursor.valid() {
             let start_ts = {
                 let current_key = default_cursor.key(&mut self.statistics.data);
-                // TODO: if length is not equal, no need to truncate.
-                let current_user_key = Key::truncate_ts_for(current_key)?;
-                if user_key.encoded().as_slice() != current_user_key {
+                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                     // Meet another key: don't need to scan more.
                     break;
                 }
@@ -329,8 +325,7 @@ impl<S: Snapshot> CfReader<S> {
         }
         let commit_ts = {
             let current_key = write_cursor.key(&mut self.statistics.write);
-            let current_user_key = Key::truncate_ts_for(current_key)?;
-            if user_key.encoded().as_slice() != current_user_key {
+            if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key: don't need to scan more.
                 return Ok(None);
             }
@@ -388,9 +383,7 @@ impl<S: Snapshot> CfReader<S> {
         while write_cursor.valid() {
             let commit_ts = {
                 let current_key = write_cursor.key(&mut self.statistics.write);
-                // TODO: if length is not equal, no need to truncate.
-                let current_user_key = Key::truncate_ts_for(current_key)?;
-                if user_key.encoded().as_slice() != current_user_key {
+                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                     // Meet another key: don't need to scan more.
                     break;
                 }
