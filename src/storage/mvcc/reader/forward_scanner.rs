@@ -275,8 +275,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                     }
                     {
                         let current_key = self.write_cursor.key(&mut self.statistics.write);
-                        if Key::truncate_ts_for(current_key)?
-                            != current_user_key.encoded().as_slice()
+                        if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice())
                         {
                             // Found another user key, don't need to seek again.
                             needs_seek = false;
@@ -337,7 +336,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         for _ in 0..SEEK_BOUND {
             {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if Key::truncate_ts_for(current_key)? != user_key.encoded().as_slice() {
+                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                     // Meet another key.
                     return Ok(None);
                 }
@@ -364,7 +363,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 return Ok(None);
             }
             let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if Key::truncate_ts_for(current_key)? != user_key.encoded().as_slice() {
+            if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
                 return Ok(None);
             }
@@ -412,7 +411,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 return Ok(None);
             }
             let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if Key::truncate_ts_for(current_key)? != user_key.encoded().as_slice() {
+            if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
                 return Ok(None);
             }
