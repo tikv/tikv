@@ -121,7 +121,11 @@ impl ScalarFunc {
     pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let y = try_opt!(self.children[1].eval_real(ctx, row));
-        Ok(Some(x.pow(y)))
+        let pow = x.pow(y);
+        if pow.is_infinite() || pow.is_nan() {
+           return Ok(Some(0.0));
+        }
+        Ok(Some(pow))
     }
 }
 
@@ -344,7 +348,8 @@ mod test {
         let tests = vec![
             (ScalarFuncSig::Pow, Datum::F64(1.0), Datum::F64(3.0), Datum::F64(1.0)),
             (ScalarFuncSig::Pow, Datum::F64(3.0), Datum::F64(0.0), Datum::F64(1.0)),
-            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(3.0), Datum::F64(8.0))
+            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(3.0), Datum::F64(8.0)),
+            (ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(300000000.0), Datum::F64(0.0))
         ];
         let mut ctx = EvalContext::default();
         for (sig, arg0, arg1, exp) in tests {
