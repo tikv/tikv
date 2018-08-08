@@ -174,21 +174,17 @@ impl<S: Snapshot> ForwardScanner<S> {
         loop {
             // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
             // the encoded user key we are currently dealing with. It may not have a write, or
-            // may not have a lock.
-            let current_user_key;
-
+            // may not have a lock. It is not a slice to avoid data being invalidated after
+            // cursor moving.
+            //
             // `has_write` indicates whether `current_user_key` has at least one corresponding
             // `write`. If there is one, it is what current write cursor pointing to. The pointed
             // `write` must be the most recent (i.e. largest `commit_ts`) write of
             // `current_user_key`.
-            let has_write;
-
+            //
             // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
             // there is one, it is what current lock cursor pointing to.
-            let has_lock;
-
-            {
-                let current_user_key_slice;
+            let (current_user_key, has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid() {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
@@ -208,46 +204,34 @@ impl<S: Snapshot> ForwardScanner<S> {
                         // Write cursor yields `None` but lock cursor yields something:
                         // In RC, it means we got nothing.
                         // In SI, we need to check if the lock will cause conflict.
-                        current_user_key_slice = k;
-                        has_write = false;
-                        has_lock = true;
+                        (k.to_vec(), false, true)
                     }
                     (Some(k), None) => {
                         // Write cursor yields something but lock cursor yields `None`:
                         // We need to further step write cursor to our desired version
-                        current_user_key_slice = Key::truncate_ts_for(k)?;
-                        has_write = true;
-                        has_lock = false;
+                        (Key::truncate_ts_for(k)?.to_vec(), true, false)
                     }
                     (Some(wk), Some(lk)) => match Key::truncate_ts_for(wk)?.cmp(lk) {
                         Ordering::Less => {
                             // Write cursor user key < lock cursor, it means the lock of the
                             // current key that write cursor is pointing to does not exist.
-                            current_user_key_slice = Key::truncate_ts_for(wk)?;
-                            has_write = true;
-                            has_lock = false;
+                            (Key::truncate_ts_for(wk)?.to_vec(), true, false)
                         }
                         Ordering::Greater => {
                             // Write cursor user key > lock cursor, it means we got a lock of a
                             // key that does not have a write. In SI, we need to check if the
                             // lock will cause conflict.
-                            current_user_key_slice = lk;
-                            has_write = false;
-                            has_lock = true;
+                            (lk.to_vec(), false, true)
                         }
                         Ordering::Equal => {
                             // Write cursor user key == lock cursor, it means the lock of the
                             // current key that write cursor is pointing to *exists*.
-                            current_user_key_slice = lk;
-                            has_write = true;
-                            has_lock = true;
+                            (lk.to_vec(), true, true)
                         }
                     },
-                };
-                // Convert the key into a `Vec` to avoid data being invalidated after cursor
-                // moving.
-                current_user_key = Key::from_encoded(current_user_key_slice.to_vec());
-            }
+                }
+            };
+            let current_user_key = Key::from_encoded(current_user_key);
 
             // Attempt to read specified version of the key. Note that we may get `None`
             // indicating that no desired version is found, or a DELETE version is found, or
