@@ -668,6 +668,7 @@ mod test {
     fn test_greatest_and_least() {
         let dec1 = "0.1".parse::<Decimal>().unwrap();
         let dec2 = "1.1".parse::<Decimal>().unwrap();
+
         let s1 = "你好".as_bytes().to_owned();
         let s2 = "你好啊".as_bytes().to_owned();
 
@@ -688,6 +689,11 @@ mod test {
                 Datum::I64(1),
             ),
             (
+                ScalarFuncSig::GreatestInt,
+                vec![Datum::I64(0), Datum::I64(1), Datum::I64(2)],
+                Datum::I64(2),
+            ),
+            (
                 ScalarFuncSig::GreatestReal,
                 vec![Datum::Null, Datum::F64(0.1)],
                 Datum::Null,
@@ -699,8 +705,8 @@ mod test {
             ),
             (
                 ScalarFuncSig::GreatestReal,
-                vec![Datum::F64(0.1), Datum::F64(1.1)],
-                Datum::F64(1.1),
+                vec![Datum::F64(0.1), Datum::F64(1.1), Datum::F64(2.1)],
+                Datum::F64(2.1),
             ),
             (
                 ScalarFuncSig::GreatestDecimal,
@@ -744,7 +750,7 @@ mod test {
             ),
             (
                 ScalarFuncSig::LeastInt,
-                vec![Datum::I64(0), Datum::I64(1)],
+                vec![Datum::I64(0), Datum::I64(1), Datum::I64(2)],
                 Datum::I64(0),
             ),
             (
@@ -759,7 +765,7 @@ mod test {
             ),
             (
                 ScalarFuncSig::LeastReal,
-                vec![Datum::F64(0.1), Datum::F64(1.1)],
+                vec![Datum::F64(0.1), Datum::F64(1.1), Datum::F64(2.1)],
                 Datum::F64(0.1),
             ),
             (
