@@ -258,41 +258,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             let result = self.get(&current_user_key, has_write, has_lock);
 
             if has_write {
-                // After `self.get()`, our write cursor may be pointing to current user key (if we
-                // found a desired version), or next user key (if there is no desired version), or
-                // out of bound.
-
-                // If it is pointing to current user key, we need to step it until we meet a new
-                // key. We first try to `next()` a few times. If still not reaching another user
-                // key, we `seek()`.
-
-                let mut needs_seek = true;
-                for _ in 0..SEEK_BOUND {
-                    if !self.write_cursor.valid() {
-                        // Key space ended don't need to seek again.
-                        needs_seek = false;
-                        break;
-                    }
-                    {
-                        let current_key = self.write_cursor.key(&mut self.statistics.write);
-                        if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice())
-                        {
-                            // Found another user key, don't need to seek again.
-                            needs_seek = false;
-                            break;
-                        }
-                    }
-                    self.write_cursor.next(&mut self.statistics.write);
-                }
-
-                // We have not found another user key for now, so we directly `seek()`.
-                // After that, we must pointing to another key, or out of bound.
-                if needs_seek {
-                    self.write_cursor.seek(
-                        &current_user_key.clone().append_ts(0),
-                        &mut self.statistics.write,
-                    )?;
-                }
+                self.move_write_cursor_to_next_user_key(&current_user_key)?;
             }
             if has_lock {
                 self.lock_cursor.next(&mut self.statistics.lock);
@@ -307,6 +273,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     }
 
     /// Attempt to get the value of a key specified by `user_key` and `self.ts`.
+    #[inline]
     fn get(&mut self, user_key: &Key, has_write: bool, has_lock: bool) -> Result<Option<Value>> {
         let mut safe_ts = self.ts;
         match self.isolation_level {
@@ -376,28 +343,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             self.statistics.write.processed += 1;
 
             match write.write_type {
-                WriteType::Put => {
-                    if self.omit_value {
-                        return Ok(Some(vec![]));
-                    }
-                    match write.short_value {
-                        Some(value) => {
-                            // Value is carried in `write`.
-                            return Ok(Some(value));
-                        }
-                        None => {
-                            // Value is in the default CF.
-                            self.ensure_default_cursor()?;
-                            let value = super::util::near_load_data_by_write(
-                                &mut self.default_cursor.as_mut().unwrap(),
-                                user_key,
-                                write,
-                                &mut self.statistics,
-                            )?;
-                            return Ok(Some(value));
-                        }
-                    }
-                }
+                WriteType::Put => return Ok(Some(self.load_data_by_write(write, user_key)?)),
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
                     // Continue iterate next `write`.
@@ -418,7 +364,70 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
     }
 
+    /// Load the value by the given `write`. If value is carried in `write`, it will be returned
+    /// directly. Otherwise there will be a default CF look up.
+    ///
+    /// The implementation is the same as `PointGetter::load_data_by_write`.
+    #[inline]
+    fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
+        if self.omit_value {
+            return Ok(vec![]);
+        }
+        match write.short_value {
+            Some(value) => {
+                // Value is carried in `write`.
+                Ok(value)
+            }
+            None => {
+                // Value is in the default CF.
+                self.ensure_default_cursor()?;
+                let value = super::util::near_load_data_by_write(
+                    &mut self.default_cursor.as_mut().unwrap(),
+                    user_key,
+                    write,
+                    &mut self.statistics,
+                )?;
+                Ok(value)
+            }
+        }
+    }
+
+    /// After `self.get()`, our write cursor may be pointing to current user key (if we
+    /// found a desired version), or next user key (if there is no desired version), or
+    /// out of bound.
+    ///
+    /// If it is pointing to current user key, we need to step it until we meet a new
+    /// key. We first try to `next()` a few times. If still not reaching another user
+    /// key, we `seek()`.
+    #[inline]
+    fn move_write_cursor_to_next_user_key(&mut self, current_user_key: &Key) -> Result<()> {
+        for _ in 0..SEEK_BOUND {
+            if !self.write_cursor.valid() {
+                // Key space ended. We are done here.
+                return Ok(());
+            }
+            {
+                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
+                    // Found another user key. We are done here.
+                    return Ok(());
+                }
+            }
+            self.write_cursor.next(&mut self.statistics.write);
+        }
+
+        // We have not found another user key for now, so we directly `seek()`.
+        // After that, we must pointing to another key, or out of bound.
+        self.write_cursor.seek(
+            &current_user_key.clone().append_ts(0),
+            &mut self.statistics.write,
+        )?;
+
+        Ok(())
+    }
+
     /// Create the default cursor if it doesn't exist.
+    #[inline]
     fn ensure_default_cursor(&mut self) -> Result<()> {
         if self.default_cursor.is_some() {
             return Ok(());
