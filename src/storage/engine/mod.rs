@@ -630,7 +630,7 @@ mod tests {
     use super::SEEK_BOUND;
     use super::*;
     use kvproto::kvrpcpb::Context;
-    use storage::{make_key, CfName, CF_DEFAULT};
+    use storage::{CfName, Key, CF_DEFAULT};
     use tempdir::TempDir;
     use util::codec::bytes;
     use util::escape;
@@ -667,44 +667,47 @@ mod tests {
 
     fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
-            .put(&Context::new(), make_key(key), value.to_vec())
+            .put(&Context::new(), Key::from_raw(key), value.to_vec())
             .unwrap();
     }
 
     fn must_put_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
         engine
-            .put_cf(&Context::new(), cf, make_key(key), value.to_vec())
+            .put_cf(&Context::new(), cf, Key::from_raw(key), value.to_vec())
             .unwrap();
     }
 
     fn must_delete<E: Engine>(engine: &E, key: &[u8]) {
-        engine.delete(&Context::new(), make_key(key)).unwrap();
+        engine.delete(&Context::new(), Key::from_raw(key)).unwrap();
     }
 
     fn must_delete_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
         engine
-            .delete_cf(&Context::new(), cf, make_key(key))
+            .delete_cf(&Context::new(), cf, Key::from_raw(key))
             .unwrap();
     }
 
     fn assert_has<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
+        assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
     }
 
     fn assert_has_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap().unwrap(), value);
+        assert_eq!(
+            snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
+            value
+        );
     }
 
     fn assert_none<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(snapshot.get(&make_key(key)).unwrap(), None);
+        assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
     }
 
     fn assert_none_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap(), None);
+        assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
     }
 
     fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
@@ -713,7 +716,7 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        iter.seek(&make_key(key), &mut statistics).unwrap();
+        iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
         assert_eq!(
             (iter.key(), iter.value()),
             (&*bytes::encode_bytes(pair.0), pair.1)
@@ -726,7 +729,8 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        iter.reverse_seek(&make_key(key), &mut statistics).unwrap();
+        iter.reverse_seek(&Key::from_raw(key), &mut statistics)
+            .unwrap();
         assert_eq!(
             (iter.key(), iter.value()),
             (&*bytes::encode_bytes(pair.0), pair.1)
@@ -736,7 +740,9 @@ mod tests {
     fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
         let mut statistics = CFStatistics::default();
         assert!(
-            cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
+            cursor
+                .near_seek(&Key::from_raw(key), &mut statistics)
+                .unwrap(),
             escape(key)
         );
         assert_eq!(
@@ -753,7 +759,7 @@ mod tests {
         let mut statistics = CFStatistics::default();
         assert!(
             cursor
-                .near_reverse_seek(&make_key(key), &mut statistics)
+                .near_reverse_seek(&Key::from_raw(key), &mut statistics)
                 .unwrap(),
             escape(key)
         );
@@ -776,8 +782,8 @@ mod tests {
             .write(
                 &Context::new(),
                 vec![
-                    Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
-                    Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec()),
+                    Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
+                    Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
                 ],
             )
             .unwrap();
@@ -788,8 +794,8 @@ mod tests {
             .write(
                 &Context::new(),
                 vec![
-                    Modify::Delete(CF_DEFAULT, make_key(b"x")),
-                    Modify::Delete(CF_DEFAULT, make_key(b"y")),
+                    Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
+                    Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
                 ],
             )
             .unwrap();
@@ -812,8 +818,16 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
-        assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
+        assert!(
+            !iter
+                .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !iter
+                .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+                .unwrap()
+        );
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
@@ -834,7 +848,7 @@ mod tests {
         let mut statistics = CFStatistics::default();
         assert!(
             !cursor
-                .near_seek(&make_key(b"z\x00"), &mut statistics)
+                .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
                 .unwrap()
         );
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
@@ -865,22 +879,34 @@ mod tests {
         let mut statistics = CFStatistics::default();
         assert!(
             !cursor
-                .near_reverse_seek(&make_key(b"x"), &mut statistics)
+                .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
                 .unwrap()
         );
         assert!(
             !cursor
-                .near_reverse_seek(&make_key(b"z"), &mut statistics)
+                .near_reverse_seek(&Key::from_raw(b"z"), &mut statistics)
                 .unwrap()
         );
         assert!(
             !cursor
-                .near_reverse_seek(&make_key(b"w"), &mut statistics)
+                .near_reverse_seek(&Key::from_raw(b"w"), &mut statistics)
                 .unwrap()
         );
-        assert!(!cursor.near_seek(&make_key(b"x"), &mut statistics).unwrap());
-        assert!(!cursor.near_seek(&make_key(b"z"), &mut statistics).unwrap());
-        assert!(!cursor.near_seek(&make_key(b"w"), &mut statistics).unwrap());
+        assert!(
+            !cursor
+                .near_seek(&Key::from_raw(b"x"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_seek(&Key::from_raw(b"z"), &mut statistics)
+                .unwrap()
+        );
+        assert!(
+            !cursor
+                .near_seek(&Key::from_raw(b"w"), &mut statistics)
+                .unwrap()
+        );
     }
 
     macro_rules! assert_seek {
@@ -927,7 +953,7 @@ mod tests {
                 i = SEEK_BOUND * 30 - 1 - i;
             }
             let key = format!("key_{:03}", i);
-            let seek_key = make_key(key.as_bytes());
+            let seek_key = Key::from_raw(key.as_bytes());
             let exp_kv = if i <= 100 {
                 match seek_mode {
                     SeekMode::Reverse => None,
@@ -1070,7 +1096,8 @@ mod tests {
 
         let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
-        iter.seek(&make_key(b"foo30"), &mut statistics).unwrap();
+        iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
+            .unwrap();
 
         assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo4"));
         assert_eq!(iter.value(), b"bar4");
@@ -1079,7 +1106,7 @@ mod tests {
 
         let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
-        iter.near_seek(&make_key(b"foo55"), &mut statistics)
+        iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
 
         assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo6"));
