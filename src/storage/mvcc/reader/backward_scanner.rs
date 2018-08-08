@@ -242,18 +242,23 @@ impl<S: Snapshot> BackwardScanner<S> {
             }
 
             let mut write = {
-                let (commit_ts, key) = {
-                    last_handled_key =
-                        Some(self.write_cursor.key(&mut self.statistics.write).to_vec());
-                    let w_key = Key::from_encoded(
-                        self.write_cursor.key(&mut self.statistics.write).to_vec(),
-                    );
-                    (w_key.decode_ts()?, w_key.truncate_ts()?)
-                };
+                let mut is_found = false;
+                {
+                    let (commit_ts, key) = {
+                        last_handled_key =
+                            Some(self.write_cursor.key(&mut self.statistics.write).to_vec());
+                        let w_key = self.write_cursor.key(&mut self.statistics.write);
 
-                // reach neighbour user key or can't see this version.
-                if ts < commit_ts || &key != user_key {
-                    assert!(&key <= user_key);
+                        (Key::decode_ts_from(w_key)?, Key::truncate_ts_for(w_key)?)
+                    };
+
+                    // reach neighbour user key or can't see this version.
+                    if ts < commit_ts || key != user_key.encoded().as_slice() {
+                        assert!(key <= user_key.encoded().as_slice());
+                        is_found = true;
+                    }
+                }
+                if is_found {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
                 self.statistics.write.processed += 1;
@@ -280,6 +285,7 @@ impl<S: Snapshot> BackwardScanner<S> {
 
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
+        // TODO: Avoid realloc.
         let key = user_key.clone().append_ts(ts);
         let valid = self
             .write_cursor
@@ -295,12 +301,13 @@ impl<S: Snapshot> BackwardScanner<S> {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
 
-                let w_key =
-                    Key::from_encoded(self.write_cursor.key(&mut self.statistics.write).to_vec());
-                let commit_ts = w_key.decode_ts()?;
-                assert!(commit_ts <= ts);
-                let key = w_key.truncate_ts()?;
-                assert_eq!(&key, user_key);
+                {
+                    let w_key = self.write_cursor.key(&mut self.statistics.write);
+                    let commit_ts = Key::decode_ts_from(w_key)?;
+                    assert!(commit_ts <= ts);
+                    let key = Key::truncate_ts_for(w_key)?;
+                    assert_eq!(key, user_key.encoded().as_slice());
+                }
                 self.statistics.write.processed += 1;
                 Write::parse(self.write_cursor.value(&mut self.statistics.write))?
             };
