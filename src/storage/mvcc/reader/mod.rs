@@ -22,14 +22,6 @@ pub use self::cf_reader::{CfReader, CfReaderBuilder};
 pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
 pub use self::point_getter::{PointGetter, PointGetterBuilder};
 
-// When there are many versions for the user key, after several tries,
-// we will use seek to locate the right position. But this will turn around
-// the write cf's iterator's direction inside RocksDB, and the next user key
-// need to turn back the direction to backward. As we have tested, turn around
-// iterator's direction from forward to backward is as expensive as seek in
-// RocksDB, so don't set REVERSE_SEEK_BOUND too small.
-const REVERSE_SEEK_BOUND: u64 = 32;
-
 #[cfg(test)]
 mod tests {
     //    use kvproto::kvrpcpb::IsolationLevel;
