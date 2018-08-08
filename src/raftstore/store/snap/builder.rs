@@ -49,7 +49,7 @@ impl CfFile {
         snap_key: SnapKey,
         snap_stale_notifier: &SnapStaleNotifier,
     ) -> RaftStoreResult<usize> {
-        let (mut cf_key_count, mut cf_size) = (0, 0);
+        let (mut cf_key_count, mut cf_size, mut stale) = (0, 0, false);
         match self.tmp_cf_file {
             Either::Left(ref mut file) => {
                 db_snap.scan_cf(self.cf, start_key, end_key, false, |key, value| {
@@ -57,7 +57,8 @@ impl CfFile {
                     cf_size += key.len() + value.len();
                     file.encode_compact_bytes(key)?;
                     file.encode_compact_bytes(value)?;
-                    Ok(!stale_for_generate(snap_key, snap_stale_notifier))
+                    stale = stale_for_generate(snap_key, snap_stale_notifier);
+                    Ok(!stale)
                 })?;
                 // use an empty byte array to indicate that cf reaches an end.
                 file.encode_compact_bytes(b"")?;
@@ -65,25 +66,31 @@ impl CfFile {
             }
             Either::Right(ref mut writer) => {
                 let mut bytes = 0;
-                let dir = io_limiter.map_or(0, |l| l.get_max_bytes_per_time());
+                let base = io_limiter.map_or(0, |l| l.get_max_bytes_per_time());
                 db_snap.scan_cf(self.cf, &start_key, &end_key, false, |key, value| {
                     let l = key.len() + value.len();
                     cf_key_count += 1;
                     cf_size += l;
                     if let Some(ref limiter) = io_limiter {
-                        if bytes >= dir {
+                        if bytes >= base {
                             bytes = 0;
-                            limiter.request(dir);
+                            limiter.request(base);
                         }
                         bytes += l as i64;
                     }
                     writer.put(key, value)?;
-                    Ok(!stale_for_generate(snap_key, snap_stale_notifier))
+                    stale = stale_for_generate(snap_key, snap_stale_notifier);
+                    Ok(!stale)
                 })?;
                 if cf_key_count > 0 {
                     writer.finish()?;
                 }
             }
+        }
+
+        if stale {
+            error!("{} build_snapshot meets stale db snap", snap_key);
+            return Err(Error::Snapshot(SnapError::Stale));
         }
 
         // TODO: calculate written bytes and crc32 while scaning.
@@ -145,6 +152,7 @@ impl SnapshotBase {
         let tmp_meta_path = gen_meta_tmp_file_path(&self.dir, self.for_send, self.key);
         let mut tmp_meta_file = create_new_file_at(&tmp_meta_path)?;
         snapshot_meta.write_to_writer(&mut tmp_meta_file)?;
+        tmp_meta_file.flush()?;
         tmp_meta_file.sync_all()?;
 
         let tmp_snap_dir = gen_tmp_snap_dir(&self.dir, self.for_send, self.key);

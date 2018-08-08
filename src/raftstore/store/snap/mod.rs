@@ -64,6 +64,10 @@ quick_error! {
             description("abort")
             display("abort")
         }
+        Stale {
+            description("stale snapshot")
+            description("stale snapshot")
+        }
         Unavaliable {
             description("snapshot unavaliable")
             description("snapshot unavaliable")
