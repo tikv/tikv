@@ -1179,8 +1179,7 @@ impl Peer {
             return;
         }
         self.leader_lease.renew(ts);
-        let term = self.term();
-        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
+        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease() {
             let progress = ReadProgress::leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);
         }

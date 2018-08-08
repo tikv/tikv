@@ -525,15 +525,6 @@ const METRICS_FLUSH_INTERVAL: u64 = 15; // 15s
 impl<C: Sender<StoreMsg>> RunnableWithTimer<Task, ()> for LocalReader<C> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         self.metrics.borrow_mut().flush();
-        let count = self.delegates.values().fold(0i64, |mut acc, delegate| {
-            if let Some(ref lease) = delegate.leader_lease {
-                if lease.term() == delegate.term {
-                    acc += 1;
-                }
-            }
-            acc
-        });
-        LOCAL_READ_LEADER.set(count);
         timer.add_task(Duration::from_secs(METRICS_FLUSH_INTERVAL), ());
     }
 }
@@ -755,7 +746,7 @@ mod tests {
 
         // Register region 1
         lease.renew(monotonic_raw_now());
-        let remote = lease.maybe_new_remote_lease(1).unwrap();
+        let remote = lease.maybe_new_remote_lease().unwrap();
         // But the applied_index_term is stale.
         let register_region1 = Task::Register(ReadDelegate {
             tag: String::new(),
