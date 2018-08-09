@@ -19,6 +19,8 @@ use storage::txn::Result;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
 
+const MIN_KEY_BUFFER_CAPACITY: usize = 256;
+
 #[derive(Copy, Clone)]
 pub enum ScanOn {
     Table,
@@ -48,11 +50,26 @@ impl<S: Snapshot> Scanner<S> {
         key_only: bool,
         range: KeyRange,
     ) -> Result<Self> {
-        let (scan_mode, seek_key) = if desc {
-            (ScanMode::Backward, range.get_end().to_vec())
+        let scan_mode = if desc {
+            ScanMode::Backward
         } else {
-            (ScanMode::Forward, range.get_start().to_vec())
+            ScanMode::Forward
         };
+
+        let seek_key = {
+            let seek_key_slice = if desc {
+                range.get_end()
+            } else {
+                range.get_start()
+            };
+            let mut buffer = Vec::with_capacity(::std::cmp::max(
+                MIN_KEY_BUFFER_CAPACITY,
+                seek_key_slice.len(),
+            ));
+            buffer.extend_from_slice(seek_key_slice);
+            buffer
+        };
+
         let scanner = Self::range_scanner(store, scan_mode, key_only, &range)?;
 
         Ok(Self {
@@ -116,11 +133,15 @@ impl<S: Snapshot> Scanner<S> {
             );
         }
 
-        self.seek_key = match (self.scan_mode, self.scan_on) {
-            (ScanMode::Forward, _) | (ScanMode::Backward, ScanOn::Index) => key.clone(),
-            (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
-            _ => unreachable!(),
-        };
+        {
+            let seek_key_slice = match (self.scan_mode, self.scan_on) {
+                (ScanMode::Forward, _) | (ScanMode::Backward, ScanOn::Index) => key.as_slice(),
+                (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)),
+                _ => unreachable!(),
+            };
+            self.seek_key.clear();
+            self.seek_key.extend_from_slice(seek_key_slice);
+        }
 
         Ok(Some((key, value)))
     }
