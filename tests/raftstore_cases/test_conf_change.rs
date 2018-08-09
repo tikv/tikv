@@ -634,7 +634,8 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&engine_4, b"k3", b"v3");
 
-    // Transfer leader to (4, 12) and check pd heartbeats from it.
+    // Transfer leader to (4, 12) and check pd heartbeats from it to ensure
+    // that `Peer::peer` has be updated correctly after the peer is promoted.
     pd_client.transfer_leader(r1, new_peer(4, 12));
     pd_client.region_leader_must_be(r1, new_peer(4, 12));
 
