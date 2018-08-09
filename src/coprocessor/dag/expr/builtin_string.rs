@@ -45,21 +45,21 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
         let i = try_opt!(self.children[1].eval_int(ctx, row));
-        let s = str::from_utf8(&s)?;
-        let slen = s.chars().count();
-        let l: usize = if i < 0 {
-            0
-        } else if i as usize > slen {
-            slen
-        } else {
-            i as usize
-        };
-        let t = s
-            .chars()
-            .into_iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<_>>();
-        Ok(Some(Cow::Owned(t[0..l].concat().into_bytes())))
+        if i <= 0 {
+            return Ok(Some(Cow::Owned(b"".to_vec())));
+        }
+        {
+            let s = str::from_utf8(&s)?;
+            if s.chars().count() > i as usize {
+                let t = s
+                    .chars()
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>();
+                return Ok(Some(Cow::Owned(t[0..i as usize].concat().into_bytes())));
+            }
+        }
+        Ok(Some(s))
     }
 }
 
@@ -180,6 +180,11 @@ mod test {
     #[test]
     fn test_left() {
         let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"".to_vec()),
+            ),
             (
                 Datum::Bytes(b"hello".to_vec()),
                 Datum::I64(1),
