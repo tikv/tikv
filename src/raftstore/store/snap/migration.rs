@@ -11,10 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::*;
+use regex::Regex;
 
 pub(super) fn parse_old_snap_name(name: &str) -> Option<(bool, SnapKey)> {
-    let pattern = Regex::new("(gen|rev)_([0-9]+)_([0-9]+)_([0-9]+)").unwrap();
-    let caps = pattern.captures(name)?;
+    lazy_static! {
+        static ref PATTERN: Regex = Regex::new("(gen|rev)_([0-9]+)_([0-9]+)_([0-9]+)").unwrap();
+    }
+    let caps = PATTERN.captures(name)?;
     let for_send = caps.at(1)? == SNAP_GEN_PREFIX;
     let region_id = caps.at(2)?.parse().ok()?;
     let term = caps.at(3)?.parse().ok()?;

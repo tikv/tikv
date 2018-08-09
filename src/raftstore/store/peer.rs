@@ -1101,8 +1101,8 @@ impl Peer {
             self.raft_group
                 .advance_apply(apply_state.get_applied_index());
         }
-        self.mut_store()
-            .set_applied_state(apply_state, applied_index_term);
+        self.mut_store().set_applied_state(apply_state);
+        self.mut_store().set_applied_term(applied_index_term);
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
         self.delete_keys_hint += apply_metrics.delete_keys_hint;

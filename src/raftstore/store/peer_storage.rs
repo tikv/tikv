@@ -608,15 +608,19 @@ impl PeerStorage {
     }
 
     #[inline]
-    pub fn set_applied_state(&mut self, apply_state: RaftApplyState, applied_index_term: u64) {
+    pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
         self.apply_state = apply_state;
-        self.applied_index_term = applied_index_term;
         self.snap_stale_notifier
             .compacted_term
             .store(self.truncated_term(), Ordering::Relaxed);
         self.snap_stale_notifier
             .compacted_idx
             .store(self.truncated_index(), Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn set_applied_term(&mut self, applied_index_term: u64) {
+        self.applied_index_term = applied_index_term;
     }
 
     #[inline]
