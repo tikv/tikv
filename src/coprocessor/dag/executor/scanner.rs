@@ -165,7 +165,7 @@ impl<S: Snapshot> Scanner<S> {
             ScanMode::Forward => {
                 // Increase seek_key, so that stop_scan returns a key that is exclusive, producing
                 // a half-close range
-                util::calc_prefix_next(&mut self.seek_key);
+                util::convert_to_prefix_next(&mut self.seek_key);
                 range.set_end(self.seek_key.clone())
             }
             ScanMode::Backward => range.set_start(self.seek_key.clone()),
