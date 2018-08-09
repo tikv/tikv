@@ -113,6 +113,8 @@ local-read-batch-size = 33
 split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
+region-max-keys = 100000
+region-split-keys = 100000
 
 [rocksdb]
 wal-recovery-mode = 1
