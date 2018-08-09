@@ -17,14 +17,8 @@ use tipb::schema::ColumnInfo;
 use super::codec::datum::Datum;
 use super::codec::mysql;
 
-/// Get the smallest key which is larger than the key given.
-pub fn prefix_next(key: &[u8]) -> Vec<u8> {
-    let mut nk = key.to_vec();
-    calc_prefix_next(&mut nk);
-    nk
-}
-
-pub fn calc_prefix_next(key: &mut Vec<u8>) {
+/// Convert the key to the smallest key which is larger than the key given.
+pub fn prefix_next(key: &mut Vec<u8>) {
     if key.is_empty() {
         key.push(0);
         return;
@@ -51,9 +45,43 @@ pub fn calc_prefix_next(key: &mut Vec<u8>) {
     }
 }
 
+/// Check if `key1`'s prefix next equals to `key2`
+pub fn prefix_next_equals(key1: &[u8], key2: &[u8]) -> bool {
+    if key1.is_empty() {
+        return key2 == [0];
+    }
+    if key2.is_empty() {
+        return false;
+    }
+
+    let mut carry_pos = key1.len() - 1;
+    loop {
+        if key1[carry_pos] != 255 {
+            break;
+        }
+
+        if carry_pos == 0 {
+            // All bytes of `start` are 255. `end` should equals `start.append(0)`
+            return &key2[..key2.len() - 1] == key1 && *key2.last().unwrap() == 0;
+        }
+
+        carry_pos -= 1;
+    }
+
+    // So they are equal when:
+    // * lengths are equal and
+    // * `key1`'s value at `carry_pos` is that of `key2` - 1 and
+    // * `key2`'s part after carry_pos is all 0
+    // * `key1` and `key2`'s parts before carry_pos are equal.
+    key1.len() == key2.len()
+        && key1[carry_pos] + 1 == key2[carry_pos]
+        && key2[carry_pos + 1..].iter().all(|byte| *byte == 0)
+        && key1[..carry_pos] == key2[..carry_pos]
+}
+
 /// `is_point` checks if the key range represents a point.
 pub fn is_point(range: &coppb::KeyRange) -> bool {
-    range.get_end() == &*prefix_next(range.get_start())
+    prefix_next_equals(range.get_start(), range.get_end())
 }
 
 #[inline]
@@ -70,18 +98,73 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 mod test {
     use super::*;
 
+    fn test_prefix_next_once(key: &[u8], expected: &[u8]) {
+        let mut key = key.to_vec();
+        prefix_next(&mut key);
+        assert_eq!(key.as_slice(), expected);
+    }
+
     #[test]
     fn test_prefix_next() {
-        assert_eq!(prefix_next(&[]), vec![0]);
-        assert_eq!(prefix_next(&[0]), vec![1]);
-        assert_eq!(prefix_next(&[1]), vec![2]);
-        assert_eq!(prefix_next(&[255]), vec![255, 0]);
-        assert_eq!(prefix_next(&[255, 255, 255]), vec![255, 255, 255, 0]);
-        assert_eq!(prefix_next(&[1, 255]), vec![2, 0]);
-        assert_eq!(prefix_next(&[0, 1, 255]), vec![0, 2, 0]);
-        assert_eq!(prefix_next(&[0, 1, 255, 5]), vec![0, 1, 255, 6]);
-        assert_eq!(prefix_next(&[0, 1, 5, 255]), vec![0, 1, 6, 0]);
-        assert_eq!(prefix_next(&[0, 1, 255, 255]), vec![0, 2, 0, 0]);
-        assert_eq!(prefix_next(&[0, 255, 255, 255]), vec![1, 0, 0, 0]);
+        test_prefix_next_once(&[], &[0]);
+        test_prefix_next_once(&[0], &[1]);
+        test_prefix_next_once(&[1], &[2]);
+        test_prefix_next_once(&[255], &[255, 0]);
+        test_prefix_next_once(&[255, 255, 255], &[255, 255, 255, 0]);
+        test_prefix_next_once(&[1, 255], &[2, 0]);
+        test_prefix_next_once(&[0, 1, 255], &[0, 2, 0]);
+        test_prefix_next_once(&[0, 1, 255, 5], &[0, 1, 255, 6]);
+        test_prefix_next_once(&[0, 1, 5, 255], &[0, 1, 6, 0]);
+        test_prefix_next_once(&[0, 1, 255, 255], &[0, 2, 0, 0]);
+        test_prefix_next_once(&[0, 255, 255, 255], &[1, 0, 0, 0]);
+    }
+
+    fn test_prefix_next_equals_case(lhs: &[u8], expected: &[u8], unexpected: &[&[u8]]) {
+        assert!(prefix_next_equals(lhs, expected));
+        for rhs in unexpected {
+            assert!(!prefix_next_equals(lhs, rhs));
+        }
+    }
+
+    #[test]
+    fn test_prefix_next_equals() {
+        test_prefix_next_equals_case(&[], &[0], &[&[], &[1], &[2]]);
+        test_prefix_next_equals_case(&[0], &[1], &[&[], &[0], &[00], &[2], &[255]]);
+        test_prefix_next_equals_case(&[1], &[2], &[&[], &[1], &[3], &[10]]);
+        test_prefix_next_equals_case(&[255], &[255, 0], &[&[0], &[255, 255, 0]]);
+        test_prefix_next_equals_case(
+            &[255, 255, 255],
+            &[255, 255, 255, 0],
+            &[
+                &[],
+                &[0],
+                &[0, 0, 0],
+                &[255, 255, 0],
+                &[255, 255, 255, 255, 0],
+            ],
+        );
+        test_prefix_next_equals_case(
+            &[1, 255],
+            &[2, 0],
+            &[&[], &[1, 255, 0], &[2, 255], &[1, 255], &[2, 0, 0]],
+        );
+        test_prefix_next_equals_case(
+            &[0, 255],
+            &[1, 0],
+            &[&[], &[0, 255, 0], &[1, 255], &[0, 255], &[1, 0, 0]],
+        );
+        test_prefix_next_equals_case(
+            &[1, 2, 3, 4, 255, 255],
+            &[1, 2, 3, 5, 0, 0],
+            &[
+                &[],
+                &[1, 2, 3, 4, 255, 255],
+                &[1, 2, 3, 4, 0, 0],
+                &[1, 2, 3, 5, 255, 255],
+                &[1, 2, 3, 5, 0, 1],
+                &[1, 2, 3, 5, 1, 0],
+                &[1, 2, 4, 0, 0, 0],
+            ],
+        );
     }
 }
