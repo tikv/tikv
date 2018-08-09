@@ -1431,7 +1431,7 @@ impl ApplyDelegate {
             .schedule(Task::apply_to(region_id, merge.clone(), tx))
             .unwrap();
 
-        // Continue after the source region has applied the specified position.
+        // Continue after the source region has applied to the specified position.
         rx.then(move |res| match res {
             Ok(region) => future::ok((self, region)),
             _e @ Err(oneshot::Canceled) => future::err((self, Error::Canceled)),
