@@ -106,7 +106,7 @@ fn new_debug_executor(
             ))) as Box<DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<DebugExecutor>,
-        _ => unreachable!(),
+        _ => unreachable!("You have to set up the parameter --pb or --db!"),
     }
 }
 
