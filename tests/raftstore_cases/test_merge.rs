@@ -343,27 +343,37 @@ fn test_node_merge_dist_isolation() {
 /// way behind others so others have to send it a snapshot.
 #[test]
 fn test_node_merge_brain_split() {
-    // ::util::init_log();
+    // ::util::ci_setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
 
     cluster.run();
-
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
+
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    // The split regions' leaders could be at store 3, so transfer them to peer 1.
+    let left_peer_1 = find_peer(&left, 1).cloned().unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_peer_1);
+    let right_peer_1 = find_peer(&right, 1).cloned().unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_peer_1);
 
     cluster.must_put(b"k11", b"v11");
+    cluster.must_put(b"k21", b"v21");
+    // Make sure peers on store 3 have replicated latest update, which means
+    // they have already reported their progresses to leader.
     util::must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    util::must_get_equal(&cluster.get_engine(3), b"k21", b"v21");
+
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    let right = pd_client.get_region(b"k3").unwrap();
     pd_client.must_merge(left.get_id(), right.get_id());
 
     for i in 0..100 {
