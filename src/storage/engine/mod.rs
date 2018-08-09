@@ -350,6 +350,7 @@ impl<I: Iterator> Cursor<I> {
     }
 
     /// Mark key and value as unread. It will be invoked once cursor is moved.
+    #[inline]
     fn mark_unread(&mut self) {
         self.cur_key_has_read = false;
         self.cur_value_has_read = false;
