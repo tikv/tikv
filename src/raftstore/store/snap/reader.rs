@@ -14,7 +14,7 @@ use raftstore::store::util::check_key_in_region;
 use storage::CF_RAFT;
 use util::codec::bytes::CompactBytesFromFileDecoder;
 use util::file::{calc_crc32, delete_file_if_exist, get_file_size};
-use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion};
+use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 struct SnapshotBase {
     dir: String,
@@ -140,19 +140,24 @@ impl SnapshotApplyer {
 
     pub(super) fn apply(&self, mut options: ApplyOptions) -> Result<()> {
         for cf in self.base.snapshot_meta.get_cf_files() {
-            if cf.get_size() == 0 {
+            let (cf, size, checksum) = (cf.get_cf(), cf.get_size(), cf.get_checksum());
+            if size == 0 {
                 continue;
             }
-            let cf = cf.get_cf();
+
             if plain_file_used(cf) {
+                let path = gen_cf_file_path(&self.base.dir, false, self.base.key, cf);
+                check_file_size_and_checksum(path, size, checksum)?;
                 self.apply_plain_cf_file(cf, &options)?;
             } else {
                 let (dir, key) = (&self.base.dir, self.base.key);
                 let cf_path = gen_cf_file_path(dir, false, key, cf);
                 let clone_path = gen_cf_clone_file_path(dir, false, key, cf);
-                prepare_sst_for_ingestion(&cf_path, &clone_path)?;
-
                 let db = options.db.as_ref();
+
+                prepare_sst_for_ingestion(&cf_path, &clone_path)?;
+                validate_sst_for_ingestion(db, cf, &clone_path, size, checksum)?;
+
                 let mut options = IngestExternalFileOptions::new();
                 options.move_files(true);
                 let handle = box_try!(get_cf_handle(db, cf));
@@ -237,29 +242,19 @@ fn gen_cf_clone_file_path(dir: &str, for_send: bool, key: SnapKey, cf: &str) -> 
     cf_path
 }
 
-pub(super) fn check_snapshot_with_meta(
-    meta: &SnapshotMeta,
-    dir: &str,
-    for_send: bool,
-    key: SnapKey,
+fn check_file_size_and_checksum<P: AsRef<Path>>(
+    path: P,
+    expected_size: u64,
+    expected_checksum: u32,
 ) -> Result<()> {
-    let base = SnapshotBase::new(dir.to_owned(), for_send, key, meta.clone());
-    for cf in base.snapshot_meta.get_cf_files() {
-        if cf.get_size() == 0 {
-            continue;
-        }
-        let (dir, for_send, key) = (&base.dir, base.for_send, base.key);
-        let cf_file_path = gen_cf_file_path(dir, for_send, key, cf.get_cf());
+    let size = get_file_size(&path)?;
+    if size != expected_size {
+        return Err(snapshot_size_corrupt(expected_size, size));
+    }
 
-        let checksum = calc_crc32(&cf_file_path)?;
-        if checksum != cf.get_checksum() {
-            return Err(snapshot_checksum_corrupt(cf.get_checksum(), checksum));
-        }
-
-        let size = get_file_size(&cf_file_path)?;
-        if size != cf.get_size() {
-            return Err(snapshot_size_corrupt(cf.get_size(), size));
-        }
+    let checksum = calc_crc32(&path)?;
+    if checksum != expected_checksum {
+        return Err(snapshot_checksum_corrupt(expected_checksum, checksum));
     }
     Ok(())
 }

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Digest, Hasher32};
 
-pub fn get_file_size(path: &PathBuf) -> io::Result<u64> {
+pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
     Ok(meta.len())
 }

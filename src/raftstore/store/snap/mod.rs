@@ -16,8 +16,8 @@ mod reader;
 use self::builder::SnapshotGenerator;
 pub use self::builder::SnapshotReceiver;
 use self::migration::*;
+use self::reader::SnapshotApplyer;
 pub use self::reader::SnapshotSender;
-use self::reader::{check_snapshot_with_meta, SnapshotApplyer};
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -253,8 +253,6 @@ impl SnapManager {
     ) -> Result<()> {
         let meta_path = gen_meta_file_path(&self.core.dir, false, key);
         if let Ok(meta) = read_snapshot_meta(&meta_path) {
-            check_snapshot_with_meta(&meta, &self.core.dir, false, key)?;
-
             let dir = self.core.dir.clone();
             let (ref_count, used_times) = {
                 self.register(false, key, None, false)?;
