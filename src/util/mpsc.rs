@@ -121,6 +121,11 @@ impl<T> Sender<T> {
             Err(TrySendError::Disconnected(t))
         }
     }
+
+    #[inline]
+    pub fn is_disconnected(&self) -> bool {
+        self.state.is_receiver_closed()
+    }
 }
 
 impl<T> Receiver<T> {
@@ -240,6 +245,11 @@ impl<T> LooseBoundedSender<T> {
         } else {
             Err(TrySendError::Full(t))
         }
+    }
+
+    #[inline]
+    pub fn is_disconnected(&self) -> bool {
+        self.sender.is_disconnected()
     }
 }
 

@@ -30,13 +30,13 @@ use raft::eraftpb::ConfChangeType;
 use tikv::config::*;
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
-use tikv::raftstore::Result;
+use tikv::raftstore::{Error, Result};
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
-use tikv::util::transport::SendCh;
+use tikv::util::transport::InternalSendCh;
 
 use super::cluster::{Cluster, Simulator};
 
@@ -438,13 +438,21 @@ pub fn must_error_read_on_peer<T: Simulator>(
     }
 }
 
+pub fn must_region_not_found(res: Result<RaftCmdResponse>) {
+    match res {
+        Ok(ref resp) if resp.get_header().get_error().has_region_not_found() => {}
+        Err(Error::RegionNotFound(_)) => {}
+        _ => panic!("unexpected response: {:?}", res),
+    }
+}
+
 fn dummpy_filter(_: &CompactionJobInfo) -> bool {
     true
 }
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    tx: SendCh<StoreMsg>,
+    tx: InternalSendCh<StoreMsg>,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine

@@ -34,7 +34,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::storage::CF_DEFAULT;
-use tikv::util::transport::SendCh;
+use tikv::util::transport::InternalSendCh;
 use tikv::util::{escape, rocksdb, HandyRwLock};
 
 // We simulate 3 or 5 nodes, each has a store.
@@ -64,7 +64,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
+    fn get_store_sendch(&self, node_id: u64) -> Option<InternalSendCh<Msg>>;
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter);
@@ -889,13 +889,11 @@ impl<T: Simulator> Cluster<T> {
         loop {
             let find_leader =
                 new_status_request(region_id, new_peer(store_id, 0), new_region_leader_cmd());
-            let resp = self
-                .call_command(find_leader, Duration::from_secs(5))
-                .unwrap();
-
-            if !is_error_response(&resp) {
-                return;
-            }
+            match self.call_command(find_leader, Duration::from_secs(5)) {
+                Ok(ref resp) if !is_error_response(&resp) => return,
+                Ok(_) | Err(Error::RegionNotFound(_)) => {}
+                Err(e) => panic!("unexpected error: {:?}", e),
+            };
 
             if try_cnt > 250 {
                 panic!(
@@ -913,9 +911,11 @@ impl<T: Simulator> Cluster<T> {
         loop {
             let peer = new_peer(store_id, 0);
             let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
-            let resp = self
-                .call_command(find_leader, Duration::from_secs(5))
-                .unwrap();
+            let resp = match self.call_command(find_leader, Duration::from_secs(5)) {
+                Ok(resp) => resp,
+                Err(Error::RegionNotFound(_)) => break,
+                Err(e) => panic!("unexpected error: {:?}", e),
+            };
 
             if is_error_response(&resp) {
                 assert!(

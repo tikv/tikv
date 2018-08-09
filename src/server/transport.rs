@@ -14,37 +14,40 @@
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{SendError, TrySendError};
 use std::sync::{Arc, RwLock};
 
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
+use raftstore::store::router::InternalTransport;
 use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
-use raftstore::Result as RaftStoreResult;
+use raftstore::{Error, Result as RaftStoreResult};
 use server::raft_client::RaftClient;
 use server::Result;
 use util::collections::HashSet;
-use util::transport::SendCh;
 use util::worker::Scheduler;
 use util::HandyRwLock;
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+    fn send(&self, region_id: u64, msg: StoreMsg) -> RaftStoreResult<()>;
 
     /// Send StoreMsg.
-    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
+    fn try_send(&self, region_id: u64, msg: StoreMsg) -> RaftStoreResult<()>;
 
     // Send RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::RaftMessage(msg))
+        self.try_send(msg.region_id, StoreMsg::RaftMessage(msg))
     }
 
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_raft_cmd(req, cb))
+        self.try_send(
+            req.get_header().get_region_id(),
+            StoreMsg::new_raft_cmd(req, cb),
+        )
     }
 
     // Send a batch of RaftCmdRequests to local store.
@@ -53,18 +56,25 @@ pub trait RaftStoreRouter: Send + Clone {
         batch: Vec<RaftCmdRequest>,
         on_finished: BatchReadCallback,
     ) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
+        let region_id = batch[0].get_header().get_region_id();
+        self.try_send(
+            region_id,
+            StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished),
+        )
     }
 
     // Send significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()>;
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
 
     // Report the peer of the region is unreachable.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        self.significant_send(SignificantMsg::Unreachable {
+        self.significant_send(
             region_id,
-            to_peer_id,
-        })
+            SignificantMsg::Unreachable {
+                region_id,
+                to_peer_id,
+            },
+        )
     }
 
     // Report the sending snapshot status to the peer of the region.
@@ -74,65 +84,49 @@ pub trait RaftStoreRouter: Send + Clone {
         to_peer_id: u64,
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
-        self.significant_send(SignificantMsg::SnapshotStatus {
+        self.significant_send(
             region_id,
-            to_peer_id,
-            status,
-        })
+            SignificantMsg::SnapshotStatus {
+                region_id,
+                to_peer_id,
+                status,
+            },
+        )
     }
 }
 
 #[derive(Clone)]
-pub struct ServerRaftStoreRouter {
-    pub ch: SendCh<StoreMsg>,
-    pub significant_msg_sender: Sender<SignificantMsg>,
+pub struct ServerThreadedStoreRouter {
+    pub ch: InternalTransport,
 }
 
-impl ServerRaftStoreRouter {
-    pub fn new(
-        ch: SendCh<StoreMsg>,
-        significant_msg_sender: Sender<SignificantMsg>,
-    ) -> ServerRaftStoreRouter {
-        ServerRaftStoreRouter {
-            ch,
-            significant_msg_sender,
-        }
+impl ServerThreadedStoreRouter {
+    pub fn new(ch: InternalTransport) -> ServerThreadedStoreRouter {
+        ServerThreadedStoreRouter { ch }
     }
 }
 
-impl RaftStoreRouter for ServerRaftStoreRouter {
-    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.try_send(msg)?;
-        Ok(())
+impl RaftStoreRouter for ServerThreadedStoreRouter {
+    #[inline]
+    fn try_send(&self, region_id: u64, msg: StoreMsg) -> RaftStoreResult<()> {
+        self.send(region_id, msg)
     }
 
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.send(msg)?;
-        Ok(())
-    }
-
-    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::RaftMessage(msg))
-    }
-
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_raft_cmd(req, cb))
-    }
-
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
-    }
-
-    fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
-        if let Err(e) = self.significant_msg_sender.send(msg) {
-            return Err(box_err!("failed to sendsignificant msg {:?}", e));
+    #[inline]
+    fn send(&self, region_id: u64, msg: StoreMsg) -> RaftStoreResult<()> {
+        match self.ch.send(region_id, msg) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => Err(Error::RegionNotFound(region_id)),
+            Err(e) => Err(box_err!("failed to send msg: {:?}", e)),
         }
+    }
 
-        Ok(())
+    #[inline]
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+        match self.ch.significant_send(region_id, msg) {
+            Ok(()) => Ok(()),
+            Err(SendError(_)) => Err(Error::RegionNotFound(region_id)),
+        }
     }
 }
 

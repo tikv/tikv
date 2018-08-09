@@ -13,7 +13,7 @@
 
 use std::ops::Deref;
 use std::path::Path;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{Arc, RwLock};
 use tikv::util::collections::{HashMap, HashSet};
 
 use tempdir::TempDir;
@@ -30,17 +30,18 @@ use raft::SnapshotStatus;
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::store::router::InternalTransport;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use tikv::server::transport::{RaftStoreRouter, ServerThreadedStoreRouter};
 use tikv::server::Node;
-use tikv::util::transport::SendCh;
+use tikv::util::transport::InternalSendCh;
 use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
+    routers: HashMap<u64, SimulateTransport<Msg, ServerThreadedStoreRouter>>,
 }
 
 #[derive(Clone)]
@@ -68,7 +69,7 @@ impl Deref for ChannelTransport {
 }
 
 impl Channel<RaftMessage> for ChannelTransport {
-    fn send(&self, msg: RaftMessage) -> Result<()> {
+    fn send(&self, _: u64, msg: RaftMessage) -> Result<()> {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
@@ -146,7 +147,10 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<Msg, ServerRaftStoreRouter> {
+    pub fn get_node_router(
+        &self,
+        node_id: u64,
+    ) -> SimulateTransport<Msg, ServerThreadedStoreRouter> {
         self.trans.rl().routers.get(&node_id).cloned().unwrap()
     }
 }
@@ -160,16 +164,15 @@ impl Simulator for NodeCluster {
     ) -> (u64, Engines, Option<TempDir>) {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
-        let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
-        let (snap_status_sender, snap_status_receiver) = mpsc::channel();
+        let (mailboxes, receiver) = actor_store::create_transport(&cfg.raft_store);
         let pd_worker = FutureWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
-            &mut event_loop,
             &cfg.server,
             &cfg.raft_store,
             Arc::clone(&self.pd_client),
+            mailboxes.clone(),
         );
 
         // Create engine
@@ -195,11 +198,10 @@ impl Simulator for NodeCluster {
         };
 
         node.start(
-            event_loop,
             engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
-            snap_status_receiver,
+            receiver,
             pd_worker,
             coprocessor_host,
             importer,
@@ -225,7 +227,7 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone());
+        let router = ServerThreadedStoreRouter::new(InternalTransport::new(mailboxes.clone()));
         self.trans
             .wl()
             .routers
@@ -271,7 +273,8 @@ impl Simulator for NodeCluster {
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        self.trans.send(msg)
+        let region_id = msg.get_region_id();
+        self.trans.send(region_id, msg)
     }
 
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
@@ -298,7 +301,7 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>> {
+    fn get_store_sendch(&self, node_id: u64) -> Option<InternalSendCh<Msg>> {
         self.nodes.get(&node_id).map(|node| node.get_sendch())
     }
 }

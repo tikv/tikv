@@ -644,13 +644,7 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     debug!("requesting: {:?}", put);
     put.mut_header().set_peer(new_peer(1, 1));
     cluster.clear_send_filters();
-    let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
-    assert!(resp.get_header().has_error());
-    assert!(
-        resp.get_header().get_error().has_region_not_found(),
-        "{:?} should have region not found",
-        resp
-    );
+    must_region_not_found(cluster.call_command(put, Duration::from_secs(5)));
 }
 
 #[test]

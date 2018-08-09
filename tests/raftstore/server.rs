@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 use tikv::util::collections::{HashMap, HashSet};
@@ -27,19 +27,20 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
-use tikv::raftstore::{store, Result};
+use tikv::raftstore::store::router::InternalTransport;
+use tikv::raftstore::store::{actor_store, Callback, Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::Result;
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
-use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::transport::ServerThreadedStoreRouter;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
 };
 use tikv::storage::{self, RaftKv};
 use tikv::util::security::SecurityManager;
-use tikv::util::transport::SendCh;
+use tikv::util::transport::InternalSendCh;
 use tikv::util::worker::{FutureWorker, Worker};
 
 use super::cluster::{Cluster, Simulator};
@@ -47,7 +48,7 @@ use super::pd::TestPdClient;
 use super::transport_simulate::*;
 use super::util::create_test_engine;
 
-type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
+type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerThreadedStoreRouter>;
 type SimulateServerTransport =
     SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
@@ -57,7 +58,7 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    store_ch: SendCh<StoreMsg>,
+    store_ch: InternalSendCh<StoreMsg>,
     worker: Worker<ResolveTask>,
 }
 
@@ -118,10 +119,10 @@ impl Simulator for ServerCluster {
         }
 
         // Initialize raftstore channels.
-        let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
-        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-        let (snap_status_sender, snap_status_receiver) = mpsc::channel();
-        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
+        let (mailboxes, receiver) = actor_store::create_transport(&cfg.raft_store);
+        let ch = InternalTransport::new(mailboxes.clone());
+        let store_sendch = InternalSendCh::new(ch.clone(), "raftstore");
+        let raft_router = ServerThreadedStoreRouter::new(ch);
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create engine
@@ -152,7 +153,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
+        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch.clone()));
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
@@ -194,21 +195,20 @@ impl Simulator for ServerCluster {
 
         // Create node.
         let mut node = Node::new(
-            &mut event_loop,
             &cfg.server,
             &cfg.raft_store,
             Arc::clone(&self.pd_client),
+            mailboxes,
         );
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, store_sendch);
 
         node.start(
-            event_loop,
             engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
-            snap_status_receiver,
+            receiver,
             pd_worker,
             coprocessor_host,
             importer,
@@ -306,7 +306,7 @@ impl Simulator for ServerCluster {
         self.metas.get_mut(&node_id).unwrap().router.clear_filters();
     }
 
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<StoreMsg>> {
+    fn get_store_sendch(&self, node_id: u64) -> Option<InternalSendCh<StoreMsg>> {
         self.metas.get(&node_id).map(|m| m.store_ch.clone())
     }
 }

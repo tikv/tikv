@@ -470,10 +470,11 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
 #[test]
 fn test_coprocessor() {
-    let (_cluster, client, _) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     // SQL push down commands
     let mut req = Request::new();
     req.set_tp(REQ_TYPE_DAG);
+    req.set_context(ctx);
     client.coprocessor(&req).unwrap();
 }
 

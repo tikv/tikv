@@ -485,12 +485,15 @@ impl<S: RaftStoreRouter> RegionInfoProvider for RaftKv<S> {
             });
         };
 
-        self.router.try_send(StoreMsg::SeekRegion {
-            from_key: from_key.to_vec(),
-            filter,
-            limit,
-            callback,
-        })?;
+        self.router.try_send(
+            0,
+            StoreMsg::SeekRegion {
+                from_key: from_key.to_vec(),
+                filter,
+                limit,
+                callback,
+            },
+        )?;
         rx.recv().map_err(|e| {
             box_err!(
                 "failed to receive seek_local_region result from raftstore: {:?}",

@@ -28,7 +28,7 @@ use rocksdb::DB;
 use super::metrics::*;
 use pd::{PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
-use raftstore::store::store::StoreInfo;
+use raftstore::store::actor_store::StoreInfo;
 use raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
@@ -39,7 +39,7 @@ use util::collections::HashMap;
 use util::escape;
 use util::rocksdb::*;
 use util::time::time_now_sec;
-use util::transport::SendCh;
+use util::transport::InternalSendCh;
 use util::worker::FutureRunnable as Runnable;
 
 // Use an asynchronous thread to tell pd something.
@@ -174,7 +174,7 @@ impl Display for Task {
 pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    ch: SendCh<Msg>,
+    ch: InternalSendCh<Msg>,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -182,7 +182,12 @@ pub struct Runner<T: PdClient> {
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
+    pub fn new(
+        store_id: u64,
+        pd_client: Arc<T>,
+        ch: InternalSendCh<Msg>,
+        db: Arc<DB>,
+    ) -> Runner<T> {
         Runner {
             store_id,
             pd_client,
@@ -402,7 +407,7 @@ impl<T: PdClient> Runner<T> {
                                 .with_label_values(&["peer stale"])
                                 .inc();
                             if let Some(source) = merge_source {
-                                send_merge_fail(ch, source);
+                                send_merge_fail(ch, peer, source);
                             } else {
                                 send_destroy_peer_message(ch, local_region, peer, pd_region);
                             }
@@ -659,7 +664,7 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 }
 
 fn send_admin_request(
-    ch: &SendCh<Msg>,
+    ch: &InternalSendCh<Msg>,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -684,15 +689,19 @@ fn send_admin_request(
 }
 
 // send merge fail to gc merge source.
-fn send_merge_fail(ch: SendCh<Msg>, source: u64) {
-    if let Err(e) = ch.send(Msg::MergeFail { region_id: source }) {
+fn send_merge_fail(ch: InternalSendCh<Msg>, peer: metapb::Peer, source: u64) {
+    if let Err(e) = ch.send(Msg::MergeResult {
+        region_id: source,
+        peer,
+        successful: false,
+    }) {
         error!("[region {}] failed to report merge fail: {:?}", source, e);
     }
 }
 
 // send a raft message to destroy the specified stale peer
 fn send_destroy_peer_message(
-    ch: SendCh<Msg>,
+    ch: InternalSendCh<Msg>,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,

@@ -15,10 +15,11 @@ mod metrics;
 mod raft_client;
 mod service;
 
+pub mod actor;
 pub mod config;
 pub mod debug;
 pub mod errors;
-pub mod node;
+// pub mod node;
 pub mod readpool;
 pub mod resolve;
 pub mod server;
@@ -30,13 +31,13 @@ use std::fmt::{Debug, Formatter, Result as FormatResult};
 use futures::sync::{mpsc, oneshot};
 use futures::{stream, Future, Sink, Stream};
 
+pub use self::actor::{create_raft_storage, Node};
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
-pub use self::node::{create_raft_storage, Node};
 pub use self::raft_client::RaftClient;
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::server::Server;
-pub use self::transport::{ServerRaftStoreRouter, ServerTransport};
+pub use self::transport::{ServerThreadedStoreRouter, ServerTransport};
 
 pub enum OnResponse<T> {
     Unary(oneshot::Sender<T>),

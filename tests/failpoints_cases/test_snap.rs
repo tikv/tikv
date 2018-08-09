@@ -29,6 +29,7 @@ use raftstore::util::*;
 #[test]
 fn test_overlap_cleanup() {
     let _guard = ::setup();
+    // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
@@ -80,6 +81,7 @@ fn test_overlap_cleanup() {
 #[test]
 fn test_server_snapshot_on_resolve_failure() {
     let _guard = ::setup();
+    // ::util::init_log();
     let mut cluster = new_server_cluster(1, 4);
     configure_for_snapshot(&mut cluster);
 
@@ -155,7 +157,7 @@ fn test_server_snapshot_on_resolve_failure() {
 #[test]
 fn test_generate_snapshot() {
     let _guard = ::setup();
-
+    // ::util::init_log();
     let mut cluster = new_server_cluster(1, 5);
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);

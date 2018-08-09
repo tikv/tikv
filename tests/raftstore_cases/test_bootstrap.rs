@@ -14,13 +14,11 @@
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use tempdir::TempDir;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{
-    bootstrap_store, create_event_loop, keys, Engines, Peekable, SnapManager,
-};
+use tikv::raftstore::store::{actor_store, bootstrap_store, keys, Engines, Peekable, SnapManager};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;
@@ -52,7 +50,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let pd_client = Arc::new(TestPdClient::new(0));
     let cfg = new_tikv_config(0);
 
-    let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
+    let (mailboxes, receiver) = actor_store::create_transport(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
     let engine =
@@ -64,13 +62,12 @@ fn test_node_bootstrap_with_prepared_data() {
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(
-        &mut event_loop,
         &cfg.server,
         &cfg.raft_store,
         Arc::clone(&pd_client),
+        mailboxes.clone(),
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
-    let (_, snapshot_status_receiver) = mpsc::channel();
     let pd_worker = FutureWorker::new("test-pd-worker");
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
@@ -104,11 +101,10 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // try to restart this node, will clear the prepare data
     node.start(
-        event_loop,
         engines,
         simulate_trans,
         snap_mgr,
-        snapshot_status_receiver,
+        receiver,
         pd_worker,
         coprocessor_host,
         importer,

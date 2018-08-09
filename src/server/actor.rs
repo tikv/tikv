@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,29 +12,29 @@
 // limitations under the License.
 
 use std::process;
-use std::sync::mpsc::Receiver;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use mio::EventLoop;
-
 use super::transport::RaftStoreRouter;
 use super::Result;
+use futures_cpupool::Builder;
 use import::SSTImporter;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
+use raftstore::store::actor_store::Store;
+use raftstore::store::router::{InternalMailboxes, InternalTransport};
 use raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg, SnapManager, Store,
-    StoreChannel, Transport,
+    self, keys, AllMsg, Config as StoreConfig, Engines, Msg, Peekable, SnapManager, Transport,
 };
 use server::readpool::ReadPool;
 use server::Config as ServerConfig;
 use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::transport::SendCh;
+use util::mpsc::Receiver;
+use util::transport::InternalSendCh;
 use util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -79,25 +79,21 @@ pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
-    store_handle: Option<thread::JoinHandle<()>>,
-    ch: SendCh<Msg>,
-
+    mailboxes: InternalMailboxes,
     pd_client: Arc<C>,
+    started: bool,
 }
 
 impl<C> Node<C>
 where
     C: PdClient,
 {
-    pub fn new<T>(
-        event_loop: &mut EventLoop<Store<T, C>>,
+    pub fn new(
         cfg: &ServerConfig,
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
-    ) -> Node<C>
-    where
-        T: Transport + 'static,
-    {
+        mailboxes: InternalMailboxes,
+    ) -> Node<C> {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -116,25 +112,23 @@ where
         }
         store.set_labels(RepeatedField::from_vec(labels));
 
-        let ch = SendCh::new(event_loop.channel(), "raftstore");
         Node {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg: store_cfg.clone(),
-            store_handle: None,
+            mailboxes,
             pd_client,
-            ch,
+            started: false,
         }
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn start<T>(
         &mut self,
-        event_loop: EventLoop<Store<T, C>>,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
+        receiver: Receiver<AllMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
@@ -169,12 +163,11 @@ where
         // inform pd.
         self.pd_client.put_store(self.store.clone())?;
         self.start_store(
-            event_loop,
             store_id,
             engines,
             trans,
             snap_mgr,
-            significant_msg_receiver,
+            receiver,
             pd_worker,
             coprocessor_host,
             importer,
@@ -186,8 +179,8 @@ where
         self.store.get_id()
     }
 
-    pub fn get_sendch(&self) -> SendCh<Msg> {
-        self.ch.clone()
+    pub fn get_sendch(&self) -> InternalSendCh<Msg> {
+        InternalSendCh::new(InternalTransport::new(self.mailboxes.clone()), "raftstore")
     }
 
     // check store, return store id for the engine.
@@ -319,12 +312,11 @@ where
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     fn start_store<T>(
         &mut self,
-        mut event_loop: EventLoop<Store<T, C>>,
         store_id: u64,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
+        receiver: Receiver<AllMsg>,
         pd_worker: FutureWorker<PdTask>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
@@ -332,63 +324,54 @@ where
     where
         T: Transport + 'static,
     {
-        info!("start raft store {} thread", store_id);
+        info!("start raft store {}", store_id);
 
-        if self.store_handle.is_some() {
+        if self.started {
             return Err(box_err!("{} is already started", store_id));
         }
 
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
-        let sender = event_loop.channel();
+        let mailboxes = self.mailboxes.clone();
 
-        let (tx, rx) = mpsc::channel();
-        let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
-        let h = builder.spawn(move || {
-            let ch = StoreChannel {
-                sender,
-                significant_msg_receiver,
-            };
-            let mut store = match Store::new(
-                ch,
-                store,
-                cfg,
-                engines,
-                trans,
-                pd_client,
-                snap_mgr,
-                pd_worker,
-                coprocessor_host,
-                importer,
-            ) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
-            tx.send(0).unwrap();
-            if let Err(e) = store.run(&mut event_loop) {
-                error!("store {} run err {:?}", store_id, e);
-            };
-        })?;
-        // wait for store to be initialized
-        rx.recv().unwrap();
-
-        self.store_handle = Some(h);
+        let poller = Builder::new()
+            .pool_size(self.store_cfg.concurrency)
+            .name_prefix(thd_name!(format!("raftstore-{}.", store_id)))
+            .create();
+        let store = match Store::new(
+            mailboxes,
+            receiver,
+            store,
+            cfg,
+            engines,
+            trans,
+            pd_client,
+            snap_mgr,
+            pd_worker,
+            coprocessor_host,
+            importer,
+            poller,
+        ) {
+            Ok(s) => s,
+            Err(e) => panic!("construct store {} fail: {:?}", store_id, e),
+        };
+        if let Err(e) = store.run() {
+            panic!("store {} run fail: {:?}", store_id, e);
+        }
+        self.started = true;
         Ok(())
     }
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
         info!("stop raft store {} thread", store_id);
-        let h = match self.store_handle.take() {
-            None => return Ok(()),
-            Some(h) => h,
-        };
-
-        box_try!(self.ch.send(Msg::Quit));
-        if let Err(e) = h.join() {
-            return Err(box_err!("join store {} thread err {:?}", store_id, e));
-        }
-
+        let _ = self
+            .mailboxes
+            .lock()
+            .unwrap()
+            .get_mut(&0)
+            .unwrap()
+            .force_send(AllMsg::Msg(Msg::Quit));
         Ok(())
     }
 

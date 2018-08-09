@@ -14,31 +14,31 @@
 use raftstore;
 use raftstore::store::msg::Msg;
 use std::sync::mpsc::Sender;
-use util::transport::SendCh;
+use util::transport::{self, RetryableSendCh};
 
 pub trait MsgSender {
-    fn send(&self, msg: Msg) -> raftstore::Result<()>;
+    fn send(&mut self, msg: Msg) -> raftstore::Result<()>;
     // same as send, but with retry.
-    fn try_send(&self, msg: Msg) -> raftstore::Result<()>;
+    fn try_send(&mut self, msg: Msg) -> raftstore::Result<()>;
 }
 
-impl MsgSender for SendCh<Msg> {
-    fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
+impl<C: transport::Sender<Msg>> MsgSender for RetryableSendCh<Msg, C> {
+    fn send(&mut self, msg: Msg) -> raftstore::Result<()> {
+        RetryableSendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
 
-    fn try_send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::try_send(self, msg).map_err(|e| box_err!("{:?}", e))
+    fn try_send(&mut self, msg: Msg) -> raftstore::Result<()> {
+        RetryableSendCh::try_send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
 }
 
 impl MsgSender for Sender<Msg> {
-    fn send(&self, msg: Msg) -> raftstore::Result<()> {
+    fn send(&mut self, msg: Msg) -> raftstore::Result<()> {
         Sender::send(self, msg).unwrap();
         Ok(())
     }
 
-    fn try_send(&self, msg: Msg) -> raftstore::Result<()> {
+    fn try_send(&mut self, msg: Msg) -> raftstore::Result<()> {
         Sender::send(self, msg).unwrap();
         Ok(())
     }

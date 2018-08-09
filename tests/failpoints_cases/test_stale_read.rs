@@ -216,6 +216,7 @@ fn must_not_eq_on_key(
 
 #[test]
 fn test_node_stale_read_during_splitting_left_derive() {
+    // ::util::init_log();
     stale_read_during_splitting(false);
 }
 

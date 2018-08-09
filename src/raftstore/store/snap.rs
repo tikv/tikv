@@ -35,7 +35,7 @@ use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use util::transport::SendCh;
+use util::transport::InternalSendCh;
 use util::HandyRwLock;
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
@@ -1105,7 +1105,7 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&SendCh<Msg>>) {
+fn notify_stats(ch: Option<&InternalSendCh<Msg>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.try_send(Msg::SnapshotStats) {
             error!("notify snapshot stats failed {:?}", e)
@@ -1118,13 +1118,13 @@ fn notify_stats(ch: Option<&SendCh<Msg>>) {
 pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    ch: Option<SendCh<Msg>>,
+    ch: Option<InternalSendCh<Msg>>,
     limiter: Option<Arc<IOLimiter>>,
     max_total_size: u64,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+    pub fn new<T: Into<String>>(path: T, ch: Option<InternalSendCh<Msg>>) -> SnapManager {
         SnapManagerBuilder::default().build(path, ch)
     }
 
@@ -1156,6 +1156,60 @@ impl SnapManager {
             }
         }
         Ok(())
+    }
+
+    // Return all snapshots related to a region and is idle.
+    pub fn list_idle_region_snap(&self, region_id: u64) -> io::Result<Vec<(SnapKey, bool)>> {
+        let core = self.core.rl();
+        let path = Path::new(&core.base);
+        let read_dir = fs::read_dir(path)?;
+        // Remove the duplicate snap keys.
+        let mut v: Vec<_> = read_dir
+            .filter_map(|p| {
+                let p = match p {
+                    Err(e) => {
+                        error!("failed to list content of {}: {:?}", core.base, e);
+                        return None;
+                    }
+                    Ok(p) => p,
+                };
+                match p.file_type() {
+                    Ok(t) if t.is_file() => {}
+                    _ => return None,
+                }
+                let file_name = p.file_name();
+                let name = match file_name.to_str() {
+                    None => return None,
+                    Some(n) => n,
+                };
+                let is_sending = name.starts_with(SNAP_GEN_PREFIX);
+                let numbers: Vec<u64> = name.split('.').next().map_or_else(
+                    || vec![],
+                    |s| {
+                        s.split('_')
+                            .skip(1)
+                            .filter_map(|s| s.parse().ok())
+                            .collect()
+                    },
+                );
+                if numbers.len() != 3 {
+                    error!("failed to parse snapkey from {}", name);
+                    return None;
+                }
+                let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
+                if snap_key.region_id != region_id {
+                    return None;
+                }
+                if core.registry.contains_key(&snap_key) {
+                    // Skip those registered snapshot.
+                    return None;
+                }
+                Some((snap_key, is_sending))
+            })
+            .collect();
+        v.sort();
+        v.dedup();
+        Ok(v)
     }
 
     // Return all snapshots which is idle not being used.
@@ -1424,7 +1478,7 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+    pub fn build<T: Into<String>>(&self, path: T, ch: Option<InternalSendCh<Msg>>) -> SnapManager {
         let limiter = if self.max_write_bytes_per_sec > 0 {
             Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
         } else {
