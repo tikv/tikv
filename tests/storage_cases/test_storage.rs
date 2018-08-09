@@ -24,7 +24,7 @@ use tikv::storage::engine::{RocksEngine, TEMP_DIR};
 use tikv::storage::gc_worker::GC_BATCH_SIZE;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::{self, make_key, Engine, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
+use tikv::storage::{self, Engine, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
 use tikv::util::worker::FutureWorker;
 
 use super::assert_storage::AssertionStorage;
@@ -46,7 +46,7 @@ fn test_txn_store_get() {
 fn test_txn_store_get_with_type_lock() {
     let store = AssertionStorage::default();
     store.put_ok(b"k1", b"v1", 1, 2);
-    store.prewrite_ok(vec![Mutation::Lock(make_key(b"k1"))], b"k1", 5);
+    store.prewrite_ok(vec![Mutation::Lock(Key::from_raw(b"k1"))], b"k1", 5);
     store.get_ok(b"k1", 20, b"v1");
 }
 
@@ -69,8 +69,8 @@ fn test_txn_store_cleanup_rollback() {
     store.put_ok(b"secondary", b"s-0", 1, 2);
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((make_key(b"secondary"), b"s-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
         ],
         b"primary",
         5,
@@ -86,8 +86,8 @@ fn test_txn_store_cleanup_commit() {
     store.put_ok(b"secondary", b"s-0", 1, 2);
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((make_key(b"secondary"), b"s-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
         ],
         b"primary",
         5,
@@ -108,9 +108,9 @@ fn test_txn_store_for_point_get_with_pk() {
     store.put_ok(b"secondary", b"v3", 3, 4);
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"primary"), b"v3".to_vec())),
-            Mutation::Put((make_key(b"secondary"), b"s-5".to_vec())),
-            Mutation::Put((make_key(b"new_key"), b"new_key".to_vec())),
+            Mutation::Put((Key::from_raw(b"primary"), b"v3".to_vec())),
+            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"new_key"), b"new_key".to_vec())),
         ],
         b"primary",
         5,
@@ -447,24 +447,24 @@ fn test_txn_store_scan_lock() {
     store.put_ok(b"k1", b"v1", 1, 2);
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
-            Mutation::Put((make_key(b"s1"), b"v5".to_vec())),
+            Mutation::Put((Key::from_raw(b"p1"), b"v5".to_vec())),
+            Mutation::Put((Key::from_raw(b"s1"), b"v5".to_vec())),
         ],
         b"p1",
         5,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p2"), b"v10".to_vec())),
-            Mutation::Put((make_key(b"s2"), b"v10".to_vec())),
+            Mutation::Put((Key::from_raw(b"p2"), b"v10".to_vec())),
+            Mutation::Put((Key::from_raw(b"s2"), b"v10".to_vec())),
         ],
         b"p2",
         10,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p3"), b"v20".to_vec())),
-            Mutation::Put((make_key(b"s3"), b"v20".to_vec())),
+            Mutation::Put((Key::from_raw(b"p3"), b"v20".to_vec())),
+            Mutation::Put((Key::from_raw(b"s3"), b"v20".to_vec())),
         ],
         b"p3",
         20,
@@ -517,16 +517,16 @@ fn test_txn_store_resolve_lock() {
 
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
-            Mutation::Put((make_key(b"s1"), b"v5".to_vec())),
+            Mutation::Put((Key::from_raw(b"p1"), b"v5".to_vec())),
+            Mutation::Put((Key::from_raw(b"s1"), b"v5".to_vec())),
         ],
         b"p1",
         5,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p2"), b"v10".to_vec())),
-            Mutation::Put((make_key(b"s2"), b"v10".to_vec())),
+            Mutation::Put((Key::from_raw(b"p2"), b"v10".to_vec())),
+            Mutation::Put((Key::from_raw(b"s2"), b"v10".to_vec())),
         ],
         b"p2",
         10,
@@ -547,7 +547,7 @@ fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
     let store = AssertionStorage::default();
     for k in &keys {
         store.prewrite_ok(
-            vec![Mutation::Put((make_key(k.as_bytes()), b"v".to_vec()))],
+            vec![Mutation::Put((Key::from_raw(k.as_bytes()), b"v".to_vec()))],
             b"k1",
             5,
         );
@@ -565,16 +565,16 @@ fn test_txn_store_resolve_lock_in_a_batch() {
 
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
-            Mutation::Put((make_key(b"s1"), b"v5".to_vec())),
+            Mutation::Put((Key::from_raw(b"p1"), b"v5".to_vec())),
+            Mutation::Put((Key::from_raw(b"s1"), b"v5".to_vec())),
         ],
         b"p1",
         5,
     );
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p2"), b"v10".to_vec())),
-            Mutation::Put((make_key(b"s2"), b"v10".to_vec())),
+            Mutation::Put((Key::from_raw(b"p2"), b"v10".to_vec())),
+            Mutation::Put((Key::from_raw(b"s2"), b"v10".to_vec())),
         ],
         b"p2",
         10,
@@ -612,8 +612,8 @@ fn test_txn_store_commit_illegal_tso() {
     let start_ts = 5;
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((make_key(b"secondary"), b"s-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
         ],
         b"primary",
         start_ts,
@@ -629,8 +629,8 @@ fn test_store_resolve_with_illegal_tso() {
     let start_ts = 5;
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
-            Mutation::Put((make_key(b"secondary"), b"s-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"primary"), b"p-5".to_vec())),
+            Mutation::Put((Key::from_raw(b"secondary"), b"s-5".to_vec())),
         ],
         b"primary",
         start_ts,
@@ -779,12 +779,12 @@ fn test_txn_storage_keysize() {
     store.raw_delete_ok("".to_string(), b"short_key".to_vec());
     store.raw_delete_err("".to_string(), long_key.clone());
     store.prewrite_ok(
-        vec![Mutation::Put((make_key(b"short_key"), b"v".to_vec()))],
+        vec![Mutation::Put((Key::from_raw(b"short_key"), b"v".to_vec()))],
         b"short_key",
         1,
     );
     store.prewrite_err(
-        vec![Mutation::Put((make_key(&long_key), b"v".to_vec()))],
+        vec![Mutation::Put((Key::from_raw(&long_key), b"v".to_vec()))],
         b"short_key",
         1,
     );
@@ -795,7 +795,7 @@ fn test_txn_store_lock_primary() {
     let store = AssertionStorage::default();
     // txn1 locks "p" then aborts.
     store.prewrite_ok(
-        vec![Mutation::Put((make_key(b"p"), b"p1".to_vec()))],
+        vec![Mutation::Put((Key::from_raw(b"p"), b"p1".to_vec()))],
         b"p",
         1,
     );
@@ -803,8 +803,8 @@ fn test_txn_store_lock_primary() {
     // txn2 wants to write "p", "s".
     store.prewrite_locked(
         vec![
-            Mutation::Put((make_key(b"p"), b"p2".to_vec())),
-            Mutation::Put((make_key(b"s"), b"s2".to_vec())),
+            Mutation::Put((Key::from_raw(b"p"), b"p2".to_vec())),
+            Mutation::Put((Key::from_raw(b"s"), b"s2".to_vec())),
         ],
         b"p",
         2,
@@ -817,8 +817,8 @@ fn test_txn_store_lock_primary() {
     // txn3 wants to write "p", "s", neither of them should be locked.
     store.prewrite_ok(
         vec![
-            Mutation::Put((make_key(b"p"), b"p3".to_vec())),
-            Mutation::Put((make_key(b"s"), b"s3".to_vec())),
+            Mutation::Put((Key::from_raw(b"p"), b"p3".to_vec())),
+            Mutation::Put((Key::from_raw(b"s"), b"s3".to_vec())),
         ],
         b"p",
         3,
@@ -835,7 +835,7 @@ fn test_txn_store_write_conflict() {
     store.put_ok(key, primary, start_ts, conflict_ts);
     let start_ts2 = 6;
     store.prewrite_conflict(
-        vec![Mutation::Put((make_key(key), primary.to_vec()))],
+        vec![Mutation::Put((Key::from_raw(key), primary.to_vec()))],
         primary,
         start_ts2,
         key,
@@ -862,7 +862,7 @@ impl Oracle {
 const INC_MAX_RETRY: usize = 100;
 
 fn inc<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
-    let key_address = make_key(key);
+    let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
         let number: i32 = match store.get(Context::new(), &key_address, start_ts) {
@@ -878,7 +878,7 @@ fn inc<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, key: &[u8]) -> Result
             .prewrite(
                 Context::new(),
                 vec![Mutation::Put((
-                    make_key(key),
+                    Key::from_raw(key),
                     next.to_string().into_bytes(),
                 ))],
                 key.to_vec(),
@@ -945,7 +945,7 @@ fn format_key(x: usize) -> Vec<u8> {
 fn inc_multi<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let keys: Vec<Key> = (0..n).map(format_key).map(|x| make_key(&x)).collect();
+        let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
         let mut mutations = vec![];
         for key in keys.iter().take(n) {
             let number = match store.get(Context::new(), key, start_ts) {
@@ -1076,7 +1076,7 @@ fn test_conflict_commands_on_fault_engine() {
     async_storage
         .async_prewrite(
             storage.ctx.clone(),
-            vec![Mutation::Put((make_key(&k), v.clone()))],
+            vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
             k.clone(),
             start_ts,
             Default::default(),
@@ -1088,19 +1088,19 @@ fn test_conflict_commands_on_fault_engine() {
     async_storage
         .async_commit(
             storage.ctx.clone(),
-            vec![make_key(&k)],
+            vec![Key::from_raw(&k)],
             start_ts,
             commit_ts,
             box |_| {},
         )
         .unwrap();
     async_storage
-        .async_cleanup(storage.ctx.clone(), make_key(&k), start_ts, box |_| {})
+        .async_cleanup(storage.ctx.clone(), Key::from_raw(&k), start_ts, box |_| {})
         .unwrap();
     async_storage
         .async_rollback(
             storage.ctx.clone(),
-            vec![make_key(&k)],
+            vec![Key::from_raw(&k)],
             start_ts,
             box |_| {},
         )

@@ -31,7 +31,7 @@ use rocksdb::{
 use config::DbConfig;
 use raftstore::store::keys;
 use storage::mvcc::{Write, WriteType};
-use storage::types::{split_encoded_key_on_ts, Key};
+use storage::types::Key;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use util::config::MB;
 use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
@@ -185,7 +185,7 @@ impl SSTWriter {
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let k = keys::data_key(key);
-        let (_, commit_ts) = split_encoded_key_on_ts(key)?;
+        let (_, commit_ts) = Key::split_on_ts_for(key)?;
         if is_short_value(value) {
             let w = Write::new(WriteType::Put, commit_ts, Some(value.to_vec()));
             self.write.put(&k, &w.to_bytes())?;
