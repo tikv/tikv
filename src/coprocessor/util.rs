@@ -18,39 +18,36 @@ use super::codec::datum::Datum;
 use super::codec::mysql;
 
 /// Get the smallest key which is larger than the key given.
-#[inline]
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {
     let mut nk = key.to_vec();
-    convert_to_prefix_next(&mut nk);
+    calc_prefix_next(&mut nk);
     nk
 }
 
-/// Change the key to the smallest key which is larger than the key given.
-pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
+pub fn calc_prefix_next(key: &mut Vec<u8>) {
     if key.is_empty() {
         key.push(0);
         return;
     }
     let mut i = key.len() - 1;
 
-    // Find the last byte that is not 255
+    // Add 1 to the last byte that is not 255, and set it's following bytes to 0.
     loop {
-        if key[i] != 255 {
-            break;
+        if key[i] == 255 {
+            key[i] = 0;
+        } else {
+            key[i] += 1;
+            return;
         }
-
         if i == 0 {
-            // All bytes are 255. Append a zero and exit.
+            // All bytes are 255. Append a 0 to the key.
+            for byte in key.iter_mut() {
+                *byte = 255;
+            }
             key.push(0);
             return;
         }
         i -= 1;
-    }
-
-    // Increase it and set following to zero
-    key[i] += 1;
-    for byte in key.iter_mut().skip(i + 1) {
-        *byte = 0;
     }
 }
 
