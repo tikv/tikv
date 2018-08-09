@@ -778,15 +778,14 @@ impl ApplyDelegate {
         index: u64,
         term: u64,
         req: RaftCmdRequest,
-    ) -> Box<Future<Item = RaftCmdFutureItem, Error = FutureError> + Send> {
+    ) -> impl Future<Item = RaftCmdFutureItem, Error = FutureError> {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
         ctx.exec_ctx = Some(self.new_ctx(index, term, req));
         ctx.wb_mut().set_save_point();
 
-        box self
-            .exec_raft_cmd(ctx)
+        self.exec_raft_cmd(ctx)
             .then(move |res| match res {
                 Ok((delegate, ctx, resp, exec_result)) => {
                     future::ok((delegate, ctx, resp, exec_result))
@@ -978,7 +977,7 @@ impl ApplyDelegate {
                     box future::err((self, ctx, box_err!("unsupported admin command type")))
                 }
             };
-        box exec_res.then(move |res| match res {
+        exec_res.then(move |res| match res {
             Ok((delegate, ctx, mut response, exec_result)) => {
                 response.set_cmd_type(cmd_type);
                 let mut resp = RaftCmdResponse::new();
