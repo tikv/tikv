@@ -514,7 +514,7 @@ impl<T: Simulator> Cluster<T> {
     // If the resp is "not leader error", get the real leader.
     // Sometimes, we may still can't get leader even in "not leader error",
     // returns a INVALID_PEER for this.
-    pub fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
+    fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
         if !is_error_response(resp) {
             return false;
         }
