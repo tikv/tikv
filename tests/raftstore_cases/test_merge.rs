@@ -357,8 +357,6 @@ fn test_node_merge_brain_split() {
     let region = pd_client.get_region(b"k1").unwrap();
 
     cluster.must_split(&region, b"k2");
-    cluster.must_put(b"k11", b"v11");
-    cluster.must_put(b"k21", b"v21");
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k3").unwrap();
 
@@ -368,11 +366,12 @@ fn test_node_merge_brain_split() {
     let right_peer_1 = find_peer(&right, 1).cloned().unwrap();
     cluster.must_transfer_leader(right.get_id(), right_peer_1);
 
-    // Make sure all stores has replicated latest update.
-    for i in 1..4 {
-        util::must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
-        util::must_get_equal(&cluster.get_engine(i), b"k21", b"v21");
-    }
+    cluster.must_put(b"k11", b"v11");
+    cluster.must_put(b"k21", b"v21");
+    // Make sure peers on store 3 have replicated latest update, which means
+    // they have already reported their progresses to leader.
+    util::must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    util::must_get_equal(&cluster.get_engine(3), b"k21", b"v21");
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     pd_client.must_merge(left.get_id(), right.get_id());
