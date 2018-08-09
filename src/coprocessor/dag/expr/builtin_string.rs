@@ -47,10 +47,12 @@ impl ScalarFunc {
         let i = try_opt!(self.children[1].eval_int(ctx, row));
         let s = str::from_utf8(&s)?;
         let slen = s.chars().count();
-        let l = match (i < 0, slen > i as usize) {
-            (true, _) => 0,
-            (false, true) => i as usize,
-            _ => slen,
+        let l: usize = if i < 0 {
+            0
+        } else if i as usize > slen {
+            slen
+        } else {
+            i as usize
         };
         let t = s
             .chars()
