@@ -1428,10 +1428,10 @@ impl ApplyDelegate {
 
         // Send message to the source region first.
         self.scheduler
-            .schedule(Task::wait(region_id, merge.clone(), tx))
+            .schedule(Task::apply_to(region_id, merge.clone(), tx))
             .unwrap();
 
-        // Continue after received the source region.
+        // Continue after the source region has applied the specified position.
         rx.then(move |res| match res {
             Ok(region) => future::ok((self, region)),
             _e @ Err(oneshot::Canceled) => future::err((self, Error::Canceled)),
@@ -2077,10 +2077,10 @@ pub struct Update {
 }
 
 /// When two regions are going to merge, at the commit_merge stage,
-/// the target region will send a `WaitSourceApplyTo` message to
-/// the source region and wait util the source region apply to specified
-/// position.
-pub struct WaitSourceApplyTo {
+/// the target region will send a `SourceMustApplyTo` message to
+/// the source region and wait util the source region apply to the
+/// specified position.
+pub struct SourceMustApplyTo {
     pub source_region: u64,
 
     pub merge_req: CommitMergeRequest,
@@ -2098,7 +2098,7 @@ pub enum RegionTask {
     Proposal(RegionProposal),
 
     Update(Update),
-    Wait(WaitSourceApplyTo),
+    ApplyTo(SourceMustApplyTo),
     Stop((u64, Sender<()>)),
 }
 
@@ -2137,7 +2137,7 @@ pub enum Task {
     Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
 
-    Wait(WaitSourceApplyTo),
+    ApplyTo(SourceMustApplyTo),
 }
 
 impl Task {
@@ -2156,12 +2156,12 @@ impl Task {
         Task::Destroy(Destroy { region_id })
     }
 
-    pub fn wait(
+    pub fn apply_to(
         source_region: u64,
         merge_req: CommitMergeRequest,
         tx: oneshot::Sender<Region>,
     ) -> Task {
-        Task::Wait(WaitSourceApplyTo {
+        Task::ApplyTo(SourceMustApplyTo {
             source_region,
             merge_req,
             tx,
@@ -2178,11 +2178,11 @@ impl Display for Task {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
-            Task::Wait(ref w) => write!(
+            Task::ApplyTo(ref a) => write!(
                 f,
                 "wait source region [{}] apply to [{}]",
-                w.source_region,
-                w.merge_req.get_commit()
+                a.source_region,
+                a.merge_req.get_commit()
             ),
         }
     }
@@ -2439,14 +2439,14 @@ impl Runner {
                             // Exit current task
                             box future::err(())
                         }
-                        RegionTask::Wait(w) => {
-                            let need_apply_to = w.merge_req.get_commit();
+                        RegionTask::ApplyTo(a) => {
+                            let need_apply_to = a.merge_req.get_commit();
                             let applied_index = delegate.apply_state.applied_index;
-                            assert_eq!(delegate.region_id(), w.source_region);
+                            assert_eq!(delegate.region_id(), a.source_region);
 
                             if applied_index >= need_apply_to {
                                 // Current applied index >= need_apply_to, don't need to catch up log.
-                                w.tx.send(delegate.region.clone()).unwrap();
+                                a.tx.send(delegate.region.clone()).unwrap();
                                 delegate.destroy();
 
                                 // Exit current task
@@ -2454,7 +2454,7 @@ impl Runner {
                             } else {
                                 // Apply left entries.
                                 let entries =
-                                    delegate.load_entries_for_merge(&w.merge_req, applied_index);
+                                    delegate.load_entries_for_merge(&a.merge_req, applied_index);
                                 assert_eq!(entries.len() as u64, need_apply_to - applied_index);
                                 let ctx = ApplyContext::new(
                                     delegate.host.clone(),
@@ -2484,7 +2484,7 @@ impl Runner {
                                         }
 
                                         // Tell target region, has applied to specified position, and destroy itself.
-                                        w.tx.send(delegate.region.clone()).unwrap();
+                                        a.tx.send(delegate.region.clone()).unwrap();
                                         delegate.destroy();
 
                                         Err(())
@@ -2583,20 +2583,22 @@ impl Runner {
         }
     }
 
-    fn handle_wait(&mut self, wait: WaitSourceApplyTo) {
+    fn handle_apply_to(&mut self, apply_to: SourceMustApplyTo) {
         // Dispatch the wait message to the `source_region`.
-        let region = wait.source_region;
-        let tx = self.region_task_senders.get(&region).unwrap_or_else(|| {
+        // When source region received this message, it will apply left entries
+        // by itself, so we remove its sender here.
+        let region = apply_to.source_region;
+        let tx = self.region_task_senders.remove(&region).unwrap_or_else(|| {
             panic!(
-                "Can't send WaitApplyTo message to region {}, no related message channel",
+                "Can't send ApplyTo message to region {}, no related message channel",
                 region
             );
         });
 
-        tx.unbounded_send(RegionTask::Wait(wait))
+        tx.unbounded_send(RegionTask::ApplyTo(apply_to))
             .unwrap_or_else(|e| {
                 panic!(
-                    "Can't send WaitApplyTo message to region {}caused by err: {:?}",
+                    "Can't send ApplyTo message to region {}, caused by err: {:?}",
                     region, e
                 );
             });
@@ -2654,7 +2656,7 @@ impl Runnable<Task> for Runner {
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
-            Task::Wait(w) => self.handle_wait(w),
+            Task::ApplyTo(a) => self.handle_apply_to(a),
         }
     }
 
