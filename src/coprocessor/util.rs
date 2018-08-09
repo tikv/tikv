@@ -20,22 +20,29 @@ use super::codec::mysql;
 /// Get the smallest key which is larger than the key given.
 pub fn prefix_next(key: &[u8]) -> Vec<u8> {
     let mut nk = key.to_vec();
-    if nk.is_empty() {
-        nk.push(0);
-        return nk;
+    calc_prefix_next(&mut nk);
+    nk
+}
+
+pub fn calc_prefix_next(key: &mut Vec<u8>) {
+    if key.is_empty() {
+        key.push(0);
+        return;
     }
-    let mut i = nk.len() - 1;
+    let mut i = key.len() - 1;
     loop {
-        if nk[i] == 255 {
-            nk[i] = 0;
+        if key[i] == 255 {
+            key[i] = 0;
         } else {
-            nk[i] += 1;
-            return nk;
+            key[i] += 1;
+            return;
         }
         if i == 0 {
-            nk = key.to_vec();
-            nk.push(0);
-            return nk;
+            let old_len = key.len();
+            key.clear();
+            key.resize(old_len, 255);
+            key.push(0);
+            return;
         }
         i -= 1;
     }

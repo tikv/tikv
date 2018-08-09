@@ -98,9 +98,10 @@ impl<S: Snapshot> Scanner<S> {
     pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
         self.range = range;
         self.no_more = false;
+        self.seek_key.clear();
         match self.scan_mode {
-            ScanMode::Backward => self.seek_key = self.range.get_end().to_vec(),
-            ScanMode::Forward => self.seek_key = self.range.get_start().to_vec(),
+            ScanMode::Backward => self.seek_key.extend_from_slice(self.range.get_end()),
+            ScanMode::Forward => self.seek_key.extend_from_slice(self.range.get_start()),
             _ => unreachable!(),
         };
 
@@ -162,7 +163,9 @@ impl<S: Snapshot> Scanner<S> {
 
         match self.scan_mode {
             ScanMode::Forward => {
-                self.seek_key = util::prefix_next(&self.seek_key);
+                // Increase seek_key, so that stop_scan returns a key that is exclusive, producing
+                // a half-close range
+                util::calc_prefix_next(&mut self.seek_key);
                 range.set_end(self.seek_key.clone())
             }
             ScanMode::Backward => range.set_start(self.seek_key.clone()),
