@@ -28,14 +28,14 @@ use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg, SnapManager, Store,
-    StoreChannel, Transport,
+    self, keys, Config as StoreConfig, Engines, Msg, Peekable, ReadTask, SignificantMsg,
+    SnapManager, Store, StoreChannel, Transport,
 };
 use server::readpool::ReadPool;
 use server::Config as ServerConfig;
 use storage::{self, Config as StorageConfig, RaftKv, Storage};
 use util::transport::SendCh;
-use util::worker::FutureWorker;
+use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -136,6 +136,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>
@@ -176,6 +177,7 @@ where
             snap_mgr,
             significant_msg_receiver,
             pd_worker,
+            local_read_worker,
             coprocessor_host,
             importer,
         )?;
@@ -326,6 +328,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>
@@ -359,6 +362,7 @@ where
                 pd_client,
                 snap_mgr,
                 pd_worker,
+                local_read_worker,
                 coprocessor_host,
                 importer,
             ) {
