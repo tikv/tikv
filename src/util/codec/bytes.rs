@@ -163,18 +163,74 @@ pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
     Err(Error::unexpected_eof())
 }
 
-/// decode_bytes_in_place decodes bytes which is encoded by `encoded_bytes` before just in place without malloc.
+
+/// `decode_bytes` decodes bytes which is encoded by `encoded_bytes` before.
+///
+/// Please note that, data is a mut reference to slice. After calling this the 
+/// slice that data point to would change.
+pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
+    let mut key = Vec::with_capacity(data.len() / (ENC_GROUP_SIZE + 1) * ENC_GROUP_SIZE);
+    let mut offset = 0;
+    let chunk_len = ENC_GROUP_SIZE + 1;
+    loop {
+        // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
+        let next_offset = offset + chunk_len;
+        let chunk = if next_offset <= data.len() {
+            &data[offset..next_offset]
+        } else {
+            return Err(Error::unexpected_eof());
+        };
+        offset = next_offset;
+        // the last byte in decode unit is for marker which indicates pad size
+        let (&marker, bytes) = chunk.split_last().unwrap();
+        let pad_size = if desc {
+            marker as usize
+        } else {
+            (ENC_MARKER - marker) as usize
+        };
+        // no padding, just push 8 bytes
+        if pad_size == 0 {
+            key.write_all(bytes).unwrap();
+            continue;
+        }
+        if pad_size > ENC_GROUP_SIZE {
+            return Err(Error::KeyPadding);
+        }
+        // if has padding, split the padding pattern and push rest bytes
+        let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
+        key.write_all(bytes).unwrap();
+        let pad_byte = if desc { !0 } else { 0 };
+        // check the padding pattern whether validate or not
+        if padding.iter().any(|x| *x != pad_byte) {
+            return Err(Error::KeyPadding);
+        }
+
+        if desc {
+            for k in &mut key {
+                *k = !*k;
+            }
+        }
+        // data will point to following unencoded bytes, maybe timestamp
+        *data = &data[offset..];
+        return Ok(key);
+    }
+}
+
+/// `decode_bytes_in_place` decodes bytes which is encoded by `encoded_bytes` before just in place without malloc.
+/// Please use this instead of `decode_bytes` if possible.
 pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
     let mut write_offset = 0;
     let mut read_offset = 0;
 
     let chunk_len = ENC_GROUP_SIZE + 1;
     loop {
+        // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
         let next_offset = read_offset + chunk_len;
         if next_offset > data.len() {
             return Err(Error::unexpected_eof());
         };
-       
+
+        // the last byte in decode unit is for marker which indicates pad size 
         let marker = data[next_offset - 1];
         let pad_size = if desc {
             marker as usize
@@ -182,14 +238,18 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
             (ENC_MARKER - marker) as usize
         };
 
+        // no padding, just move 8 bytes to write_offset
         if pad_size == 0 {
             unsafe {
+                // it is semantically equivalent to C's memmove()
+                // and the src and dest may overlap
                 ptr::copy(
                     data.as_ptr().offset(read_offset as isize),
                     data.as_mut_ptr().offset(write_offset as isize),
                     ENC_GROUP_SIZE
                     );
                 write_offset += ENC_GROUP_SIZE;
+                // one more for marker
                 read_offset += ENC_GROUP_SIZE + 1;
             }
             continue;
@@ -198,6 +258,7 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
         if pad_size > ENC_GROUP_SIZE {
             return Err(Error::KeyPadding);
         }
+        // if has padding, move bytes without padding pattern
         unsafe {
             ptr::copy(
                 data.as_ptr().offset(read_offset as isize),
@@ -209,6 +270,7 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
         }
 
         let pad_byte = if desc { !0 } else { 0 };
+        // check the padding pattern whether validate or not
         if data[read_offset..read_offset+pad_size].iter().any(|x| *x != pad_byte) {
             return Err(Error::KeyPadding);
         }
@@ -222,49 +284,6 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
             }
         }
         return Ok(data)
-    }
-}
-
-/// decode_bytes decodes bytes which is encoded by `encoded_bytes` before.
-pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
-    let mut key = Vec::with_capacity(data.len() / (ENC_GROUP_SIZE + 1) * ENC_GROUP_SIZE);
-    let mut offset = 0;
-    let chunk_len = ENC_GROUP_SIZE + 1;
-    loop {
-        let next_offset = offset + chunk_len;
-        let chunk = if next_offset <= data.len() {
-            &data[offset..next_offset]
-        } else {
-            return Err(Error::unexpected_eof());
-        };
-        offset = next_offset;
-        let (&marker, bytes) = chunk.split_last().unwrap();
-        let pad_size = if desc {
-            marker as usize
-        } else {
-            (ENC_MARKER - marker) as usize
-        };
-        if pad_size == 0 {
-            key.write_all(bytes).unwrap();
-            continue;
-        }
-        if pad_size > ENC_GROUP_SIZE {
-            return Err(Error::KeyPadding);
-        }
-        let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
-        key.write_all(bytes).unwrap();
-        let pad_byte = if desc { !0 } else { 0 };
-        if padding.iter().any(|x| *x != pad_byte) {
-            return Err(Error::KeyPadding);
-        }
-
-        if desc {
-            for k in &mut key {
-                *k = !*k;
-            }
-        }
-        *data = &data[offset..];
-        return Ok(key);
     }
 }
 
