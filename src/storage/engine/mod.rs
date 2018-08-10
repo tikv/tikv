@@ -354,6 +354,7 @@ impl<I: Iterator> Cursor<I> {
     }
 
     /// Mark key and value as unread. It will be invoked once cursor is moved.
+    #[inline]
     fn mark_unread(&mut self) {
         self.cur_key_has_read = false;
         self.cur_value_has_read = false;
@@ -694,25 +695,26 @@ pub mod tests {
 
     pub fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot
+        let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(iter.value(&mut statistics), pair.1);
+        cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
     pub fn assert_seek_for_prev<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot
+        let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Backward)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        iter.seek_for_prev(&Key::from_raw(key), &mut statistics)
+        cursor
+            .seek_for_prev(&Key::from_raw(key), &mut statistics)
             .unwrap();
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-        assert_eq!(iter.value(&mut statistics), pair.1);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
     pub fn assert_near_seek<I: Iterator>(
