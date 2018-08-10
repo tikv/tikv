@@ -176,7 +176,7 @@ impl<S: Snapshot> MvccTxn<S> {
             Mutation::Lock(key) => (key, None),
         };
 
-        if value.is_some() && is_short_value(&value.unwrap()) {
+        if value.is_some() && is_short_value(value.as_ref().unwrap()) {
             self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
         } else {
             self.lock_key(
@@ -186,8 +186,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 options.lock_ttl,
                 None,
             );
-            let ts = self.start_ts;
-            self.put_value(key, ts, value);
+            if value.is_some() {
+                let ts = self.start_ts;
+                self.put_value(&key, ts, value.unwrap());
+            }
         }
         Ok(())
     }
