@@ -16,10 +16,13 @@ use std::thread;
 use std::time::Duration;
 
 use super::cluster::{Cluster, Simulator};
+use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::transport_simulate::*;
 use super::util::*;
+
 use raft::eraftpb::MessageType;
+use tikv::util::HandyRwLock;
 
 enum FailureType<'a> {
     Partition(&'a [u64], &'a [u64]),
@@ -40,16 +43,8 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
         Arc::from(AtomicBool::new(true)),
     ));
 
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(peer, response_notifier);
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(peer, request_notifier);
+    cluster.sim.wl().add_send_filter(peer, response_notifier);
+    cluster.sim.wl().add_send_filter(peer, request_notifier);
 
     rx
 }
@@ -76,7 +71,7 @@ fn test_prevote<T: Simulator>(
     let rx = attach_prevote_notifiers(cluster, detect_during_failure.0);
     match failure_type {
         FailureType::Partition(majority, minority) => {
-            cluster.partition(majority.clone().to_vec(), minority.clone().to_vec());
+            cluster.partition(majority.to_vec(), minority.to_vec());
         }
         FailureType::Reboot(peers) => {
             peers.iter().for_each(|&peer| cluster.stop_node(peer));
@@ -263,4 +258,31 @@ fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Clu
 fn test_server_isolated_follower_leader_does_not_change() {
     let mut cluster = new_server_cluster(0, 5);
     test_isolated_follower_leader_does_not_change(&mut cluster);
+}
+
+fn test_create_peer_from_pre_vote<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+
+    let rx = attach_prevote_notifiers(cluster, 1);
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    if rx.recv_timeout(Duration::from_secs(3)).is_err() {
+        panic!("peer 1 should send pre vote");
+    }
+
+    // The peer 2 should be created.
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+}
+
+#[test]
+fn test_node_create_peer_from_pre_vote() {
+    let mut cluster = new_node_cluster(0, 2);
+    cluster.cfg.raft_store.prevote = true;
+    test_create_peer_from_pre_vote(&mut cluster);
 }
