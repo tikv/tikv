@@ -15,8 +15,8 @@ use byteorder::ReadBytesExt;
 use std::io::{BufRead, Write};
 
 use super::{BytesSlice, Error, Result};
-use util::codec::number::{self, NumberEncoder};
 use std::ptr;
+use util::codec::number::{self, NumberEncoder};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -163,10 +163,9 @@ pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
     Err(Error::unexpected_eof())
 }
 
-
-/// `decode_bytes` decodes bytes which is encoded by `encoded_bytes` before.
+/// `decode_bytes` decodes bytes which is encoded by `encode_bytes` before.
 ///
-/// Please note that, data is a mut reference to slice. After calling this the 
+/// Please note that, data is a mut reference to slice. After calling this the
 /// slice that data point to would change.
 pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
     let mut key = Vec::with_capacity(data.len() / (ENC_GROUP_SIZE + 1) * ENC_GROUP_SIZE);
@@ -216,9 +215,9 @@ pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
     }
 }
 
-/// `decode_bytes_in_place` decodes bytes which is encoded by `encoded_bytes` before just in place without malloc.
+/// `decode_bytes_in_place` decodes bytes which is encoded by `encode_bytes` before just in place without malloc.
 /// Please use this instead of `decode_bytes` if possible.
-pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
+pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     let mut write_offset = 0;
     let mut read_offset = 0;
 
@@ -230,7 +229,7 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
             return Err(Error::unexpected_eof());
         };
 
-        // the last byte in decode unit is for marker which indicates pad size 
+        // the last byte in decode unit is for marker which indicates pad size
         let marker = data[next_offset - 1];
         let pad_size = if desc {
             marker as usize
@@ -247,8 +246,8 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
                 ptr::copy(
                     data.as_ptr().offset(read_offset as isize),
                     data.as_mut_ptr().offset(write_offset as isize),
-                    ENC_GROUP_SIZE
-                    );
+                    ENC_GROUP_SIZE,
+                );
             }
             write_offset += ENC_GROUP_SIZE;
             // one more for marker
@@ -264,7 +263,7 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
             ptr::copy(
                 data.as_ptr().offset(read_offset as isize),
                 data.as_mut_ptr().offset(write_offset as isize),
-                ENC_GROUP_SIZE - pad_size
+                ENC_GROUP_SIZE - pad_size,
             );
         }
         write_offset += ENC_GROUP_SIZE - pad_size;
@@ -272,19 +271,20 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
 
         let pad_byte = if desc { !0 } else { 0 };
         // check the padding pattern whether validate or not
-        if data[read_offset..read_offset+pad_size].iter().any(|x| *x != pad_byte) {
+        if data[read_offset..read_offset + pad_size]
+            .iter()
+            .any(|x| *x != pad_byte)
+        {
             return Err(Error::KeyPadding);
         }
-        unsafe {
-            data.set_len(write_offset)
-        }
+        unsafe { data.set_len(write_offset) }
 
         if desc {
-            for k in &mut data {
+            for k in data {
                 *k = !*k;
             }
         }
-        return Ok(data)
+        return Ok(());
     }
 }
 
@@ -348,7 +348,7 @@ mod tests {
             ),
         ];
 
-        for (source, asc, desc) in pairs {
+        for (source, mut asc, mut desc) in pairs {
             assert_eq!(encode_bytes(&source), asc);
             assert_eq!(encode_bytes_desc(&source), desc);
 
@@ -357,8 +357,9 @@ mod tests {
                 let mut asc_input = asc.as_slice();
                 assert_eq!(source, decode_bytes(&mut asc_input, false).unwrap());
                 assert_eq!(asc_input.as_ptr() as usize - asc_offset, asc.len());
-            }   
-            assert_eq!(source, decode_bytes_in_place(asc, false).unwrap());
+            }
+            decode_bytes_in_place(&mut asc, false).unwrap();
+            assert_eq!(source, asc);
 
             {
                 let desc_offset = desc.as_ptr() as usize;
@@ -366,7 +367,8 @@ mod tests {
                 assert_eq!(source, decode_bytes(&mut desc_input, true).unwrap());
                 assert_eq!(desc_input.as_ptr() as usize - desc_offset, desc.len());
             }
-            assert_eq!(source, decode_bytes_in_place(desc, true).unwrap());
+            decode_bytes_in_place(&mut desc, true).unwrap();
+            assert_eq!(source, desc);
         }
     }
 
@@ -384,9 +386,9 @@ mod tests {
             vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 0],
         ];
 
-        for x in invalid_bytes {
+        for mut x in invalid_bytes {
             assert!(decode_bytes(&mut x.as_slice(), false).is_err());
-            assert!(decode_bytes_in_place(x, false).is_err());
+            assert!(decode_bytes_in_place(&mut x, false).is_err());
         }
     }
 
@@ -492,7 +494,7 @@ mod tests {
         b.iter(|| {
             let key = [b'x'; 2000000];
             let encoded = encode_bytes(&key);
-            decode_bytes(&mut encoded.as_slice(), false);
+            decode_bytes(&mut encoded.as_slice(), false).unwrap();
         });
     }
 
@@ -500,8 +502,8 @@ mod tests {
     fn bench_decode_inplace(b: &mut Bencher) {
         b.iter(|| {
             let key = [b'x'; 2000000];
-            let encoded = encode_bytes(&key);
-            decode_bytes_in_place(encoded, false);
+            let mut encoded = encode_bytes(&key);
+            decode_bytes_in_place(&mut encoded, false).unwrap();
         });
     }
 }
