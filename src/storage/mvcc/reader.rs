@@ -369,12 +369,12 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(k)) => Key::from_encoded(k.to_vec()),
+                    (None, Some(k)) => Key::from_encoded_slice(k),
                     (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
                     (Some(wk), Some(lk)) => if wk < lk {
                         Key::from_encoded(wk.to_vec()).truncate_ts()?
                     } else {
-                        Key::from_encoded(lk.to_vec())
+                        Key::from_encoded_slice(lk)
                     },
                 }
             };
@@ -414,10 +414,10 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(k)) => Key::from_encoded(k.to_vec()),
+                    (None, Some(k)) => Key::from_encoded_slice(k),
                     (Some(k), None) => Key::from_encoded(k.to_vec()).truncate_ts()?,
                     (Some(wk), Some(lk)) => if wk < lk {
-                        Key::from_encoded(lk.to_vec())
+                        Key::from_encoded_slice(lk)
                     } else {
                         Key::from_encoded(wk.to_vec()).truncate_ts()?
                     },
@@ -601,7 +601,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut locks = Vec::with_capacity(limit);
         while cursor.valid() {
-            let key = Key::from_encoded(cursor.key(&mut self.statistics.lock).to_vec());
+            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
             if filter(&lock) {
                 locks.push((key, lock));
@@ -654,7 +654,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = Key::from_encoded(cursor.key(&mut self.statistics.data).to_vec());
+            let cur_key = Key::from_encoded_slice(cursor.key(&mut self.statistics.data));
             let ts = cur_key.decode_ts()?;
             let cur_key_without_ts = cur_key.truncate_ts()?;
             if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {

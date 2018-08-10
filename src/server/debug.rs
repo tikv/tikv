@@ -917,7 +917,7 @@ impl MvccChecker {
         let handle = box_try!(get_cf_handle(self.db.as_ref(), cf));
         match ts {
             Some(ts) => {
-                let key = Key::from_encoded(key.to_vec()).append_ts(ts);
+                let key = Key::from_encoded_slice(key).append_ts(ts);
                 box_try!(wb.delete_cf(handle, &keys::data_key(key.encoded())));
             }
             None => box_try!(wb.delete_cf(handle, &keys::data_key(key))),
