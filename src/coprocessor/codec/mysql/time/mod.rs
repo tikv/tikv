@@ -176,6 +176,10 @@ impl Time {
         self.time.month() == 0 || self.time.day() == 0
     }
 
+    pub fn get_time(&self) -> &DateTime<Tz> {
+        &self.time
+    }
+
     pub fn get_fsp(&self) -> u8 {
         self.fsp
     }
