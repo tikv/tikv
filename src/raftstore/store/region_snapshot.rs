@@ -532,11 +532,11 @@ mod tests {
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
             !iter
-                .reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+                .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
                 .unwrap()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
                 .unwrap()
         );
         let mut pair = (
@@ -545,7 +545,7 @@ mod tests {
         );
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
                 .unwrap()
         );
         pair = (
@@ -555,15 +555,15 @@ mod tests {
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
         assert!(
             !iter
-                .reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
+                .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
                 .is_err()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
                 .is_err()
         );
 
@@ -590,11 +590,11 @@ mod tests {
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(
             !iter
-                .reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+                .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
                 .unwrap()
         );
         assert!(
-            iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+            iter.reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
                 .unwrap()
         );
         let pair = (

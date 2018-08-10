@@ -71,10 +71,18 @@ impl Key {
         bytes::decode_bytes(&mut self.0.as_slice(), false)
     }
 
-    /// Creates a key from encoded bytes.
+    /// Creates a key from encoded bytes vector.
     #[inline]
     pub fn from_encoded(encoded_key: Vec<u8>) -> Key {
         Key(encoded_key)
+    }
+
+    /// Creates a key with reserved capacity for timestamp from encoded bytes slice.
+    #[inline]
+    pub fn from_encoded_slice(encoded_key: &[u8]) -> Key {
+        let mut k = Vec::with_capacity(encoded_key.len() + number::U64_SIZE);
+        k.extend_from_slice(encoded_key);
+        Key(k)
     }
 
     /// Gets the encoded representation of this key.
@@ -210,7 +218,7 @@ mod tests {
         let k = b"k";
         let ts = 123;
         assert!(Key::split_on_ts_for(k).is_err());
-        let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
+        let enc = Key::from_encoded_slice(k).append_ts(ts);
         let res = Key::split_on_ts_for(enc.encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
     }
