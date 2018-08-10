@@ -77,7 +77,7 @@ impl Key {
         Key(encoded_key)
     }
 
-    /// Creates a key with reserver capacity for timestamp from encoded bytes slice.
+    /// Creates a key with reserved capacity for timestamp from encoded bytes slice.
     #[inline]
     pub fn from_encoded_slice(encoded_key: &[u8]) -> Key {
         let mut k = Vec::with_capacity(encoded_key.len() + number::U64_SIZE);
