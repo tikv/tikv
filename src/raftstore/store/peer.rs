@@ -37,10 +37,9 @@ use raft::{
     NO_LIMIT,
 };
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::engine::{Peekable, Snapshot};
-use raftstore::store::worker::apply::ApplyMetrics;
+use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::worker::{
-    apply, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
+    apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
 };
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
@@ -1181,7 +1180,8 @@ impl Peer {
             return;
         }
         self.leader_lease.renew(ts);
-        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease() {
+        let term = self.term();
+        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);
         }
@@ -1763,8 +1763,9 @@ impl Peer {
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest, check_epoch: bool) -> ReadResponse {
-        let mut resp = ReadExecutor::new(self.region(), &self.engines.kv, &self.tag)
-            .execute(&req, check_epoch)
+        let mut resp = ReadExecutor::new(self.engines.kv.clone(), check_epoch)
+            .set_regon(self.region().clone())
+            .execute(&req)
             .unwrap_or_else(|e| {
                 match e {
                     Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
@@ -2007,44 +2008,58 @@ impl RequestInspector for Peer {
 }
 
 #[derive(Debug)]
-pub struct ReadExecutor<'r, 'e, 't> {
-    region: &'r metapb::Region,
-    engine: &'e Arc<DB>,
-    tag: &'t str,
+pub struct ReadExecutor {
+    check_epoch: bool,
+    region: Option<metapb::Region>,
+    snapshot: SyncSnapshot,
 }
 
-impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
-    pub fn new(region: &'r metapb::Region, engine: &'e Arc<DB>, tag: &'t str) -> Self {
+impl ReadExecutor {
+    pub fn new(engine: Arc<DB>, check_epoch: bool) -> Self {
         ReadExecutor {
-            region,
-            engine,
-            tag,
+            check_epoch,
+            region: None,
+            snapshot: Snapshot::new(engine.clone()).into_sync(),
         }
     }
 
-    fn do_get(&self, req: &Request, snap: &Snapshot) -> Result<Response> {
+    pub fn set_regon(&mut self, region: metapb::Region) -> &mut Self {
+        self.region = Some(region);
+        self
+    }
+
+    fn do_get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         // TODO: the get_get looks weird, maybe we should figure out a better name later.
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, self.region)?;
+        util::check_key_in_region(key, region)?;
 
         let mut resp = Response::new();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
-            snap.get_value_cf(cf, &keys::data_key(key))
+            self.snapshot
+                .get_value_cf(cf, &keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
-                        "{} failed to get {} with cf {}: {:?}",
-                        self.tag,
+                        "[region {}] failed to get {} with cf {}: {:?}",
+                        region.get_id(),
                         escape(key),
                         cf,
                         e
                     )
                 })
         } else {
-            snap.get_value(&keys::data_key(key))
-                .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", self.tag, escape(key), e))
+            self.snapshot
+                .get_value(&keys::data_key(key))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[region {}] failed to get {}: {:?}",
+                        region.get_id(),
+                        escape(key),
+                        e
+                    )
+                })
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
@@ -2053,19 +2068,21 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
         Ok(resp)
     }
 
-    pub fn execute(&self, msg: &RaftCmdRequest, check_epoch: bool) -> Result<ReadResponse> {
-        if check_epoch {
-            check_region_epoch(msg, self.region, true)?;
+    pub fn execute(&self, msg: &RaftCmdRequest) -> Result<ReadResponse> {
+        if self.region.is_none() {
+            return Err(box_err!("execute RaftCmdRequest with empty region"));
+        }
+        let region = self.region.as_ref().unwrap();
+        if self.check_epoch {
+            check_region_epoch(msg, region, true)?;
         }
         let mut need_snapshot = false;
-        let snapshot = Snapshot::new(Arc::clone(self.engine));
         let requests = msg.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
-
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => self.do_get(req, &snapshot)?,
+                CmdType::Get => self.do_get(req, region)?,
                 CmdType::Snap => {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
@@ -2085,8 +2102,8 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
         response.set_responses(protobuf::RepeatedField::from_vec(responses));
         let snapshot = if need_snapshot {
             Some(RegionSnapshot::from_snapshot(
-                snapshot.into_sync(),
-                self.region.to_owned(),
+                self.snapshot.clone(),
+                region.to_owned(),
             ))
         } else {
             None

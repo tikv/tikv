@@ -85,7 +85,9 @@ impl ReadDelegate {
 
     fn handle_read(&self, req: &RaftCmdRequest, kv_engine: &Arc<DB>) -> Option<ReadResponse> {
         if let Ok(mut resp) =
-            ReadExecutor::new(&self.region, kv_engine, &self.tag).execute(req, false)
+            ReadExecutor::new(kv_engine.clone(), false /* dont check region epoch */)
+                .set_regon(self.region.clone())
+                .execute(req)
         {
             if let Some(ref lease) = self.leader_lease {
                 if lease.inspect(None) == LeaseState::Valid {
@@ -746,7 +748,7 @@ mod tests {
 
         // Register region 1
         lease.renew(monotonic_raw_now());
-        let remote = lease.maybe_new_remote_lease().unwrap();
+        let remote = lease.maybe_new_remote_lease(term6).unwrap();
         // But the applied_index_term is stale.
         let register_region1 = Task::Register(ReadDelegate {
             tag: String::new(),
