@@ -109,7 +109,7 @@ impl<S: Snapshot> MvccReader<S> {
         };
 
         self.statistics.data.processed += 1;
-        self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
+        self.statistics.data.flow_stats.read_bytes += k.take_raw().unwrap_or_default().len() + res.len();
         self.statistics.data.flow_stats.read_keys += 1;
         Ok(res)
     }

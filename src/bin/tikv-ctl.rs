@@ -1531,7 +1531,7 @@ fn main() {
         println!("{}", &unescape(escaped).to_hex().to_uppercase());
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
-        match Key::from_encoded(unescape(encoded)).raw() {
+        match Key::from_encoded(unescape(encoded)).take_raw() {
             Ok(k) => println!("{}", escape(&k)),
             Err(e) => eprintln!("decode meets error: {}", e),
         };

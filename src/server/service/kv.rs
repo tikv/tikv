@@ -1095,7 +1095,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 } else {
                     match v {
                         Ok(Some((k, vv))) => {
-                            resp.set_key(k.raw().unwrap());
+                            resp.set_key(k.take_raw().unwrap());
                             resp.set_info(extract_mvcc_info(vv));
                         }
                         Ok(None) => {

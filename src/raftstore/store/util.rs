@@ -1271,7 +1271,7 @@ mod tests {
             .unwrap();
 
         let middle_key = Key::from_encoded(keys::origin_key(&middle_key).to_owned())
-            .raw()
+            .take_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
     }
