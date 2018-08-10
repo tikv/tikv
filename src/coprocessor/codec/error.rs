@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use coprocessor::dag::expr::EvalContext;
 use std::error::Error as StdError;
 use std::io;
 use std::str::Utf8Error;
@@ -66,6 +67,13 @@ quick_error! {
 }
 
 impl Error {
+    pub fn handle_invalid_time_error(ctx: &mut EvalContext, err: Error) -> Option<Error> {
+        if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
+            return Some(err);
+        }
+        ctx.warnings.append_warning(err);
+        None
+    }
     pub fn overflow(data: &str, expr: &str) -> Error {
         let msg = format!("{} value is out of range in {:?}", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
@@ -122,6 +130,16 @@ impl Error {
 
     pub fn unexpected_eof() -> Error {
         util::codec::Error::unexpected_eof().into()
+    }
+
+    pub fn invalid_time_format(val: &str) -> Error {
+        let msg = format!("invalid time format: '{}'", val);
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
+    }
+
+    pub fn incorrect_datetime_value(val: &str) -> Error {
+        let msg = format!("Incorrect datetime value: '{}'", val);
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
 }
 

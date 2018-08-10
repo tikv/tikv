@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
+use coprocessor::codec::error::Error;
+use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
@@ -31,6 +33,44 @@ impl ScalarFunc {
         let res = t.date_format(format_mask_str)?;
         Ok(Some(Cow::Owned(res.into_bytes())))
     }
+
+    #[inline]
+    pub fn date<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let t;
+        match self.children[0].eval_time(ctx, row) {
+            Err(err) => match Error::handle_invalid_time_error(ctx, err) {
+                Some(err) => return Err(err),
+                None => return Ok(None),
+            },
+            Ok(None) => {
+                match Error::handle_invalid_time_error(ctx, Error::incorrect_datetime_value("None"))
+                {
+                    Some(err) => return Err(err),
+                    None => return Ok(None),
+                }
+            }
+            Ok(Some(res)) => t = res,
+        }
+        if t.is_zero() {
+            match Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ) {
+                Some(err) => return Err(err),
+                None => return Ok(None),
+            }
+        }
+        let res = Time::new(
+            t.get_time().date().and_hms(0, 0, 0),
+            mysql::types::DATE,
+            t.get_fsp() as i8,
+        ).unwrap();
+        Ok(Some(Cow::Owned(res)))
+    }
 }
 
 #[cfg(test)]
@@ -38,7 +78,9 @@ mod test {
     use coprocessor::codec::mysql::Time;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::*;
     use coprocessor::dag::expr::{EvalContext, Expression};
+    use std::sync::Arc;
     use tipb::expression::ScalarFuncSig;
     #[test]
     fn test_date_format() {
@@ -89,6 +131,47 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
+        }
+    }
+
+    #[test]
+    fn test_date() {
+        let tests = vec![
+            ("2011-11-11", "2011-11-11"),
+            ("2011-11-11 10:10:10", "2011-11-11"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let exp = Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap());
+            let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let exp = Datum::Null;
+        let f = scalar_func_expr(ScalarFuncSig::Date, &[input]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, exp);
+
+        // test zero case
+        let mut cfg = EvalConfig::new(FLAG_IN_UPDATE_OR_DELETE_STMT).unwrap();
+        cfg.set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO);
+        cfg.set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg = datum_expr(Datum::Time(
+            Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
+        ));
+        let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "zero timestamp should be wrong"),
+            Err(_) => assert!(true),
         }
     }
 }

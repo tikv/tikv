@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 use std::{i64, mem, u64};
-
 use tipb::select;
 
 use super::{Error, Result};

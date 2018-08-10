@@ -152,6 +152,10 @@ impl Time {
         })
     }
 
+    pub fn get_time(&self) -> DateTime<Tz> {
+        self.time
+    }
+
     pub fn get_tp(&self) -> u8 {
         self.tp
     }
