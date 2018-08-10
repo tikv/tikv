@@ -98,7 +98,9 @@ impl<S: Snapshot> Scanner<S> {
     pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
         self.range = range;
         self.no_more = false;
-        self.seek_key.clear();
+        unsafe {
+            self.seek_key.set_len(0);
+        }
         match self.scan_mode {
             ScanMode::Backward => self.seek_key.extend_from_slice(self.range.get_end()),
             ScanMode::Forward => self.seek_key.extend_from_slice(self.range.get_start()),
@@ -140,7 +142,9 @@ impl<S: Snapshot> Scanner<S> {
                 (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)),
                 _ => unreachable!(),
             };
-            self.seek_key.clear();
+            unsafe {
+                self.seek_key.set_len(0);
+            }
             self.seek_key.extend_from_slice(seek_key_slice);
         }
 

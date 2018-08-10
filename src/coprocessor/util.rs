@@ -45,43 +45,48 @@ pub fn prefix_next(key: &mut Vec<u8>) {
     }
 }
 
-/// Check if `key1`'s prefix next equals to `key2`
-pub fn prefix_next_equals(key1: &[u8], key2: &[u8]) -> bool {
-    if key1.is_empty() {
-        return key2 == [0];
-    }
-    if key2.is_empty() {
-        return false;
-    }
+/// Check if `key`'s prefix next equals to `next`
+pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
+    let len = key.len();
+    let next_len = next.len();
 
-    let mut carry_pos = key1.len() - 1;
-    loop {
-        if key1[carry_pos] != 255 {
-            break;
+    if len == next_len {
+        let mut carry_pos = len;
+        loop {
+            if carry_pos == 0 {
+                // All bytes of `key` are 255. `next` couldn't be `key`'s prefix_next since their
+                // lengths are equal.
+                return false;
+            }
+
+            carry_pos -= 1;
+            if key[carry_pos] != 255 {
+                break;
+            }
         }
 
-        if carry_pos == 0 {
-            // All bytes of `start` are 255. `end` should equals `start.append(0)`
-            return &key2[..key2.len() - 1] == key1 && *key2.last().unwrap() == 0;
-        }
-
-        carry_pos -= 1;
+        // So they are equal when:
+        // * `key`'s value at `carry_pos` is that of `next` - 1 and
+        // * `next`'s part after carry_pos is all 0
+        // * `key` and `next`'s parts before carry_pos are equal.
+        key[carry_pos] + 1 == next[carry_pos]
+            && next[carry_pos + 1..].iter().all(|byte| *byte == 0)
+            && key[..carry_pos] == next[..carry_pos]
+    } else if len + 1 == next_len {
+        // `next` must has one more 0 than `key`, and the first `len` bytes must be all 255.
+        // The case that `len == 0` is also covered here.
+        *next.last().unwrap() == 0
+            && key.iter().all(|byte| *byte == 255)
+            && next.iter().take(len).all(|byte| *byte == 255)
+    } else {
+        // Length not match.
+        false
     }
-
-    // So they are equal when:
-    // * lengths are equal and
-    // * `key1`'s value at `carry_pos` is that of `key2` - 1 and
-    // * `key2`'s part after carry_pos is all 0
-    // * `key1` and `key2`'s parts before carry_pos are equal.
-    key1.len() == key2.len()
-        && key1[carry_pos] + 1 == key2[carry_pos]
-        && key2[carry_pos + 1..].iter().all(|byte| *byte == 0)
-        && key1[..carry_pos] == key2[..carry_pos]
 }
 
 /// `is_point` checks if the key range represents a point.
 pub fn is_point(range: &coppb::KeyRange) -> bool {
-    prefix_next_equals(range.get_start(), range.get_end())
+    is_prefix_next(range.get_start(), range.get_end())
 }
 
 #[inline]
@@ -119,20 +124,20 @@ mod test {
         test_prefix_next_once(&[0, 255, 255, 255], &[1, 0, 0, 0]);
     }
 
-    fn test_prefix_next_equals_case(lhs: &[u8], expected: &[u8], unexpected: &[&[u8]]) {
-        assert!(prefix_next_equals(lhs, expected));
+    fn test_is_prefix_next_case(lhs: &[u8], expected: &[u8], unexpected: &[&[u8]]) {
+        assert!(is_prefix_next(lhs, expected));
         for rhs in unexpected {
-            assert!(!prefix_next_equals(lhs, rhs));
+            assert!(!is_prefix_next(lhs, rhs));
         }
     }
 
     #[test]
-    fn test_prefix_next_equals() {
-        test_prefix_next_equals_case(&[], &[0], &[&[], &[1], &[2]]);
-        test_prefix_next_equals_case(&[0], &[1], &[&[], &[0], &[00], &[2], &[255]]);
-        test_prefix_next_equals_case(&[1], &[2], &[&[], &[1], &[3], &[10]]);
-        test_prefix_next_equals_case(&[255], &[255, 0], &[&[0], &[255, 255, 0]]);
-        test_prefix_next_equals_case(
+    fn test_is_prefix_next() {
+        test_is_prefix_next_case(&[], &[0], &[&[], &[1], &[2]]);
+        test_is_prefix_next_case(&[0], &[1], &[&[], &[0], &[00], &[2], &[255]]);
+        test_is_prefix_next_case(&[1], &[2], &[&[], &[1], &[3], &[10]]);
+        test_is_prefix_next_case(&[255], &[255, 0], &[&[0], &[255, 255, 0]]);
+        test_is_prefix_next_case(
             &[255, 255, 255],
             &[255, 255, 255, 0],
             &[
@@ -143,17 +148,17 @@ mod test {
                 &[255, 255, 255, 255, 0],
             ],
         );
-        test_prefix_next_equals_case(
+        test_is_prefix_next_case(
             &[1, 255],
             &[2, 0],
             &[&[], &[1, 255, 0], &[2, 255], &[1, 255], &[2, 0, 0]],
         );
-        test_prefix_next_equals_case(
+        test_is_prefix_next_case(
             &[0, 255],
             &[1, 0],
             &[&[], &[0, 255, 0], &[1, 255], &[0, 255], &[1, 0, 0]],
         );
-        test_prefix_next_equals_case(
+        test_is_prefix_next_case(
             &[1, 2, 3, 4, 255, 255],
             &[1, 2, 3, 5, 0, 0],
             &[
