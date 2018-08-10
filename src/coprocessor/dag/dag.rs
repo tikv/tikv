@@ -85,6 +85,8 @@ impl<S: Snapshot + 'static> DAGContext<S> {
             req.get_executors()
         );
 
+        let (has_aggr, has_topn) = check_aggr_and_topn(req.get_executors().to_vec());
+
         let dag_executor = build_exec(
             req.take_executors().into_vec(),
             store,
@@ -92,8 +94,6 @@ impl<S: Snapshot + 'static> DAGContext<S> {
             Arc::new(eval_cfg),
             req.get_collect_range_counts(),
         )?;
-
-        let (has_aggr, has_topn) = check_aggr_and_topn(req.take_executors().into_vec());
 
         Ok(Self {
             _phantom: Default::default(),

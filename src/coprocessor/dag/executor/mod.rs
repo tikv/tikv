@@ -318,6 +318,9 @@ pub fn check_aggr_and_topn(execs: Vec<executor::Executor>) -> (bool, bool) {
             ExecType::TypeAggregation => {
                 has_aggr = true;
             }
+            ExecType::TypeStreamAgg => {
+                has_aggr = true;
+            }
             ExecType::TypeTopN => {
                 has_topn = true;
             }
