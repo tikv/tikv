@@ -42,7 +42,7 @@ pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
 
-pub const SEEK_BOUND: usize = 4;
+pub const SEEK_BOUND: u64 = 4;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 const STAT_TOTAL: &str = "total";
