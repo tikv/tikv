@@ -295,7 +295,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "futures"
 version = "0.1.23"
+source = "git+https://github.com/busyjay/futures-rs.git?branch=use-crossbeam#5e6b89e599dbdb9f7d4471965053a6d696eabb85"
+
+[[package]]
+name = "futures"
+version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+replace = "futures 0.1.23 (git+https://github.com/busyjay/futures-rs.git?branch=use-crossbeam)"
 
 [[package]]
 name = "futures-cpupool"
@@ -1574,6 +1580,7 @@ dependencies = [
 "checksum fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "237b7991317b8d94391c0a4813b1f74fd81c11352440cd598d2b763ed288bfc1"
 "checksum fuchsia-zircon 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "2e9763c69ebaae630ba35f74888db465e49e259ba1bc0eda7d06f4a067615d82"
 "checksum fuchsia-zircon-sys 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "3dcaa9ae7725d12cdb85b3ad99a434db70b468c09ded17e012d86b5c1010f7a7"
+"checksum futures 0.1.23 (git+https://github.com/busyjay/futures-rs.git?branch=use-crossbeam)" = "<none>"
 "checksum futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)" = "884dbe32a6ae4cd7da5c6db9b78114449df9953b8d490c9d7e1b51720b922c62"
 "checksum futures-cpupool 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)" = "ab90cde24b3319636588d0c35fe03b1333857621051837ed769faefb4c2162e4"
 "checksum fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"

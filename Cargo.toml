@@ -104,6 +104,10 @@ branch = "dev"
 features = ["profiling"]
 optional = true
 
+[replace]
+"futures:0.1.23" = { git = "https://github.com/busyjay/futures-rs.git", branch = "use-crossbeam" }
+"futures_cpupool:0.1.8" = { git = "https://github.com/busyjay/futures-rs.git", branch = "use-crossbeam" }
+
 [workspace]
 members = [
   "fuzz"
