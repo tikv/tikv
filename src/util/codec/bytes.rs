@@ -248,10 +248,10 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
                     data.as_mut_ptr().offset(write_offset as isize),
                     ENC_GROUP_SIZE
                     );
-                write_offset += ENC_GROUP_SIZE;
-                // one more for marker
-                read_offset += ENC_GROUP_SIZE + 1;
             }
+            write_offset += ENC_GROUP_SIZE;
+            // one more for marker
+            read_offset += ENC_GROUP_SIZE + 1;
             continue;
         }
 
@@ -265,16 +265,16 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
                 data.as_mut_ptr().offset(write_offset as isize),
                 ENC_GROUP_SIZE - pad_size
             );
-            write_offset += ENC_GROUP_SIZE - pad_size;
-            read_offset += ENC_GROUP_SIZE - pad_size;
         }
+        write_offset += ENC_GROUP_SIZE - pad_size;
+        read_offset += ENC_GROUP_SIZE - pad_size;
 
         let pad_byte = if desc { !0 } else { 0 };
         // check the padding pattern whether validate or not
         if data[read_offset..read_offset+pad_size].iter().any(|x| *x != pad_byte) {
             return Err(Error::KeyPadding);
         }
-        unsafe{
+        unsafe {
             data.set_len(write_offset)
         }
 
@@ -476,15 +476,6 @@ mod tests {
             assert!(input.is_empty());
             assert_eq!(decoded, s.as_bytes());
         }
-    }
-
-    #[test]
-    fn test_inplace_correctness() {
-        let key = [b'x'; 2000000];
-        let encoded = encode_bytes(&key);
-        let d = decode_bytes(&mut encoded.as_slice(), false).unwrap();
-        let i = decode_bytes_in_place(encoded, false).unwrap();
-        assert_eq!(d, i);
     }
 
     use test::Bencher;

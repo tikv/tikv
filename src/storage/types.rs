@@ -65,13 +65,14 @@ impl Key {
         Key(codec::bytes::encode_bytes(key))
     }
 
-    /// Gets the raw representation of this key.
+    /// Gets and moves the raw representation of this key.
     #[inline]
     pub fn take_raw(self) -> Result<Vec<u8>, codec::Error> {
         let k = self.0;
         bytes::decode_bytes_in_place(k, false)
     }
 
+    /// Gets the raw representation of this key.
     #[inline]
     pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
         bytes::decode_bytes(&mut self.0.as_slice(), false)
