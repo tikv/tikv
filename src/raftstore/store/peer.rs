@@ -39,8 +39,9 @@ use raft::{
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Peekable, Snapshot};
 use raftstore::store::worker::apply::ApplyMetrics;
-use raftstore::store::worker::{apply, Proposal, RegionProposal};
-use raftstore::store::worker::{Apply, ApplyTask};
+use raftstore::store::worker::{
+    apply, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
+};
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
@@ -259,6 +260,7 @@ pub struct Peer {
     pub raft_entry_max_size: u64,
 
     apply_scheduler: Scheduler<ApplyTask>,
+    read_scheduler: Scheduler<ReadTask>,
 
     pub pending_remove: bool,
 
@@ -384,6 +386,7 @@ impl Peer {
             approximate_keys: None,
             compaction_declined_bytes: 0,
             apply_scheduler: store.apply_scheduler(),
+            read_scheduler: store.read_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
             pending_merge_state: None,
@@ -414,6 +417,15 @@ impl Peer {
         Ok(peer)
     }
 
+    pub fn register_delegates(&self) {
+        self.apply_scheduler
+            .schedule(ApplyTask::register(self))
+            .unwrap();
+        self.read_scheduler
+            .schedule(ReadTask::register(self))
+            .unwrap();
+    }
+
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
@@ -442,12 +454,13 @@ impl Peer {
                 );
                 return None;
             }
-            // There is no tasks in apply worker.
+            // There is no tasks in apply/local read worker.
             false
         } else {
             initialized
         };
         self.pending_remove = true;
+
         Some(DestroyPeerJob {
             async_remove,
             initialized,
@@ -521,7 +534,14 @@ impl Peer {
     /// This will update the region of the peer, caller must ensure the region
     /// has been preserved in a durable device.
     pub fn set_region(&mut self, region: metapb::Region) {
-        self.mut_store().set_region(region)
+        if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
+        {
+            // Epoch version changed, disable read on the localreader for this region.
+            self.leader_lease.expire_remote_lease();
+        }
+        self.mut_store().set_region(region.clone());
+        let progress = ReadProgress::region(region);
+        self.maybe_update_read_progress(progress);
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -775,6 +795,8 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
+                    let progress = ReadProgress::term(self.term());
+                    self.maybe_update_read_progress(progress);
                     self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
@@ -964,8 +986,7 @@ impl Peer {
         }
 
         if apply_snap_result.is_some() {
-            let reg = ApplyTask::register(self);
-            self.apply_scheduler.schedule(reg).unwrap();
+            self.register_delegates();
         }
 
         apply_snap_result
@@ -1054,7 +1075,7 @@ impl Peer {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(req));
+                    cb.invoke_read(self.handle_read(req, true));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
@@ -1102,6 +1123,7 @@ impl Peer {
                 .advance_apply(apply_state.get_applied_index());
         }
         self.mut_store().apply_state = apply_state;
+        let progress_to_be_updated = self.mut_store().applied_index_term != applied_index_term;
         self.mut_store().applied_index_term = applied_index_term;
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
@@ -1117,12 +1139,17 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(req));
+                    cb.invoke_read(self.handle_read(req, true));
                 }
             }
             self.pending_reads.ready_cnt = 0;
         }
         self.pending_reads.gc();
+
+        if progress_to_be_updated {
+            let progress = ReadProgress::applied_index_term(applied_index_term);
+            self.maybe_update_read_progress(progress);
+        }
     }
 
     pub fn post_split(&mut self) {
@@ -1152,6 +1179,18 @@ impl Peer {
             return;
         }
         self.leader_lease.renew(ts);
+        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease() {
+            let progress = ReadProgress::leader_lease(remote_lease);
+            self.maybe_update_read_progress(progress);
+        }
+    }
+
+    fn maybe_update_read_progress(&self, progress: ReadProgress) {
+        if self.is_leader() {
+            let update = ReadTask::update(self.region_id, progress);
+            debug!("{} update {}", self.tag, update);
+            self.read_scheduler.schedule(update).unwrap();
+        }
     }
 
     pub fn maybe_campaign(
@@ -1261,7 +1300,7 @@ impl Peer {
         match policy {
             Ok(RequestPolicy::ReadLocal) => {
                 metrics.local_read += 1;
-                Some(self.handle_read(req))
+                Some(self.handle_read(req, false))
             }
             // require to propose again, and use the `propose` above.
             Ok(RequestPolicy::ReadIndex) => None,
@@ -1424,7 +1463,7 @@ impl Peer {
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
-        cb.invoke_read(self.handle_read(req))
+        cb.invoke_read(self.handle_read(req, false))
     }
 
     fn pre_read_index(&self) -> Result<()> {
@@ -1721,9 +1760,9 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_read(&mut self, req: RaftCmdRequest) -> ReadResponse {
+    fn handle_read(&mut self, req: RaftCmdRequest, check_epoch: bool) -> ReadResponse {
         let mut resp = ReadExecutor::new(self.region(), &self.engines.kv, &self.tag)
-            .execute(&req)
+            .execute(&req, check_epoch)
             .unwrap_or_else(|e| {
                 match e {
                     Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
@@ -1865,7 +1904,7 @@ impl Peer {
 
 /// `RequestPolicy` decides how we handle a request.
 #[derive(Clone, PartialEq, Debug)]
-enum RequestPolicy {
+pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
     // Handle the read request via raft's SafeReadIndex mechanism.
@@ -1876,9 +1915,9 @@ enum RequestPolicy {
 }
 
 /// `RequestInspector` makes `RequestPolicy` for requests.
-trait RequestInspector {
+pub trait RequestInspector {
     /// Has the current term been applied?
-    fn has_applied_to_current_term(&self) -> bool;
+    fn has_applied_to_current_term(&mut self) -> bool;
     /// Inspects its lease.
     fn inspect_lease(&mut self) -> LeaseState;
 
@@ -1943,7 +1982,7 @@ trait RequestInspector {
 }
 
 impl RequestInspector for Peer {
-    fn has_applied_to_current_term(&self) -> bool {
+    fn has_applied_to_current_term(&mut self) -> bool {
         self.get_store().applied_index_term == self.term()
     }
 
@@ -1966,14 +2005,14 @@ impl RequestInspector for Peer {
 }
 
 #[derive(Debug)]
-struct ReadExecutor<'r, 'e, 't> {
+pub struct ReadExecutor<'r, 'e, 't> {
     region: &'r metapb::Region,
     engine: &'e Arc<DB>,
     tag: &'t str,
 }
 
 impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
-    fn new(region: &'r metapb::Region, engine: &'e Arc<DB>, tag: &'t str) -> Self {
+    pub fn new(region: &'r metapb::Region, engine: &'e Arc<DB>, tag: &'t str) -> Self {
         ReadExecutor {
             region,
             engine,
@@ -2012,8 +2051,10 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
         Ok(resp)
     }
 
-    fn execute(&self, msg: &RaftCmdRequest) -> Result<ReadResponse> {
-        check_region_epoch(msg, self.region, true)?;
+    pub fn execute(&self, msg: &RaftCmdRequest, check_epoch: bool) -> Result<ReadResponse> {
+        if check_epoch {
+            check_region_epoch(msg, self.region, true)?;
+        }
         let mut need_snapshot = false;
         let snapshot = Snapshot::new(Arc::clone(self.engine));
         let requests = msg.get_requests();
@@ -2149,7 +2190,7 @@ mod tests {
             lease_state: LeaseState,
         }
         impl RequestInspector for DummyInspector {
-            fn has_applied_to_current_term(&self) -> bool {
+            fn has_applied_to_current_term(&mut self) -> bool {
                 self.applied_to_index_term
             }
             fn inspect_lease(&mut self) -> LeaseState {
