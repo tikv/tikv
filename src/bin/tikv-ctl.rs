@@ -1805,12 +1805,12 @@ fn convert_gbmb(mut bytes: u64) -> String {
     const GB: u64 = 1024 * 1024 * 1024;
     const MB: u64 = 1024 * 1024;
     if bytes < MB {
-        return format!("{} B ", bytes);
+        return format!("{} B", bytes);
     }
     let mb = if bytes % GB == 0 {
         String::from("")
     } else {
-        format!("{:.3} MB ", (bytes % GB) as f64 / MB as f64)
+        format!("{:.3} MB", (bytes % GB) as f64 / MB as f64)
     };
     bytes /= GB;
     let gb = if bytes == 0 {
