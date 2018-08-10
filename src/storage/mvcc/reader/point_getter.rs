@@ -991,15 +991,6 @@ mod tests {
     #[test]
     fn test_long_value() {}
 
-    #[test]
-    fn test_get_rollback() {}
-
-    #[test]
-    fn test_get_delete() {}
-
-    #[test]
-    fn test_get_value() {}
-
     /// Get corrupted data.
     #[test]
     fn test_default_data_missing() {}
