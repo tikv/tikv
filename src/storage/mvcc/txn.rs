@@ -132,63 +132,62 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: &[u8],
         options: &Options,
     ) -> Result<()> {
-        let key = mutation.key();
-        if !options.skip_constraint_check {
-            if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than or equal to
-                // current start timestamp, we should abort current prewrite, even if the commit
-                // type is Rollback.
-                if commit >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    return Err(Error::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_ts: commit,
-                        key: key.raw()?,
-                        primary: primary.to_vec(),
-                    });
+        {
+            let key = mutation.key();
+            if !options.skip_constraint_check {
+                if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
+                    // Abort on writes after our start timestamp ...
+                    // If exists a commit version whose commit timestamp is larger than or equal to
+                    // current start timestamp, we should abort current prewrite, even if the commit
+                    // type is Rollback.
+                    if commit >= self.start_ts {
+                        MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                        return Err(Error::WriteConflict {
+                            start_ts: self.start_ts,
+                            conflict_ts: commit,
+                            key: key.raw()?,
+                            primary: primary.to_vec(),
+                        });
+                    }
                 }
             }
-        }
-        // ... or locks at any timestamp.
-        if let Some(lock) = self.reader.load_lock(key)? {
-            if lock.ts != self.start_ts {
-                return Err(Error::KeyIsLocked {
-                    key: key.raw()?,
-                    primary: lock.primary,
-                    ts: lock.ts,
-                    ttl: lock.ttl,
-                });
+            // ... or locks at any timestamp.
+            if let Some(lock) = self.reader.load_lock(key)? {
+                if lock.ts != self.start_ts {
+                    return Err(Error::KeyIsLocked {
+                        key: key.raw()?,
+                        primary: lock.primary,
+                        ts: lock.ts,
+                        ttl: lock.ttl,
+                    });
+                }
+                // No need to overwrite the lock and data.
+                // If we use single delete, we can't put a key multiple times.
+                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                return Ok(());
             }
-            // No need to overwrite the lock and data.
-            // If we use single delete, we can't put a key multiple times.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(());
         }
 
-        let short_value = if let Mutation::Put((_, ref value)) = mutation {
-            if is_short_value(value) {
-                Some(value.clone())
-            } else {
-                None
-            }
-        } else {
-            None
+        let lock_type = LockType::from_mutation(&mutation);
+
+        let (key, value) = match mutation {
+            Mutation::Put((key, value)) => (key, Some(value)),
+            Mutation::Delete(key) => (key, None),
+            Mutation::Lock(key) => (key, None),
         };
 
-        self.lock_key(
-            key.clone(),
-            LockType::from_mutation(&mutation),
-            primary.to_vec(),
-            options.lock_ttl,
-            short_value,
-        );
-
-        if let Mutation::Put((_, ref value)) = mutation {
-            if !is_short_value(value) {
-                let ts = self.start_ts;
-                self.put_value(key, ts, value.clone());
-            }
+        if value.is_some() && is_short_value(&value.unwrap()) {
+            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
+        } else {
+            self.lock_key(
+                key.clone(),
+                lock_type,
+                primary.to_vec(),
+                options.lock_ttl,
+                None,
+            );
+            let ts = self.start_ts;
+            self.put_value(key, ts, value);
         }
         Ok(())
     }
