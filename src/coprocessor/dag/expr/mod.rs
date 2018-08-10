@@ -16,8 +16,10 @@ mod builtin_cast;
 mod builtin_compare;
 mod builtin_control;
 mod builtin_json;
+mod builtin_like;
 mod builtin_math;
 mod builtin_op;
+mod builtin_string;
 mod builtin_time;
 mod column;
 mod constant;
@@ -89,7 +91,7 @@ impl Expression {
         }
     }
 
-    #[allow(match_same_arms)]
+    #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
     fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
@@ -106,7 +108,7 @@ impl Expression {
         }
     }
 
-    #[allow(match_same_arms)]
+    #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -239,7 +241,7 @@ impl Expression {
                 .and_then(|i| {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
-                    Time::from_packed_u64(i, t, fsp, &ctx.cfg.tz)
+                    Time::from_packed_u64(i, t, fsp, ctx.cfg.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), tp)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
@@ -423,7 +425,7 @@ mod test {
 
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,

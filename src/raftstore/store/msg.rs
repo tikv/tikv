@@ -16,18 +16,19 @@ use std::fmt;
 use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
+use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
+use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
-use raftstore::store::util::RegionApproximateStat;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
-use super::RegionSnapshot;
+use super::{Peer, RegionSnapshot};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadResponse {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot>,
@@ -38,9 +39,24 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
+#[derive(Debug)]
+pub enum SeekRegionResult {
+    Found {
+        local_peer: metapb::Peer,
+        region: metapb::Region,
+    },
+    LimitExceeded {
+        next_key: Vec<u8>,
+    },
+    Ended,
+}
+
 pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
 pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
+
+pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
+pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -170,10 +186,16 @@ pub enum Msg {
         hash: Vec<u8>,
     },
 
-    // For region stat
-    RegionApproximateStat {
+    // For region size
+    RegionApproximateSize {
         region_id: u64,
-        stat: RegionApproximateStat,
+        size: u64,
+    },
+
+    // For region keys
+    RegionApproximateKeys {
+        region_id: u64,
+        keys: u64,
     },
 
     // Compaction finished event
@@ -181,6 +203,7 @@ pub enum Msg {
     HalfSplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
+        policy: CheckPolicy,
     },
     MergeFail {
         region_id: u64,
@@ -188,6 +211,13 @@ pub enum Msg {
 
     ValidateSSTResult {
         invalid_ssts: Vec<SSTMeta>,
+    },
+
+    SeekRegion {
+        from_key: Vec<u8>,
+        filter: SeekRegionFilter,
+        limit: u32,
+        callback: SeekRegionCallback,
     },
 }
 
@@ -215,13 +245,15 @@ impl fmt::Debug for Msg {
                 ref split_key,
                 ..
             } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
-            Msg::RegionApproximateStat {
-                region_id,
-                ref stat,
-            } => write!(
+            Msg::RegionApproximateSize { region_id, size } => write!(
                 fmt,
-                "Region's approximate stat [region_id: {}, stat: {:?}]",
-                region_id, stat
+                "Region's approximate size [region_id: {}, size: {:?}]",
+                region_id, size
+            ),
+            Msg::RegionApproximateKeys { region_id, keys } => write!(
+                fmt,
+                "Region's approximate keys [region_id: {}, keys: {:?}]",
+                region_id, keys
             ),
             Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             Msg::HalfSplitRegion { ref region_id, .. } => {
@@ -229,6 +261,9 @@ impl fmt::Debug for Msg {
             }
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            Msg::SeekRegion { ref from_key, .. } => {
+                write!(fmt, "Seek Region from_key {:?}", from_key)
+            }
         }
     }
 }
@@ -253,10 +288,15 @@ impl Msg {
         }
     }
 
-    pub fn new_half_split_region(region_id: u64, region_epoch: RegionEpoch) -> Msg {
+    pub fn new_half_split_region(
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        policy: CheckPolicy,
+    ) -> Msg {
         Msg::HalfSplitRegion {
             region_id,
             region_epoch,
+            policy,
         }
     }
 }
@@ -269,7 +309,7 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
     use raftstore::Error;
     use util::transport::SendCh;
 
@@ -324,6 +364,7 @@ mod tests {
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
+        request.set_status_request(StatusRequest::new());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
         match call_command(sendch, request, Duration::from_millis(10)) {
             Err(Error::Timeout(_)) => {}

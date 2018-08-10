@@ -25,6 +25,8 @@ use util::config::{ReadableDuration, ReadableSize};
 pub struct Config {
     // true for high reliability, prevent data loss when power failure.
     pub sync_log: bool,
+    // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+    pub prevote: bool,
     pub raftdb_path: String,
 
     // store capacity. 0 means no limit.
@@ -114,6 +116,9 @@ pub struct Config {
 
     pub cleanup_import_sst_interval: ReadableDuration,
 
+    /// Maximum size of every local read task batch.
+    pub local_read_batch_size: u64,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -129,6 +134,7 @@ impl Default for Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             sync_log: true,
+            prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),
@@ -175,6 +181,7 @@ impl Default for Config {
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
+            local_read_batch_size: 1024,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -303,6 +310,9 @@ impl Config {
             ));
         }
 
+        if self.local_read_batch_size == 0 {
+            return Err(box_err!("local-read-batch-size must be greater than 0"));
+        }
         Ok(())
     }
 }
@@ -382,6 +392,10 @@ mod tests {
         cfg = Config::new();
         cfg.abnormal_leader_missing_duration = ReadableDuration::minutes(2);
         cfg.max_leader_missing_duration = ReadableDuration::minutes(1);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.local_read_batch_size = 0;
         assert!(cfg.validate().is_err());
     }
 }

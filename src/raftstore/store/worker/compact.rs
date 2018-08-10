@@ -15,13 +15,14 @@ use std::collections::VecDeque;
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
+use std::time::Instant;
 
-use rocksdb::{CFHandle, Range, DB};
+use rocksdb::DB;
 use storage::CF_WRITE;
 use util::escape;
-use util::properties::MvccProperties;
 use util::rocksdb;
 use util::rocksdb::compact_range;
+use util::rocksdb::stats::get_range_entries_and_versions;
 use util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -64,7 +65,13 @@ impl Display for Task {
             } => f
                 .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
-                .field("ranges", ranges)
+                .field(
+                    "ranges",
+                    &(
+                        ranges.first().as_ref().map(|k| escape(k)),
+                        ranges.last().as_ref().map(|k| escape(k)),
+                    ),
+                )
                 .field("tombstones_num_threshold", &tombstones_num_threshold)
                 .field(
                     "tombstones_percent_threshold",
@@ -103,6 +110,7 @@ impl Runner {
         end_key: Option<Vec<u8>>,
     ) -> Result<(), Error> {
         let handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
+        let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
             .start_coarse_timer();
@@ -117,6 +125,13 @@ impl Runner {
             1, /* threads */
         );
         compact_range_timer.observe_duration();
+        info!(
+            "compact range ({:?}, {:?}) for cf {:?} finished, takes: {:?}",
+            start,
+            end,
+            cf_name,
+            timer.elapsed()
+        );
         Ok(())
     }
 }
@@ -132,8 +147,6 @@ impl Runnable<Task> for Runner {
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
                     error!("execute compact range for cf {} failed, err {}", &cf, e);
-                } else {
-                    info!("compact range for cf {} finished", &cf);
                 }
             }
             Task::CheckAndCompact {
@@ -181,37 +194,6 @@ fn need_compact(
     let estimate_num_del = num_entires - num_versions;
     estimate_num_del >= tombstones_num_threshold
         && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
-}
-
-fn get_range_entries_and_versions(
-    engine: &DB,
-    cf: &CFHandle,
-    start: &[u8],
-    end: &[u8],
-) -> Option<(u64, u64)> {
-    let range = Range::new(start, end);
-    let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
-        Ok(v) => v,
-        Err(_) => return None,
-    };
-
-    if collection.is_empty() {
-        return None;
-    }
-
-    // Aggregate total MVCC properties and total number entries.
-    let mut props = MvccProperties::new();
-    let mut num_entries = 0;
-    for (_, v) in &*collection {
-        let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-        num_entries += v.num_entries();
-        props.add(&mvcc);
-    }
-
-    Some((num_entries, props.num_versions))
 }
 
 fn collect_ranges_need_compact(
@@ -278,6 +260,7 @@ mod test {
     use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::properties::MvccPropertiesCollectorFactory;
     use util::rocksdb::new_engine;
+    use util::rocksdb::stats::get_range_entries_and_versions;
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
 
     use super::*;
@@ -336,16 +319,14 @@ mod test {
 
     fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
-        let k = MvccKey::from_encoded(data_key(k));
-        let k = k.append_ts(commit_ts);
+        let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
         db.put_cf(cf, k.encoded(), &w.to_bytes()).unwrap();
     }
 
     fn delete(db: &DB, k: &[u8], commit_ts: u64) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
-        let k = MvccKey::from_encoded(data_key(k));
-        let k = k.append_ts(commit_ts);
+        let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
         db.delete_cf(cf, k.encoded()).unwrap();
     }
 

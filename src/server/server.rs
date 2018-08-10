@@ -59,7 +59,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn new(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
@@ -277,7 +277,7 @@ mod tests {
         let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future-worker");
         let storage_read_pool = ReadPool::new(
             "storage-readpool",
             &readpool::Config::default_for_test(),

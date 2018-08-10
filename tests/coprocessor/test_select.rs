@@ -370,7 +370,7 @@ pub struct Store<E: Engine> {
 
 impl<E: Engine> Store<E> {
     fn new(engine: E) -> Self {
-        let pd_worker = FutureWorker::new("test future worker");
+        let pd_worker = FutureWorker::new("test-future–worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || storage::ReadPoolContext::new(pd_worker.scheduler())
         });

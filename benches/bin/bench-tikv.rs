@@ -16,7 +16,6 @@
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(btree_range, collections_bound)]
-#![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
 
 extern crate clap;
 extern crate futures;

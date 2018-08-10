@@ -335,15 +335,15 @@ pub enum Direction {
 }
 
 impl Direction {
-    pub fn is_recv(&self) -> bool {
-        match *self {
+    pub fn is_recv(self) -> bool {
+        match self {
             Direction::Recv | Direction::Both => true,
             Direction::Send => false,
         }
     }
 
-    pub fn is_send(&self) -> bool {
-        match *self {
+    pub fn is_send(self) -> bool {
+        match self {
             Direction::Send | Direction::Both => true,
             Direction::Recv => false,
         }

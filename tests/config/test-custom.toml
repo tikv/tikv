@@ -66,6 +66,7 @@ job = "tikv_1"
 
 [raftstore]
 sync-log = false
+prevote = false
 raftdb-path = "/var"
 capacity = 123
 raft-base-tick-interval = "12s"
@@ -109,11 +110,14 @@ merge-max-log-gap = 3
 merge-check-tick-interval = "11s"
 use-delete-range = true
 cleanup-import-sst-interval = "12m"
+local-read-batch-size = 33
 
 [coprocessor]
 split-region-on-table = true
 region-max-size = "12MB"
 region-split-size = "12MB"
+region-max-keys = 100000
+region-split-keys = 100000
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -130,6 +134,7 @@ stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
 info-log-max-size = "1KB"
 info-log-roll-time = "12s"
+info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
 bytes-per-sync = "1MB"
@@ -305,6 +310,7 @@ stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
 info-log-max-size = "1KB"
 info-log-roll-time = "1s"
+info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"

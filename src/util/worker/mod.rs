@@ -32,13 +32,14 @@ use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{RecvTimeoutError, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use crossbeam_channel::{self, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
+use util::mpsc::{self, Receiver, Sender};
 use util::time::{Instant, SlowTimer};
 use util::timer::Timer;
 
@@ -187,7 +188,7 @@ impl<T> Clone for Scheduler<T> {
 /// Useful for test purpose.
 #[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
-    let (tx, _) = crossbeam_channel::unbounded::<Option<T>>();
+    let (tx, _) = mpsc::unbounded::<Option<T>>();
     Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
 }
 
@@ -220,9 +221,9 @@ impl<S: Into<String>> Builder<S> {
 
     pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = if self.pending_capacity == usize::MAX {
-            crossbeam_channel::unbounded::<Option<T>>()
+            mpsc::unbounded::<Option<T>>()
         } else {
-            crossbeam_channel::bounded::<Option<T>>(self.pending_capacity)
+            mpsc::bounded::<Option<T>>(self.pending_capacity)
         };
 
         Worker {

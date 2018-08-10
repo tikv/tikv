@@ -31,10 +31,11 @@ use kvproto::pdpb::{
     RegionHeartbeatResponse, ResponseHeader,
 };
 use kvproto::pdpb_grpc::PdClient;
-use tokio_timer::Timer;
+use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 use util::security::SecurityManager;
+use util::timer::GLOBAL_TIMER_HANDLE;
 use util::{Either, HandyRwLock};
 
 pub struct Inner {
@@ -92,7 +93,7 @@ impl Stream for HeartbeatReceiver {
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
-    timer: Timer,
+    timer: Handle,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -105,7 +106,7 @@ impl LeaderClient {
     ) -> LeaderClient {
         let (tx, rx) = client.region_heartbeat().unwrap();
         LeaderClient {
-            timer: Timer::default(),
+            timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
                 env,
                 hb_sender: Either::Left(Some(tx)),
@@ -248,7 +249,7 @@ where
             Err(_) => Box::new(
                 self.client
                     .timer
-                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
+                    .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
                     .then(|_| Err(self)),
             ),
         }

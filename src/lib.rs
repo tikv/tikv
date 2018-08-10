@@ -13,7 +13,6 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
-#![feature(proc_macro)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
@@ -23,11 +22,12 @@
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
+#![feature(const_int_ops)]
+#![feature(use_extern_macros)]
 #![recursion_limit = "200"]
-#![cfg_attr(not(feature = "cargo-clippy"), allow(unknown_lints))]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![allow(nonminimal_bool)]
+#![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
 
 extern crate alloc;
 extern crate backtrace;
@@ -35,7 +35,10 @@ extern crate backtrace;
 extern crate bitflags;
 extern crate byteorder;
 extern crate chrono;
+extern crate chrono_tz;
 extern crate crc;
+extern crate crossbeam;
+#[macro_use]
 extern crate crossbeam_channel;
 #[macro_use]
 extern crate fail;
@@ -54,6 +57,7 @@ extern crate libc;
 extern crate log;
 extern crate mio;
 extern crate murmur3;
+extern crate num;
 #[macro_use]
 extern crate prometheus;
 extern crate prometheus_static_metric;
@@ -68,7 +72,19 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[macro_use(slog_o, slog_kv)]
+#[cfg_attr(not(test), macro_use(slog_o, slog_kv))]
+#[cfg_attr(
+    test,
+    macro_use(
+        slog_o,
+        slog_kv,
+        slog_crit,
+        slog_log,
+        slog_record,
+        slog_b,
+        slog_record_static
+    )
+)]
 extern crate slog;
 extern crate slog_async;
 extern crate slog_scope;
@@ -89,6 +105,8 @@ extern crate url;
 extern crate utime;
 extern crate uuid;
 extern crate zipf;
+#[macro_use]
+extern crate derive_more;
 
 #[macro_use]
 pub mod util;

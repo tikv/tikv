@@ -23,7 +23,9 @@ use storage::types::Key;
 use storage::CF_WRITE;
 use util::escape;
 
-use super::super::{Coprocessor, ObserverContext, Result, SplitCheckObserver, SplitChecker};
+use super::super::{
+    Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
+};
 use super::Host;
 
 #[derive(Default)]
@@ -36,12 +38,12 @@ impl SplitChecker for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], _: u64) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
         if self.split_key.is_some() {
             return true;
         }
 
-        let current_encoded_key = keys::origin_key(key);
+        let current_encoded_key = keys::origin_key(entry.key());
 
         let split_key = if self.first_encoded_table_prefix.is_some() {
             if !is_same_table(
@@ -181,7 +183,7 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
     if let Ok(raw_key) = Key::from_encoded(encoded_key.to_vec()).raw() {
         table_codec::extract_table_prefix(&raw_key)
-            .map(|k| Key::from_raw(k).encoded().to_vec())
+            .map(|k| Key::from_raw(k).take_encoded())
             .ok()
     } else {
         None
@@ -210,6 +212,7 @@ mod test {
     use std::sync::Arc;
 
     use kvproto::metapb::Peer;
+    use kvproto::pdpb::CheckPolicy;
     use rocksdb::Writable;
     use tempdir::TempDir;
 
@@ -262,12 +265,12 @@ mod test {
             for (start_id, end_id, want) in cases {
                 region.set_start_key(
                     start_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 region.set_end_key(
                     end_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).encoded().to_vec())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
@@ -310,7 +313,9 @@ mod test {
         // Try to "disable" size split.
         cfg.region_max_size = ReadableSize::gb(2);
         cfg.region_split_size = ReadableSize::gb(1);
-
+        // Try to "disable" keys split
+        cfg.region_max_keys = 2000000000;
+        cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(cfg, sch);
         let mut runnable =
@@ -321,7 +326,7 @@ mod test {
             for (encoded_start_key, encoded_end_key, table_id) in cases {
                 region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
                 region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
-                runnable.run(SplitCheckTask::new(region.clone(), true));
+                runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
 
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
@@ -342,7 +347,7 @@ mod test {
 
         let gen_encoded_table_prefix = |table_id| {
             let key = Key::from_raw(&gen_table_prefix(table_id));
-            key.encoded().to_vec()
+            key.take_encoded()
         };
 
         // arbitrary padding.

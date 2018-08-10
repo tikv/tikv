@@ -35,7 +35,7 @@ use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
 use tikv::util::transport::SendCh;
-use tikv::util::worker::FutureWorker;
+use tikv::util::worker::{FutureWorker, Worker};
 use tikv::util::HandyRwLock;
 
 pub struct ChannelTransportCore {
@@ -164,6 +164,10 @@ impl Simulator for NodeCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
         let pd_worker = FutureWorker::new("test-pd-worker");
 
+        // Create localreader.
+        let local_reader = Worker::new("test-local-reader");
+        let local_ch = local_reader.scheduler();
+
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
             &mut event_loop,
@@ -190,7 +194,7 @@ impl Simulator for NodeCluster {
         let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
         let importer = {
-            let dir = Path::new(engines.kv_engine.path()).join("import-sst");
+            let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(SSTImporter::new(dir).unwrap())
         };
 
@@ -201,12 +205,14 @@ impl Simulator for NodeCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            local_reader,
             coprocessor_host,
             importer,
             None,
         ).unwrap();
         assert!(
-            Arc::clone(&engines.kv_engine)
+            engines
+                .kv
                 .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
                 .unwrap()
                 .is_none()
@@ -225,7 +231,8 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone());
+        let router =
+            ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone(), local_ch);
         self.trans
             .wl()
             .routers

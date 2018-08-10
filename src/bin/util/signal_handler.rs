@@ -34,8 +34,8 @@ mod imp {
                     // Use SIGUSR1 to log metrics.
                     info!("{}", metrics::dump());
                     if let Some(ref engines) = engines {
-                        info!("{:?}", rocksdb_stats::dump(&engines.kv_engine));
-                        info!("{:?}", rocksdb_stats::dump(&engines.raft_engine));
+                        info!("{:?}", rocksdb_stats::dump(&engines.kv));
+                        info!("{:?}", rocksdb_stats::dump(&engines.raft));
                     }
                 }
                 SIGUSR2 => profiling::dump_prof(None),

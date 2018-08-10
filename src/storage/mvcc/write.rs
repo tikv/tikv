@@ -50,8 +50,8 @@ impl WriteType {
         }
     }
 
-    fn to_u8(&self) -> u8 {
-        match *self {
+    fn to_u8(self) -> u8 {
+        match self {
             WriteType::Put => FLAG_PUT,
             WriteType::Delete => FLAG_DELETE,
             WriteType::Lock => FLAG_LOCK,

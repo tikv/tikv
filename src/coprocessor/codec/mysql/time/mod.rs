@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,20 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::WriteBytesExt;
+mod extension;
+mod tz;
+mod weekmode;
+
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::{mem, str};
 
-use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Timelike, Utc, Weekday};
+use byteorder::WriteBytesExt;
+use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
-use super::super::{Error, Result, TEN_POW};
-use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::mysql::{self, check_fsp, parse_frac, types};
 use util::codec::number::{self, NumberEncoder};
 use util::codec::BytesSlice;
+
+use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
+use coprocessor::codec::mysql::{self, Decimal};
+use coprocessor::codec::{Error, Result, TEN_POW};
+
+use self::extension::*;
+use self::weekmode::WeekMode;
+
+pub use self::tz::Tz;
+
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
@@ -50,209 +60,20 @@ const MONTH_NAMES_ABBR: &[&str] = &[
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-bitflags! {
-    pub struct WeekMode: u32 {
-        const BEHAVIOR_MONDAY_FIRST  = 0b00000001;
-        const BEHAVIOR_YEAR          = 0b00000010;
-        const BEHAVIOR_FIRST_WEEKDAY = 0b00000100;
-    }
-}
-
-impl WeekMode {
-    pub fn to_normalized(self) -> WeekMode {
-        let mut mode = self;
-        if !mode.contains(WeekMode::BEHAVIOR_MONDAY_FIRST) {
-            mode ^= WeekMode::BEHAVIOR_FIRST_WEEKDAY;
-        }
-        mode
-    }
-}
-
-pub trait WeekdayExtension {
-    fn name(&self) -> &'static str;
-    fn name_abbr(&self) -> &'static str;
-}
-
-impl WeekdayExtension for Weekday {
-    fn name(&self) -> &'static str {
-        match *self {
-            Weekday::Mon => "Monday",
-            Weekday::Tue => "Tuesday",
-            Weekday::Wed => "Wednesday",
-            Weekday::Thu => "Thursday",
-            Weekday::Fri => "Friday",
-            Weekday::Sat => "Saturday",
-            Weekday::Sun => "Sunday",
-        }
-    }
-
-    fn name_abbr(&self) -> &'static str {
-        match *self {
-            Weekday::Mon => "Mon",
-            Weekday::Tue => "Tue",
-            Weekday::Wed => "Wed",
-            Weekday::Thu => "Thu",
-            Weekday::Fri => "Fri",
-            Weekday::Sat => "Sat",
-            Weekday::Sun => "Sun",
-        }
-    }
-}
-
-pub trait DateTimeExtension {
-    fn days(&self) -> i32;
-    fn calc_year_week(
-        &self,
-        monday_first: bool,
-        week_year: bool,
-        first_weekday: bool,
-    ) -> (i32, i32);
-    fn calc_year_week_by_week_mode(&self, week_mode: WeekMode) -> (i32, i32);
-    fn week(&self, mode: WeekMode) -> i32;
-    fn year_week(&self, mode: WeekMode) -> (i32, i32);
-}
-
-impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
-    /// returns the day of year starting from 1.
-    /// implements TiDB YearDay().
-    fn days(&self) -> i32 {
-        if self.month() == 0 || self.day() == 0 {
-            (0)
-        } else {
-            self.ordinal() as i32
-        }
-    }
-
-    /// returns the week of year and year. should not be called directly.
-    /// when monday_first == true, Monday is considered as the first day in the week,
-    ///         otherwise Sunday.
-    /// when week_year == true, week is from 1 to 53, otherwise from 0 to 53.
-    /// when first_weekday == true, the week that contains the first 'first-day-of-week' is week 1,
-    ///         otherwise weeks are numbered according to ISO 8601:1988.
-    fn calc_year_week(
-        &self,
-        monday_first: bool,
-        mut week_year: bool,
-        first_weekday: bool,
-    ) -> (i32, i32) {
-        let week: i32;
-        let mut year = self.year();
-
-        let daynr = calc_day_number(self.year(), self.month() as i32, self.day() as i32);
-        let mut first_daynr = calc_day_number(self.year(), 1, 1);
-        let mut weekday = calc_weekday(first_daynr, !monday_first);
-        let mut days: i32;
-
-        if self.month() == 1 && (self.day() as i32) <= 7 - weekday {
-            if !week_year && ((first_weekday && weekday != 0) || (!first_weekday && weekday >= 4)) {
-                return (year, 0);
-            }
-            week_year = true;
-            year -= 1;
-            days = calc_days_in_year(year);
-            first_daynr -= days;
-            weekday = (weekday + 53 * 7 - days) % 7;
-        }
-
-        if (first_weekday && weekday != 0) || (!first_weekday && weekday >= 4) {
-            days = daynr - (first_daynr + 7 - weekday);
-        } else {
-            days = daynr - (first_daynr - weekday);
-        }
-
-        if week_year && days >= 52 * 7 {
-            weekday = (weekday + calc_days_in_year(year)) % 7;
-            if (!first_weekday && weekday < 4) || (first_weekday && weekday == 0) {
-                year += 1;
-                return (year, 1);
-            }
-        }
-        week = days / 7 + 1;
-        (year, week)
-    }
-
-    /// returns the week of year according to week mode. should not be called directly.
-    /// implements TiDB calcWeek()
-    fn calc_year_week_by_week_mode(&self, week_mode: WeekMode) -> (i32, i32) {
-        let mode = week_mode.to_normalized();
-        let monday_first = mode.contains(WeekMode::BEHAVIOR_MONDAY_FIRST);
-        let week_year = mode.contains(WeekMode::BEHAVIOR_YEAR);
-        let first_weekday = mode.contains(WeekMode::BEHAVIOR_FIRST_WEEKDAY);
-        self.calc_year_week(monday_first, week_year, first_weekday)
-    }
-
-    /// returns the week of year.
-    /// implementes TiDB Week().
-    fn week(&self, mode: WeekMode) -> i32 {
-        if self.month() == 0 || self.day() == 0 {
-            return 0;
-        }
-        let (_, week) = self.calc_year_week_by_week_mode(mode);
-        week
-    }
-
-    /// returns the week of year and year.
-    /// implements TiDB YearWeek().
-    fn year_week(&self, mode: WeekMode) -> (i32, i32) {
-        self.calc_year_week_by_week_mode(mode | WeekMode::BEHAVIOR_YEAR)
-    }
-}
-
-fn abbr_day_of_month(day: i32) -> &'static str {
-    match day {
-        1 | 21 | 31 => "st",
-        2 | 22 => "nd",
-        3 | 23 => "rd",
-        _ => "th",
-    }
-}
-
-// calculates days since 0000-00-00.
-fn calc_day_number(mut year: i32, month: i32, day: i32) -> i32 {
-    if year == 0 && month == 0 {
-        return 0;
-    }
-    let mut delsum = 365 * year + 31 * (month - 1) + day;
-    if month <= 2 {
-        year -= 1;
-    } else {
-        delsum -= (month * 4 + 23) / 10;
-    }
-    let temp = ((year / 100 + 1) * 3) / 4;
-    delsum + year / 4 - temp
-}
-
-/// calculates days in one year, it works with 0 <= year <= 99.
-fn calc_days_in_year(year: i32) -> i32 {
-    if (year & 3) == 0 && (year % 100 != 0 || (year % 400 == 0 && (year != 0))) {
-        return 366;
-    }
-    365
-}
-
-/// calculates weekday from daynr, returns 0 for Monday, 1 for Tuesday ...
-fn calc_weekday(mut daynr: i32, sunday_first_day: bool) -> i32 {
-    daynr += 5;
-    if sunday_first_day {
-        daynr += 1;
-    }
-    daynr % 7
-}
-
 #[inline]
-fn zero_time(tz: &FixedOffset) -> DateTime<FixedOffset> {
+fn zero_time(tz: Tz) -> DateTime<Tz> {
     tz.timestamp(ZERO_TIMESTAMP, 0)
 }
 
 #[inline]
-fn zero_datetime(tz: &FixedOffset) -> Time {
-    Time::new(zero_time(tz), types::DATETIME, mysql::DEFAULT_FSP).unwrap()
+fn zero_datetime(tz: Tz) -> Time {
+    Time::new(zero_time(tz), mysql::types::DATETIME, mysql::DEFAULT_FSP).unwrap()
 }
 
-#[allow(too_many_arguments)]
+#[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
 #[inline]
 fn ymd_hms_nanos<T: TimeZone>(
-    tz: &T,
+    tz: T,
     year: i32,
     month: u32,
     day: u32,
@@ -317,17 +138,17 @@ fn split_ymd_hms(mut s: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
 #[derive(Clone, Debug)]
 pub struct Time {
     // TimeZone should be loaded from request context.
-    time: DateTime<FixedOffset>,
+    time: DateTime<Tz>,
     tp: u8,
     fsp: u8,
 }
 
 impl Time {
-    pub fn new(time: DateTime<FixedOffset>, tp: u8, fsp: i8) -> Result<Time> {
+    pub fn new(time: DateTime<Tz>, tp: u8, fsp: i8) -> Result<Time> {
         Ok(Time {
             time,
             tp,
-            fsp: check_fsp(fsp)?,
+            fsp: mysql::check_fsp(fsp)?,
         })
     }
 
@@ -336,11 +157,11 @@ impl Time {
     }
 
     pub fn set_tp(&mut self, tp: u8) -> Result<()> {
-        if self.tp != tp && tp == types::DATE {
+        if self.tp != tp && tp == mysql::types::DATE {
             // Truncate hh:mm::ss part if the type is Date
-            self.time = self.time.date().and_hms(0, 0, 0);
+            self.time = self.time.date().and_hms(0, 0, 0); // TODO: might panic!
         }
-        if self.tp != tp && tp == types::TIMESTAMP {
+        if self.tp != tp && tp == mysql::types::TIMESTAMP {
             return Err(box_err!("can not convert datetime/date to timestamp"));
         }
         self.tp = tp;
@@ -364,7 +185,7 @@ impl Time {
     }
 
     fn to_numeric_str(&self) -> String {
-        if self.tp == types::DATE {
+        if self.tp == mysql::types::DATE {
             // TODO: pure calculation should be enough.
             format!("{}", self.time.format("%Y%m%d"))
         } else {
@@ -409,11 +230,11 @@ impl Time {
     }
 
     pub fn parse_utc_datetime(s: &str, fsp: i8) -> Result<Time> {
-        Time::parse_datetime(s, fsp, &FixedOffset::east(0))
+        Time::parse_datetime(s, fsp, Tz::utc())
     }
 
-    pub fn parse_datetime(s: &str, fsp: i8, tz: &FixedOffset) -> Result<Time> {
-        let fsp = check_fsp(fsp)?;
+    pub fn parse_datetime(s: &str, fsp: i8, tz: Tz) -> Result<Time> {
+        let fsp = mysql::check_fsp(fsp)?;
         let mut frac_str = "";
         let mut need_adjust = false;
         let parts = Time::parse_datetime_format(s);
@@ -472,7 +293,7 @@ impl Time {
             }
         }
 
-        let frac = parse_frac(frac_str.as_bytes(), fsp)?;
+        let frac = mysql::parse_frac(frac_str.as_bytes(), fsp)?;
         if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
@@ -490,13 +311,13 @@ impl Time {
             sec,
             frac * TEN_POW[9 - fsp as usize],
         )?;
-        Time::new(time, types::DATETIME as u8, fsp as i8)
+        Time::new(time, mysql::types::DATETIME as u8, fsp as i8)
     }
 
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
     /// be a UTC time; otherwise the packed time should be in the same timezone as `tz`
     /// specified.
-    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: &FixedOffset) -> Result<Time> {
+    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: Tz) -> Result<Time> {
         if u == 0 {
             return Time::new(zero_time(tz), tp, fsp);
         }
@@ -512,8 +333,8 @@ impl Time {
         let minute = ((hms >> 6) & ((1 << 6) - 1)) as u32;
         let hour = (hms >> 12) as u32;
         let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
-        let t = if tp == types::TIMESTAMP {
-            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanosec)?;
+        let t = if tp == mysql::types::TIMESTAMP {
+            let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanosec)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec)?
@@ -521,12 +342,12 @@ impl Time {
         Time::new(t, tp, fsp as i8)
     }
 
-    pub fn from_duration(tz: &FixedOffset, tp: u8, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: Tz, tp: u8, d: &MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
-            .with_timezone(tz)
+            .with_timezone(&tz)
             .date()
-            .and_hms(0, 0, 0)
+            .and_hms(0, 0, 0) // TODO: might panic!
             .checked_add_signed(dur);
         if t.is_none() {
             return Err(box_err!("parse from duration {} overflows", d));
@@ -539,8 +360,8 @@ impl Time {
                 t
             ));
         }
-        if tp == types::DATE {
-            let t = t.date().and_hms(0, 0, 0);
+        if tp == mysql::types::DATE {
+            let t = t.date().and_hms(0, 0, 0); // TODO: might panic!
             Time::new(t, tp, d.fsp as i8)
         } else {
             Time::new(t, tp, d.fsp as i8)
@@ -563,7 +384,7 @@ impl Time {
         if self.is_zero() {
             return 0;
         }
-        let t = if self.tp == types::TIMESTAMP {
+        let t = if self.tp == mysql::types::TIMESTAMP {
             self.time.naive_utc()
         } else {
             self.time.naive_local()
@@ -576,11 +397,11 @@ impl Time {
     }
 
     pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
-        if self.tp == types::DATE || self.is_zero() {
+        if self.tp == mysql::types::DATE || self.is_zero() {
             // date type has no fsp
             return Ok(());
         }
-        let fsp = check_fsp(fsp)?;
+        let fsp = mysql::check_fsp(fsp)?;
         if fsp == self.fsp {
             return Ok(());
         }
@@ -623,7 +444,7 @@ impl Time {
             'D' => Ok(format!(
                 "{}{}",
                 self.time.day(),
-                abbr_day_of_month(self.time.day() as i32)
+                self.time.abbr_day_of_month()
             )),
             'd' => Ok(format!("{:02}", self.time.day())),
             'e' => Ok(format!("{}", self.time.day())),
@@ -781,14 +602,14 @@ impl Ord for Time {
 impl Display for Time {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         if self.is_zero() {
-            if self.tp == types::DATE {
+            if self.tp == mysql::types::DATE {
                 return f.write_str(ZERO_DATE_STR);
             }
 
             return f.write_str(ZERO_DATETIME_STR);
         }
 
-        if self.tp == types::DATE {
+        if self.tp == mysql::types::DATE {
             if self.is_zero() {
                 return f.write_str(ZERO_DATE_STR);
             } else {
@@ -855,7 +676,7 @@ impl Time {
             return Err(Error::unexpected_eof());
         };
         *data = &data[2..];
-        let tz = FixedOffset::east(0); // TODO
+        let tz = Tz::utc(); // TODO
         if year == 0
             && month == 0
             && day == 0
@@ -864,14 +685,14 @@ impl Time {
             && second == 0
             && nanoseconds == 0
         {
-            return Ok(zero_datetime(&tz));
+            return Ok(zero_datetime(tz));
         }
-        let t = if tp == types::TIMESTAMP {
-            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
+        let t = if tp == mysql::types::TIMESTAMP {
+            let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanoseconds)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(
-                &FixedOffset::east(0),
+                Tz::utc(),
                 year,
                 month,
                 day,
@@ -891,12 +712,34 @@ mod test {
 
     use std::cmp::Ordering;
 
-    use chrono::{Duration, FixedOffset};
+    use chrono::{Duration, Local};
 
-    use coprocessor::codec::mysql::{types, Duration as MyDuration, MAX_FSP, UN_SPECIFIED_FSP};
+    use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UN_SPECIFIED_FSP};
 
-    const MIN_OFFSET: i32 = -60 * 24 + 1;
-    const MAX_OFFSET: i32 = 60 * 24;
+    fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
+        const MIN_OFFSET: i64 = -60 * 24 + 1;
+        const MAX_OFFSET: i64 = 60 * 24;
+
+        // test some offset
+        for mut offset in MIN_OFFSET..MAX_OFFSET {
+            offset *= 60;
+            let tz = Tz::from_offset(offset).unwrap();
+            f(tz, offset)
+        }
+
+        // test some time zone name without DST
+        let tz_table = vec![
+            ("Etc/GMT+11", -39600),
+            ("Etc/GMT0", 0),
+            ("Etc/GMT-5", 18000),
+            ("UTC", 0),
+            ("Universal", 0),
+        ];
+        for (name, offset) in tz_table {
+            let tz = Tz::from_tz_name(name).unwrap();
+            f(tz, offset)
+        }
+    }
 
     #[test]
     fn test_parse_datetime() {
@@ -947,21 +790,19 @@ mod test {
             let utc_t = Time::parse_utc_datetime(input, fsp).unwrap();
             assert_eq!(format!("{}", utc_t), exp);
 
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = FixedOffset::east(offset);
-                let t = Time::parse_datetime(input, fsp, &tz).unwrap();
+            for_each_tz(move |tz, offset| {
+                let t = Time::parse_datetime(input, fsp, tz).unwrap();
                 if utc_t.is_zero() {
                     assert_eq!(t, utc_t);
                 } else {
                     let exp_t = Time::new(
-                        utc_t.time - Duration::seconds(i64::from(offset)),
+                        utc_t.time - Duration::seconds(offset),
                         utc_t.tp,
                         utc_t.fsp as i8,
                     ).unwrap();
                     assert_eq!(exp_t, t);
                 }
-            }
+            });
         }
 
         let fail_tbl = vec![
@@ -974,8 +815,98 @@ mod test {
         ];
 
         for t in fail_tbl {
-            let tz = FixedOffset::east(0);
-            assert!(Time::parse_datetime(t, 0, &tz).is_err(), t);
+            let tz = Tz::utc();
+            assert!(Time::parse_datetime(t, 0, tz).is_err(), t);
+        }
+    }
+
+    #[test]
+    fn test_parse_datetime_dst() {
+        // Ambiguous date times are commented out.
+        // See https://github.com/chronotope/chrono-tz/issues/23
+
+        let ok_tables = vec![
+            ("Asia/Shanghai", "1988-04-09 23:59:59", 576604799),
+            ("Asia/Shanghai", "1988-04-10 01:00:00", 576604800),
+            ("Asia/Shanghai", "1988-09-11 00:00:00", 589910400),
+            ("Asia/Shanghai", "1988-09-11 00:00:01", 589910401),
+            // ("Asia/Shanghai", "1988-09-10 23:59:59", 589906799), // ambiguous
+            // ("Asia/Shanghai", "1988-09-10 23:00:00", 589903200), // ambiguous
+            ("Asia/Shanghai", "1988-09-10 22:59:59", 589903199),
+            ("Asia/Shanghai", "2015-01-02 23:59:59", 1420214399),
+            ("America/Los_Angeles", "1919-03-30 01:59:59", -1601820001),
+            ("America/Los_Angeles", "1919-03-30 03:00:00", -1601820000),
+            ("America/Los_Angeles", "2011-03-13 01:59:59", 1300010399),
+            ("America/Los_Angeles", "2011-03-13 03:00:00", 1300010400),
+            // ("America/Los_Angeles", "2011-11-06 01:59:59", 1320569999), // ambiguous
+            ("America/Los_Angeles", "2011-11-06 02:00:00", 1320573600),
+            ("America/Toronto", "2013-11-18 11:55:00", 1384793700),
+        ];
+
+        for (tz_name, time_str, utc_timestamp) in ok_tables {
+            let tz = Tz::from_tz_name(tz_name).unwrap();
+            let t = Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).unwrap();
+            assert_eq!(t.time.timestamp(), utc_timestamp);
+        }
+
+        // TODO: When calling `UNIX_TIMESTAMP()` in MySQL, these date time will not fail.
+        // However it will fail when inserting into a TIMESTAMP field.
+        let fail_tables = vec![
+            ("Asia/Shanghai", "1988-04-10"),
+            ("Asia/Shanghai", "1988-04-10 00:00:00"),
+            ("Asia/Shanghai", "1988-04-10 00:59:59"),
+            ("America/Los_Angeles", "1919-03-30 02:00:00"),
+            ("America/Los_Angeles", "1919-03-30 02:59:59"),
+            ("America/Los_Angeles", "2011-03-13 02:00:00"),
+            ("America/Los_Angeles", "2011-03-13 02:59:59"),
+        ];
+
+        for (tz_name, time_str) in fail_tables {
+            let tz = Tz::from_tz_name(tz_name).unwrap();
+            assert!(Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).is_err());
+        }
+    }
+
+    #[test]
+    #[cfg_attr(feature = "cargo-clippy", allow(zero_prefixed_literal))]
+    fn test_parse_datetime_system_timezone() {
+        // Basically, we check whether the parse result is the same when construcing using local.
+        let tables = vec![
+            (1988, 04, 09, 23, 59, 59),
+            (1988, 04, 10, 01, 00, 00),
+            (1988, 09, 11, 00, 00, 00),
+            (1988, 09, 11, 00, 00, 01),
+            (1988, 09, 10, 23, 59, 59),
+            (1988, 09, 10, 23, 00, 00),
+            (1988, 09, 10, 22, 59, 59),
+            (2015, 01, 02, 23, 59, 59),
+            (1919, 03, 30, 01, 59, 59),
+            (1919, 03, 30, 03, 00, 00),
+            (1988, 04, 10, 00, 00, 00),
+            (1988, 04, 10, 00, 59, 59),
+        ];
+        // These are supposed to be local time zones
+        let local_tzs = vec![
+            Tz::from_tz_name("SYSTEM").unwrap(),
+            Tz::from_tz_name("system").unwrap(),
+            Tz::from_tz_name("System").unwrap(),
+            Tz::local(),
+        ];
+        for (year, month, day, hour, minute, second) in tables {
+            for tz in &local_tzs {
+                // Some Date time listed in the test case may be invalid in the current time zone,
+                // so we need to check it first.
+                let local_time = Local
+                    .ymd_opt(year, month, day)
+                    .and_hms_opt(hour, minute, second)
+                    .earliest();
+                if let Some(local_time) = local_time {
+                    let time_str =
+                        format!("{}-{}-{} {}:{}:{}", year, month, day, hour, minute, second);
+                    let t = Time::parse_datetime(&time_str, UN_SPECIFIED_FSP, *tz).unwrap();
+                    assert_eq!(t.time, local_time);
+                }
+            }
         }
     }
 
@@ -991,24 +922,22 @@ mod test {
             ("2000-06-01 00:00:00.999999", MAX_FSP),
         ];
         for (s, fsp) in cases {
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = FixedOffset::east(offset);
-                let t = Time::parse_datetime(s, fsp, &tz).unwrap();
+            for_each_tz(move |tz, offset| {
+                let t = Time::parse_datetime(s, fsp, tz).unwrap();
                 let packed = t.to_packed_u64();
                 let reverted_datetime =
-                    Time::from_packed_u64(packed, types::DATETIME, fsp, &tz).unwrap();
+                    Time::from_packed_u64(packed, mysql::types::DATETIME, fsp, tz).unwrap();
                 assert_eq!(reverted_datetime, t);
                 assert_eq!(reverted_datetime.to_packed_u64(), packed);
 
                 let reverted_timestamp =
-                    Time::from_packed_u64(packed, types::TIMESTAMP, fsp, &tz).unwrap();
+                    Time::from_packed_u64(packed, mysql::types::TIMESTAMP, fsp, tz).unwrap();
                 assert_eq!(
                     reverted_timestamp.time,
-                    reverted_datetime.time + Duration::seconds(i64::from(offset))
+                    reverted_datetime.time + Duration::seconds(offset)
                 );
                 assert_eq!(reverted_timestamp.to_packed_u64(), packed);
-            }
+            })
         }
     }
 
@@ -1052,18 +981,16 @@ mod test {
         ];
 
         for (t_str, fsp, datetime_dec, date_dec) in cases {
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = FixedOffset::east(offset);
-                let mut t = Time::parse_datetime(t_str, fsp, &tz).unwrap();
+            for_each_tz(move |tz, _offset| {
+                let mut t = Time::parse_datetime(t_str, fsp, tz).unwrap();
                 let mut res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, datetime_dec);
 
-                t = Time::parse_datetime(t_str, 0, &tz).unwrap();
-                t.tp = types::DATE;
+                t = Time::parse_datetime(t_str, 0, tz).unwrap();
+                t.tp = mysql::types::DATE;
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
-            }
+            });
         }
     }
 
@@ -1094,13 +1021,11 @@ mod test {
         ];
 
         for (l, r, exp) in cases {
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = FixedOffset::east(offset);
-                let l_t = Time::parse_datetime(l, MAX_FSP, &tz).unwrap();
-                let r_t = Time::parse_datetime(r, MAX_FSP, &tz).unwrap();
+            for_each_tz(move |tz, _offset| {
+                let l_t = Time::parse_datetime(l, MAX_FSP, tz).unwrap();
+                let r_t = Time::parse_datetime(r, MAX_FSP, tz).unwrap();
                 assert_eq!(exp, l_t.cmp(&r_t));
-            }
+            });
         }
     }
 
@@ -1208,18 +1133,16 @@ mod test {
                 input, exp, utc_t, expect
             );
 
-            for mut offset in MIN_OFFSET..MAX_OFFSET {
-                offset *= 60;
-                let tz = FixedOffset::east(offset);
-                let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, &tz).unwrap();
+            for_each_tz(move |tz, offset| {
+                let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, tz).unwrap();
                 t.round_frac(fsp).unwrap();
-                let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, &tz).unwrap();
+                let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, tz).unwrap();
                 assert_eq!(
                     t, expect,
                     "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
                     offset, input, exp, t, expect
                 );
-            }
+            });
         }
     }
 
@@ -1232,11 +1155,11 @@ mod test {
 
         for (s, exp) in cases {
             let mut res = Time::parse_utc_datetime(s, UN_SPECIFIED_FSP).unwrap();
-            res.set_tp(types::DATE).unwrap();
-            res.set_tp(types::DATETIME).unwrap();
+            res.set_tp(mysql::types::DATE).unwrap();
+            res.set_tp(mysql::types::DATETIME).unwrap();
             let ep = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
             assert_eq!(res, ep);
-            let res = res.set_tp(types::TIMESTAMP);
+            let res = res.set_tp(mysql::types::TIMESTAMP);
             assert!(res.is_err());
         }
     }
@@ -1244,10 +1167,10 @@ mod test {
     #[test]
     fn test_from_duration() {
         let cases = vec![("11:30:45.123456"), ("-35:30:46")];
-        let tz = FixedOffset::east(0);
+        let tz = Tz::utc();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(&tz, types::DATETIME, &d).unwrap();
+            let get = Time::from_duration(tz, mysql::types::DATETIME, &d).unwrap();
             let get_today = get
                 .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))

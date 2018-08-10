@@ -197,6 +197,8 @@ fn test_node_merge_restart() {
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
+    let peer_on_store1 = find_peer(&left, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), peer_on_store1);
     cluster.must_put(b"k11", b"v11");
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
     let skip_destroy_fp = "raft_store_skip_destroy_peer";

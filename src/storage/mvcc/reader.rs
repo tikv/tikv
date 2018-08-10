@@ -94,7 +94,7 @@ impl<S: Snapshot> MvccReader<S> {
             self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
         }
 
-        let k = key.append_ts(ts);
+        let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
             match cursor.get(&k, &mut self.statistics.data)? {
                 None => panic!("key {} not found, ts {}", key, ts),
@@ -109,8 +109,6 @@ impl<S: Snapshot> MvccReader<S> {
         };
 
         self.statistics.data.processed += 1;
-        self.statistics.data.flow_stats.read_bytes += k.raw().unwrap_or_default().len() + res.len();
-        self.statistics.data.flow_stats.read_keys += 1;
         Ok(res)
     }
 
@@ -184,23 +182,21 @@ impl<S: Snapshot> MvccReader<S> {
 
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
-            cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek_for_prev(&key.clone().append_ts(ts), &mut self.statistics.write)?
         } else {
-            cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write)?
+            cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?
         };
         if !ok {
             return Ok(None);
         }
-        let write_key = Key::from_encoded(cursor.key().to_vec());
+        let write_key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec());
         let commit_ts = write_key.decode_ts()?;
         let k = write_key.truncate_ts()?;
         if &k != key {
             return Ok(None);
         }
-        let write = Write::parse(cursor.value())?;
+        let write = Write::parse(cursor.value(&mut self.statistics.write))?;
         self.statistics.write.processed += 1;
-        self.statistics.write.flow_stats.read_bytes += cursor.key().len() + cursor.value().len();
-        self.statistics.write.flow_stats.read_keys += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -271,6 +267,13 @@ impl<S: Snapshot> MvccReader<S> {
             if write.start_ts == start_ts {
                 return Ok(Some((commit_ts, write.write_type)));
             }
+
+            // If we reach a commit version whose type is not Rollback and start ts is
+            // larger than the given start ts, stop searching.
+            if write.write_type != WriteType::Rollback && write.start_ts > start_ts {
+                break;
+            }
+
             seek_ts = commit_ts + 1;
         }
         Ok(None)
@@ -325,9 +328,10 @@ impl<S: Snapshot> MvccReader<S> {
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
         while ok {
-            if Write::parse(cursor.value())?.start_ts == ts {
+            if Write::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
                 return Ok(Some(
-                    Key::from_encoded(cursor.key().to_vec()).truncate_ts()?,
+                    Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
+                        .truncate_ts()?,
                 ));
             }
             ok = cursor.next(&mut self.statistics.write);
@@ -349,7 +353,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if w_cur.near_seek(&key, &mut self.statistics.write)? {
-                        w_key = Some(w_cur.key());
+                        w_key = Some(w_cur.key(&mut self.statistics.write));
                     } else {
                         w_key = None;
                         write_valid = false;
@@ -357,7 +361,7 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 if lock_valid {
                     if l_cur.near_seek(&key, &mut self.statistics.lock)? {
-                        l_key = Some(l_cur.key());
+                        l_key = Some(l_cur.key(&mut self.statistics.lock));
                     } else {
                         l_key = None;
                         lock_valid = false;
@@ -394,7 +398,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
                     if w_cur.near_reverse_seek(&key, &mut self.statistics.write)? {
-                        w_key = Some(w_cur.key());
+                        w_key = Some(w_cur.key(&mut self.statistics.write));
                     } else {
                         w_key = None;
                         write_valid = false;
@@ -402,7 +406,7 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 if lock_valid {
                     if l_cur.near_reverse_seek(&key, &mut self.statistics.lock)? {
-                        l_key = Some(l_cur.key());
+                        l_key = Some(l_cur.key(&mut self.statistics.lock));
                     } else {
                         l_key = None;
                         lock_valid = false;
@@ -438,10 +442,19 @@ impl<S: Snapshot> MvccReader<S> {
         // Check lock.
         match self.isolation_level {
             IsolationLevel::SI => {
-                let l_cur = self.lock_cursor.as_ref().unwrap();
-                if l_cur.valid() && l_cur.key() == user_key.encoded().as_slice() {
-                    self.statistics.lock.processed += 1;
-                    self.check_lock_impl(user_key, ts, Lock::parse(l_cur.value())?)?;
+                let lock = {
+                    let l_cur = self.lock_cursor.as_mut().unwrap();
+                    if l_cur.valid()
+                        && l_cur.key(&mut self.statistics.lock) == user_key.encoded().as_slice()
+                    {
+                        self.statistics.lock.processed += 1;
+                        Some(Lock::parse(l_cur.value(&mut self.statistics.lock))?)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(lock) = lock {
+                    self.check_lock_impl(user_key, ts, lock)?;
                 }
             }
             IsolationLevel::RC => {}
@@ -458,9 +471,9 @@ impl<S: Snapshot> MvccReader<S> {
 
             let mut write = {
                 let (commit_ts, key) = {
-                    let w_cur = self.write_cursor.as_ref().unwrap();
-                    last_handled_key = Some(w_cur.key().to_vec());
-                    let w_key = Key::from_encoded(w_cur.key().to_vec());
+                    let w_cur = self.write_cursor.as_mut().unwrap();
+                    last_handled_key = Some(w_cur.key(&mut self.statistics.write).to_vec());
+                    let w_key = Key::from_encoded(w_cur.key(&mut self.statistics.write).to_vec());
                     (w_key.decode_ts()?, w_key.truncate_ts()?)
                 };
 
@@ -470,7 +483,12 @@ impl<S: Snapshot> MvccReader<S> {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
                 self.statistics.write.processed += 1;
-                Write::parse(self.write_cursor.as_ref().unwrap().value())?
+                Write::parse(
+                    self.write_cursor
+                        .as_mut()
+                        .unwrap()
+                        .value(&mut self.statistics.write),
+                )?
             };
 
             match write.write_type {
@@ -496,7 +514,7 @@ impl<S: Snapshot> MvccReader<S> {
 
         // After several prev, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        let key = user_key.append_ts(ts);
+        let key = user_key.clone().append_ts(ts);
         let valid = self
             .write_cursor
             .as_mut()
@@ -507,20 +525,24 @@ impl<S: Snapshot> MvccReader<S> {
             let mut write = {
                 // If we reach the last handled key, it means we have checked all versions
                 // for this user key.
-                if self.write_cursor.as_ref().unwrap().key()
+                if self
+                    .write_cursor
+                    .as_mut()
+                    .unwrap()
+                    .key(&mut self.statistics.write)
                     >= last_handled_key.as_ref().unwrap().as_slice()
                 {
                     return self.get_value(user_key, lastest_version.0, lastest_version.1);
                 }
 
-                let w_cur = self.write_cursor.as_ref().unwrap();
-                let w_key = Key::from_encoded(w_cur.key().to_vec());
+                let w_cur = self.write_cursor.as_mut().unwrap();
+                let w_key = Key::from_encoded(w_cur.key(&mut self.statistics.write).to_vec());
                 let commit_ts = w_key.decode_ts()?;
                 assert!(commit_ts <= ts);
                 let key = w_key.truncate_ts()?;
                 assert_eq!(&key, user_key);
                 self.statistics.write.processed += 1;
-                Write::parse(w_cur.value())?
+                Write::parse(w_cur.value(&mut self.statistics.write))?
             };
 
             match write.write_type {
@@ -557,13 +579,14 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    #[allow(type_complexity)]
-    pub fn scan_lock<F>(
+    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
+    /// remaining locks that can be scanned.
+    pub fn scan_locks<F>(
         &mut self,
-        start: Option<Key>,
+        start: Option<&Key>,
         filter: F,
         limit: usize,
-    ) -> Result<(Vec<(Key, Lock)>, Option<Key>)>
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
         F: Fn(&Lock) -> bool,
     {
@@ -574,22 +597,23 @@ impl<S: Snapshot> MvccReader<S> {
             None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
-            return Ok((vec![], None));
+            return Ok((vec![], false));
         }
-        let mut locks = vec![];
+        let mut locks = Vec::with_capacity(limit);
         while cursor.valid() {
-            let key = Key::from_encoded(cursor.key().to_vec());
-            let lock = Lock::parse(cursor.value())?;
+            let key = Key::from_encoded(cursor.key(&mut self.statistics.lock).to_vec());
+            let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
             if filter(&lock) {
-                locks.push((key.clone(), lock));
-                if limit > 0 && locks.len() >= limit {
-                    return Ok((locks, Some(key)));
+                locks.push((key, lock));
+                if limit > 0 && locks.len() == limit {
+                    return Ok((locks, true));
                 }
             }
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed += locks.len();
-        Ok((locks, None))
+        // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
+        Ok((locks, false))
     }
 
     pub fn scan_keys(
@@ -613,8 +637,9 @@ impl<S: Snapshot> MvccReader<S> {
                 self.statistics.write.processed += keys.len();
                 return Ok((keys, start));
             }
-            let key = Key::from_encoded(cursor.key().to_vec()).truncate_ts()?;
-            start = Some(key.append_ts(0));
+            let key =
+                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
+            start = Some(key.clone().append_ts(0));
             keys.push(key);
         }
     }
@@ -629,10 +654,11 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = Key::from_encoded(cursor.key().to_vec());
+            let cur_key = Key::from_encoded(cursor.key(&mut self.statistics.data).to_vec());
+            let ts = cur_key.decode_ts()?;
             let cur_key_without_ts = cur_key.truncate_ts()?;
             if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
-                v.push((cur_key.decode_ts()?, cursor.value().to_vec()));
+                v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
             }
             if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
                 break;
@@ -711,8 +737,9 @@ mod tests {
     use std::sync::Arc;
     use std::u64;
     use storage::engine::{Modify, ScanMode};
+    use storage::mvcc::write::WriteType;
     use storage::mvcc::{MvccReader, MvccTxn};
-    use storage::{make_key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
     use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
     use util::rocksdb::{self as rocksdb_util, CFOptions};
@@ -733,19 +760,19 @@ mod tests {
         }
 
         pub fn put(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Put((make_key(pk), vec![]));
+            let m = Mutation::Put((Key::from_raw(pk), vec![]));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
 
         pub fn lock(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Lock(make_key(pk));
+            let m = Mutation::Lock(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
 
         pub fn delete(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Delete(make_key(pk));
+            let m = Mutation::Delete(Key::from_raw(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -758,7 +785,7 @@ mod tests {
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
             txn.commit(&k, commit_ts).unwrap();
@@ -766,15 +793,16 @@ mod tests {
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            txn.collapse_rollback(false);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
-            let k = make_key(pk);
+            let k = Key::from_raw(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
                 let mut txn = MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true);
@@ -981,7 +1009,7 @@ mod tests {
         for i in 0..256 {
             for y in 0..256 {
                 let pk = &[i as u8, y as u8];
-                let m = Mutation::Put((make_key(pk), vec![]));
+                let m = Mutation::Put((Key::from_raw(pk), vec![]));
                 engine.prewrite(m, pk, start_ts);
                 engine.rollback(pk, start_ts);
                 // Generate 65534 RocksDB tombstones between [0,0] and [255,255].
@@ -995,7 +1023,7 @@ mod tests {
         let start_ts = 3;
         for i in 0..256 {
             let pk = &[i as u8];
-            let m = Mutation::Put((make_key(pk), vec![]));
+            let m = Mutation::Put((Key::from_raw(pk), vec![]));
             engine.prewrite(m, pk, start_ts);
         }
 
@@ -1009,7 +1037,7 @@ mod tests {
             IsolationLevel::SI,
         );
         let row = &[255 as u8];
-        let k = make_key(row);
+        let k = Key::from_raw(row);
 
         // Call reverse seek
         let ts = 2;
@@ -1030,7 +1058,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
         let k = &[10 as u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1038,7 +1066,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
         let k = &[9 as u8];
         for ts in 0..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1046,7 +1074,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback for key [8].
         let k = &[8 as u8];
         for ts in 0..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             if ts < REVERSE_SEEK_BOUND / 2 {
                 engine.commit(k, ts, ts);
@@ -1058,18 +1086,18 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND / 2 Put 1 delete and REVERSE_SEEK_BOUND/2 Rollback for key [7].
         let k = &[7 as u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
         {
             let ts = REVERSE_SEEK_BOUND / 2;
-            let m = Mutation::Delete(make_key(k));
+            let m = Mutation::Delete(Key::from_raw(k));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
         for ts in REVERSE_SEEK_BOUND / 2 + 1..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.rollback(k, ts);
         }
@@ -1077,7 +1105,7 @@ mod tests {
         // Generate 1 PUT for key [6].
         let k = &[6 as u8];
         for ts in 0..1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1085,7 +1113,7 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND + 1 Rollback for key [5].
         let k = &[5 as u8];
         for ts in 0..REVERSE_SEEK_BOUND + 1 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.rollback(k, ts);
         }
@@ -1094,7 +1122,7 @@ mod tests {
         // with ts = REVERSE_SEEK_BOUND + 1 for key [4].
         let k = &[4 as u8];
         for ts in REVERSE_SEEK_BOUND..REVERSE_SEEK_BOUND + 2 {
-            let m = Mutation::Put((make_key(k), vec![ts as u8]));
+            let m = Mutation::Put((Key::from_raw(k), vec![ts as u8]));
             engine.prewrite(m, k, ts);
             engine.commit(k, ts, ts);
         }
@@ -1112,9 +1140,9 @@ mod tests {
         let ts = REVERSE_SEEK_BOUND;
         // Use REVERSE_SEEK_BOUND / 2 prev to get key [10].
         assert_eq!(
-            reader.reverse_seek(make_key(&[11 as u8]), ts).unwrap(),
+            reader.reverse_seek(Key::from_raw(&[11 as u8]), ts).unwrap(),
             Some((
-                make_key(&[10 as u8]),
+                Key::from_raw(&[10 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
             ))
         );
@@ -1130,8 +1158,8 @@ mod tests {
         // Use REVERSE_SEEK_BOUND prev and 1 seek to get key [9].
         // So the total prev += REVERSE_SEEK_BOUND, total seek = 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[10 as u8]), ts).unwrap(),
-            Some((make_key(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+            reader.reverse_seek(Key::from_raw(&[10 as u8]), ts).unwrap(),
+            Some((Key::from_raw(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         total_prev += REVERSE_SEEK_BOUND as usize;
         total_seek += 1;
@@ -1145,9 +1173,9 @@ mod tests {
         // in reverse_get_impl), 1 seek and 1 next to get key [8].
         // So the total prev += REVERSE_SEEK_BOUND + 1, total next += 1, total seek += 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[9 as u8]), ts).unwrap(),
+            reader.reverse_seek(Key::from_raw(&[9 as u8]), ts).unwrap(),
             Some((
-                make_key(&[8 as u8]),
+                Key::from_raw(&[8 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
             ))
         );
@@ -1165,8 +1193,8 @@ mod tests {
         // key [6] will cause 3 prev (2 in near_reverse_seek and 1 in reverse_get_impl).
         // So the total prev += REVERSE_SEEK_BOUND + 6, total next += 1, total seek += 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[8 as u8]), ts).unwrap(),
-            Some((make_key(&[6 as u8]), vec![0 as u8]))
+            reader.reverse_seek(Key::from_raw(&[8 as u8]), ts).unwrap(),
+            Some((Key::from_raw(&[6 as u8]), vec![0 as u8]))
         );
         total_prev += REVERSE_SEEK_BOUND as usize + 5;
         total_seek += 1;
@@ -1184,8 +1212,8 @@ mod tests {
         // key [4] will cause 1 prev.
         // So the total prev += REVERSE_SEEK_BOUND + 3, total next += 1, total seek += 1.
         assert_eq!(
-            reader.reverse_seek(make_key(&[6 as u8]), ts).unwrap(),
-            Some((make_key(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
+            reader.reverse_seek(Key::from_raw(&[6 as u8]), ts).unwrap(),
+            Some((Key::from_raw(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         total_prev += REVERSE_SEEK_BOUND as usize + 3;
         total_seek += 1;
@@ -1197,12 +1225,74 @@ mod tests {
         assert_eq!(reader.get_statistics().write.get, 0);
 
         // Use a prev and reach the very beginning.
-        assert_eq!(reader.reverse_seek(make_key(&[4 as u8]), ts).unwrap(), None);
+        assert_eq!(
+            reader.reverse_seek(Key::from_raw(&[4 as u8]), ts).unwrap(),
+            None
+        );
         total_prev += 1;
         assert_eq!(reader.get_statistics().write.prev, total_prev);
         assert_eq!(reader.get_statistics().write.seek, total_seek);
         assert_eq!(reader.get_statistics().write.next, total_next);
         assert_eq!(reader.get_statistics().write.seek_for_prev, 1);
         assert_eq!(reader.get_statistics().write.get, 0);
+    }
+
+    #[test]
+    fn test_get_txn_commit_info() {
+        let path = TempDir::new("_test_storage_mvcc_reader_reverse_seek_basic").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 1);
+        engine.commit(k, 1, 10);
+
+        engine.rollback(k, 5);
+        engine.rollback(k, 20);
+
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 25);
+        engine.commit(k, 25, 30);
+
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 35);
+        engine.commit(k, 35, 40);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+
+        // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
+        // is 40.
+        // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        let key = Key::from_raw(k);
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
+        assert_eq!(commit_ts, 40);
+        assert_eq!(write_type, WriteType::Put);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 25).unwrap().unwrap();
+        assert_eq!(commit_ts, 30);
+        assert_eq!(write_type, WriteType::Put);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 20).unwrap().unwrap();
+        assert_eq!(commit_ts, 20);
+        assert_eq!(write_type, WriteType::Rollback);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().unwrap();
+        assert_eq!(commit_ts, 10);
+        assert_eq!(write_type, WriteType::Put);
+
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5).unwrap().unwrap();
+        assert_eq!(commit_ts, 5);
+        assert_eq!(write_type, WriteType::Rollback);
+
+        let seek_for_prev_old = reader.get_statistics().write.seek_for_prev;
+        assert!(reader.get_txn_commit_info(&key, 15).unwrap().is_none());
+        let seek_for_prev_new = reader.get_statistics().write.seek_for_prev;
+
+        // `get_txn_commit_info(&key, 15)` stopped at `30_25 PUT`.
+        assert_eq!(seek_for_prev_new - seek_for_prev_old, 2);
     }
 }

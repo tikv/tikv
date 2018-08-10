@@ -344,7 +344,10 @@ mod test {
             let d = Duration::parse(input, fsp);
             match expect {
                 Some(exp) => {
-                    let s = format!("{}", d.expect(&escape(input)));
+                    let s = format!(
+                        "{}",
+                        d.unwrap_or_else(|e| panic!("{}: {:?}", escape(input), e))
+                    );
                     if s != expect.unwrap() {
                         panic!("expect parse {} to {}, got {}", escape(input), exp, s);
                     }

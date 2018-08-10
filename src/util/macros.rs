@@ -101,7 +101,7 @@ macro_rules! box_err {
     });
 }
 
-#[allow(doc_markdown)]
+#[cfg_attr(feature = "cargo-clippy", allow(doc_markdown))]
 /// Recover from panicable closure.
 ///
 /// Please note that this macro assume the closure is able to be forced to implement `UnwindSafe`.

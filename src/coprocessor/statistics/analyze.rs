@@ -18,7 +18,6 @@ use protobuf::{Message, RepeatedField};
 use rand::{thread_rng, Rng, ThreadRng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
-use tipb::schema::ColumnInfo;
 
 use storage::{Snapshot, SnapshotStore};
 
@@ -87,6 +86,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_cmsketch_width() as usize,
         );
         while let Some(row) = scanner.next()? {
+            let row = row.take_origin();
             let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
             hist.append(bytes);
             if let Some(c) = cms.as_mut() {
@@ -152,7 +152,6 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 
 struct SampleBuilder<S: Snapshot> {
     data: TableScanExecutor<S>,
-    cols: Vec<ColumnInfo>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
@@ -184,10 +183,9 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(&meta, ranges, snap, false)?;
+        let table_scanner = TableScanExecutor::new(meta, ranges, snap, false)?;
         Ok(Self {
             data: table_scanner,
-            cols: meta.take_columns().to_vec(),
             col_len,
             max_bucket_size: req.get_bucket_size() as usize,
             max_fm_sketch_size: req.get_sketch_size() as usize,
@@ -213,7 +211,8 @@ impl<S: Snapshot> SampleBuilder<S> {
             self.col_len
         ];
         while let Some(row) = self.data.next()? {
-            let cols = row.get_binary_cols(&self.cols)?;
+            let row = row.take_origin();
+            let cols = row.get_binary_cols()?;
             let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();
             if self.col_len != retrieve_len {

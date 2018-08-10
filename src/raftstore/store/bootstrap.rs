@@ -14,7 +14,7 @@
 use super::engine::{Iterable, Mutable};
 use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
-use super::store::Engines;
+use super::util::Engines;
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use raftstore::Result;
@@ -40,16 +40,11 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
 pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
-    if !is_range_empty(&engines.kv_engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
+    if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!("kv store is not empty and has already had data."));
     }
 
-    if !is_range_empty(
-        &engines.raft_engine,
-        CF_DEFAULT,
-        keys::MIN_KEY,
-        keys::MAX_KEY,
-    )? {
+    if !is_range_empty(&engines.raft, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!(
             "raft store is not empty and has already had data."
         ));
@@ -58,8 +53,8 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engines.kv_engine.put_msg(keys::STORE_IDENT_KEY, &ident)?;
-    engines.kv_engine.sync_wal()?;
+    engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
+    engines.kv.sync_wal()?;
     Ok(())
 }
 
@@ -70,41 +65,39 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
 
     let wb = WriteBatch::new();
     wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)?;
-    let handle = rocksdb::get_cf_handle(&engines.kv_engine, CF_RAFT)?;
+    let handle = rocksdb::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state)?;
-    write_initial_apply_state(&engines.kv_engine, &wb, region.get_id())?;
-    engines.kv_engine.write(wb)?;
-    engines.kv_engine.sync_wal()?;
+    write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
+    engines.kv.write(wb)?;
+    engines.kv.sync_wal()?;
 
     let raft_wb = WriteBatch::new();
     write_initial_raft_state(&raft_wb, region.get_id())?;
-    engines.raft_engine.write(raft_wb)?;
-    engines.raft_engine.sync_wal()?;
+    engines.raft.write(raft_wb)?;
+    engines.raft.sync_wal()?;
     Ok(())
 }
 
 // Clear first region meta and prepare state.
 pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> {
-    engines
-        .raft_engine
-        .delete(&keys::raft_state_key(region_id))?;
-    engines.raft_engine.sync_wal()?;
+    engines.raft.delete(&keys::raft_state_key(region_id))?;
+    engines.raft.sync_wal()?;
 
     let wb = WriteBatch::new();
     wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
     // should clear raft initial state too.
-    let handle = rocksdb::get_cf_handle(&engines.kv_engine, CF_RAFT)?;
+    let handle = rocksdb::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.delete_cf(handle, &keys::region_state_key(region_id))?;
     wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
-    engines.kv_engine.write(wb)?;
-    engines.kv_engine.sync_wal()?;
+    engines.kv.write(wb)?;
+    engines.kv.sync_wal()?;
     Ok(())
 }
 
 // Clear prepare state
 pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
-    engines.kv_engine.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
-    engines.kv_engine.sync_wal()?;
+    engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
+    engines.kv.sync_wal()?;
     Ok(())
 }
 

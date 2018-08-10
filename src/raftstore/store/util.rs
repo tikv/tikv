@@ -11,7 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::Bound::Excluded;
 use std::option::Option;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::{fmt, u64};
 
 use kvproto::metapb;
@@ -24,8 +27,9 @@ use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
-use storage::{Key, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use util::properties::{RowsProperties, SizeProperties};
+use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use util::properties::RangeProperties;
+use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
 
@@ -101,8 +105,8 @@ const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
 
-pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str {
-    match *conf_type {
+pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str {
+    match conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
@@ -320,10 +324,65 @@ pub fn get_region_approximate_size_cf(
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
-        let props = SizeProperties::decode(v.user_collected_properties())?;
+        let props = RangeProperties::decode(v.user_collected_properties())?;
         size += props.get_approximate_size_in_range(&start, &end);
     }
     Ok(size)
+}
+
+pub fn get_region_approximate_keys_cf(
+    db: &DB,
+    cfname: &str,
+    region: &metapb::Region,
+) -> Result<u64> {
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+    for (_, v) in &*collection {
+        let props = RangeProperties::decode(v.user_collected_properties())?;
+        keys += props.get_approximate_keys_in_range(&start, &end);
+    }
+    Ok(keys)
+}
+
+/// Get the approxmiate middle key of the region. If we suppose the region
+/// is stored on disk as a plain file, "middle key" means the key whose
+/// position is in the middle of the file.
+///
+/// The returned key maybe is timestamped if transaction KV is used,
+/// and must start with "z".
+pub fn get_region_approximate_middle_cf(
+    db: &DB,
+    cfname: &str,
+    region: &metapb::Region,
+) -> Result<Option<Vec<u8>>> {
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+
+    let mut keys = Vec::new();
+    for (_, v) in &*collection {
+        let props = RangeProperties::decode(v.user_collected_properties())?;
+        keys.extend(
+            props
+                .offsets
+                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .map(|(k, _)| k.to_owned()),
+        );
+    }
+    keys.sort();
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    // Calculate the position by (len-1)/2. So it's the left one
+    // of two middle positions if the number of keys is even.
+    let middle = (keys.len() - 1) / 2;
+    Ok(Some(keys.swap_remove(middle)))
 }
 
 pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
@@ -334,35 +393,40 @@ pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u
     Ok(size)
 }
 
-/// Get the approximate number of records in the region.
-pub fn get_region_approximate_rows(db: &DB, region: &metapb::Region) -> Result<u64> {
+/// Get the approximate number of keys in the region.
+pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
+    // try to get from RangeProperties first.
+    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
+        Ok(v) => if v > 0 {
+            return Ok(v);
+        },
+        Err(e) => debug!(
+            "old_version:get keys from RangeProperties failed with err:{:?}",
+            e
+        ),
+    }
+
     let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
-    let range = Range::new(&start, &end);
-    let (mut rows, _) = db.get_approximate_memtable_stats_cf(cf, &range);
-    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
-    for (_, v) in &*collection {
-        let props = RowsProperties::decode(v.user_collected_properties())?;
-        rows += props.get_approximate_rows_in_range(&start, &end);
-    }
-    Ok(rows)
+    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
+    Ok(keys)
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct RegionApproximateStat {
-    /// the approximate number of records in the region.
-    pub rows: u64,
-    /// the approximate size of the region.
-    pub size: u64,
-}
+/// Get region approximate middle key based on default and write cf size.
+pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
-impl RegionApproximateStat {
-    pub fn new(db: &DB, region: &metapb::Region) -> Result<RegionApproximateStat> {
-        let rows = get_region_approximate_rows(db, region)?;
-        let size = get_region_approximate_size(db, region)?;
-        Ok(RegionApproximateStat { rows, size })
-    }
+    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+    let middle_by_cf = if default_cf_size >= write_cf_size {
+        CF_DEFAULT
+    } else {
+        CF_WRITE
+    };
+
+    get_region_approximate_middle_cf(db, middle_by_cf, &region)
 }
 
 /// Check if replicas of two regions are on the same stores.
@@ -415,14 +479,15 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
 ///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
 ///     And the expired timestamp for that leader lease is `commit_ts + lease`,
 ///     which is `send_ts + max_lease` in short.
-// TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
-//       to the local read thread, so name it remote. If Lease expires, the remote must
-//       expire too.
 pub struct Lease {
     // A suspect timestamp is in the Either::Left(_),
     // a valid timestamp is in the Either::Right(_).
     bound: Option<Either<Timespec, Timespec>>,
     max_lease: Duration,
+
+    max_drift: Duration,
+    last_update: Timespec,
+    remote: Option<RemoteLease>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -440,6 +505,10 @@ impl Lease {
         Lease {
             bound: None,
             max_lease,
+
+            max_drift: max_lease / 3,
+            last_update: Timespec::new(0, 0),
+            remote: None,
         }
     }
 
@@ -463,10 +532,20 @@ impl Lease {
                 self.bound = Some(Either::Right(bound));
             }
         }
+        // Renew remote if it's valid.
+        if let Some(Either::Right(bound)) = self.bound {
+            if bound - self.last_update > self.max_drift {
+                self.last_update = bound;
+                if let Some(ref r) = self.remote {
+                    r.renew(bound);
+                }
+            }
+        }
     }
 
     /// Suspect the lease to the bound.
     pub fn suspect(&mut self, send_ts: Timespec) {
+        self.expire_remote_lease();
         let bound = self.next_expired_time(send_ts);
         self.bound = Some(Either::Left(bound));
     }
@@ -485,7 +564,35 @@ impl Lease {
     }
 
     pub fn expire(&mut self) {
+        self.expire_remote_lease();
         self.bound = None;
+    }
+
+    pub fn expire_remote_lease(&mut self) {
+        // Expire remote lease if there is any.
+        if let Some(r) = self.remote.take() {
+            r.expire();
+        }
+    }
+
+    pub fn maybe_new_remote_lease(&mut self) -> Option<RemoteLease> {
+        if self.remote.is_some() {
+            // At most one connected RemoteLease.
+            return None;
+        }
+        let expired_time = match self.bound {
+            Some(Either::Right(ts)) => timespec_to_u64(ts),
+            _ => 0,
+        };
+        let remote = RemoteLease {
+            expired_time: Arc::new(AtomicU64::new(expired_time)),
+        };
+        // Clone the remote.
+        let remote_clone = RemoteLease {
+            expired_time: Arc::clone(&remote.expired_time),
+        };
+        self.remote = Some(remote);
+        Some(remote_clone)
     }
 }
 
@@ -498,6 +605,81 @@ impl fmt::Debug for Lease {
             None => fmter.finish(),
         }
     }
+}
+
+/// A remote lease, it can only be derived by `Lease`. It will be sent
+/// to the local read thread, so name it remote. If Lease expires, the remote must
+/// expire too.
+#[derive(Debug)]
+pub struct RemoteLease {
+    expired_time: Arc<AtomicU64>,
+}
+
+impl RemoteLease {
+    pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
+        let expired_time = self.expired_time.load(AtomicOrdering::Acquire);
+        if ts.unwrap_or_else(monotonic_raw_now) < u64_to_timespec(expired_time) {
+            LeaseState::Valid
+        } else {
+            LeaseState::Expired
+        }
+    }
+
+    fn renew(&self, bound: Timespec) {
+        self.expired_time
+            .store(timespec_to_u64(bound), AtomicOrdering::Release);
+    }
+
+    fn expire(&self) {
+        self.expired_time.store(0, AtomicOrdering::Release);
+    }
+}
+
+// Contants used in `timespec_to_u64` and `u64_to_timespec`.
+const NSEC_PER_MSEC: i32 = 1_000_000;
+const TIMESPEC_NSEC_SHIFT: usize = 32 - NSEC_PER_MSEC.leading_zeros() as usize;
+
+const MSEC_PER_SEC: i64 = 1_000;
+const TIMESPEC_SEC_SHIFT: usize = 64 - MSEC_PER_SEC.leading_zeros() as usize;
+
+const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
+
+/// Convert Timespec to u64. It's millisecond precision and
+/// covers a range of about 571232829 years in total.
+///
+/// # Panics
+///
+/// If Timespecs have negative sec.
+#[inline]
+fn timespec_to_u64(ts: Timespec) -> u64 {
+    // > Darwin's and Linux's struct timespec functions handle pre-
+    // > epoch timestamps using a "two steps back, one step forward" representation,
+    // > though the man pages do not actually document this. For example, the time
+    // > -1.2 seconds before the epoch is represented by `Timespec { sec: -2_i64,
+    // > nsec: 800_000_000 }`.
+    //
+    // Quote from crate time,
+    //   https://github.com/rust-lang-deprecated/time/blob/
+    //   e313afbd9aad2ba7035a23754b5d47105988789d/src/lib.rs#L77
+    assert!(ts.sec >= 0 && ts.sec < (1i64 << (64 - TIMESPEC_SEC_SHIFT)));
+    assert!(ts.nsec >= 0);
+
+    // Round down to millisecond precision.
+    let ms = ts.nsec >> TIMESPEC_NSEC_SHIFT;
+    let sec = ts.sec << TIMESPEC_SEC_SHIFT;
+    sec as u64 | ms as u64
+}
+
+/// Convert Timespec to u64.
+///
+/// # Panics
+///
+/// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
+#[inline]
+fn u64_to_timespec(u: u64) -> Timespec {
+    let sec = u >> TIMESPEC_SEC_SHIFT;
+    let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
+    Timespec::new(sec as i64, nsec as i32)
 }
 
 /// Parse data of entry `index`.
@@ -542,10 +724,24 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     conf_state
 }
 
+#[derive(Clone, Debug)]
+pub struct Engines {
+    pub kv: Arc<DB>,
+    pub raft: Arc<DB>,
+}
+
+impl Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+        Engines {
+            kv: kv_engine,
+            raft: raft_engine,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::process;
-    use std::thread;
+    use std::{iter, process, thread};
 
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::AdminRequest;
@@ -558,7 +754,8 @@ mod tests {
     use raftstore::store::peer_storage;
     use storage::mvcc::{Write, WriteType};
     use storage::{Key, ALL_CFS, CF_DEFAULT};
-    use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
+    use util::escape;
+    use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
     use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use util::time::{monotonic_now, monotonic_raw_now};
 
@@ -589,40 +786,100 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
+        let remote = lease.maybe_new_remote_lease().unwrap();
+        let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
+            assert_eq!(lease.inspect(ts), state);
+            if state == LeaseState::Expired || state == LeaseState::Suspect {
+                assert_eq!(remote.inspect(ts), LeaseState::Expired);
+            }
+        };
+
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
 
         let now = monotonic_raw_now();
         let next_expired_time = lease.next_expired_time(now);
-        assert_eq!(next_expired_time, now + duration);
+        assert_eq!(now + duration, next_expired_time);
 
         // Transit to the Valid state.
         lease.renew(now);
-        assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
-        assert_eq!(lease.inspect(None), LeaseState::Valid);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Valid);
+        inspect_test(&lease, None, LeaseState::Valid);
 
         // After lease expired time.
         sleep_test(duration, &lease, LeaseState::Expired);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, None, LeaseState::Expired);
 
         // Transit to the Suspect state.
         lease.suspect(monotonic_raw_now());
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Suspect
-        );
-        assert_eq!(lease.inspect(None), LeaseState::Suspect);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
+        inspect_test(&lease, None, LeaseState::Suspect);
 
-        // After lease expired time. Always suspect.
+        // After lease expired time, still suspect.
         sleep_test(duration, &lease, LeaseState::Suspect);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
 
         // Clear lease.
         lease.expire();
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, None, LeaseState::Expired);
+    }
+
+    #[test]
+    fn test_timespec_u64() {
+        let cases = vec![
+            (Timespec::new(0, 0), 0x0000_0000_0000_0000u64),
+            (Timespec::new(0, 1), 0x0000_0000_0000_0000u64), // 1ns is round down to 0ms.
+            (Timespec::new(0, 999_999), 0x0000_0000_0000_0000u64), // 999_999ns is round down to 0ms.
+            (
+                // 1_048_575ns is round down to 0ms.
+                Timespec::new(0, 1_048_575 /* 0x0FFFFF */),
+                0x0000_0000_0000_0000u64,
+            ),
+            (
+                // 1_048_576ns is round down to 1ms.
+                Timespec::new(0, 1_048_576 /* 0x100000 */),
+                0x0000_0000_0000_0001u64,
+            ),
+            (Timespec::new(1, 0), 1 << TIMESPEC_SEC_SHIFT),
+            (Timespec::new(1, 0x100000), 1 << TIMESPEC_SEC_SHIFT | 1),
+            (
+                // Max seconds.
+                Timespec::new((1i64 << (64 - TIMESPEC_SEC_SHIFT)) - 1, 0),
+                (-1i64 as u64) << TIMESPEC_SEC_SHIFT,
+            ),
+            (
+                // Max nano seconds.
+                Timespec::new(
+                    0,
+                    (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT,
+                ),
+                999_999_999 >> TIMESPEC_NSEC_SHIFT,
+            ),
+            (
+                Timespec::new(
+                    (1i64 << (64 - TIMESPEC_SEC_SHIFT)) - 1,
+                    (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT,
+                ),
+                (-1i64 as u64) << TIMESPEC_SEC_SHIFT | (999_999_999 >> TIMESPEC_NSEC_SHIFT),
+            ),
+        ];
+
+        for (ts, u) in cases {
+            assert!(u64_to_timespec(timespec_to_u64(ts)) <= ts);
+            assert!(u64_to_timespec(u) <= ts);
+            assert_eq!(timespec_to_u64(u64_to_timespec(u)), u);
+            assert_eq!(timespec_to_u64(ts), u);
+        }
+
+        let start = monotonic_raw_now();
+        let mut now = monotonic_raw_now();
+        while now - start < Duration::seconds(1) {
+            let u = timespec_to_u64(now);
+            let round = u64_to_timespec(u);
+            assert!(round <= now, "{:064b} = {:?} > {:?}", u, round, now);
+            now = monotonic_raw_now();
+        }
     }
 
     // Tests the util function `check_key_in_region`.
@@ -717,11 +974,11 @@ mod tests {
     #[test]
     fn test_conf_change_type_str() {
         assert_eq!(
-            conf_change_type_str(&ConfChangeType::AddNode),
+            conf_change_type_str(ConfChangeType::AddNode),
             STR_CONF_CHANGE_ADD_NODE
         );
         assert_eq!(
-            conf_change_type_str(&ConfChangeType::RemoveNode),
+            conf_change_type_str(ConfChangeType::RemoveNode),
             STR_CONF_CHANGE_REMOVE_NODE
         );
     }
@@ -760,14 +1017,12 @@ mod tests {
     }
 
     #[test]
-    fn test_region_approximate_stats() {
-        let path = TempDir::new("_test_raftstore_region_approximate_stats").expect("");
+    fn test_region_approximate_keys() {
+        let path = TempDir::new("_test_region_approximate_keys").expect("");
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         let cfs_opts = LARGE_CFS
@@ -777,35 +1032,22 @@ mod tests {
         let db = rocksdb_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
-        let mut write_cf_size = 0;
-        let mut default_cf_size = 0;
         for &(key, vlen) in &cases {
             let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).encoded());
             let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &key, &write_v).unwrap();
             db.flush_cf(write_cf, true).unwrap();
-            write_cf_size += key.len() + write_v.len();
 
             let default_v = vec![0; vlen as usize];
             let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
             db.put_cf(default_cf, &key, &default_v).unwrap();
             db.flush_cf(default_cf, true).unwrap();
-
-            default_cf_size += key.len() + default_v.len();
         }
 
         let region = make_region(1, vec![], vec![]);
-        let region_stat = RegionApproximateStat::new(&db, &region).unwrap();
-        assert_eq!(region_stat.size, (write_cf_size + default_cf_size) as u64);
-        // The number of records in region is the number of records in write cf.
-        assert_eq!(region_stat.rows, cases.len() as u64);
-
-        let size = get_region_approximate_size_cf(&db, CF_DEFAULT, &region).unwrap();
-        assert_eq!(size, default_cf_size as u64);
-
-        let size = get_region_approximate_size_cf(&db, CF_WRITE, &region).unwrap();
-        assert_eq!(size, write_cf_size as u64);
+        let region_keys = get_region_approximate_keys(&db, &region).unwrap();
+        assert_eq!(region_keys, cases.len() as u64);
     }
 
     #[test]
@@ -815,8 +1057,8 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
@@ -1173,5 +1415,43 @@ mod tests {
             check_region_epoch(&req, &region, false).unwrap_err();
             check_region_epoch(&req, &region, true).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_get_region_approximate_middle_cf() {
+        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat(b'v').take(256));
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
+            .unwrap()
+            .unwrap();
+
+        let middle_key = Key::from_encoded(keys::origin_key(&middle_key).to_owned())
+            .raw()
+            .unwrap();
+        assert_eq!(escape(&middle_key), "key_049");
     }
 }

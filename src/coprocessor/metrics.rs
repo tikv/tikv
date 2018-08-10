@@ -59,6 +59,11 @@ lazy_static! {
         "Bucketed counter of coprocessor scan details for each CF",
         &["req", "cf", "tag"]
     ).unwrap();
+    pub static ref COPR_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_coprocessor_rocksdb_perf",
+        "Total number of RocksDB internal operations from PerfContext",
+        &["req", "metric"]
+    ).unwrap();
     pub static ref COPR_EXECUTOR_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_executor_count",
         "Total number of each executor",

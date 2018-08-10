@@ -109,7 +109,7 @@ impl Monitor {
     {
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
-            .name(thd_name!("time-monitor-worker"))
+            .name(thd_name!("time-monitor"))
             .spawn(move || {
                 while let Err(_) = rx.try_recv() {
                     let before = now();
@@ -464,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(eq_op)]
+    #[cfg_attr(feature = "cargo-clippy", allow(eq_op))]
     fn test_instant() {
         Instant::now().elapsed();
         Instant::now_coarse().elapsed();

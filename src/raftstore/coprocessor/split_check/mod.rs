@@ -12,14 +12,18 @@
 // limitations under the License.
 
 mod half;
+mod keys;
 mod size;
 mod table;
 
+use rocksdb::DB;
+
+use super::error::Result;
+use super::{KeyEntry, ObserverContext, SplitChecker};
 use kvproto::metapb::Region;
 
-use super::{ObserverContext, SplitChecker};
-
 pub use self::half::HalfCheckObserver;
+pub use self::keys::KeysCheckObserver;
 pub use self::size::SizeCheckObserver;
 pub use self::table::TableCheckObserver;
 
@@ -50,10 +54,10 @@ impl Host {
     /// Hook to call for every check during split.
     ///
     /// Return true means abort early.
-    pub fn on_kv(&mut self, region: &Region, key: &[u8], value_size: u64) -> bool {
+    pub fn on_kv(&mut self, region: &Region, entry: &KeyEntry) -> bool {
         let mut ob_ctx = ObserverContext::new(region);
         for checker in &mut self.checkers {
-            if checker.on_kv(&mut ob_ctx, key, value_size) {
+            if checker.on_kv(&mut ob_ctx, entry) {
                 return true;
             }
         }
@@ -65,6 +69,20 @@ impl Host {
             .drain(..)
             .flat_map(|mut c| c.split_key())
             .next()
+    }
+
+    pub fn approximate_split_key(
+        mut self,
+        region: &Region,
+        engine: &DB,
+    ) -> Result<Option<Vec<u8>>> {
+        for checker in &mut self.checkers {
+            match box_try!(checker.approximate_split_key(region, engine)) {
+                Some(split_key) => return Ok(Some(split_key)),
+                None => continue,
+            }
+        }
+        Ok(None)
     }
 
     #[inline]

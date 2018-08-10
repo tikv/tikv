@@ -33,7 +33,7 @@ use super::util::*;
 /// it should consider itself as a stale peer which is removed from the region.
 /// This test case covers the following scenario:
 /// At first, there are three peer A, B, C in the cluster, and A is leader.
-/// Peer B gets down. And then A adds D, E, F int the cluster.
+/// Peer B gets down. And then A adds D, E, F into the cluster.
 /// Peer D becomes leader of the new cluster, and then removes peer A, B, C.
 /// After all these peer in and out, now the cluster has peer D, E, F.
 /// If peer B goes up at this moment, it still thinks it is one of the cluster
@@ -58,7 +58,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_engine(2);
     must_get_equal(&engine_2, key, value);
 
-    // Isolate peer 2 from other part of the cluster.
+    // Isolate peer 2 from rest of the cluster.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // In case 2 is leader, it will fail to pass the healthy nodes check,
@@ -79,7 +79,6 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // destroy itself earlier than this test case expects.
 
     // Wait for max_leader_missing_duration to time out.
-
     cluster.must_remove_region(2, r1);
 
     // Check whether this region is still functional properly.

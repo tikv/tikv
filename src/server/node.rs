@@ -29,14 +29,14 @@ use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Msg, Peekable, SignificantMsg, SnapManager, Store,
-    StoreChannel, Transport,
+    self, keys, Config as StoreConfig, Engines, Msg, Peekable, ReadTask, SignificantMsg,
+    SnapManager, Store, StoreChannel, Transport,
 };
 use server::readpool::ReadPool;
 use server::Config as ServerConfig;
 use storage::{self, Config as StorageConfig, RaftKv, Storage};
 use util::transport::SendCh;
-use util::worker::FutureWorker;
+use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -105,6 +105,7 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        store.set_version(env!("CARGO_PKG_VERSION").to_string());
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
@@ -126,7 +127,7 @@ where
         }
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn start<T>(
         &mut self,
         event_loop: EventLoop<Store<T, C>>,
@@ -135,6 +136,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         distsql_cache: Option<Arc<SQLCache>>,
@@ -176,6 +178,7 @@ where
             snap_mgr,
             significant_msg_receiver,
             pd_worker,
+            local_read_worker,
             coprocessor_host,
             importer,
             distsql_cache,
@@ -194,9 +197,7 @@ where
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = engines
-            .kv_engine
-            .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
+        let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -256,7 +257,7 @@ where
 
     fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
         let res = engines
-            .kv_engine
+            .kv
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?;
         if res.is_none() {
             return Ok(());
@@ -319,7 +320,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[allow(too_many_arguments)]
+    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     fn start_store<T>(
         &mut self,
         mut event_loop: EventLoop<Store<T, C>>,
@@ -329,6 +330,7 @@ where
         snap_mgr: SnapManager,
         significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
+        local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
         distsql_cache: Option<Arc<SQLCache>>,
@@ -363,6 +365,7 @@ where
                 pd_client,
                 snap_mgr,
                 pd_worker,
+                local_read_worker,
                 coprocessor_host,
                 importer,
                 distsql_cache,
