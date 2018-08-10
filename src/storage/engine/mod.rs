@@ -298,6 +298,18 @@ impl Statistics {
         detail.set_write(self.write.scan_info());
         detail
     }
+
+    pub fn mut_cf_statistics(&mut self, cf: &str) -> &mut CFStatistics {
+        if cf.is_empty() {
+            return &mut self.data;
+        }
+        match cf {
+            CF_DEFAULT => &mut self.data,
+            CF_LOCK => &mut self.lock,
+            CF_WRITE => &mut self.write,
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -319,6 +331,9 @@ pub struct Cursor<I: Iterator> {
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
+
+    cur_key_has_read: bool,
+    cur_value_has_read: bool,
 }
 
 impl<I: Iterator> Cursor<I> {
@@ -328,7 +343,17 @@ impl<I: Iterator> Cursor<I> {
             scan_mode: mode,
             min_key: None,
             max_key: None,
+
+            cur_key_has_read: false,
+            cur_value_has_read: false,
         }
+    }
+
+    /// Mark key and value as unread. It will be invoked once cursor is moved.
+    #[inline]
+    fn mark_unread(&mut self) {
+        self.cur_key_has_read = false;
+        self.cur_value_has_read = false;
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
@@ -340,14 +365,12 @@ impl<I: Iterator> Cursor<I> {
 
         if self.scan_mode == ScanMode::Forward
             && self.valid()
-            && self.iter.key() >= key.encoded().as_slice()
+            && self.key(statistics) >= key.encoded().as_slice()
         {
             return Ok(true);
         }
 
-        statistics.seek += 1;
-
-        if !self.iter.seek(key)? {
+        if !self.internal_seek(key, statistics)? {
             self.max_key = Some(key.encoded().to_owned());
             return Ok(false);
         }
@@ -363,7 +386,7 @@ impl<I: Iterator> Cursor<I> {
         if !self.iter.valid() {
             return self.seek(key, statistics);
         }
-        let ord = self.iter.key().cmp(key.encoded());
+        let ord = self.key(statistics).cmp(key.encoded());
         if ord == Ordering::Equal
             || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
@@ -375,12 +398,12 @@ impl<I: Iterator> Cursor<I> {
         }
         if ord == Ordering::Greater {
             near_loop!(
-                self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
+                self.prev(statistics) && self.key(statistics) > key.encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
             if self.iter.valid() {
-                if self.iter.key() < key.encoded().as_slice() {
+                if self.key(statistics) < key.encoded().as_slice() {
                     self.next(statistics);
                 }
             } else {
@@ -390,7 +413,7 @@ impl<I: Iterator> Cursor<I> {
         } else {
             // ord == Less
             near_loop!(
-                self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
+                self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
@@ -408,13 +431,13 @@ impl<I: Iterator> Cursor<I> {
     /// around `key`, otherwise you should `seek` first.
     pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
         if self.scan_mode != ScanMode::Backward {
-            if self.near_seek(key, statistics)? && self.iter.key() == &**key.encoded() {
-                return Ok(Some(self.iter.value()));
+            if self.near_seek(key, statistics)? && self.key(statistics) == &**key.encoded() {
+                return Ok(Some(self.value(statistics)));
             }
             return Ok(None);
         }
-        if self.near_seek_for_prev(key, statistics)? && self.iter.key() == &**key.encoded() {
-            return Ok(Some(self.iter.value()));
+        if self.near_seek_for_prev(key, statistics)? && self.key(statistics) == &**key.encoded() {
+            return Ok(Some(self.value(statistics)));
         }
         Ok(None)
     }
@@ -428,13 +451,12 @@ impl<I: Iterator> Cursor<I> {
 
         if self.scan_mode == ScanMode::Backward
             && self.valid()
-            && self.iter.key() <= key.encoded().as_slice()
+            && self.key(statistics) <= key.encoded().as_slice()
         {
             return Ok(true);
         }
 
-        statistics.seek_for_prev += 1;
-        if !self.iter.seek_for_prev(key)? {
+        if !self.internal_seek_for_prev(key, statistics)? {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
         }
@@ -447,7 +469,7 @@ impl<I: Iterator> Cursor<I> {
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
         }
-        let ord = self.iter.key().cmp(key.encoded());
+        let ord = self.key(statistics).cmp(key.encoded());
         if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
@@ -460,12 +482,12 @@ impl<I: Iterator> Cursor<I> {
 
         if ord == Ordering::Less {
             near_loop!(
-                self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
+                self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
             if self.iter.valid() {
-                if self.iter.key() > key.encoded().as_slice() {
+                if self.key(statistics) > key.encoded().as_slice() {
                     self.prev(statistics);
                 }
             } else {
@@ -474,7 +496,7 @@ impl<I: Iterator> Cursor<I> {
             }
         } else {
             near_loop!(
-                self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
+                self.prev(statistics) && self.key(statistics) > key.encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
@@ -492,7 +514,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(false);
         }
 
-        if self.iter.key() == &**key.encoded() {
+        if self.key(statistics) == &**key.encoded() {
             // should not update min_key here. otherwise reverse_seek_le may not
             // work as expected.
             return Ok(self.prev(statistics));
@@ -510,7 +532,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(false);
         }
 
-        if self.iter.key() == &**key.encoded() {
+        if self.key(statistics) == &**key.encoded() {
             return Ok(self.prev(statistics));
         }
 
@@ -518,42 +540,69 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn key(&self) -> &[u8] {
-        self.iter.key()
+    pub fn key(&mut self, statistics: &mut CFStatistics) -> &[u8] {
+        let key = self.iter.key();
+        if !self.cur_key_has_read {
+            self.cur_key_has_read = true;
+            statistics.flow_stats.read_bytes += key.len();
+            statistics.flow_stats.read_keys += 1;
+        }
+        key
     }
 
     #[inline]
-    pub fn value(&self) -> &[u8] {
-        self.iter.value()
+    pub fn value(&mut self, statistics: &mut CFStatistics) -> &[u8] {
+        let value = self.iter.value();
+        if !self.cur_value_has_read {
+            self.cur_value_has_read = true;
+            statistics.flow_stats.read_bytes += value.len();
+        }
+        value
     }
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
+        self.mark_unread();
         self.iter.seek_to_first()
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
+        self.mark_unread();
         self.iter.seek_to_last()
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.seek += 1;
+        self.mark_unread();
         self.iter.seek(key)
+    }
+
+    #[inline]
+    pub fn internal_seek_for_prev(
+        &mut self,
+        key: &Key,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
+        statistics.seek_for_prev += 1;
+        self.mark_unread();
+        self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
+        self.mark_unread();
         self.iter.next()
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.prev += 1;
+        self.mark_unread();
         self.iter.prev()
     }
 
@@ -712,29 +761,26 @@ mod tests {
 
     fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot
+        let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
-        assert_eq!(
-            (iter.key(), iter.value()),
-            (&*bytes::encode_bytes(pair.0), pair.1)
-        );
+        cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
     fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot
+        let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        iter.reverse_seek(&Key::from_raw(key), &mut statistics)
+        cursor
+            .reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap();
-        assert_eq!(
-            (iter.key(), iter.value()),
-            (&*bytes::encode_bytes(pair.0), pair.1)
-        );
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
     fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
@@ -745,10 +791,8 @@ mod tests {
                 .unwrap(),
             escape(key)
         );
-        assert_eq!(
-            (cursor.key(), cursor.value()),
-            (&*bytes::encode_bytes(pair.0), pair.1)
-        );
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
     fn assert_near_reverse_seek<I: Iterator>(
@@ -763,10 +807,8 @@ mod tests {
                 .unwrap(),
             escape(key)
         );
-        assert_eq!(
-            (cursor.key(), cursor.value()),
-            (&*bytes::encode_bytes(pair.0), pair.1)
-        );
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
     fn test_get_put<E: Engine>(engine: &E) {
@@ -920,8 +962,11 @@ mod tests {
                 $res
             );
             if let Some((ref k, ref v)) = $res {
-                assert_eq!($cursor.key(), bytes::encode_bytes(k.as_bytes()).as_slice());
-                assert_eq!($cursor.value(), v.as_bytes());
+                assert_eq!(
+                    $cursor.key(&mut statistics),
+                    bytes::encode_bytes(k.as_bytes()).as_slice()
+                );
+                assert_eq!($cursor.value(&mut statistics), v.as_bytes());
             }
         }};
     }
@@ -1099,8 +1144,8 @@ mod tests {
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo4"));
-        assert_eq!(iter.value(), b"bar4");
+        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.seek, 1);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
@@ -1109,8 +1154,8 @@ mod tests {
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo6"));
-        assert_eq!(iter.value(), b"bar6");
+        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo6"));
+        assert_eq!(iter.value(&mut statistics), b"bar6");
         assert_eq!(statistics.seek, 0);
         assert_eq!(statistics.next, 1);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
@@ -1119,20 +1164,20 @@ mod tests {
         let mut statistics = CFStatistics::default();
         iter.prev(&mut statistics);
 
-        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo4"));
-        assert_eq!(iter.value(), b"bar4");
+        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.prev, 1);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         iter.prev(&mut statistics);
-        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo2"));
-        assert_eq!(iter.value(), b"bar2");
+        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo2"));
+        assert_eq!(iter.value(&mut statistics), b"bar2");
         assert_eq!(statistics.prev, 2);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
 
         iter.prev(&mut statistics);
-        assert_eq!(iter.key(), &*bytes::encode_bytes(b"foo"));
-        assert_eq!(iter.value(), b"bar1");
+        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
+        assert_eq!(iter.value(&mut statistics), b"bar1");
         assert_eq!(statistics.prev, 3);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
