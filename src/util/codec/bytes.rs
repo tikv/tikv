@@ -243,6 +243,7 @@ pub fn decode_bytes_in_place(mut data: Vec<u8>, desc: bool) -> Result<Vec<u8>> {
             unsafe {
                 // it is semantically equivalent to C's memmove()
                 // and the src and dest may overlap
+                // if src == dest do nothing
                 ptr::copy(
                     data.as_ptr().offset(read_offset as isize),
                     data.as_mut_ptr().offset(write_offset as isize),
