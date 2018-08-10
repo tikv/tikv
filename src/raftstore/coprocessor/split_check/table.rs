@@ -181,7 +181,7 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
 }
 
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
-    if let Ok(raw_key) = Key::from_encoded(encoded_key.to_vec()).raw() {
+    if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).raw() {
         table_codec::extract_table_prefix(&raw_key)
             .map(|k| Key::from_raw(k).take_encoded())
             .ok()
