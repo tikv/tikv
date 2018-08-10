@@ -987,6 +987,10 @@ mod tests {
     #[test]
     fn test_isolation_si() {}
 
+    /// Locks are ignored in RC.
+    #[test]
+    fn test_isolation_rc() {}
+
     /// Get keys that have long values.
     #[test]
     fn test_long_value() {}
