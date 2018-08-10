@@ -53,10 +53,8 @@ impl ScalarFunc {
             if s.chars().count() > i as usize {
                 let t = s
                     .chars()
-                    .into_iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>();
-                return Ok(Some(Cow::Owned(t[0..i as usize].concat().into_bytes())));
+                    .into_iter();
+                return Ok(Some(Cow::Owned(t.take(i as usize).collect::<String>().into_bytes())));
             }
         }
         Ok(Some(s))
