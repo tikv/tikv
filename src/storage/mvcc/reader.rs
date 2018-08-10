@@ -107,7 +107,6 @@ impl<S: Snapshot> MvccReader<S> {
                 Some(v) => v,
             }
         };
-
         self.statistics.data.processed += 1;
         self.statistics.data.flow_stats.read_bytes += k.encoded().len() + res.len();
         self.statistics.data.flow_stats.read_keys += 1;
