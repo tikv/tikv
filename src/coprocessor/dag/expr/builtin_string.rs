@@ -39,6 +39,7 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(format!("{:b}", i).into_bytes())))
     }
 
+
     #[inline]
     pub fn ltrim<'a, 'b: 'a>(
         &'b self,
@@ -47,10 +48,9 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let s = String::from_utf8(val.into_owned())?;
-        Ok(Some(Cow::Owned(s.trim_left().as_bytes().to_vec())))
+        Ok(Some(Cow::Owned(s.trim_left_matches(' ').as_bytes().to_vec())))
     }
 
-    #[inline]
     pub fn rtrim<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -58,7 +58,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let s = String::from_utf8(val.into_owned())?;
-        Ok(Some(Cow::Owned(s.trim_right().as_bytes().to_vec())))
+        Ok(Some(Cow::Owned(s.trim_right_matches(' ').as_bytes().to_vec())))
     }
 }
 
@@ -180,7 +180,14 @@ mod test {
         let cases = vec![
             ("   bar   ", "bar   "),
             ("bar", "bar"),
+            ("\t  bar", "\t  bar"),
+            ("\r  bar", "\r  bar"),
+            ("\n  bar", "\n  bar"),
+            ("  \tbar", "\tbar"),
             ("", ""),
+            ("  你好", "你好"),
+            ("  분산 데이터베이스    ", "분산 데이터베이스    "),
+            ("   あなたのことが好きです   ", "あなたのことが好きです   "),
         ];
 
         let mut ctx = EvalContext::default();
@@ -207,7 +214,14 @@ mod test {
         let cases = vec![
             ("   bar   ", "   bar"),
             ("bar", "bar"),
+            ("  bar\t  ", "  bar\t"),
+            (" bar   \t", " bar   \t"),
+            ("bar   \r", "bar   \r"),
+            ("bar   \n", "bar   \n"),
             ("", ""),
+            ("  你好  ", "  你好"),
+            ("  분산 데이터베이스    ", "  분산 데이터베이스"),
+            ("   あなたのことが好きです   ", "   あなたのことが好きです"),
         ];
 
         let mut ctx = EvalContext::default();
