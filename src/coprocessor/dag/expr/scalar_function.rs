@@ -192,6 +192,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
+            | ScalarFuncSig::LTrim
+            | ScalarFuncSig::RTrim
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig => (1, 1),
 
@@ -361,7 +363,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
-            | ScalarFuncSig::LTrim
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
@@ -405,7 +406,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::Rpad
             | ScalarFuncSig::RpadBinary
-            | ScalarFuncSig::RTrim
             | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
@@ -850,6 +850,8 @@ dispatch_call! {
 
         DateFormatSig => date_format,
         Bin => bin,
+        LTrim => ltrim,
+        RTrim => rtrim,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1091,6 +1093,8 @@ mod test {
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::LTrim,
+                    ScalarFuncSig::RTrim,
                 ],
                 1,
                 1,
@@ -1302,7 +1306,6 @@ mod test {
             ScalarFuncSig::Lower,
             ScalarFuncSig::Lpad,
             ScalarFuncSig::LpadBinary,
-            ScalarFuncSig::LTrim,
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
@@ -1346,7 +1349,6 @@ mod test {
             ScalarFuncSig::RowSig,
             ScalarFuncSig::Rpad,
             ScalarFuncSig::RpadBinary,
-            ScalarFuncSig::RTrim,
             ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,

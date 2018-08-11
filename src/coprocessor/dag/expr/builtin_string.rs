@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
@@ -36,6 +37,28 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let i = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(Cow::Owned(format!("{:b}", i).into_bytes())))
+    }
+
+    #[inline]
+    pub fn ltrim<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = String::from_utf8(val.into_owned())?;
+        Ok(Some(Cow::Owned(s.trim_left().as_bytes().to_vec())))
+    }
+
+    #[inline]
+    pub fn rtrim<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = String::from_utf8(val.into_owned())?;
+        Ok(Some(Cow::Owned(s.trim_right().as_bytes().to_vec())))
     }
 }
 
@@ -151,5 +174,58 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    fn test_ltrim() {
+        let cases = vec![
+            ("   bar   ", "bar   "),
+            ("bar", "bar"),
+            ("", ""),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, exp) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+            assert_eq!(got, exp, "ltrim('{:?}')", input_str);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "ltrim(NULL)");
+    }
+
+    #[test]
+    fn test_rtrim() {
+        let cases = vec![
+            ("   bar   ", "   bar"),
+            ("bar", "bar"),
+            ("", ""),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, exp) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+            assert_eq!(got, exp, "rtrim('{:?}')", input_str);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "rtrim(NULL)");
     }
 }
