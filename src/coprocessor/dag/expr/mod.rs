@@ -20,6 +20,7 @@ mod builtin_like;
 mod builtin_math;
 mod builtin_miscellaneous;
 mod builtin_op;
+mod builtin_other;
 mod builtin_string;
 mod builtin_time;
 mod column;
