@@ -16,7 +16,8 @@ use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
-use std::borrow::Cow;
+
+const SPACE: char = ' ';
 
 impl ScalarFunc {
     pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -179,6 +180,7 @@ mod test {
         }
     }
 
+    #[test]
     fn test_ltrim() {
         let cases = vec![
             ("   bar   ", "bar   "),
