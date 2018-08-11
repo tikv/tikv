@@ -177,6 +177,20 @@ impl ScalarFunc {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(!lhs))
     }
+
+    pub fn left_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        let ret = (lhs as u64).checked_shl(rhs as u32).unwrap_or(0);
+        Ok(Some(ret as i64))
+    }
+
+    pub fn right_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        let ret = (lhs as u64).checked_shr(rhs as u32).unwrap_or(0);
+        Ok(Some(ret as i64))
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +505,48 @@ mod test {
         for (arg, exp) in cases {
             let args = &[datum_expr(arg)];
             let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitNegSig, args))
+                .unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_left_shift() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(2), Datum::I64(492)),
+            (Datum::I64(-123), Datum::I64(2), Datum::I64(18446744073709551124)),
+            (Datum::I64(-123), Datum::I64(-1), Datum::I64(0)),
+            (Datum::I64(123), Datum::I64(0), Datum::I64(123)),
+            (Datum::Null, Datum::I64(1), Datum::Null),
+            (Datum::I64(123), Datum::Null, Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (lhs, rhs, exp) in cases {
+            let lhs = datum_expr(lhs);
+            let rhs = datum_expr(rhs);
+            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]))
+                .unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_right_shift() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(2), Datum::I64(30)),
+            (Datum::I64(-123), Datum::I64(2), Datum::I64(4611686018427387873)),
+            (Datum::I64(-123), Datum::I64(-1), Datum::I64(0)),
+            (Datum::I64(123), Datum::I64(0), Datum::I64(123)),
+            (Datum::Null, Datum::I64(1), Datum::Null),
+            (Datum::I64(123), Datum::Null, Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (lhs, rhs, exp) in cases {
+            let lhs = datum_expr(lhs);
+            let rhs = datum_expr(rhs);
+            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::RightShift, &[lhs, rhs]))
                 .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
