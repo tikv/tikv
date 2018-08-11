@@ -51,10 +51,10 @@ impl ScalarFunc {
         {
             let s = str::from_utf8(&s)?;
             if s.chars().count() > i as usize {
-                let t = s
-                    .chars()
-                    .into_iter();
-                return Ok(Some(Cow::Owned(t.take(i as usize).collect::<String>().into_bytes())));
+                let t = s.chars().into_iter();
+                return Ok(Some(Cow::Owned(
+                    t.take(i as usize).collect::<String>().into_bytes(),
+                )));
             }
         }
         Ok(Some(s))
