@@ -15,6 +15,7 @@ use kvproto::coprocessor::KeyRange;
 
 use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
+use std::cmp::max;
 use storage::txn::Result;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
@@ -62,10 +63,7 @@ impl<S: Snapshot> Scanner<S> {
             } else {
                 range.get_start()
             };
-            let mut buffer = Vec::with_capacity(::std::cmp::max(
-                MIN_KEY_BUFFER_CAPACITY,
-                seek_key_slice.len(),
-            ));
+            let mut buffer = Vec::with_capacity(max(MIN_KEY_BUFFER_CAPACITY, seek_key_slice.len()));
             buffer.extend_from_slice(seek_key_slice);
             buffer
         };
