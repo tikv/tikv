@@ -389,7 +389,7 @@ fn connect(
     security_mgr: &SecurityManager,
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    info!("connect to PD endpoint: {:?}", addr);
+    info!("connecting to PD endpoint: {:?}", addr);
     let addr = addr
         .trim_left_matches("http://")
         .trim_left_matches("https://");
@@ -448,7 +448,7 @@ pub fn try_connect_leader(
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
             if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
-                info!("connect to PD leader {:?}", ep);
+                info!("connected to PD leader {:?}", ep);
                 return Ok((client, resp));
             }
         }
