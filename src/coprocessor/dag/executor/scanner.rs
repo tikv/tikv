@@ -433,4 +433,78 @@ pub mod test {
         let scanner = Scanner::new(&store, ScanOn::Table, false, false, range.clone()).unwrap();
         assert_eq!(scanner.seek_key, range.get_start());
     }
+
+    #[test]
+    fn test_scan_start_stop() {
+        let table_id = 1;
+        let pks = vec![1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 26, 27];
+        let values: Vec<_> = pks
+            .iter()
+            .map(|pk| format!("value{}", pk).into_bytes())
+            .collect();
+        let test_data: Vec<_> = pks
+            .into_iter()
+            .map(|pk| table::encode_row_key(table_id, pk))
+            .zip(values.into_iter())
+            .collect();
+        let mut test_store = TestStore::new(&test_data);
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+
+        // `test_take` is used to take `count` keys from the scanner. It calls `start_scan` at
+        // beginning, `stop_scan` in the end, producing a range. the range will be cheched against
+        // `expect_start_pk` and `expect_end_pk`. Pass -1 as pk means the end.
+        let test_take = |scanner: &mut Scanner<_>, count, expect_start_pk, expect_end_pk| {
+            let mut range = KeyRange::new();
+            scanner.start_scan(&mut range);
+
+            let mut keys = Vec::new();
+            for _ in 0..count {
+                if let Some((key, _)) = scanner.next_row().unwrap() {
+                    keys.push(key);
+                } else {
+                    break;
+                }
+            }
+
+            let has_more = scanner.stop_scan(&mut range);
+            if has_more || scanner.scan_mode == ScanMode::Forward {
+                assert_eq!(
+                    range.get_start(),
+                    table::encode_row_key(table_id, expect_start_pk).as_slice()
+                );
+            } else {
+                assert_eq!(expect_start_pk, -1);
+            }
+            if has_more || scanner.scan_mode == ScanMode::Backward {
+                assert_eq!(
+                    range.get_end(),
+                    table::encode_row_key(table_id, expect_end_pk).as_slice()
+                );
+            } else {
+                assert_eq!(expect_end_pk, -1);
+            }
+
+            keys
+        };
+
+        let range = get_range(table_id, 1, 26);
+        let mut scanner = Scanner::new(&store, ScanOn::Table, false, true, range.clone()).unwrap();
+        let mut res = test_take(&mut scanner, 3, 1, 4);
+        res.append(&mut test_take(&mut scanner, 3, 4, 8));
+        res.append(&mut test_take(&mut scanner, 3, 8, 21));
+        res.append(&mut test_take(&mut scanner, 10, 21, -1));
+
+        let expect_keys: Vec<_> = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25]
+            .iter()
+            .map(|pk| table::encode_row_key(table_id, *pk))
+            .collect();
+        assert_eq!(res, expect_keys);
+
+        let mut scanner = Scanner::new(&store, ScanOn::Table, true, true, range).unwrap();
+        let mut res = test_take(&mut scanner, 3, 15, 26);
+        res.append(&mut test_take(&mut scanner, 3, 5, 15));
+        res.append(&mut test_take(&mut scanner, 10, -1, 5));
+        assert_eq!(res, expect_keys.into_iter().rev().collect::<Vec<_>>());
+    }
 }
