@@ -27,7 +27,7 @@ impl ScalarFunc {
                 Ok(None)
             },
             Err(e) => if e.is_overflow() {
-                Ok(Some(64i64))
+                Ok(Some(64))
             } else {
                 Err(e)
             },
