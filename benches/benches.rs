@@ -18,6 +18,7 @@ extern crate kvproto;
 extern crate log;
 #[macro_use(slog_o, slog_kv)]
 extern crate slog;
+extern crate byteorder;
 extern crate mio;
 extern crate protobuf;
 extern crate raft;
