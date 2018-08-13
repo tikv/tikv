@@ -248,6 +248,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
 
         unsafe {
             // the last byte in decode unit is for marker which indicates pad size
+            // for the sake of performancce, use get_unchecked() to save bound check
             let marker = *data.get_unchecked(marker_offset);
             let pad_size = if desc {
                 marker as usize
