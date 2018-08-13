@@ -657,7 +657,7 @@ impl Snap {
                 cf_file.checksum = calc_crc32(&cf_file.path)?;
             } else {
                 // Clean up the `tmp_path` if this cf file is empty.
-                delete_file_if_exist(&cf_file.tmp_path);
+                delete_file_if_exist(&cf_file.tmp_path).unwrap();
             }
         }
         Ok(())
@@ -880,17 +880,17 @@ impl Snapshot for Snap {
     fn delete(&self) {
         debug!("deleting {}", self.path());
         for cf_file in &self.cf_files {
-            delete_file_if_exist(&cf_file.clone_path);
+            delete_file_if_exist(&cf_file.clone_path).unwrap();
             if self.hold_tmp_files {
-                delete_file_if_exist(&cf_file.tmp_path);
+                delete_file_if_exist(&cf_file.tmp_path).unwrap();
             }
-            if delete_file_if_exist(&cf_file.path) {
+            if delete_file_if_exist(&cf_file.path).unwrap() {
                 self.size_track.fetch_sub(cf_file.size, Ordering::SeqCst);
             }
         }
-        delete_file_if_exist(&self.meta_file.path);
+        delete_file_if_exist(&self.meta_file.path).unwrap();
         if self.hold_tmp_files {
-            delete_file_if_exist(&self.meta_file.tmp_path);
+            delete_file_if_exist(&self.meta_file.tmp_path).unwrap();
         }
     }
 
