@@ -261,11 +261,15 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
                 }
 
                 // check the padding pattern whether validate or not
-                let padding_slice = if desc { &ENC_DESC_PADDING[..pad_size] } else { &ENC_ASC_PADDING[..pad_size] };
+                let padding_slice = if desc {
+                    &ENC_DESC_PADDING[..pad_size]
+                } else {
+                    &ENC_ASC_PADDING[..pad_size]
+                };
                 if &data[marker_offset - pad_size..marker_offset] != padding_slice {
                     return Err(Error::KeyPadding);
-                } 
-                data.set_len(write_offset - pad_size); 
+                }
+                data.set_len(write_offset - pad_size);
 
                 if desc {
                     for k in data {
@@ -273,7 +277,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
                     }
                 }
                 return Ok(());
-            }   
+            }
         }
     }
 }
@@ -513,7 +517,7 @@ mod tests {
     fn bench_decode_inplace_small(b: &mut Bencher) {
         let key = [b'x'; 30];
         let encoded = encode_bytes(&key);
-         b.iter(|| {
+        b.iter(|| {
             let mut encoded = encoded.clone();
             decode_bytes_in_place(&mut encoded, false).unwrap();
         });
