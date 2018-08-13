@@ -20,7 +20,8 @@ use util::codec::number::{self, NumberEncoder};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
-const ENC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
+const ENC_ASC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
+const ENC_DESC_PADDING: [u8; ENC_GROUP_SIZE] = [!0; ENC_GROUP_SIZE];
 
 // returns the maximum encoded bytes size.
 pub fn max_encoded_bytes_size(n: usize) -> usize {
@@ -46,7 +47,11 @@ pub trait BytesEncoder: NumberEncoder {
             } else {
                 pad = ENC_GROUP_SIZE - remain;
                 self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf))?;
-                self.write_all(adjust_bytes_order(&ENC_PADDING[..pad], desc, &mut buf))?;
+                if desc {
+                    self.write_all(&ENC_DESC_PADDING[..pad])?;
+                } else {
+                    self.write_all(&ENC_ASC_PADDING[..pad])?;
+                }
             }
             self.write_all(adjust_bytes_order(
                 &[ENC_MARKER - (pad as u8)],
@@ -220,71 +225,56 @@ pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
 pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     let mut write_offset = 0;
     let mut read_offset = 0;
-
-    let chunk_len = ENC_GROUP_SIZE + 1;
     loop {
+        let marker_offset = read_offset + ENC_GROUP_SIZE;
         // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
-        let next_offset = read_offset + chunk_len;
+        let next_offset = marker_offset + 1;
         if next_offset > data.len() {
             return Err(Error::unexpected_eof());
         };
 
-        // the last byte in decode unit is for marker which indicates pad size
-        let marker = data[next_offset - 1];
-        let pad_size = if desc {
-            marker as usize
-        } else {
-            (ENC_MARKER - marker) as usize
-        };
-
-        // no padding, just move 8 bytes to write_offset
-        if pad_size == 0 {
-            unsafe {
-                // it is semantically equivalent to C's memmove()
-                // and the src and dest may overlap
-                // if src == dest do nothing
-                ptr::copy(
-                    data.as_ptr().offset(read_offset as isize),
-                    data.as_mut_ptr().offset(write_offset as isize),
-                    ENC_GROUP_SIZE,
-                );
-            }
-            write_offset += ENC_GROUP_SIZE;
-            // one more for marker
-            read_offset += ENC_GROUP_SIZE + 1;
-            continue;
-        }
-
-        if pad_size > ENC_GROUP_SIZE {
-            return Err(Error::KeyPadding);
-        }
-        // if has padding, move bytes without padding pattern
         unsafe {
+            // it is semantically equivalent to C's memmove()
+            // and the src and dest may overlap
+            // if src == dest do nothing
             ptr::copy(
                 data.as_ptr().offset(read_offset as isize),
                 data.as_mut_ptr().offset(write_offset as isize),
-                ENC_GROUP_SIZE - pad_size,
+                ENC_GROUP_SIZE,
             );
         }
-        write_offset += ENC_GROUP_SIZE - pad_size;
-        read_offset += ENC_GROUP_SIZE - pad_size;
+        write_offset += ENC_GROUP_SIZE;
+        read_offset = next_offset;
 
-        let pad_byte = if desc { !0 } else { 0 };
-        // check the padding pattern whether validate or not
-        if data[read_offset..read_offset + pad_size]
-            .iter()
-            .any(|x| *x != pad_byte)
-        {
-            return Err(Error::KeyPadding);
-        }
-        unsafe { data.set_len(write_offset) }
+        unsafe {
+            // the last byte in decode unit is for marker which indicates pad size
+            let marker = *data.get_unchecked(marker_offset);
+            let pad_size = if desc {
+                marker as usize
+            } else {
+                (ENC_MARKER - marker) as usize
+            };
 
-        if desc {
-            for k in data {
-                *k = !*k;
-            }
+            if pad_size > 0 {
+                if pad_size > ENC_GROUP_SIZE {
+                    return Err(Error::KeyPadding);
+                }
+
+                // check the padding pattern whether validate or not
+                let padding_slice = if desc { &ENC_DESC_PADDING[..pad_size] } else { &ENC_ASC_PADDING[..pad_size] };
+                if &data[marker_offset - pad_size..marker_offset] != padding_slice {
+                    return Err(Error::KeyPadding);
+                } 
+                data.set_len(write_offset - pad_size); 
+
+                if desc {
+                    for k in data {
+                        *k = !*k;
+                    }
+                }
+                return Ok(());
+            }   
         }
-        return Ok(());
     }
 }
 
@@ -491,18 +481,40 @@ mod tests {
 
     #[bench]
     fn bench_decode(b: &mut Bencher) {
+        let key = [b'x'; 10000];
+        let encoded = encode_bytes(&key);
         b.iter(|| {
-            let key = [b'x'; 2000000];
-            let encoded = encode_bytes(&key);
+            let encoded = encoded.clone();
             decode_bytes(&mut encoded.as_slice(), false).unwrap();
         });
     }
 
     #[bench]
     fn bench_decode_inplace(b: &mut Bencher) {
+        let key = [b'x'; 10000];
+        let encoded = encode_bytes(&key);
         b.iter(|| {
-            let key = [b'x'; 2000000];
-            let mut encoded = encode_bytes(&key);
+            let mut encoded = encoded.clone();
+            decode_bytes_in_place(&mut encoded, false).unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_decode_small(b: &mut Bencher) {
+        let key = [b'x'; 30];
+        let encoded = encode_bytes(&key);
+        b.iter(|| {
+            let encoded = encoded.clone();
+            decode_bytes(&mut encoded.as_slice(), false).unwrap();
+        });
+    }
+
+    #[bench]
+    fn bench_decode_inplace_small(b: &mut Bencher) {
+        let key = [b'x'; 30];
+        let encoded = encode_bytes(&key);
+         b.iter(|| {
+            let mut encoded = encoded.clone();
             decode_bytes_in_place(&mut encoded, false).unwrap();
         });
     }
