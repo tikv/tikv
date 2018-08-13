@@ -191,6 +191,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::Upper
+            | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
@@ -358,7 +360,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Log1Arg
             | ScalarFuncSig::Log2
             | ScalarFuncSig::Log2Args
-            | ScalarFuncSig::Lower
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::LTrim
@@ -478,7 +479,6 @@ impl ScalarFunc {
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
-            | ScalarFuncSig::Upper
             | ScalarFuncSig::User
             | ScalarFuncSig::UTCDate
             | ScalarFuncSig::UTCTimestampWithArg
@@ -849,6 +849,8 @@ dispatch_call! {
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
+        Upper => upper,
+        Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
     }
@@ -1093,6 +1095,8 @@ mod test {
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::Lower,
+                    ScalarFuncSig::Upper,
                 ],
                 1,
                 1,
@@ -1300,7 +1304,6 @@ mod test {
             ScalarFuncSig::Log1Arg,
             ScalarFuncSig::Log2,
             ScalarFuncSig::Log2Args,
-            ScalarFuncSig::Lower,
             ScalarFuncSig::Lpad,
             ScalarFuncSig::LpadBinary,
             ScalarFuncSig::LTrim,
@@ -1420,7 +1423,6 @@ mod test {
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
-            ScalarFuncSig::Upper,
             ScalarFuncSig::User,
             ScalarFuncSig::UTCDate,
             ScalarFuncSig::UTCTimestampWithArg,
