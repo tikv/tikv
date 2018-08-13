@@ -27,28 +27,28 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
     path.exists() && path.is_file()
 }
 
-/// Delete given path from file system. Return `true` for success.
-pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> bool {
+/// Delete given path from file system. Return `true` for success, `false` means there is no such
+/// file. Otherwise the raw error will be returned.
+pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     match fs::remove_file(&file) {
-        Ok(_) => return true,
-        Err(ref e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) => warn!("failed to delete file {}: {:?}", file.as_ref().display(), e),
+        Ok(_) => Ok(true),
+        Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
     }
-    false
 }
 
-/// Delete given path from file system. Return `true` for success.
-pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> bool {
+/// Delete given path from file system. Return `true` for success, `false` means there is no such
+/// directory. Otherwise the raw error will be returned.
+pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::remove_dir_all(&dir) {
-        Ok(_) => return true,
-        Err(ref e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) => warn!("failed to delete dir {}: {:?}", dir.as_ref().display(), e),
+        Ok(_) => Ok(true),
+        Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
     }
-    false
 }
 
 /// Delete given path from file system. Return `true` for new created.
-pub fn create_dir_if_not_exists<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
+pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::create_dir(&dir) {
         Ok(_) => Ok(true),
         Err(ref e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
@@ -171,11 +171,11 @@ mod test {
                 .unwrap();
         }
         assert_eq!(file_exists(&existent_file), true);
-        delete_file_if_exist(&existent_file);
+        delete_file_if_exist(&existent_file).unwrap();
         assert_eq!(file_exists(&existent_file), false);
 
         let non_existent_file = dir_path.join("non_existent_file");
-        delete_file_if_exist(&non_existent_file);
+        delete_file_if_exist(&non_existent_file).unwrap();
     }
 
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {
@@ -197,5 +197,16 @@ mod test {
         let large_file = tmp_dir.path().join("large.txt");
         let large_checksum = gen_rand_file(&large_file, DIGEST_BUFFER_SIZE * 4);
         assert_eq!(calc_crc32(&large_file).unwrap(), large_checksum);
+    }
+
+    #[test]
+    fn test_create_delete_dir() {
+        let tmp_dir = TempDir::new("").unwrap();
+        let subdir = tmp_dir.path().join("subdir");
+
+        assert!(!delete_dir_if_exist(&subdir).unwrap());
+        assert!(create_dir_if_not_exist(&subdir).unwrap());
+        assert!(!create_dir_if_not_exist(&subdir).unwrap());
+        assert!(delete_dir_if_exist(&subdir).unwrap());
     }
 }
