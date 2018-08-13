@@ -1257,7 +1257,7 @@ impl<E: Engine> Storage<E> {
                             if i + 1 == ranges_len {
                                 None
                             } else {
-                                Some(Key::from_encoded(ranges[i + 1].get_start_key().to_vec()))
+                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
                             }
                         } else {
                             Some(Key::from_encoded(end_key))
