@@ -144,7 +144,7 @@ impl Expression {
             Cow::Borrowed(bs) => str::from_utf8(bs).map_err(Error::from).map(Cow::Borrowed),
             Cow::Owned(bs) => String::from_utf8(bs).map_err(Error::from).map(Cow::Owned),
         };
-        return s.map(Some);
+        s.map(Some)
     }
 
     fn eval_time<'a, 'b: 'a>(
