@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{i64, str};
+use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::types;
@@ -45,13 +45,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         Ok(Some(Cow::Owned(
-            str::from_utf8(&s)?
-                .chars()
-                .rev()
-                .collect::<String>()
-                .into_bytes(),
+            s.chars().rev().collect::<String>().into_bytes(),
         )))
     }
 
@@ -61,13 +57,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if types::is_binary_str(self.children[0].get_tp()) {
-            return Ok(Some(s));
+            return Ok(Some(Cow::Owned(s.to_string().into_bytes())));
         }
-        Ok(Some(Cow::Owned(
-            str::from_utf8(&s)?.to_uppercase().into_bytes(),
-        )))
+        Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
     }
 
     #[inline]
@@ -76,13 +70,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if types::is_binary_str(self.children[0].get_tp()) {
-            return Ok(Some(s));
+            return Ok(Some(Cow::Owned(s.to_string().into_bytes())));
         }
-        Ok(Some(Cow::Owned(
-            str::from_utf8(&s)?.to_lowercase().into_bytes(),
-        )))
+        Ok(Some(Cow::Owned(s.to_lowercase().into_bytes())))
     }
 }
 
