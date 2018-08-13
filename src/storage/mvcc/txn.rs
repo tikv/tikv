@@ -374,15 +374,6 @@ mod tests {
     use storage::mvcc::{CfReaderBuilder, MvccTxn, PointGetterBuilder};
     use storage::{Key, Mutation, Options, ALL_CFS, SHORT_VALUE_MAX_LEN};
 
-    fn gen_value(v: u8, len: usize) -> Vec<u8> {
-        let mut value = Vec::with_capacity(len);
-        for _ in 0..len {
-            value.push(v);
-        }
-
-        value
-    }
-
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
@@ -409,7 +400,7 @@ mod tests {
     fn test_mvcc_txn_read() {
         test_mvcc_txn_read_imp(b"k1", b"v1");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_read_imp(b"k2", &long_value);
     }
 
@@ -479,7 +470,7 @@ mod tests {
     fn test_mvcc_txn_prewrite() {
         test_mvcc_txn_prewrite_imp(b"k1", b"v1");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_prewrite_imp(b"k2", &long_value);
     }
 
@@ -507,7 +498,7 @@ mod tests {
     fn test_mvcc_txn_commit_ok() {
         test_mvcc_txn_commit_ok_imp(b"x", b"v", b"y", b"z");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_commit_ok_imp(b"x", &long_value, b"y", b"z");
     }
 
@@ -528,7 +519,7 @@ mod tests {
     fn test_mvcc_txn_commit_err() {
         test_mvcc_txn_commit_err_imp(b"k", b"v");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_commit_err_imp(b"k2", &long_value);
     }
 
@@ -575,7 +566,7 @@ mod tests {
     fn test_mvcc_txn_rollback() {
         test_mvcc_txn_rollback_imp(b"k", b"v");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_rollback_imp(b"k2", &long_value);
     }
 
@@ -592,7 +583,7 @@ mod tests {
     fn test_mvcc_txn_rollback_err() {
         test_mvcc_txn_rollback_err_imp(b"k", b"v");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_rollback_err_imp(b"k2", &long_value);
     }
 
@@ -664,10 +655,10 @@ mod tests {
     fn test_gc() {
         test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4");
 
-        let v1 = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
-        let v2 = gen_value(b'y', SHORT_VALUE_MAX_LEN + 1);
-        let v3 = gen_value(b'z', SHORT_VALUE_MAX_LEN + 1);
-        let v4 = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_gc_imp(b"k2", &v1, &v2, &v3, &v4);
     }
 
@@ -698,7 +689,7 @@ mod tests {
     fn test_write() {
         test_write_imp(b"kk", b"v1", b"k");
 
-        let v2 = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
+        let v2 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_write_imp(b"kk", &v2, b"k");
     }
 
@@ -724,8 +715,8 @@ mod tests {
     fn test_scan_keys() {
         test_scan_keys_imp(vec![b"a", b"c", b"e", b"b", b"d", b"f"], vec![b"a", b"b"]);
 
-        let v1 = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
-        let v4 = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_scan_keys_imp(vec![b"a", b"c", b"e", b"b", b"d", b"f"], vec![&v1, &v4]);
     }
 
@@ -760,7 +751,7 @@ mod tests {
     fn test_write_size() {
         test_write_size_imp(b"key", b"value", b"pk");
 
-        let v = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
+        let v = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_write_size_imp(b"key", &v, b"pk");
     }
 
@@ -845,7 +836,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[2],
-            &gen_value(b'v', SHORT_VALUE_MAX_LEN + 1),
+            &"v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
             &[2],
             3,
         );
@@ -854,7 +845,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[3],
-            &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1),
+            &"a".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
             &[3],
             3,
         );
@@ -863,7 +854,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[3],
-            &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1),
+            &"b".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
             &[3],
             5,
         );
@@ -872,7 +863,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[6],
-            &gen_value(b'x', SHORT_VALUE_MAX_LEN + 1),
+            &"x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
             &[6],
             3,
         );
@@ -882,8 +873,8 @@ mod tests {
         let mut cf_reader = CfReaderBuilder::new(snapshot).build().unwrap();
         let v = cf_reader.scan_values(&Key::from_raw(&[3])).unwrap();
         assert_eq!(v.len(), 2);
-        assert_eq!(v[1], (3, gen_value(b'a', SHORT_VALUE_MAX_LEN + 1)));
-        assert_eq!(v[0], (5, gen_value(b'b', SHORT_VALUE_MAX_LEN + 1)));
+        assert_eq!(v[1], (3, "a".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes()));
+        assert_eq!(v[0], (5, "b".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes()));
     }
 
     #[test]
@@ -892,13 +883,13 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
 
-        must_prewrite_put(&engine, &[2], &gen_value(b'v', 2), &[2], 3);
+        must_prewrite_put(&engine, &[2], b"vv", &[2], 3);
         must_commit(&engine, &[2], 3, 3);
 
         must_prewrite_put(
             &engine,
             &[3],
-            &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1),
+            &"a".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
             &[3],
             4,
         );
@@ -907,13 +898,13 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[5],
-            &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1),
+            &"b".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
             &[5],
             2,
         );
         must_commit(&engine, &[5], 2, 5);
 
-        must_prewrite_put(&engine, &[6], &gen_value(b'x', 3), &[6], 3);
+        must_prewrite_put(&engine, &[6], b"xxx", &[6], 3);
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
