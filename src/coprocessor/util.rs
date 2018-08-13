@@ -51,6 +51,7 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
     let next_len = next.len();
 
     if len == next_len {
+        // Find the last non-255 byte
         let mut carry_pos = len;
         loop {
             if carry_pos == 0 {
@@ -65,10 +66,22 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
             }
         }
 
+        // Now `carry_pos` is the index of the last byte that is not 255. For example:
+        //   key: [1, 2, 3, 255, 255, 255]
+        //               ^ carry_pos == 2
+
         // So they are equal when:
         // * `key`'s value at `carry_pos` is that of `next` - 1 and
         // * `next`'s part after carry_pos is all 0
-        // * `key` and `next`'s parts before carry_pos are equal.
+        // * `key` and `next`'s parts before `carry_pos` are equal.
+        // For example:
+        //   key:  [1, 2, 3, 255, 255, 255]
+        //   next: [1, 2, 4,   0,   0,   0]
+        //                ^ carry_pos == 2
+        // The part before `carry_pos` is all [1, 2],
+        // the bytes at `carry_pos` differs by 1 (4 == 3 + 1), and
+        // the remaining bytes of next ([0, 0, 0]) is all 0.
+        // so [1, 2, 4, 0, 0, 0] is prefix_next of [1, 2, 3, 255, 255, 255]
         key[carry_pos] + 1 == next[carry_pos]
             && next[carry_pos + 1..].iter().all(|byte| *byte == 0)
             && key[..carry_pos] == next[..carry_pos]
