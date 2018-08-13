@@ -145,7 +145,7 @@ pub fn delete_all_in_range_cf(
     // traditional way to cleanup.
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
         if cf == CF_WRITE {
-            let start = Key::from_encoded(start_key.to_vec()).append_ts(u64::MAX);
+            let start = Key::from_encoded_slice(start_key).append_ts(u64::MAX);
             wb.delete_range_cf(handle, start.encoded(), end_key)?;
         } else {
             wb.delete_range_cf(handle, start_key, end_key)?;
@@ -1449,7 +1449,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let middle_key = Key::from_encoded(keys::origin_key(&middle_key).to_owned())
+        let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
             .raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");

@@ -359,6 +359,31 @@ mod test {
         expr
     }
 
+    pub fn string_datum_expr_with_tp(
+        datum: Datum,
+        tp: u8,
+        flag: u64,
+        flen: i32,
+        charset: String,
+        collate: i32,
+    ) -> Expr {
+        let mut expr = Expr::new();
+        match datum {
+            Datum::Bytes(bs) => {
+                expr.set_tp(ExprType::Bytes);
+                expr.set_val(bs);
+                expr.mut_field_type().set_tp(i32::from(tp));
+                expr.mut_field_type().set_flag(flag as u32);
+                expr.mut_field_type().set_flen(flen);
+                expr.mut_field_type().set_charset(charset);
+                expr.mut_field_type().set_collate(collate);
+            }
+            Datum::Null => expr.set_tp(ExprType::Null),
+            d => panic!("unsupport datum: {:?}", d),
+        }
+        expr
+    }
+
     pub fn datum_expr(datum: Datum) -> Expr {
         let mut expr = Expr::new();
         match datum {
