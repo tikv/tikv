@@ -15,9 +15,12 @@ use kvproto::coprocessor::KeyRange;
 
 use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
+use std::cmp::max;
 use storage::txn::Result;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
+
+const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
 #[derive(Copy, Clone)]
 pub enum ScanOn {
@@ -48,11 +51,23 @@ impl<S: Snapshot> Scanner<S> {
         key_only: bool,
         range: KeyRange,
     ) -> Result<Self> {
-        let (scan_mode, seek_key) = if desc {
-            (ScanMode::Backward, range.get_end().to_vec())
+        let scan_mode = if desc {
+            ScanMode::Backward
         } else {
-            (ScanMode::Forward, range.get_start().to_vec())
+            ScanMode::Forward
         };
+
+        let seek_key = {
+            let seek_key_slice = if desc {
+                range.get_end()
+            } else {
+                range.get_start()
+            };
+            let mut buffer = Vec::with_capacity(max(MIN_KEY_BUFFER_CAPACITY, seek_key_slice.len()));
+            buffer.extend_from_slice(seek_key_slice);
+            buffer
+        };
+
         let scanner = Self::range_scanner(store, scan_mode, key_only, &range)?;
 
         Ok(Self {
@@ -81,9 +96,12 @@ impl<S: Snapshot> Scanner<S> {
     pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
         self.range = range;
         self.no_more = false;
+        unsafe {
+            self.seek_key.set_len(0);
+        }
         match self.scan_mode {
-            ScanMode::Backward => self.seek_key = self.range.get_end().to_vec(),
-            ScanMode::Forward => self.seek_key = self.range.get_start().to_vec(),
+            ScanMode::Backward => self.seek_key.extend_from_slice(self.range.get_end()),
+            ScanMode::Forward => self.seek_key.extend_from_slice(self.range.get_start()),
         };
 
         self.statistics_cache.add(&self.scanner.take_statistics());
@@ -115,32 +133,41 @@ impl<S: Snapshot> Scanner<S> {
             );
         }
 
-        self.seek_key = match (self.scan_mode, self.scan_on) {
-            (ScanMode::Forward, _) => util::prefix_next(&key), // Where is this thing useful?????
-            (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
-            (ScanMode::Backward, ScanOn::Index) => key.clone(),
-        };
+        {
+            let seek_key_slice = match (self.scan_mode, self.scan_on) {
+                (ScanMode::Forward, _) | (ScanMode::Backward, ScanOn::Index) => key.as_slice(),
+                (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)),
+            };
+            unsafe {
+                self.seek_key.set_len(0);
+            }
+            self.seek_key.extend_from_slice(seek_key_slice);
+        }
 
         Ok(Some((key, value)))
     }
 
     pub fn start_scan(&self, range: &mut KeyRange) {
         assert!(!self.no_more);
-        let cur_seek_key = self.seek_key.clone();
         match self.scan_mode {
-            ScanMode::Forward => range.set_start(cur_seek_key),
-            ScanMode::Backward => range.set_end(cur_seek_key),
+            ScanMode::Forward => range.set_start(self.seek_key.clone()),
+            ScanMode::Backward => range.set_end(self.seek_key.clone()),
         };
     }
 
-    pub fn stop_scan(&self, range: &mut KeyRange) -> bool {
+    pub fn stop_scan(&mut self, range: &mut KeyRange) -> bool {
         if self.no_more {
             return false;
         }
-        let cur_seek_key = self.seek_key.clone();
+
         match self.scan_mode {
-            ScanMode::Forward => range.set_end(cur_seek_key),
-            ScanMode::Backward => range.set_start(cur_seek_key),
+            ScanMode::Forward => {
+                // Increase seek_key, so that stop_scan returns a key that is exclusive, producing
+                // a half-close range
+                util::convert_to_prefix_next(&mut self.seek_key);
+                range.set_end(self.seek_key.clone())
+            }
+            ScanMode::Backward => range.set_start(self.seek_key.clone()),
         };
         true
     }
@@ -315,7 +342,8 @@ pub mod test {
 
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
         let start_key = table::encode_row_key(table_id, handle);
-        let end = util::prefix_next(&start_key);
+        let mut end = start_key.clone();
+        util::convert_to_prefix_next(&mut end);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
         key_range.set_end(end);
@@ -399,5 +427,79 @@ pub mod test {
         // 2.asc scan
         let scanner = Scanner::new(&store, ScanOn::Table, false, false, range.clone()).unwrap();
         assert_eq!(scanner.seek_key, range.get_start());
+    }
+
+    #[test]
+    fn test_scan_start_stop() {
+        let table_id = 1;
+        let pks = vec![1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 26, 27];
+        let values: Vec<_> = pks
+            .iter()
+            .map(|pk| format!("value{}", pk).into_bytes())
+            .collect();
+        let test_data: Vec<_> = pks
+            .into_iter()
+            .map(|pk| table::encode_row_key(table_id, pk))
+            .zip(values.into_iter())
+            .collect();
+        let mut test_store = TestStore::new(&test_data);
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+
+        // `test_take` is used to take `count` keys from the scanner. It calls `start_scan` at
+        // beginning, `stop_scan` in the end, producing a range. the range will be cheched against
+        // `expect_start_pk` and `expect_end_pk`. Pass -1 as pk means the end.
+        let test_take = |scanner: &mut Scanner<_>, count, expect_start_pk, expect_end_pk| {
+            let mut range = KeyRange::new();
+            scanner.start_scan(&mut range);
+
+            let mut keys = Vec::new();
+            for _ in 0..count {
+                if let Some((key, _)) = scanner.next_row().unwrap() {
+                    keys.push(key);
+                } else {
+                    break;
+                }
+            }
+
+            let has_more = scanner.stop_scan(&mut range);
+            if has_more || scanner.scan_mode == ScanMode::Forward {
+                assert_eq!(
+                    range.get_start(),
+                    table::encode_row_key(table_id, expect_start_pk).as_slice()
+                );
+            } else {
+                assert_eq!(expect_start_pk, -1);
+            }
+            if has_more || scanner.scan_mode == ScanMode::Backward {
+                assert_eq!(
+                    range.get_end(),
+                    table::encode_row_key(table_id, expect_end_pk).as_slice()
+                );
+            } else {
+                assert_eq!(expect_end_pk, -1);
+            }
+
+            keys
+        };
+
+        let range = get_range(table_id, 1, 26);
+        let mut scanner = Scanner::new(&store, ScanOn::Table, false, true, range.clone()).unwrap();
+        let mut res = test_take(&mut scanner, 3, 1, 4);
+        res.append(&mut test_take(&mut scanner, 3, 4, 8));
+        res.append(&mut test_take(&mut scanner, 3, 8, 21));
+        res.append(&mut test_take(&mut scanner, 10, 21, -1));
+
+        let expect_keys: Vec<_> = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25]
+            .iter()
+            .map(|pk| table::encode_row_key(table_id, *pk))
+            .collect();
+        assert_eq!(res, expect_keys);
+
+        let mut scanner = Scanner::new(&store, ScanOn::Table, true, true, range).unwrap();
+        let mut res = test_take(&mut scanner, 3, 15, 26);
+        res.append(&mut test_take(&mut scanner, 3, 5, 15));
+        res.append(&mut test_take(&mut scanner, 10, -1, 5));
+        assert_eq!(res, expect_keys.into_iter().rev().collect::<Vec<_>>());
     }
 }
