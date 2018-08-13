@@ -1254,14 +1254,403 @@ mod tests {
 
     /// Locks are checked in SI.
     #[test]
-    fn test_isolation_si() {}
+    fn test_isolation_si() {
+        fn new_point_getter<E: Engine>(engine: &E) -> PointGetter<E::Snap> {
+            let snapshot = engine.snapshot(&Context::new()).unwrap();
+            PointGetterBuilder::new(snapshot)
+                .isolation_level(IsolationLevel::SI)
+                .build()
+                .unwrap()
+        }
 
-    /// Locks are ignored in RC.
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // key [30_5] is committed.
+        must_prewrite_put(&engine, &[30u8], &[30u8], &[30u8], 5);
+        must_commit(&engine, &[30u8], 5, 5);
+
+        // key [10_5] not prewritten.
+        assert!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[10u8]), 5)
+                .unwrap()
+                .is_none()
+        );
+        // key [10_5] prewritten but not committed.
+        must_prewrite_put(&engine, &[10u8], &[10u8], &[10u8], 5);
+        {
+            // we should get error for key [10_5] even if previously we get a value [30_5].
+            let mut point_getter = new_point_getter(&engine);
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[30u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[30u8]
+            );
+            assert!(point_getter.read_next(&Key::from_raw(&[10u8]), 5).is_err());
+            // if we get the value with a smaller ts, we should success.
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[30u8]), 4)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 3)
+                    .unwrap()
+                    .is_none()
+            );
+            // if we directly get the value, we should fail as well.
+            assert!(
+                new_point_getter(&engine)
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .is_err()
+            );
+            // if we directly get the value with a smaller ts, we should success.
+            assert!(
+                new_point_getter(&engine)
+                    .read_next(&Key::from_raw(&[10u8]), 4)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        // key [10_5] committed.
+        must_commit(&engine, &[10u8], 5, 5);
+        assert_eq!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[10u8]), 8)
+                .unwrap()
+                .unwrap(),
+            &[10u8]
+        );
+        // key [10_10] prewritten but not committed
+        must_prewrite_put(&engine, &[10u8], &[100u8], &[10u8], 10);
+        {
+            // we should be able to read key [10_1] ~ [10_9]
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            // we should not be able to read key >= version 10
+            assert!(point_getter.read_next(&Key::from_raw(&[10u8]), 10).is_err());
+            assert!(point_getter.read_next(&Key::from_raw(&[10u8]), 11).is_err());
+        }
+        must_commit(&engine, &[10u8], 10, 20);
+        {
+            // we should be able to read key [10] for any version.
+            let mut point_getter = new_point_getter(&engine);
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 15)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 20)
+                    .unwrap()
+                    .unwrap(),
+                &[100u8]
+            );
+        }
+        // key [20_5] not prewritten
+        assert!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[20u8]), 5)
+                .unwrap()
+                .is_none()
+        );
+        // key [20_5] prewritten but not committed
+        must_prewrite_put(&engine, &[20u8], &[20u8], &[20u8], 5);
+        {
+            // even if there was an error previously, we are able to read another committed key.
+            let mut point_getter = new_point_getter(&engine);
+            assert!(point_getter.read_next(&Key::from_raw(&[20u8]), 5).is_err());
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            // or course we should be able to directly read the committed key.
+            assert_eq!(
+                new_point_getter(&engine)
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+        }
+        // key [40_5] prewritten but not committed
+        must_prewrite_put(&engine, &[40u8], &[40u8], &[40u8], 5);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(point_getter.read_next(&Key::from_raw(&[20u8]), 5).is_err());
+            assert!(point_getter.read_next(&Key::from_raw(&[40u8]), 5).is_err());
+        }
+        // key [20_5] committed
+        must_commit(&engine, &[20u8], 5, 5);
+        assert_eq!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[20u8]), 5)
+                .unwrap()
+                .unwrap(),
+            &[20u8]
+        );
+    }
+
+    /// Locks are ignored in RC. Use a same pattern as `test_isolation_si`, however in these
+    /// error cases we should be able to read last value.
     #[test]
-    fn test_isolation_rc() {}
+    fn test_isolation_rc() {
+        fn new_point_getter<E: Engine>(engine: &E) -> PointGetter<E::Snap> {
+            let snapshot = engine.snapshot(&Context::new()).unwrap();
+            PointGetterBuilder::new(snapshot)
+                .isolation_level(IsolationLevel::RC)
+                .build()
+                .unwrap()
+        }
 
-    /// Get corrupted data.
-    #[test]
-    fn test_default_data_missing() {}
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
+        // key [30_5] is committed.
+        must_prewrite_put(&engine, &[30u8], &[30u8], &[30u8], 5);
+        must_commit(&engine, &[30u8], 5, 5);
+
+        // key [10_5] not prewritten.
+        assert!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[10u8]), 5)
+                .unwrap()
+                .is_none()
+        );
+        // key [10_5] prewritten but not committed.
+        must_prewrite_put(&engine, &[10u8], &[10u8], &[10u8], 5);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[30u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[30u8]
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[30u8]), 4)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 3)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                new_point_getter(&engine)
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .is_none()
+            );
+            // if we directly get the value with a smaller ts, we should success.
+            assert!(
+                new_point_getter(&engine)
+                    .read_next(&Key::from_raw(&[10u8]), 4)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        // key [10_5] committed.
+        must_commit(&engine, &[10u8], 5, 5);
+        assert_eq!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[10u8]), 8)
+                .unwrap()
+                .unwrap(),
+            &[10u8]
+        );
+        // key [10_10] prewritten but not committed
+        must_prewrite_put(&engine, &[10u8], &[100u8], &[10u8], 10);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 10)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 11)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+        }
+        must_commit(&engine, &[10u8], 10, 20);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 15)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 20)
+                    .unwrap()
+                    .unwrap(),
+                &[100u8]
+            );
+        }
+        // key [20_5] not prewritten
+        assert!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[20u8]), 5)
+                .unwrap()
+                .is_none()
+        );
+        // key [20_5] prewritten but not committed
+        must_prewrite_put(&engine, &[20u8], &[20u8], &[20u8], 5);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[20u8]), 5)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                point_getter
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+            assert_eq!(
+                new_point_getter(&engine)
+                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .unwrap()
+                    .unwrap(),
+                &[10u8]
+            );
+        }
+        // key [40_5] prewritten but not committed
+        must_prewrite_put(&engine, &[40u8], &[40u8], &[40u8], 5);
+        {
+            let mut point_getter = new_point_getter(&engine);
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[20u8]), 5)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                point_getter
+                    .read_next(&Key::from_raw(&[40u8]), 5)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        // key [20_5] committed
+        must_commit(&engine, &[20u8], 5, 5);
+        assert_eq!(
+            new_point_getter(&engine)
+                .read_next(&Key::from_raw(&[20u8]), 5)
+                .unwrap()
+                .unwrap(),
+            &[20u8]
+        );
+    }
 }
