@@ -89,7 +89,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
 /// Reads user key's value in default CF according to the given write CF value
 /// (`write`).
 ///
-/// Internally, there will be a `near_seek_get` operation.
+/// Internally, there will be a `near_seek` operation with `allow_reseek == true`.
 ///
 /// Notice that the value may be already carried in the `write` (short value). In this
 /// case, you should not call this function.
@@ -109,21 +109,32 @@ where
     I: Iterator,
 {
     assert!(write.short_value.is_none());
-    let seek_key = user_key.clone().append_ts(write.start_ts); // TODO: eliminate clone.
+    let seek_key = user_key.clone().append_ts(write.start_ts);
+    default_cursor.near_seek(&seek_key, true, &mut statistics.data)?;
+    assert!(default_cursor.valid());
+    assert!(default_cursor.key(&mut statistics.data) == seek_key.encoded().as_slice());
+    statistics.data.processed += 1;
+    Ok(default_cursor.value(&mut statistics.data).to_vec())
+}
 
-    // `allow_reseek` must be `true`, because if a seek key (`${user_key}_${ts}`) that smaller
-    // than current cursor key is given, it must be valid and we should try to get it.
-
-    match default_cursor.near_seek_get(&seek_key, true, &mut statistics.data)? {
-        None => panic!(
-            "Mvcc data for key {} is not found, start_ts = {}",
-            user_key, write.start_ts
-        ),
-        Some(v) => {
-            statistics.data.processed += 1;
-            Ok(v.to_vec())
-        }
-    }
+/// Similar to `near_load_data_by_write`, but accepts a `BackwardCursor` and use
+/// `near_seek_for_prev` internally.
+pub fn near_reverse_load_data_by_write<I>(
+    default_cursor: &mut Cursor<I>, // TODO: make it `BackwardCursor`.
+    user_key: &Key,
+    write: Write,
+    statistics: &mut Statistics,
+) -> Result<Value>
+where
+    I: Iterator,
+{
+    assert!(write.short_value.is_none());
+    let seek_key = user_key.clone().append_ts(write.start_ts);
+    default_cursor.near_seek_for_prev(&seek_key, true, &mut statistics.data)?;
+    assert!(default_cursor.valid());
+    assert!(default_cursor.key(&mut statistics.data) == seek_key.encoded().as_slice());
+    statistics.data.processed += 1;
+    Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
 /// Get Mvcc properties stored in each sstable's metadata.

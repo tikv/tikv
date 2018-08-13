@@ -674,9 +674,9 @@ impl<E: Engine> Storage<E> {
                     };
                     let res = scanner.scan(limit);
 
-                    let statistics = scanner.get_statistics();
-                    thread_ctx.collect_scan_count(CMD, statistics);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
+                    let statistics = scanner.take_statistics();
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     res.map_err(Error::from).map(|results| {
                         thread_ctx.collect_key_reads(CMD, results.len() as u64);
@@ -1177,7 +1177,7 @@ impl<E: Engine> Storage<E> {
                     ).map_err(Error::from);
 
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-                    thread_ctx.collect_key_reads(CMD, statistics.data.flow_stats.read_keys as u64);
+                    thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     result
@@ -1275,7 +1275,7 @@ impl<E: Engine> Storage<E> {
                     }
 
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-                    thread_ctx.collect_key_reads(CMD, statistics.data.flow_stats.read_keys as u64);
+                    thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     Ok(result)

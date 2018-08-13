@@ -102,10 +102,9 @@ impl<S: Snapshot> Scanner<S> {
         match self.scan_mode {
             ScanMode::Backward => self.seek_key.extend_from_slice(self.range.get_end()),
             ScanMode::Forward => self.seek_key.extend_from_slice(self.range.get_start()),
-            _ => unreachable!(),
         };
 
-        self.statistics_cache.add(self.scanner.get_statistics());
+        self.statistics_cache.add(&self.scanner.take_statistics());
         self.scanner = Self::range_scanner(store, self.scan_mode, self.key_only, &self.range)?;
         Ok(())
     }
@@ -138,7 +137,6 @@ impl<S: Snapshot> Scanner<S> {
             let seek_key_slice = match (self.scan_mode, self.scan_on) {
                 (ScanMode::Forward, _) | (ScanMode::Backward, ScanOn::Index) => key.as_slice(),
                 (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)),
-                _ => unreachable!(),
             };
             unsafe {
                 self.seek_key.set_len(0);
@@ -154,7 +152,6 @@ impl<S: Snapshot> Scanner<S> {
         match self.scan_mode {
             ScanMode::Forward => range.set_start(self.seek_key.clone()),
             ScanMode::Backward => range.set_end(self.seek_key.clone()),
-            _ => unreachable!(),
         };
     }
 
@@ -171,15 +168,13 @@ impl<S: Snapshot> Scanner<S> {
                 range.set_end(self.seek_key.clone())
             }
             ScanMode::Backward => range.set_start(self.seek_key.clone()),
-            _ => unreachable!(),
         };
         true
     }
 
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
         stats.add(&self.statistics_cache);
-        self.statistics_cache = Statistics::default();
-        self.scanner.collect_statistics_into(stats);
+        stats.add(&self.scanner.take_statistics());
     }
 }
 

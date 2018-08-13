@@ -105,7 +105,6 @@ impl<S: Snapshot> SnapshotStore<S> {
                         .build()?;
                 (None, Some(backward_scanner))
             }
-            _ => unreachable!(),
         };
         Ok(StoreScanner {
             forward_scanner,
@@ -162,20 +161,14 @@ impl<S: Snapshot> StoreScanner<S> {
         Ok(results)
     }
 
-    pub fn get_statistics(&self) -> &Statistics {
-        self.forward_scanner
-            .as_ref()
-            .map(|scanner| scanner.get_statistics())
-            .unwrap_or_else(|| self.backward_scanner.as_ref().unwrap().get_statistics())
-    }
-
-    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
-        let res = self
-            .forward_scanner
-            .as_mut()
-            .map(|scanner| scanner.take_statistics())
-            .unwrap_or_else(|| self.backward_scanner.as_mut().unwrap().take_statistics());
-        stats.add(&res);
+    pub fn take_statistics(&mut self) -> Statistics {
+        if self.forward_scanner.is_some() {
+            return self.forward_scanner.as_mut().unwrap().take_statistics();
+        }
+        if self.backward_scanner.is_some() {
+            return self.backward_scanner.as_mut().unwrap().take_statistics();
+        }
+        unreachable!();
     }
 }
 

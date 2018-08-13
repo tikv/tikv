@@ -24,7 +24,7 @@ use tikv::raftstore::store::{
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;
-use tikv::util::worker::FutureWorker;
+use tikv::util::worker::{FutureWorker, Worker};
 
 use super::cluster::{Cluster, Simulator};
 use super::node::{new_node_cluster, ChannelTransport};
@@ -72,6 +72,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
     let (_, snapshot_status_receiver) = mpsc::channel();
     let pd_worker = FutureWorker::new("test-pd-worker");
+    let local_reader = Worker::new("test-local-reader");
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
     bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
@@ -110,6 +111,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snap_mgr,
         snapshot_status_receiver,
         pd_worker,
+        local_reader,
         coprocessor_host,
         importer,
     ).unwrap();

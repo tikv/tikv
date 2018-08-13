@@ -60,12 +60,11 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
-    /// Set iterator scanning mode. `Mixed` is not allowed.
+    /// Set iterator scanning mode.
     ///
     /// Defaults to `ScanMode::Forward`.
     #[inline]
     pub fn scan_mode(mut self, scan_mode: ScanMode) -> Self {
-        assert_ne!(scan_mode, ScanMode::Mixed);
         self.scan_mode = scan_mode;
         self
     }
