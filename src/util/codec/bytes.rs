@@ -346,6 +346,9 @@ mod tests {
             assert_eq!(encode_bytes(&source), asc);
             assert_eq!(encode_bytes_desc(&source), desc);
 
+            // apppend timestamp, the timestamp bytes should not affect decode result
+            asc.encode_bytes_desc(0).unwrap();
+            desc.encode_bytes_desc(0).unwrap();
             {
                 let asc_offset = asc.as_ptr() as usize;
                 let mut asc_input = asc.as_slice();
