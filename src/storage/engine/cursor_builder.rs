@@ -53,7 +53,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
     /// Set whether or not to use prefix seek.
     ///
-    /// Defaults to `false`.
+    /// Defaults to `false`, it means use total order seek.
     #[inline]
     pub fn prefix_seek(mut self, prefix_seek: bool) -> Self {
         self.prefix_seek = prefix_seek;
