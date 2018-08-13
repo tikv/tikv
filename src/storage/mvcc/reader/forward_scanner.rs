@@ -205,24 +205,27 @@ impl<S: Snapshot> ForwardScanner<S> {
                         // We need to further step write cursor to our desired version
                         (Key::truncate_ts_for(k)?.to_vec(), true, false)
                     }
-                    (Some(wk), Some(lk)) => match Key::truncate_ts_for(wk)?.cmp(lk) {
-                        Ordering::Less => {
-                            // Write cursor user key < lock cursor, it means the lock of the
-                            // current key that write cursor is pointing to does not exist.
-                            (Key::truncate_ts_for(wk)?.to_vec(), true, false)
+                    (Some(wk), Some(lk)) => {
+                        let write_user_key = Key::truncate_ts_for(wk)?;
+                        match write_user_key.cmp(lk) {
+                            Ordering::Less => {
+                                // Write cursor user key < lock cursor, it means the lock of the
+                                // current key that write cursor is pointing to does not exist.
+                                (write_user_key.to_vec(), true, false)
+                            }
+                            Ordering::Greater => {
+                                // Write cursor user key > lock cursor, it means we got a lock of a
+                                // key that does not have a write. In SI, we need to check if the
+                                // lock will cause conflict.
+                                (lk.to_vec(), false, true)
+                            }
+                            Ordering::Equal => {
+                                // Write cursor user key == lock cursor, it means the lock of the
+                                // current key that write cursor is pointing to *exists*.
+                                (lk.to_vec(), true, true)
+                            }
                         }
-                        Ordering::Greater => {
-                            // Write cursor user key > lock cursor, it means we got a lock of a
-                            // key that does not have a write. In SI, we need to check if the
-                            // lock will cause conflict.
-                            (lk.to_vec(), false, true)
-                        }
-                        Ordering::Equal => {
-                            // Write cursor user key == lock cursor, it means the lock of the
-                            // current key that write cursor is pointing to *exists*.
-                            (lk.to_vec(), true, true)
-                        }
-                    },
+                    }
                 }
             };
             let current_user_key = Key::from_encoded(current_user_key);
@@ -254,17 +257,18 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// requires that the write cursor is currently pointing to the latest version of `user_key`.
     #[inline]
     fn get(&mut self, user_key: &Key, has_write: bool, has_lock: bool) -> Result<Option<Value>> {
-        let mut safe_ts = self.ts;
-        match self.isolation_level {
-            IsolationLevel::SI => {
-                if has_lock {
+        let mut ts = self.ts;
+
+        if has_lock {
+            match self.isolation_level {
+                IsolationLevel::SI => {
                     assert!(self.lock_cursor.valid());
                     let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                     let lock = Lock::parse(lock_value)?;
-                    safe_ts = super::util::check_lock(user_key, safe_ts, &lock)?
+                    ts = super::util::check_lock(user_key, ts, &lock)?
                 }
+                IsolationLevel::RC => {}
             }
-            IsolationLevel::RC => {}
         }
 
         if !has_write {
@@ -274,7 +278,7 @@ impl<S: Snapshot> ForwardScanner<S> {
 
         // The logic starting from here is similar to `PointGetter`.
 
-        // Try to iterate to `${user_key}_${safe_ts}`. We first `next()` for a few times,
+        // Try to iterate to `${user_key}_${ts}`. We first `next()` for a few times,
         // and if we have not reached where we want, we use `seek()`.
 
         // Whether we have *not* reached where we want by `next()`.
@@ -292,21 +296,21 @@ impl<S: Snapshot> ForwardScanner<S> {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                     // Meet another key.
+                    // TODO: If we meet another user key here, we don't need to compare the key
+                    // again when trying to move to next user key in `read_next` later.
                     return Ok(None);
                 }
-                if Key::decode_ts_from(current_key)? <= safe_ts {
+                if Key::decode_ts_from(current_key)? <= ts {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
                 }
             }
         }
-        // If we have not found `${user_key}_${safe_ts}` in a few `next()`, directly `seek()`.
+        // If we have not found `${user_key}_${ts}` in a few `next()`, directly `seek()`.
         if needs_seek {
-            self.write_cursor.seek(
-                &user_key.clone().append_ts(safe_ts),
-                &mut self.statistics.write,
-            )?;
+            self.write_cursor
+                .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
             if !self.write_cursor.valid() {
                 // Key space ended.
                 return Ok(None);
@@ -314,11 +318,13 @@ impl<S: Snapshot> ForwardScanner<S> {
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
+                // TODO: If we meet another user key here, we don't need to compare the key
+                // again when trying to move to next user key in `read_next` later.
                 return Ok(None);
             }
         }
 
-        // Now we must have reached the first key >= `${user_key}_${safe_ts}`. However, we may
+        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
         // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
         loop {
             let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
@@ -341,6 +347,8 @@ impl<S: Snapshot> ForwardScanner<S> {
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
+                // TODO: If we meet another user key here, we don't need to compare the key
+                // again when trying to move to next user key in `read_next` later.
                 return Ok(None);
             }
         }

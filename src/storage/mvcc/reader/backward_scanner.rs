@@ -191,19 +191,22 @@ impl<S: Snapshot> BackwardScanner<S> {
                     (None, None) => return Ok(None),
                     (None, Some(lk)) => (lk.to_vec(), false, true),
                     (Some(wk), None) => (Key::truncate_ts_for(wk)?.to_vec(), true, false),
-                    (Some(wk), Some(lk)) => match Key::truncate_ts_for(wk)?.cmp(lk) {
-                        Ordering::Less => {
-                            // We are scanning from largest user key to smallest user key, so this
-                            // indicate that we meet a lock first, thus its corresponding write
-                            // does not exist.
-                            (lk.to_vec(), false, true)
+                    (Some(wk), Some(lk)) => {
+                        let write_user_key = Key::truncate_ts_for(wk)?;
+                        match write_user_key.cmp(lk) {
+                            Ordering::Less => {
+                                // We are scanning from largest user key to smallest user key, so this
+                                // indicate that we meet a lock first, thus its corresponding write
+                                // does not exist.
+                                (lk.to_vec(), false, true)
+                            }
+                            Ordering::Greater => {
+                                // We meet write first, so the lock of the write key does not exist.
+                                (write_user_key.to_vec(), true, false)
+                            }
+                            Ordering::Equal => (write_user_key.to_vec(), true, true),
                         }
-                        Ordering::Greater => {
-                            // We meet write first, so the lock of the write key does not exist.
-                            (Key::truncate_ts_for(wk)?.to_vec(), true, false)
-                        }
-                        Ordering::Equal => (Key::truncate_ts_for(wk)?.to_vec(), true, true),
-                    },
+                    }
                 }
             };
             let current_user_key = Key::from_encoded(current_user_key);
@@ -234,17 +237,18 @@ impl<S: Snapshot> BackwardScanner<S> {
         has_write: bool,
         has_lock: bool,
     ) -> Result<Option<Value>> {
-        let mut safe_ts = self.ts;
-        match self.isolation_level {
-            IsolationLevel::SI => {
-                if has_lock {
+        let mut ts = self.ts;
+
+        if has_lock {
+            match self.isolation_level {
+                IsolationLevel::SI => {
                     assert!(self.lock_cursor.valid());
                     let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                     let lock = Lock::parse(lock_value)?;
-                    safe_ts = super::util::check_lock(user_key, safe_ts, &lock)?
+                    ts = super::util::check_lock(user_key, ts, &lock)?
                 }
+                IsolationLevel::RC => {}
             }
-            IsolationLevel::RC => {}
         }
 
         if !has_write {
@@ -277,9 +281,11 @@ impl<S: Snapshot> BackwardScanner<S> {
                 last_checked_commit_ts = Key::decode_ts_from(current_key)?;
 
                 if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice())
-                    || last_checked_commit_ts > safe_ts
+                    || last_checked_commit_ts > ts
                 {
                     // Meet another key or meet an unwanted version. We use `last_version` as the return.
+                    // TODO: If we meet another user key here, we don't need to compare the key
+                    // again when trying to move to prev user key in `read_next`.
                     is_done = true;
                 }
             }
@@ -296,9 +302,9 @@ impl<S: Snapshot> BackwardScanner<S> {
             }
         }
 
-        // At this time, we must have current commit_ts <= safe_ts. If commit_ts == safe_ts,
+        // At this time, we must have current commit_ts <= ts. If commit_ts == ts,
         // we don't need to seek any more and we can just utilize `last_version`.
-        if last_checked_commit_ts == safe_ts {
+        if last_checked_commit_ts == ts {
             return Ok(self.handle_last_version(last_version, user_key)?);
         }
 
@@ -306,7 +312,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         // use seek to locate the latest version.
         let last_handled_key = self.write_cursor.key(&mut self.statistics.write).to_vec();
 
-        let seek_key = user_key.clone().append_ts(safe_ts);
+        let seek_key = user_key.clone().append_ts(ts);
         assert!(seek_key.encoded().as_slice() < last_handled_key.as_slice());
 
         // TODO: Replace by cast + seek().
