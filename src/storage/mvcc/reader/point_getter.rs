@@ -244,8 +244,8 @@ mod tests {
     use super::*;
     use storage::engine::{self, SEEK_BOUND, TEMP_DIR};
     use storage::mvcc::tests::*;
-    use storage::ALL_CFS;
     use storage::{Engine, Key};
+    use storage::{ALL_CFS, SHORT_VALUE_MAX_LEN};
 
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
@@ -356,7 +356,8 @@ mod tests {
             assert_eq!(statistics.data.next, 0);
             assert_eq!(statistics.data.flow_stats.read_keys, 0);
         }
-        must_prewrite_put(&engine, b"foo1", b"bar1_2", b"foo1", 4);
+        let version2_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        must_prewrite_put(&engine, b"foo1", &version2_value, b"foo1", 4);
         {
             let mut point_getter = new_point_getter(&engine);
             assert!(
@@ -458,28 +459,28 @@ mod tests {
                     .read_next(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
-                b"bar1_2".to_vec()
+                version2_value,
             );
             let statistics = point_getter.take_statistics();
             assert_eq!(statistics.write.seek, 1);
             assert_eq!(statistics.write.next, 0);
             assert_eq!(statistics.write.flow_stats.read_keys, 1);
-            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.seek, 1); // long value, 1 seek
             assert_eq!(statistics.data.next, 0);
-            assert_eq!(statistics.data.flow_stats.read_keys, 0);
+            assert_eq!(statistics.data.flow_stats.read_keys, 1);
 
             assert_eq!(
                 point_getter
                     .read_next(&Key::from_raw(b"foo1"), 7)
                     .unwrap()
                     .unwrap(),
-                b"bar1_2".to_vec()
+                version2_value,
             );
             let statistics = point_getter.take_statistics();
             assert_eq!(statistics.write.seek, 1);
             assert_eq!(statistics.write.next, 0);
             assert_eq!(statistics.write.flow_stats.read_keys, 1);
-            assert_eq!(statistics.data.seek, 0);
+            assert_eq!(statistics.data.seek, 0); // current value, no seek
             assert_eq!(statistics.data.next, 0);
             assert_eq!(statistics.data.flow_stats.read_keys, 0);
 
@@ -557,14 +558,14 @@ mod tests {
                     .read_next(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
-                b"bar1_2".to_vec()
+                version2_value,
             );
             assert_eq!(
                 point_getter
                     .read_next(&Key::from_raw(b"foo1"), 7)
                     .unwrap()
                     .unwrap(),
-                b"bar1_2".to_vec()
+                version2_value,
             );
 
             point_getter.take_statistics();
@@ -612,14 +613,14 @@ mod tests {
                     .read_next(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
-                b"bar1_2".to_vec()
+                version2_value,
             );
             assert_eq!(
                 point_getter
                     .read_next(&Key::from_raw(b"foo1"), 6)
                     .unwrap()
                     .unwrap(),
-                b"bar1_2".to_vec()
+                version2_value,
             );
             assert!(
                 point_getter
@@ -759,10 +760,12 @@ mod tests {
     fn test_multi_true_multi_key_multi_version() {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
-        // Generate SEEK_BOUND + 1 Put for key [10].
+        // Generate SEEK_BOUND + 1 Put for key [10], long value.
         let k = &[10 as u8];
         for ts in 0..SEEK_BOUND + 1 {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            let mut value = "v".repeat(SHORT_VALUE_MAX_LEN).into_bytes();
+            value.push(ts as u8);
+            must_prewrite_put(&engine, k, &value, k, ts);
             must_commit(&engine, k, ts, ts);
         }
 
@@ -787,10 +790,12 @@ mod tests {
             must_commit(&engine, k, ts, ts);
         }
 
-        // Generate SEEK_BOUND / 2 + 1 Put + SEEK_BOUND / 2 Rollback for key [50].
+        // Generate SEEK_BOUND / 2 + 1 Put + SEEK_BOUND / 2 Rollback for key [50], long value.
         let k = &[50 as u8];
         for ts in 0..SEEK_BOUND / 2 + 1 {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            let mut value = "v".repeat(SHORT_VALUE_MAX_LEN).into_bytes();
+            value.push(ts as u8);
+            must_prewrite_put(&engine, k, &value, k, ts);
             must_commit(&engine, k, ts, ts);
         }
         for ts in SEEK_BOUND / 2 + 1..SEEK_BOUND + 1 {
@@ -834,6 +839,8 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [60_N], getting key [55_N], use seek.
         // N denotes to SEEK_BOUND.
@@ -846,6 +853,8 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [60_N], getting key [60_N], use next to skip
         // SEEK_BOUND / 2 rollbacks.
@@ -858,6 +867,8 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2) as usize);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [60_N/2], getting key [60_N], use seek to reach key [60_N]
         // and next to skip SEEK_BOUND / 2 rollbacks.
@@ -870,6 +881,8 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2) as usize);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [60_N/2], getting [80_1].
         // There will be SEEK_BOUND next() + 1 seek.
@@ -883,6 +896,8 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, SEEK_BOUND as usize);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [80_1], getting [70_3], use seek.
         assert_eq!(
@@ -892,6 +907,8 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [70_2], getting [0_N], use seek.
         assert_eq!(
@@ -903,30 +920,45 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [10_N], getting [10_N], no op.
+        let mut value = "v".repeat(SHORT_VALUE_MAX_LEN).into_bytes();
+        value.push(SEEK_BOUND as u8);
         assert_eq!(
             point_getter
                 .read_next(&Key::from_raw(&[10u8]), SEEK_BOUND)
                 .unwrap()
                 .unwrap(),
-            vec![SEEK_BOUND as u8]
+            value
         );
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.data.seek, 1); // long value, first seek
+        assert_eq!(statistics.data.next, 0);
+        assert_eq!(statistics.data.flow_stats.read_keys, 1);
 
         // Currently pointing at key [10_N], getting [10_N/2], N/2 next.
+        let mut value = "v".repeat(SHORT_VALUE_MAX_LEN).into_bytes();
+        value.push((SEEK_BOUND / 2) as u8);
         assert_eq!(
             point_getter
                 .read_next(&Key::from_raw(&[10u8]), SEEK_BOUND / 2)
                 .unwrap()
                 .unwrap(),
-            vec![(SEEK_BOUND / 2) as u8]
+            value
         );
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2) as usize);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, (SEEK_BOUND / 2) as usize);
+        assert_eq!(
+            statistics.data.flow_stats.read_keys,
+            (SEEK_BOUND / 2) as usize
+        );
 
         // Currently pointing at key [10_N/2], getting [20_N/2+3].
         // Use (SEEK_BOUND / 2 + 1) next() to skip versions of key [10], reaches [20_N+1].
@@ -941,6 +973,8 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, SEEK_BOUND as usize);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [20_N/2+2]. Use (SEEK_BOUND / 2 + 2) next() to reach [20_0].
         assert_eq!(
@@ -953,15 +987,19 @@ mod tests {
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 2) as usize);
+        assert_eq!(statistics.data.seek, 0);
+        assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [20_0]. Use SEEK_BOUND next() + 1 seek to reach [50_N].
         // Then, use SEEK_BOUND / 2 next() to skip rollbacks.
+        let mut value = "v".repeat(SHORT_VALUE_MAX_LEN).into_bytes();
+        value.push((SEEK_BOUND / 2) as u8);
         assert_eq!(
             point_getter
                 .read_next(&Key::from_raw(&[50u8]), SEEK_BOUND)
                 .unwrap()
                 .unwrap(),
-            vec![(SEEK_BOUND / 2) as u8]
+            value,
         );
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
@@ -969,19 +1007,250 @@ mod tests {
             statistics.write.next,
             (SEEK_BOUND + SEEK_BOUND / 2) as usize
         );
+        assert_eq!(statistics.data.seek, 0);
+        // default cursor pointing at [10_N/2], using N/2 next() to point to [10_0] and 1 next()
+        // to point to [50_N/2].
+        assert_eq!(statistics.data.next, (SEEK_BOUND / 2 + 1) as usize);
+        assert_eq!(
+            statistics.data.flow_stats.read_keys,
+            (SEEK_BOUND / 2 + 1) as usize
+        );
     }
 
     /// Get key single time. Should get `None` for future attempts.
     #[test]
-    fn test_multi_false() {}
+    fn test_multi_false() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        must_prewrite_put(&engine, &[10u8], &[10u8], &[10u8], 5);
+        must_commit(&engine, &[10u8], 5, 5);
+
+        must_prewrite_put(&engine, &[20u8], &[20u8], &[20u8], 5);
+        must_commit(&engine, &[20u8], 5, 5);
+
+        must_prewrite_put(&engine, &[30u8], &[30u8], &[30u8], 5);
+        must_commit(&engine, &[30u8], 5, 5);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot)
+            .multi(false)
+            .build()
+            .unwrap();
+
+        // First operation, 1 seek.
+        assert_eq!(
+            point_getter
+                .read_next(&Key::from_raw(&[20u8]), 5)
+                .unwrap()
+                .unwrap(),
+            vec![20u8]
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 0);
+
+        // Next (same key): no operation
+        assert_eq!(
+            point_getter.read_next(&Key::from_raw(&[20u8]), 5).unwrap(),
+            None,
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+
+        // Next (different key): no operation
+        assert_eq!(
+            point_getter.read_next(&Key::from_raw(&[10u8]), 5).unwrap(),
+            None,
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+
+        // Next (different key): no operation
+        assert_eq!(
+            point_getter.read_next(&Key::from_raw(&[30u8]), 5).unwrap(),
+            None,
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+
+        // Next (no key): no operation
+        assert_eq!(
+            point_getter.read_next(&Key::from_raw(&[55u8]), 5).unwrap(),
+            None,
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+
+        // Create another point getter. First retrieve a key not exist, got `None`.
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot)
+            .multi(false)
+            .build()
+            .unwrap();
+        assert_eq!(
+            point_getter.read_next(&Key::from_raw(&[50u8]), 5).unwrap(),
+            None,
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 0);
+
+        // Future requests are `None` as well, even if key exists.
+        assert_eq!(
+            point_getter.read_next(&Key::from_raw(&[10u8]), 5).unwrap(),
+            None,
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+
+        // Future requests are `None` as well, even if key exists.
+        assert_eq!(
+            point_getter.read_next(&Key::from_raw(&[30u8]), 5).unwrap(),
+            None,
+        );
+        let statistics = point_getter.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
 
     /// Omit value == true && value is short value.
     #[test]
-    fn test_omit_short_value() {}
+    fn test_omit_short_value() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        must_prewrite_put(&engine, &[10u8], b"1", &[10u8], 5);
+        must_commit(&engine, &[10u8], 5, 5);
+
+        must_prewrite_put(&engine, &[20u8], b"2", &[20u8], 5);
+        must_commit(&engine, &[20u8], 5, 5);
+
+        must_prewrite_put(&engine, &[30u8], b"3", &[30u8], 5);
+        must_commit(&engine, &[30u8], 5, 5);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot)
+            .omit_value(true)
+            .build()
+            .unwrap();
+
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[0u8]), 5)
+                .unwrap()
+                .is_none(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[20u8]), 5)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[35u8]), 5)
+                .unwrap()
+                .is_none(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[30u8]), 5)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[30u8]), 1)
+                .unwrap()
+                .is_none(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[10u8]), 5)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+        );
+    }
 
     /// Omit value == true && value is long value stored in default CF.
     #[test]
-    fn test_omit_long_value() {}
+    fn test_omit_long_value() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        must_prewrite_put(
+            &engine,
+            &[10u8],
+            "1".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
+            &[10u8],
+            5,
+        );
+        must_commit(&engine, &[10u8], 5, 5);
+
+        must_prewrite_put(&engine, &[20u8], b"2", &[20u8], 5);
+        must_commit(&engine, &[20u8], 5, 5);
+
+        must_prewrite_put(
+            &engine,
+            &[30u8],
+            "3".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
+            &[30u8],
+            5,
+        );
+        must_commit(&engine, &[30u8], 5, 5);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut point_getter = PointGetterBuilder::new(snapshot)
+            .omit_value(true)
+            .build()
+            .unwrap();
+
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[0u8]), 5)
+                .unwrap()
+                .is_none(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[20u8]), 5)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[35u8]), 5)
+                .unwrap()
+                .is_none(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[30u8]), 5)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[30u8]), 1)
+                .unwrap()
+                .is_none(),
+        );
+        assert!(
+            point_getter
+                .read_next(&Key::from_raw(&[10u8]), 5)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+        );
+    }
 
     /// Locks are checked in SI.
     #[test]
@@ -990,10 +1259,6 @@ mod tests {
     /// Locks are ignored in RC.
     #[test]
     fn test_isolation_rc() {}
-
-    /// Get keys that have long values.
-    #[test]
-    fn test_long_value() {}
 
     /// Get corrupted data.
     #[test]
