@@ -347,13 +347,13 @@ mod tests {
             assert_eq!(encode_bytes_desc(&source), desc);
 
             // apppend timestamp, the timestamp bytes should not affect decode result
-            asc.encode_bytes_desc(0).unwrap();
-            desc.encode_bytes_desc(0).unwrap();
+            asc.encode_u64_desc(0).unwrap();
+            desc.encode_u64_desc(0).unwrap();
             {
                 let asc_offset = asc.as_ptr() as usize;
                 let mut asc_input = asc.as_slice();
                 assert_eq!(source, decode_bytes(&mut asc_input, false).unwrap());
-                assert_eq!(asc_input.as_ptr() as usize - asc_offset, asc.len());
+                assert_eq!(asc_input.as_ptr() as usize - asc_offset, asc.len() - number::U64_SIZE);
             }
             decode_bytes_in_place(&mut asc, false).unwrap();
             assert_eq!(source, asc);
@@ -362,7 +362,7 @@ mod tests {
                 let desc_offset = desc.as_ptr() as usize;
                 let mut desc_input = desc.as_slice();
                 assert_eq!(source, decode_bytes(&mut desc_input, true).unwrap());
-                assert_eq!(desc_input.as_ptr() as usize - desc_offset, desc.len());
+                assert_eq!(desc_input.as_ptr() as usize - desc_offset, desc.len() - number::U64_SIZE);
             }
             decode_bytes_in_place(&mut desc, true).unwrap();
             assert_eq!(source, desc);
