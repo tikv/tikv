@@ -296,6 +296,8 @@ impl<S: Snapshot> ForwardScanner<S> {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                     // Meet another key.
+                    // TODO: If we meet another user key here, we don't need to compare the key
+                    // again when trying to move to next user key in `read_next` later.
                     return Ok(None);
                 }
                 if Key::decode_ts_from(current_key)? <= ts {
@@ -316,6 +318,8 @@ impl<S: Snapshot> ForwardScanner<S> {
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
+                // TODO: If we meet another user key here, we don't need to compare the key
+                // again when trying to move to next user key in `read_next` later.
                 return Ok(None);
             }
         }
@@ -343,6 +347,8 @@ impl<S: Snapshot> ForwardScanner<S> {
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
+                // TODO: If we meet another user key here, we don't need to compare the key
+                // again when trying to move to next user key in `read_next` later.
                 return Ok(None);
             }
         }

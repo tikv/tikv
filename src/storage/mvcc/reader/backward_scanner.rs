@@ -284,6 +284,8 @@ impl<S: Snapshot> BackwardScanner<S> {
                     || last_checked_commit_ts > ts
                 {
                     // Meet another key or meet an unwanted version. We use `last_version` as the return.
+                    // TODO: If we meet another user key here, we don't need to compare the key
+                    // again when trying to move to prev user key in `read_next`.
                     is_done = true;
                 }
             }
