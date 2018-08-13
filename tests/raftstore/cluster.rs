@@ -810,7 +810,7 @@ impl<T: Simulator> Cluster<T> {
         ch.try_send(Msg::SplitRegion {
             region_id: region.get_id(),
             region_epoch: region.get_region_epoch().clone(),
-            split_key: split_key.clone(),
+            split_keys: vec![split_key.clone()],
             callback: cb,
         }).unwrap();
     }
@@ -837,11 +837,11 @@ impl<T: Simulator> Cluster<T> {
                         panic!("failed to split: {:?}", resp);
                     }
                     let admin_resp = resp.mut_admin_response();
-                    let split_resp = admin_resp.mut_split();
-                    let mut left = split_resp.take_left();
-                    let mut right = split_resp.take_right();
-                    assert_eq!(left.get_end_key(), key.as_slice());
-                    assert_eq!(left.take_end_key(), right.take_start_key());
+                    let split_resp = admin_resp.mut_splits();
+                    let regions = split_resp.get_regions();
+                    assert_eq!(regions.len(), 2);
+                    assert_eq!(regions[0].get_end_key(), key.as_slice());
+                    assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                 });
                 self.split_region(region, split_key, Callback::Write(check));
             }

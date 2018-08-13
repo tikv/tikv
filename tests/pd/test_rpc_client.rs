@@ -123,9 +123,12 @@ fn test_rpc_client() {
         .store_heartbeat(pdpb::StoreStats::new())
         .wait()
         .unwrap();
-    client.ask_split(metapb::Region::new()).wait().unwrap();
     client
-        .report_split(metapb::Region::new(), metapb::Region::new())
+        .ask_batch_split(metapb::Region::new(), 1)
+        .wait()
+        .unwrap();
+    client
+        .report_batch_split(vec![metapb::Region::new(), metapb::Region::new()])
         .wait()
         .unwrap();
 
