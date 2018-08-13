@@ -18,7 +18,7 @@ use super::codec::datum::Datum;
 use super::codec::mysql;
 
 /// Convert the key to the smallest key which is larger than the key given.
-pub fn prefix_next(key: &mut Vec<u8>) {
+pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
     if key.is_empty() {
         key.push(0);
         return;
@@ -105,7 +105,7 @@ mod test {
 
     fn test_prefix_next_once(key: &[u8], expected: &[u8]) {
         let mut key = key.to_vec();
-        prefix_next(&mut key);
+        convert_to_prefix_next(&mut key);
         assert_eq!(key.as_slice(), expected);
     }
 

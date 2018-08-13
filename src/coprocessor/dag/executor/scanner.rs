@@ -167,7 +167,7 @@ impl<S: Snapshot> Scanner<S> {
             ScanMode::Forward => {
                 // Increase seek_key, so that stop_scan returns a key that is exclusive, producing
                 // a half-close range
-                util::prefix_next(&mut self.seek_key);
+                util::convert_to_prefix_next(&mut self.seek_key);
                 range.set_end(self.seek_key.clone())
             }
             ScanMode::Backward => range.set_start(self.seek_key.clone()),
@@ -348,7 +348,7 @@ pub mod test {
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
         let start_key = table::encode_row_key(table_id, handle);
         let mut end = start_key.clone();
-        util::prefix_next(&mut end);
+        util::convert_to_prefix_next(&mut end);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
         key_range.set_end(end);
