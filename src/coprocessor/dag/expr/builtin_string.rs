@@ -44,21 +44,18 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let i = try_opt!(self.children[1].eval_int(ctx, row));
         if i <= 0 {
             return Ok(Some(Cow::Owned(b"".to_vec())));
         }
-        {
-            let s = str::from_utf8(&s)?;
-            if s.chars().count() > i as usize {
-                let t = s.chars().into_iter();
-                return Ok(Some(Cow::Owned(
-                    t.take(i as usize).collect::<String>().into_bytes(),
-                )));
-            }
+        if s.chars().count() > i as usize {
+            let t = s.chars().into_iter();
+            return Ok(Some(Cow::Owned(
+                t.take(i as usize).collect::<String>().into_bytes(),
+            )));
         }
-        Ok(Some(s))
+        Ok(Some(Cow::Owned(s.to_string().into_bytes())))
     }
 
     #[inline]
