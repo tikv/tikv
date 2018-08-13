@@ -32,7 +32,7 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use util::collections::HashMap;
-use util::time::duration_to_sec;
+use util::time::{duration_to_sec, monotonic_raw_now};
 use util::timer::Timer;
 use util::transport::{NotifyError, Sender};
 use util::worker::{Runnable, RunnableWithTimer};
@@ -83,20 +83,25 @@ impl ReadDelegate {
         }
     }
 
-    fn handle_read(&self, req: &RaftCmdRequest, kv_engine: &Arc<DB>) -> Option<ReadResponse> {
-        if let Ok(mut resp) =
-            ReadExecutor::new(kv_engine.clone(), false /* dont check region epoch */)
-                .set_regon(self.region.clone())
-                .execute(req)
-        {
-            if let Some(ref lease) = self.leader_lease {
-                if lease.inspect(None) == LeaseState::Valid {
+    // TODO: return ReadResponse once we removes batch snapshot.
+    fn handle_read<'a>(
+        &'a self,
+        req: &RaftCmdRequest,
+        executor: &mut ReadExecutor<'a>,
+    ) -> Option<ReadResponse> {
+        if let Some(ref lease) = self.leader_lease {
+            let term = lease.term();
+            if util::check_term(req, term).is_ok()
+                && lease.inspect(executor.snapshot_time()) == LeaseState::Valid
+            {
+                if let Ok(mut resp) = executor.set_regon(&self.region).execute(req) {
                     // Leader can read local if and only if it is in lease.
-                    cmd_resp::bind_term(&mut resp.response, self.term);
+                    cmd_resp::bind_term(&mut resp.response, term);
                     return Some(resp);
                 }
             }
         }
+
         None
     }
 }
@@ -142,7 +147,11 @@ impl Progress {
     }
 }
 
-pub enum Task {
+pub struct Task {
+    action: Option<Action>,
+}
+
+enum Action {
     Register(ReadDelegate),
     Update((u64, Progress)),
     Read(StoreMsg),
@@ -152,15 +161,27 @@ pub enum Task {
 impl Task {
     pub fn register(peer: &Peer) -> Task {
         let delegate = ReadDelegate::from_peer(peer);
-        Task::Register(delegate)
+        Task {
+            action: Some(Action::Register(delegate)),
+        }
     }
 
     pub fn update(region_id: u64, progress: Progress) -> Task {
-        Task::Update((region_id, progress))
+        Task {
+            action: Some(Action::Update((region_id, progress))),
+        }
     }
 
     pub fn destroy(region_id: u64) -> Task {
-        Task::Destroy(region_id)
+        Task {
+            action: Some(Action::Destroy(region_id)),
+        }
+    }
+
+    pub fn read(msg: StoreMsg) -> Task {
+        Task {
+            action: Some(Action::Read(msg)),
+        }
     }
 
     /// Task accepts `Mag`s that contain Get/Snap requests and BatchRaftSnapCmds.
@@ -195,11 +216,18 @@ impl Task {
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            Task::Register(ref delegate) => write!(f, "localreader Task::Register {:?}", delegate),
-            Task::Read(ref msg) => write!(f, "localreader Task::Msg {:?}", msg),
-            Task::Update(ref progress) => write!(f, "localreader Task::Update {:?}", progress),
-            Task::Destroy(region_id) => write!(f, "localreader Task::Destroy region {}", region_id),
+        match self.action {
+            Some(Action::Register(ref delegate)) => {
+                write!(f, "localreader Task::Register {:?}", delegate)
+            }
+            Some(Action::Read(ref msg)) => write!(f, "localreader Task::Msg {:?}", msg),
+            Some(Action::Update(ref progress)) => {
+                write!(f, "localreader Task::Update {:?}", progress)
+            }
+            Some(Action::Destroy(region_id)) => {
+                write!(f, "localreader Task::Destroy region {}", region_id)
+            }
+            None => write!(f, "localreader empty task"),
         }
     }
 }
@@ -283,10 +311,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         }
     }
 
-    fn pre_propose_raft_command<'a>(
-        &'a self,
-        req: &RaftCmdRequest,
-    ) -> Result<Option<&'a ReadDelegate>> {
+    fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<bool> {
         // Check store id.
         if let Err(e) = util::check_store_id(req, self.store_id) {
             self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
@@ -299,7 +324,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             Some(delegate) => delegate,
             None => {
                 self.metrics.borrow_mut().rejected_by_no_region += 1;
-                return Ok(None);
+                return Ok(false);
             }
         };
 
@@ -324,7 +349,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
             self.metrics.borrow_mut().rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            return Ok(None);
+            return Ok(false);
         }
 
         let mut inspector = Inspector {
@@ -332,9 +357,9 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             metrics: &mut *self.metrics.borrow_mut(),
         };
         match inspector.inspect(req) {
-            Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
+            Ok(RequestPolicy::ReadLocal) => Ok(true),
             // It can not handle other policies.
-            Ok(_) => Ok(None),
+            Ok(_) => Ok(false),
             Err(e) => Err(e),
         }
     }
@@ -342,21 +367,27 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
     // It can only handle read command.
     fn propose_raft_command(
         &mut self,
-        req: RaftCmdRequest,
+        request: RaftCmdRequest,
         callback: Callback,
         send_time: Instant,
-    ) {
-        let region_id = req.get_header().get_region_id();
-        match self.pre_propose_raft_command(&req) {
-            Ok(Some(delegate)) => {
-                if let Some(resp) = delegate.handle_read(&req, &self.kv_engine) {
-                    callback.invoke_read(resp);
-                    return;
-                }
-                self.metrics.borrow_mut().rejected_by_lease_expire += 1;
+    ) -> Option<StoreMsg> {
+        let region_id = request.get_header().get_region_id();
+        match self.pre_propose_raft_command(&request) {
+            Ok(true) => {
+                return Some(StoreMsg::RaftCmd {
+                    request,
+                    callback,
+                    send_time,
+                });
             }
             // It can not handle the rquest, forwards to raftstore.
-            Ok(None) => {}
+            Ok(false) => {
+                self.redirect(StoreMsg::RaftCmd {
+                    send_time,
+                    request,
+                    callback,
+                });
+            }
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self.delegates.get(&region_id) {
@@ -366,51 +397,156 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
                     response,
                     snapshot: None,
                 });
-                return;
             }
-        };
-
-        self.redirect(StoreMsg::RaftCmd {
-            send_time,
-            request: req,
-            callback,
-        });
+        }
+        None
     }
 
     fn propose_batch_raft_snapshot_command(
         &mut self,
         batch: Vec<RaftCmdRequest>,
         on_finished: Callback,
-    ) {
-        let size = batch.len();
-        let mut ret = Vec::with_capacity(size);
-        for req in batch {
-            let region_id = req.get_header().get_region_id();
+        send_time: Instant,
+    ) -> Option<StoreMsg> {
+        let mut need_redirect = false;
+        for req in &batch {
             match self.pre_propose_raft_command(&req) {
-                Ok(Some(delegate)) => {
-                    let resp = delegate.handle_read(&req, &self.kv_engine);
-                    ret.push(resp);
-                }
+                Ok(true) => (),
                 // It can not handle the rquest, instead of forwarding to raftstore,
                 // it returns a `None` which means users need to retry the requsets
                 // via `async_snapshot`.
-                Ok(None) => {
-                    ret.push(None);
-                }
-                Err(e) => {
-                    let mut response = cmd_resp::new_error(e);
-                    if let Some(delegate) = self.delegates.get(&region_id) {
-                        cmd_resp::bind_term(&mut response, delegate.term);
-                    }
-                    ret.push(Some(ReadResponse {
-                        response,
-                        snapshot: None,
-                    }));
+                Ok(false) | Err(_) => {
+                    need_redirect = true;
+                    break;
                 }
             }
         }
 
-        on_finished.invoke_batch_read(ret);
+        let cmd = StoreMsg::BatchRaftSnapCmds {
+            send_time,
+            batch,
+            on_finished,
+        };
+        if !need_redirect {
+            Some(cmd)
+        } else {
+            self.redirect(cmd);
+            None
+        }
+    }
+
+    fn handle_tasks(&mut self, tasks: &mut Vec<Task>) -> Option<Instant> {
+        let mut sent = None;
+        for task in tasks {
+            match task.action.take() {
+                Some(Action::Register(delegate)) => {
+                    debug!(
+                        "{} register ReadDelegate for {:?}",
+                        delegate.tag, delegate.peer_id
+                    );
+                    self.delegates.insert(delegate.region.get_id(), delegate);
+                }
+                Some(Action::Read(StoreMsg::RaftCmd {
+                    send_time,
+                    request,
+                    callback,
+                })) => {
+                    if let Some(cmd) = self.propose_raft_command(request, callback, send_time) {
+                        task.action = Some(Action::Read(cmd));
+                    }
+                    if sent.is_none() {
+                        sent = Some(send_time);
+                    }
+                }
+                Some(Action::Read(StoreMsg::BatchRaftSnapCmds {
+                    send_time,
+                    batch,
+                    on_finished,
+                })) => {
+                    if let Some(cmd) =
+                        self.propose_batch_raft_snapshot_command(batch, on_finished, send_time)
+                    {
+                        task.action = Some(Action::Read(cmd));
+                    }
+                    if sent.is_none() {
+                        sent = Some(send_time);
+                    }
+                }
+                Some(Action::Update((region_id, progress))) => {
+                    if let Some(delegate) = self.delegates.get_mut(&region_id) {
+                        delegate.update(progress);
+                    } else {
+                        panic!(
+                            "unregistered ReadDelegate, region_id: {}, {:?}",
+                            region_id, progress
+                        );
+                    }
+                }
+                Some(Action::Destroy(region_id)) => {
+                    self.delegates.remove(&region_id);
+                }
+                _ => {
+                    unimplemented!("unsupported Msg {}", task);
+                }
+            }
+        }
+        sent
+    }
+
+    fn handle_ready_tasks(&mut self, tasks: &mut Vec<Task>) {
+        // Dont check region epoch.
+        let mut executor = ReadExecutor::new(self.kv_engine.clone(), false);
+        executor.set_snapshot_time(monotonic_raw_now());
+
+        for mut task in tasks.drain(..) {
+            if task.action.is_none() {
+                continue;
+            }
+            match task.action.take().unwrap() {
+                Action::Read(StoreMsg::RaftCmd {
+                    send_time,
+                    request,
+                    callback,
+                }) => {
+                    let region_id = request.get_header().get_region_id();
+                    if let Some(delegate) = self.delegates.get(&region_id) {
+                        if let Some(resp) = delegate.handle_read(&request, &mut executor) {
+                            callback.invoke_read(resp);
+                            continue;
+                        }
+                        self.metrics.borrow_mut().rejected_by_lease_expire += 1;
+                    } else {
+                        self.metrics.borrow_mut().rejected_by_no_region += 1;
+                    }
+                    // TODO: handle err response.
+                    self.redirect(StoreMsg::RaftCmd {
+                        send_time,
+                        request,
+                        callback,
+                    });
+                }
+                Action::Read(StoreMsg::BatchRaftSnapCmds {
+                    batch, on_finished, ..
+                }) => {
+                    let size = batch.len();
+                    let mut ret = Vec::with_capacity(size);
+                    for req in batch {
+                        let region_id = req.get_header().get_region_id();
+                        if let Some(delegate) = self.delegates.get(&region_id) {
+                            let resp = delegate.handle_read(&req, &mut executor);
+                            // No matter it is `Some` or `None`, we always the response,
+                            // If it's `None` which means users need to retry the requsets
+                            // via `async_snapshot`.
+                            ret.push(resp);
+                        }
+                    }
+                    on_finished.invoke_batch_read(ret);
+                }
+                _ => {
+                    unimplemented!("unsupported Msg {}", task);
+                }
+            }
+        }
     }
 }
 
@@ -435,21 +571,14 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 
     fn inspect_lease(&mut self) -> LeaseState {
         // TODO: disable localreader if we did not enable raft's check_quorum.
-        if let Some(ref lease) = self.delegate.leader_lease {
-            // None means now.
-            if LeaseState::Valid == lease.inspect(None) {
-                return LeaseState::Valid;
-            }
-            self.metrics.rejected_by_lease_expire += 1;
-            debug!(
-                "{} leader lease is expired: {:?}",
-                self.delegate.tag, self.delegate.leader_lease
-            );
+        if self.delegate.leader_lease.is_some() {
+            // We skips lease check, because we delay it to return response.
+            LeaseState::Valid
         } else {
             debug!("{} leader lease is None", self.delegate.tag,);
             self.metrics.rejected_by_no_lease += 1;
+            LeaseState::Expired
         }
-        LeaseState::Expired
     }
 }
 
@@ -459,59 +588,13 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
     }
 
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
-        let mut sent = None;
         self.metrics
             .borrow()
             .batch_requests_size
             .observe(tasks.len() as _);
 
-        for task in tasks.drain(..) {
-            match task {
-                Task::Register(delegate) => {
-                    debug!(
-                        "{} register ReadDelegate for {:?}",
-                        delegate.tag, delegate.peer_id
-                    );
-                    self.delegates.insert(delegate.region.get_id(), delegate);
-                }
-                Task::Read(StoreMsg::RaftCmd {
-                    send_time,
-                    request,
-                    callback,
-                }) => {
-                    self.propose_raft_command(request, callback, send_time);
-                    if sent.is_none() {
-                        sent = Some(send_time);
-                    }
-                }
-                Task::Read(StoreMsg::BatchRaftSnapCmds {
-                    send_time,
-                    batch,
-                    on_finished,
-                }) => {
-                    self.propose_batch_raft_snapshot_command(batch, on_finished);
-                    if sent.is_none() {
-                        sent = Some(send_time);
-                    }
-                }
-                Task::Read(other) => {
-                    unimplemented!("unsupported Msg {:?}", other);
-                }
-                Task::Update((region_id, progress)) => {
-                    if let Some(delegate) = self.delegates.get_mut(&region_id) {
-                        delegate.update(progress);
-                    } else {
-                        panic!(
-                            "unregistered ReadDelegate, region_id: {}, {:?}",
-                            region_id, progress
-                        );
-                    }
-                }
-                Task::Destroy(region_id) => {
-                    self.delegates.remove(&region_id);
-                }
-            }
-        }
+        let sent = self.handle_tasks(tasks);
+        self.handle_ready_tasks(tasks);
 
         if let Some(send_time) = sent {
             self.metrics
@@ -689,7 +772,7 @@ mod tests {
         rx: &Receiver<StoreMsg>,
         cmd: RaftCmdRequest,
     ) {
-        let task = Task::Read(StoreMsg::new_raft_cmd(
+        let task = Task::read(StoreMsg::new_raft_cmd(
             cmd.clone(),
             Callback::Read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
@@ -750,14 +833,18 @@ mod tests {
         lease.renew(monotonic_raw_now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
         // But the applied_index_term is stale.
-        let register_region1 = Task::Register(ReadDelegate {
-            tag: String::new(),
-            region: region1.clone(),
-            peer_id: leader2.get_id(),
-            term: term6,
-            applied_index_term: term6 - 1,
-            leader_lease: Some(remote),
-        });
+        let register_region1 = Task {
+            action: Some(
+                Action::Register(ReadDelegate {
+                    tag: String::new(),
+                    region: region1.clone(),
+                    peer_id: leader2.get_id(),
+                    term: term6,
+                    applied_index_term: term6 - 1,
+                    leader_lease: Some(remote),
+                })
+            ),
+        };
         reader.run_batch(&mut vec![register_region1]);
         assert!(reader.delegates.get(&1).is_some());
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
@@ -774,7 +861,7 @@ mod tests {
 
         // Let's read.
         let region = region1.clone();
-        let task = Task::Read(StoreMsg::new_raft_cmd(
+        let task = Task::read(StoreMsg::new_raft_cmd(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let snap = resp.snapshot.unwrap();
@@ -786,7 +873,7 @@ mod tests {
 
         // Batch snapshot.
         let region = region1.clone();
-        let batch_task = Task::Read(StoreMsg::new_batch_raft_snapshot_cmd(
+        let batch_task = Task::read(StoreMsg::new_batch_raft_snapshot_cmd(
             vec![cmd.clone()],
             Box::new(move |mut resps: Vec<Option<ReadResponse>>| {
                 assert_eq!(resps.len(), 1);
@@ -803,7 +890,7 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_store_id(store_id + 1);
-        let task = Task::Read(StoreMsg::new_raft_cmd(
+        let task = Task::read(StoreMsg::new_raft_cmd(
             cmd_store_id,
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let err = resp.response.get_header().get_error();
@@ -820,7 +907,7 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_id(leader2.get_id() + 1);
-        let task = Task::Read(StoreMsg::new_raft_cmd(
+        let task = Task::read(StoreMsg::new_raft_cmd(
             cmd_peer_id,
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 assert!(
@@ -842,7 +929,7 @@ mod tests {
         // Term mismatch.
         let mut cmd_term = cmd.clone();
         cmd_term.mut_header().set_term(term6 - 2);
-        let task = Task::Read(StoreMsg::new_raft_cmd(
+        let task = Task::read(StoreMsg::new_raft_cmd(
             cmd_term,
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let err = resp.response.get_header().get_error();
@@ -867,8 +954,8 @@ mod tests {
         assert_eq!(reader.metrics.borrow().rejected_by_lease_expire, 1);
 
         // Channel full.
-        let task1 = Task::Read(StoreMsg::new_raft_cmd(cmd.clone(), Callback::None));
-        let task_full = Task::Read(StoreMsg::new_raft_cmd(
+        let task1 = Task::read(StoreMsg::new_raft_cmd(cmd.clone(), Callback::None));
+        let task_full = Task::read(StoreMsg::new_raft_cmd(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let err = resp.response.get_header().get_error();

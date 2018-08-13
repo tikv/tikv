@@ -1764,7 +1764,7 @@ impl Peer {
 
     fn handle_read(&mut self, req: RaftCmdRequest, check_epoch: bool) -> ReadResponse {
         let mut resp = ReadExecutor::new(self.engines.kv.clone(), check_epoch)
-            .set_regon(self.region().clone())
+            .set_regon(self.region())
             .execute(&req)
             .unwrap_or_else(|e| {
                 match e {
@@ -2008,22 +2008,33 @@ impl RequestInspector for Peer {
 }
 
 #[derive(Debug)]
-pub struct ReadExecutor {
+pub struct ReadExecutor<'a> {
     check_epoch: bool,
-    region: Option<metapb::Region>,
+    region: Option<&'a metapb::Region>,
     snapshot: SyncSnapshot,
+    snapshot_time: Option<Timespec>,
 }
 
-impl ReadExecutor {
+impl<'a> ReadExecutor<'a> {
     pub fn new(engine: Arc<DB>, check_epoch: bool) -> Self {
         ReadExecutor {
             check_epoch,
             region: None,
             snapshot: Snapshot::new(engine.clone()).into_sync(),
+            snapshot_time: None,
         }
     }
 
-    pub fn set_regon(&mut self, region: metapb::Region) -> &mut Self {
+    pub fn set_snapshot_time(&mut self, snapshot_time: Timespec) -> &mut Self {
+        self.snapshot_time = Some(snapshot_time);
+        self
+    }
+
+    pub fn snapshot_time(&self) -> Option<Timespec> {
+        self.snapshot_time
+    }
+
+    pub fn set_regon(&mut self, region: &'a metapb::Region) -> &mut Self {
         self.region = Some(region);
         self
     }
@@ -2072,7 +2083,7 @@ impl ReadExecutor {
         if self.region.is_none() {
             return Err(box_err!("execute RaftCmdRequest with empty region"));
         }
-        let region = self.region.as_ref().unwrap();
+        let region = self.region.unwrap();
         if self.check_epoch {
             check_region_epoch(msg, region, true)?;
         }
