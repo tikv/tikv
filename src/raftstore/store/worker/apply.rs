@@ -1916,8 +1916,8 @@ impl Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
-            apply_state: peer.get_store().apply_state.clone(),
-            applied_index_term: peer.get_store().applied_index_term,
+            apply_state: peer.get_store().apply_state().clone(),
+            applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
         }
     }
