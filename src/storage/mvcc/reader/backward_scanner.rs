@@ -15,6 +15,7 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::{Lock, Result};
 use storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
@@ -206,18 +207,17 @@ impl<S: Snapshot> BackwardScanner<S> {
                 }
             };
             let current_user_key = Key::from_encoded(current_user_key);
+
             let result = self.reverse_get(&current_user_key, has_write, has_lock);
+
             if has_write {
                 // Skip rest later versions and point to previous user key.
-                self.write_cursor.near_seek_for_prev(
-                    &current_user_key,
-                    false,
-                    &mut self.statistics.write,
-                )?;
+                self.move_write_cursor_to_prev_user_key(&current_user_key)?;
             }
             if has_lock {
                 self.lock_cursor.prev(&mut self.statistics.lock);
             }
+
             if let Some(v) = result? {
                 return Ok(Some((current_user_key, v)));
             }
@@ -396,6 +396,39 @@ impl<S: Snapshot> BackwardScanner<S> {
                 Ok(value)
             }
         }
+    }
+
+    /// After `self.reverse_get()`, our write cursor may be pointing to current user key (if we
+    /// found a desired version), or previous user key (if there is no desired version), or
+    /// out of bound.
+    ///
+    /// If it is pointing to current user key, we need to step it until we meet a new
+    /// key. We first try to `prev()` a few times. If still not reaching another user
+    /// key, we `seek_for_prev()`.
+    #[inline]
+    fn move_write_cursor_to_prev_user_key(&mut self, current_user_key: &Key) -> Result<()> {
+        for i in 0..SEEK_BOUND {
+            if i > 0 {
+                self.write_cursor.prev(&mut self.statistics.write);
+            }
+            if !self.write_cursor.valid() {
+                // Key space ended. We are done here.
+                return Ok(());
+            }
+            {
+                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
+                    // Found another user key. We are done here.
+                }
+            }
+        }
+
+        // We have not found another user key for now, so we directly `seek_for_prev()`.
+        // After that, we must pointing to another key, or out of bound.
+        self.write_cursor
+            .seek_for_prev(current_user_key, &mut self.statistics.write)?;
+
+        Ok(())
     }
 
     /// Create the default cursor if it doesn't exist.

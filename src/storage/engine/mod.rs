@@ -427,7 +427,7 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
-    fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         self.valid = true;
 
         assert_ne!(self.scan_mode, ScanMode::Forward);
