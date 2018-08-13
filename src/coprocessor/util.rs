@@ -134,8 +134,8 @@ mod test {
     #[test]
     fn test_is_prefix_next() {
         test_is_prefix_next_case(&[], &[0], &[&[], &[1], &[2]]);
-        test_is_prefix_next_case(&[0], &[1], &[&[], &[0], &[00], &[2], &[255]]);
-        test_is_prefix_next_case(&[1], &[2], &[&[], &[1], &[3], &[10]]);
+        test_is_prefix_next_case(&[0], &[1], &[&[], &[0], &[0, 0], &[2], &[255]]);
+        test_is_prefix_next_case(&[1], &[2], &[&[], &[1], &[3], &[1, 0]]);
         test_is_prefix_next_case(&[255], &[255, 0], &[&[0], &[255, 255, 0]]);
         test_is_prefix_next_case(
             &[255, 255, 255],
