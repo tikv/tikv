@@ -266,7 +266,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
                 } else {
                     &ENC_ASC_PADDING[..pad_size]
                 };
-                if &data[marker_offset - pad_size..marker_offset] != padding_slice {
+                if &data[write_offset - pad_size..write_offset] != padding_slice {
                     return Err(Error::KeyPadding);
                 }
                 data.set_len(write_offset - pad_size);
@@ -381,6 +381,7 @@ mod tests {
             vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8],
             vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 255],
             vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 0, 0, 0, 0, 0, 0, 0, 247],
         ];
 
         for mut x in invalid_bytes {
