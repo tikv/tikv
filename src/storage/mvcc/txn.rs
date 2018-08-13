@@ -364,28 +364,14 @@ impl<S: Snapshot> MvccTxn<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::write::{Write, WriteType};
-    use super::super::MvccReader;
-    use super::MvccTxn;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{self, Engine, Modify, Snapshot, TEMP_DIR};
-    use storage::{Key, Mutation, Options, ScanMode, ALL_CFS, CF_WRITE, SHORT_VALUE_MAX_LEN};
     use tempdir::TempDir;
 
-    fn gen_value(v: u8, len: usize) -> Vec<u8> {
-        let mut value = Vec::with_capacity(len);
-        for _ in 0..len {
-            value.push(v);
-        }
-
-        value
-    }
-
-    fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
-        if !modifies.is_empty() {
-            engine.write(ctx, modifies).unwrap();
-        }
-    }
+    use storage::engine::{self, Engine, TEMP_DIR};
+    use storage::mvcc::tests::*;
+    use storage::mvcc::WriteType;
+    use storage::mvcc::{MvccReader, MvccTxn};
+    use storage::{Key, Mutation, Options, ScanMode, ALL_CFS, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
@@ -413,7 +399,7 @@ mod tests {
     fn test_mvcc_txn_read() {
         test_mvcc_txn_read_imp(b"k1", b"v1");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_read_imp(b"k2", &long_value);
     }
 
@@ -483,7 +469,7 @@ mod tests {
     fn test_mvcc_txn_prewrite() {
         test_mvcc_txn_prewrite_imp(b"k1", b"v1");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_prewrite_imp(b"k2", &long_value);
     }
 
@@ -511,7 +497,7 @@ mod tests {
     fn test_mvcc_txn_commit_ok() {
         test_mvcc_txn_commit_ok_imp(b"x", b"v", b"y", b"z");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_commit_ok_imp(b"x", &long_value, b"y", b"z");
     }
 
@@ -532,7 +518,7 @@ mod tests {
     fn test_mvcc_txn_commit_err() {
         test_mvcc_txn_commit_err_imp(b"k", b"v");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_commit_err_imp(b"k2", &long_value);
     }
 
@@ -579,7 +565,7 @@ mod tests {
     fn test_mvcc_txn_rollback() {
         test_mvcc_txn_rollback_imp(b"k", b"v");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_rollback_imp(b"k2", &long_value);
     }
 
@@ -596,7 +582,7 @@ mod tests {
     fn test_mvcc_txn_rollback_err() {
         test_mvcc_txn_rollback_err_imp(b"k", b"v");
 
-        let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_rollback_err_imp(b"k2", &long_value);
     }
 
@@ -668,10 +654,10 @@ mod tests {
     fn test_gc() {
         test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4");
 
-        let v1 = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
-        let v2 = gen_value(b'y', SHORT_VALUE_MAX_LEN + 1);
-        let v3 = gen_value(b'z', SHORT_VALUE_MAX_LEN + 1);
-        let v4 = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_gc_imp(b"k2", &v1, &v2, &v3, &v4);
     }
 
@@ -706,7 +692,7 @@ mod tests {
     fn test_write() {
         test_write_imp(b"kk", b"v1", b"k", b"kkk");
 
-        let v2 = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
+        let v2 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_write_imp(b"kk", &v2, b"k", b"kkk");
     }
 
@@ -732,8 +718,8 @@ mod tests {
     fn test_scan_keys() {
         test_scan_keys_imp(vec![b"a", b"c", b"e", b"b", b"d", b"f"], vec![b"a", b"b"]);
 
-        let v1 = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
-        let v4 = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
+        let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_scan_keys_imp(vec![b"a", b"c", b"e", b"b", b"d", b"f"], vec![&v1, &v4]);
     }
 
@@ -767,7 +753,7 @@ mod tests {
     fn test_write_size() {
         test_write_size_imp(b"key", b"value", b"pk");
 
-        let v = gen_value(b'x', SHORT_VALUE_MAX_LEN + 1);
+        let v = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_write_size_imp(b"key", &v, b"pk");
     }
 
@@ -843,273 +829,6 @@ mod tests {
         must_get_rollback_ts_none(&engine, key, 2);
     }
 
-    fn must_get<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        assert_eq!(txn.get(&Key::from_raw(key)).unwrap().unwrap(), expect);
-    }
-
-    fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::RC, true);
-        assert_eq!(txn.get(&Key::from_raw(key)).unwrap().unwrap(), expect)
-    }
-
-    fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        assert!(txn.get(&Key::from_raw(key)).unwrap().is_none());
-    }
-
-    fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        assert!(txn.get(&Key::from_raw(key)).is_err());
-    }
-
-    fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        txn.prewrite(
-            Mutation::Put((Key::from_raw(key), value.to_vec())),
-            pk,
-            &Options::default(),
-        ).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        txn.prewrite(
-            Mutation::Delete(Key::from_raw(key)),
-            pk,
-            &Options::default(),
-        ).unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
-    }
-
-    fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
-            .unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
-    }
-
-    fn must_prewrite_lock_err<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        assert!(
-            txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
-                .is_err()
-        );
-    }
-
-    fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
-        txn.commit(&Key::from_raw(key), commit_ts).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    fn must_commit_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
-        assert!(txn.commit(&Key::from_raw(key), commit_ts).is_err());
-    }
-
-    fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
-        txn.rollback(&Key::from_raw(key)).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
-        assert!(txn.rollback(&Key::from_raw(key)).is_err());
-    }
-
-    fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 0, None, IsolationLevel::SI, true);
-        txn.gc(&Key::from_raw(key), safe_point).unwrap();
-        write(engine, &ctx, txn.into_modifies());
-    }
-
-    fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
-        assert_eq!(lock.ts, start_ts);
-    }
-
-    fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(reader.load_lock(&Key::from_raw(key)).unwrap().is_none());
-    }
-
-    fn must_written<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        start_ts: u64,
-        commit_ts: u64,
-        tp: WriteType,
-    ) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let k = Key::from_raw(key).append_ts(commit_ts);
-        let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
-        let write = Write::parse(&v).unwrap();
-        assert_eq!(write.start_ts, start_ts);
-        assert_eq!(write.write_type, tp);
-    }
-
-    fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(
-            reader
-                .seek_write(&Key::from_raw(key), ts)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    fn must_seek_write<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        ts: u64,
-        start_ts: u64,
-        commit_ts: u64,
-        write_type: WriteType,
-    ) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        let (t, write) = reader.seek_write(&Key::from_raw(key), ts).unwrap().unwrap();
-        assert_eq!(t, commit_ts);
-        assert_eq!(write.start_ts, start_ts);
-        assert_eq!(write.write_type, write_type);
-    }
-
-    fn must_reverse_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(
-            reader
-                .reverse_seek_write(&Key::from_raw(key), ts)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    fn must_reverse_seek_write<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        ts: u64,
-        start_ts: u64,
-        commit_ts: u64,
-        write_type: WriteType,
-    ) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        let (t, write) = reader
-            .reverse_seek_write(&Key::from_raw(key), ts)
-            .unwrap()
-            .unwrap();
-        assert_eq!(t, commit_ts);
-        assert_eq!(write.start_ts, start_ts);
-        assert_eq!(write.write_type, write_type);
-    }
-
-    fn must_get_commit_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts)
-            .unwrap()
-            .unwrap();
-        assert_ne!(write_type, WriteType::Rollback);
-        assert_eq!(ts, commit_ts);
-    }
-
-    fn must_get_commit_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-
-        let ret = reader.get_txn_commit_info(&Key::from_raw(key), start_ts);
-        assert!(ret.is_ok());
-        match ret.unwrap() {
-            None => {}
-            Some((_, write_type)) => {
-                assert_eq!(write_type, WriteType::Rollback);
-            }
-        }
-    }
-
-    fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-
-        let (ts, write_type) = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts)
-            .unwrap()
-            .unwrap();
-        assert_eq!(ts, start_ts);
-        assert_eq!(write_type, WriteType::Rollback);
-    }
-
-    fn must_get_rollback_ts_none<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-
-        let ret = reader
-            .get_txn_commit_info(&Key::from_raw(key), start_ts)
-            .unwrap();
-        assert_eq!(ret, None);
-    }
-
-    fn must_scan_keys<E: Engine>(
-        engine: &E,
-        start: Option<&[u8]>,
-        limit: usize,
-        keys: Vec<&[u8]>,
-        next_start: Option<&[u8]>,
-    ) {
-        let expect = (
-            keys.into_iter().map(Key::from_raw).collect(),
-            next_start.map(|x| Key::from_raw(x).append_ts(0)),
-        );
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Mixed),
-            false,
-            None,
-            None,
-            IsolationLevel::SI,
-        );
-        assert_eq!(
-            reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
-            expect
-        );
-    }
-
     #[test]
     fn test_scan_values_in_default() {
         let path = TempDir::new("_test_scan_values_in_default").expect("");
@@ -1119,7 +838,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[2],
-            &gen_value(b'v', SHORT_VALUE_MAX_LEN + 1),
+            "v".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[2],
             3,
         );
@@ -1128,7 +847,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[3],
-            &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1),
+            "a".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
             3,
         );
@@ -1137,7 +856,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[3],
-            &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1),
+            "b".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
             5,
         );
@@ -1146,7 +865,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[6],
-            &gen_value(b'x', SHORT_VALUE_MAX_LEN + 1),
+            "x".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[6],
             3,
         );
@@ -1164,8 +883,8 @@ mod tests {
 
         let v = reader.scan_values_in_default(&Key::from_raw(&[3])).unwrap();
         assert_eq!(v.len(), 2);
-        assert_eq!(v[1], (3, gen_value(b'a', SHORT_VALUE_MAX_LEN + 1)));
-        assert_eq!(v[0], (5, gen_value(b'b', SHORT_VALUE_MAX_LEN + 1)));
+        assert_eq!(v[1], (3, "a".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes()));
+        assert_eq!(v[0], (5, "b".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes()));
     }
 
     #[test]
@@ -1174,13 +893,13 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
 
-        must_prewrite_put(&engine, &[2], &gen_value(b'v', 2), &[2], 3);
+        must_prewrite_put(&engine, &[2], b"vv", &[2], 3);
         must_commit(&engine, &[2], 3, 3);
 
         must_prewrite_put(
             &engine,
             &[3],
-            &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1),
+            "a".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
             4,
         );
@@ -1189,13 +908,13 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[5],
-            &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1),
+            "b".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[5],
             2,
         );
         must_commit(&engine, &[5], 2, 5);
 
-        must_prewrite_put(&engine, &[6], &gen_value(b'x', 3), &[6], 3);
+        must_prewrite_put(&engine, &[6], b"xxx", &[6], 3);
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
