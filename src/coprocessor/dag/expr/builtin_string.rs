@@ -14,6 +14,7 @@
 use std::{i64, str};
 
 use super::{EvalContext, Result, ScalarFunc};
+use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
@@ -59,12 +60,44 @@ impl ScalarFunc {
         }
         Ok(Some(s))
     }
+
+    #[inline]
+    pub fn upper<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        if types::is_binary_str(self.children[0].get_tp()) {
+            return Ok(Some(s));
+        }
+        Ok(Some(Cow::Owned(
+            str::from_utf8(&s)?.to_uppercase().into_bytes(),
+        )))
+    }
+
+    #[inline]
+    pub fn lower<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        if types::is_binary_str(self.children[0].get_tp()) {
+            return Ok(Some(s));
+        }
+        Ok(Some(Cow::Owned(
+            str::from_utf8(&s)?.to_lowercase().into_bytes(),
+        )))
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use coprocessor::codec::mysql::charset::{CHARSET_BIN, COLLATION_BIN_ID};
+    use coprocessor::codec::mysql::types::{BINARY_FLAG, VAR_STRING};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr, string_datum_expr_with_tp};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
@@ -217,6 +250,198 @@ mod test {
             let arg1 = datum_expr(arg1);
             let arg2 = datum_expr(arg2);
             let op = scalar_func_expr(ScalarFuncSig::Left, &[arg1, arg2]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_upper() {
+        // Test non-bianry string case
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::Bytes(b"HELLO".to_vec()),
+            ),
+            (Datum::Bytes(b"123".to_vec()), Datum::Bytes(b"123".to_vec())),
+            (
+                Datum::Bytes("café".as_bytes().to_vec()),
+                Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(
+                    "ночь на окраине москвы"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+                Datum::Bytes(
+                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // Test binary string case
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (Datum::Bytes(b"123".to_vec()), Datum::Bytes(b"123".to_vec())),
+            (
+                Datum::Bytes("café".as_bytes().to_vec()),
+                Datum::Bytes("café".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(
+                    "ночь на окраине москвы"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+                Datum::Bytes(
+                    "ночь на окраине москвы"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = string_datum_expr_with_tp(
+                input,
+                VAR_STRING,
+                BINARY_FLAG,
+                -1,
+                CHARSET_BIN.to_owned(),
+                COLLATION_BIN_ID,
+            );
+            let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_lower() {
+        // Test non-bianry string case
+        let cases = vec![
+            (
+                Datum::Bytes(b"HELLO".to_vec()),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (Datum::Bytes(b"123".to_vec()), Datum::Bytes(b"123".to_vec())),
+            (
+                Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                Datum::Bytes("café".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(
+                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+                Datum::Bytes(
+                    "ночь на окраине москвы"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::Lower, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // Test binary string case
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (Datum::Bytes(b"123".to_vec()), Datum::Bytes(b"123".to_vec())),
+            (
+                Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(
+                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+                Datum::Bytes(
+                    "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = string_datum_expr_with_tp(
+                input,
+                VAR_STRING,
+                BINARY_FLAG,
+                -1,
+                CHARSET_BIN.to_owned(),
+                COLLATION_BIN_ID,
+            );
+            let op = scalar_func_expr(ScalarFuncSig::Lower, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
