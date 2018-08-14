@@ -141,35 +141,41 @@ pub mod tests {
     pub fn must_get<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        assert_eq!(txn.get(&Key::from_raw(key)).unwrap().unwrap(), expect);
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+        assert_eq!(
+            reader.get(&Key::from_raw(key), ts).unwrap().unwrap(),
+            expect
+        );
     }
 
     pub fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::RC, true);
-        assert_eq!(txn.get(&Key::from_raw(key)).unwrap().unwrap(), expect)
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::RC);
+        assert_eq!(
+            reader.get(&Key::from_raw(key), ts).unwrap().unwrap(),
+            expect
+        );
     }
 
     pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        assert!(txn.get(&Key::from_raw(key)).unwrap().is_none());
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+        assert!(reader.get(&Key::from_raw(key), ts).unwrap().is_none());
     }
 
     pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
-        assert!(txn.get(&Key::from_raw(key)).is_err());
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+        assert!(reader.get(&Key::from_raw(key), ts).is_err());
     }
 
     pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         txn.prewrite(
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             pk,
@@ -181,7 +187,7 @@ pub mod tests {
     pub fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         txn.prewrite(
             Mutation::Delete(Key::from_raw(key)),
             pk,
@@ -193,7 +199,7 @@ pub mod tests {
     pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
             .unwrap();
         engine.write(&ctx, txn.into_modifies()).unwrap();
@@ -202,7 +208,7 @@ pub mod tests {
     pub fn must_prewrite_lock_err<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         assert!(
             txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
                 .is_err()
@@ -212,7 +218,7 @@ pub mod tests {
     pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         txn.commit(&Key::from_raw(key), commit_ts).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -220,14 +226,14 @@ pub mod tests {
     pub fn must_commit_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         assert!(txn.commit(&Key::from_raw(key), commit_ts).is_err());
     }
 
     pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         txn.collapse_rollback(false);
         txn.rollback(&Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -236,7 +242,7 @@ pub mod tests {
     pub fn must_rollback_collapsed<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         txn.rollback(&Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -244,14 +250,14 @@ pub mod tests {
     pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         assert!(txn.rollback(&Key::from_raw(key)).is_err());
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 0, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, 0, true).unwrap();
         txn.gc(&Key::from_raw(key), safe_point).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
