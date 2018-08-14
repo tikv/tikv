@@ -17,7 +17,7 @@ use std::i64;
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 
-const SPACE: char = ' ';
+const SPACE: u8 = 0o40u8;
 
 impl ScalarFunc {
     pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -47,10 +47,12 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = String::from_utf8(val.into_owned())?;
-        Ok(Some(Cow::Owned(
-            s.trim_left_matches(SPACE).as_bytes().to_vec(),
-        )))
+        let pos = val.iter().position(|&x| x != SPACE);
+        if let Some(i) = pos {
+            Ok(Some(Cow::Owned(val[i..].to_vec())))
+        } else {
+            Ok(Some(val))
+        }
     }
 
     pub fn rtrim<'a, 'b: 'a>(
@@ -59,10 +61,12 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = String::from_utf8(val.into_owned())?;
-        Ok(Some(Cow::Owned(
-            s.trim_right_matches(SPACE).as_bytes().to_vec(),
-        )))
+        let pos = val.iter().rev().position(|&x| x != SPACE);
+        if let Some(i) = pos {
+            Ok(Some(Cow::Owned(val[..val.len()-i].to_vec())))
+        } else {
+            Ok(Some(Cow::Owned(b"".to_vec())))
+        }
     }
 }
 
@@ -184,6 +188,7 @@ mod test {
     fn test_ltrim() {
         let cases = vec![
             ("   bar   ", "bar   "),
+            ("   b   ar   ", "b   ar   "),
             ("bar", "bar"),
             ("\t  bar", "\t  bar"),
             ("\r  bar", "\r  bar"),
@@ -191,6 +196,7 @@ mod test {
             ("  \tbar", "\tbar"),
             ("", ""),
             ("  你好", "你好"),
+            ("  你  好", "你  好"),
             (
                 "  분산 데이터베이스    ",
                 "분산 데이터베이스    ",
@@ -225,12 +231,14 @@ mod test {
         let cases = vec![
             ("   bar   ", "   bar"),
             ("bar", "bar"),
+            ("ba  r", "ba  r"),
             ("  bar\t  ", "  bar\t"),
             (" bar   \t", " bar   \t"),
             ("bar   \r", "bar   \r"),
             ("bar   \n", "bar   \n"),
             ("", ""),
             ("  你好  ", "  你好"),
+            ("  你  好  ", "  你  好"),
             (
                 "  분산 데이터베이스    ",
                 "  분산 데이터베이스",
