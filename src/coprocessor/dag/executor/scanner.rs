@@ -121,7 +121,11 @@ impl<S: Snapshot> Scanner<S> {
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
-            (ScanMode::Forward, _) => util::prefix_next(&key),
+            (ScanMode::Forward, _) => {
+                let mut seek_key = key.clone();
+                util::convert_to_prefix_next(&mut seek_key);
+                seek_key
+            }
             (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
             (ScanMode::Backward, ScanOn::Index) => key.clone(),
             _ => unreachable!(),
@@ -336,7 +340,8 @@ pub mod test {
 
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
         let start_key = table::encode_row_key(table_id, handle);
-        let end = util::prefix_next(&start_key);
+        let mut end = start_key.clone();
+        util::convert_to_prefix_next(&mut end);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
         key_range.set_end(end);
