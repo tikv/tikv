@@ -189,7 +189,9 @@ impl<S: Snapshot> ForwardScanner<S> {
                 } else {
                     None
                 };
-                match (w_key, l_key) {
+
+                // `res` is `(current_user_key_slice, has_write, has_lock)`
+                let res = match (w_key, l_key) {
                     (None, None) => {
                         // Both cursors yield `None`: we know that there is nothing remaining.
                         return Ok(None);
@@ -198,12 +200,12 @@ impl<S: Snapshot> ForwardScanner<S> {
                         // Write cursor yields `None` but lock cursor yields something:
                         // In RC, it means we got nothing.
                         // In SI, we need to check if the lock will cause conflict.
-                        (k.to_vec(), false, true)
+                        (k, false, true)
                     }
                     (Some(k), None) => {
                         // Write cursor yields something but lock cursor yields `None`:
                         // We need to further step write cursor to our desired version
-                        (Key::truncate_ts_for(k)?.to_vec(), true, false)
+                        (Key::truncate_ts_for(k)?, true, false)
                     }
                     (Some(wk), Some(lk)) => {
                         let write_user_key = Key::truncate_ts_for(wk)?;
@@ -211,24 +213,27 @@ impl<S: Snapshot> ForwardScanner<S> {
                             Ordering::Less => {
                                 // Write cursor user key < lock cursor, it means the lock of the
                                 // current key that write cursor is pointing to does not exist.
-                                (write_user_key.to_vec(), true, false)
+                                (write_user_key, true, false)
                             }
                             Ordering::Greater => {
                                 // Write cursor user key > lock cursor, it means we got a lock of a
                                 // key that does not have a write. In SI, we need to check if the
                                 // lock will cause conflict.
-                                (lk.to_vec(), false, true)
+                                (lk, false, true)
                             }
                             Ordering::Equal => {
                                 // Write cursor user key == lock cursor, it means the lock of the
                                 // current key that write cursor is pointing to *exists*.
-                                (lk.to_vec(), true, true)
+                                (lk, true, true)
                             }
                         }
                     }
-                }
+                };
+
+                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
+                // the key or it's clones without reallocation.
+                (Key::from_encoded_slice(res.0), res.1, res.2)
             };
-            let current_user_key = Key::from_encoded(current_user_key);
 
             // Attempt to read specified version of the key. Note that we may get `None`
             // indicating that no desired version is found, or a DELETE version is found, or
@@ -309,6 +314,9 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
         // If we have not found `${user_key}_${ts}` in a few `next()`, directly `seek()`.
         if needs_seek {
+            // `user_key` must have reserved space here, so it's clone has reserved space too. So no
+            // reallocation happends in `append_ts`.
+            // TODO: Try to avoid `clone` here.
             self.write_cursor
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
             if !self.write_cursor.valid() {
@@ -410,6 +418,9 @@ impl<S: Snapshot> ForwardScanner<S> {
 
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
+        // `user_key` must have reserved space here, so it's clone has reserved space too. So no
+        // reallocation happends in `append_ts`.
+        // TODO: Try to avoid `clone` here.
         self.write_cursor.seek(
             &current_user_key.clone().append_ts(0),
             &mut self.statistics.write,
