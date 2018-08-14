@@ -1764,7 +1764,7 @@ impl Peer {
 
     fn handle_read(&mut self, req: RaftCmdRequest, check_epoch: bool) -> ReadResponse {
         let mut resp = ReadExecutor::new(self.engines.kv.clone(), check_epoch)
-            .set_regon(self.region())
+            .set_region(self.region())
             .execute(&req)
             .unwrap_or_else(|e| {
                 match e {
@@ -2034,7 +2034,7 @@ impl<'a> ReadExecutor<'a> {
         self.snapshot_time
     }
 
-    pub fn set_regon(&mut self, region: &'a metapb::Region) -> &mut Self {
+    pub fn set_region(&mut self, region: &'a metapb::Region) -> &mut Self {
         self.region = Some(region);
         self
     }

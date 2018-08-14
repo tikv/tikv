@@ -83,7 +83,7 @@ impl ReadDelegate {
         }
     }
 
-    // TODO: return ReadResponse once we removes batch snapshot.
+    // TODO: return ReadResponse once we remove batch snapshot.
     fn handle_read<'a>(
         &'a self,
         req: &RaftCmdRequest,
@@ -94,7 +94,7 @@ impl ReadDelegate {
             if util::check_term(req, term).is_ok()
                 && lease.inspect(executor.snapshot_time()) == LeaseState::Valid
             {
-                if let Ok(mut resp) = executor.set_regon(&self.region).execute(req) {
+                if let Ok(mut resp) = executor.set_region(&self.region).execute(req) {
                     // Leader can read local if and only if it is in lease.
                     cmd_resp::bind_term(&mut resp.response, term);
                     return Some(resp);
@@ -496,6 +496,8 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
     fn handle_ready_tasks(&mut self, tasks: &mut Vec<Task>) {
         // Dont check region epoch.
         let mut executor = ReadExecutor::new(self.kv_engine.clone(), false);
+        // TODO: should we issue an fence to guarantee we take snapshot first
+        //       and then read current timespce?
         executor.set_snapshot_time(monotonic_raw_now());
 
         for mut task in tasks.drain(..) {
@@ -534,8 +536,8 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
                         let region_id = req.get_header().get_region_id();
                         if let Some(delegate) = self.delegates.get(&region_id) {
                             let resp = delegate.handle_read(&req, &mut executor);
-                            // No matter it is `Some` or `None`, we always the response,
-                            // If it's `None` which means users need to retry the requsets
+                            // No matter it is `Some` or `None`, we always response,
+                            // If it's `None` users need to retry the requsets
                             // via `async_snapshot`.
                             ret.push(resp);
                         }
@@ -572,7 +574,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
     fn inspect_lease(&mut self) -> LeaseState {
         // TODO: disable localreader if we did not enable raft's check_quorum.
         if self.delegate.leader_lease.is_some() {
-            // We skips lease check, because we delay it to return response.
+            // We skip lease check, because it is postponed until `handle_read`.
             LeaseState::Valid
         } else {
             debug!("{} leader lease is None", self.delegate.tag,);
