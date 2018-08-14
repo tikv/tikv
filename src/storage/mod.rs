@@ -590,7 +590,7 @@ impl<E: Engine> Storage<E> {
                                 !(v.is_ok() && v.as_ref().unwrap().is_none())
                             )
                             .map(|(v, k)| match v {
-                                Ok(Some(x)) => Ok((k.raw().unwrap(), x)),
+                                Ok(Some(x)) => Ok((k.take_raw().unwrap(), x)),
                                 Err(e) => Err(Error::from(e)),
                                 _ => unreachable!(),
                             })
@@ -1245,7 +1245,7 @@ impl<E: Engine> Storage<E> {
                             if i + 1 == ranges_len {
                                 None
                             } else {
-                                Some(Key::from_encoded(ranges[i + 1].get_start_key().to_vec()))
+                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
                             }
                         } else {
                             Some(Key::from_encoded(end_key))

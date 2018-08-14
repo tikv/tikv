@@ -11,10 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::charset::COLLATION_BIN_ID;
+use tipb::expression::FieldType;
+
 /// Field can't be NULL
 const NOT_NULL_FLAG: u64 = 1;
 /// The field is unsigned.
 pub const UNSIGNED_FLAG: u64 = 32;
+/// The field is binary.
+pub const BINARY_FLAG: u64 = 64;
 /// When cast to Json, should **PARSE** but not **COERCE**.
 pub const PARSE_TO_JSON_FLAG: u64 = 262144;
 /// Telling boolean literal from integers.
@@ -80,4 +85,31 @@ pub const GEOMETRY: u8 = 255;
 /// which can represent different types of values in specific context.
 pub fn is_hybrid_type(tp: u8) -> bool {
     tp == ENUM || tp == BIT || tp == SET
+}
+
+#[inline]
+pub fn is_type_char(tp: u8) -> bool {
+    tp == STRING || tp == VARCHAR
+}
+
+#[inline]
+pub fn is_type_varchar(tp: u8) -> bool {
+    tp == VAR_STRING || tp == VARCHAR
+}
+
+#[inline]
+pub fn is_type_blob(tp: u8) -> bool {
+    tp == TINY_BLOB || tp == MEDIUM_BLOB || tp == BLOB || tp == LONG_BLOB
+}
+
+#[inline]
+pub fn is_type_unspecified(tp: u8) -> bool {
+    tp == UNSPECIFIED
+}
+
+#[inline]
+pub fn is_binary_str(tp: &FieldType) -> bool {
+    let t = tp.get_tp() as u8;
+    tp.get_collate() == COLLATION_BIN_ID
+        && (is_type_char(t) || is_type_varchar(t) || is_type_blob(t) || is_type_unspecified(t))
 }
