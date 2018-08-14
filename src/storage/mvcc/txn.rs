@@ -373,7 +373,7 @@ mod tests {
     use storage::engine::{self, Engine, TEMP_DIR};
     use storage::mvcc::tests::*;
     use storage::mvcc::WriteType;
-    use storage::mvcc::{CfReaderBuilder, MvccTxn, PointGetterBuilder};
+    use storage::mvcc::{CfReaderBuilder, MvccTxn};
     use storage::{Key, Mutation, Options, ALL_CFS, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
@@ -726,12 +726,8 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot.clone(), 10, true).unwrap();
-        let mut point_getter = PointGetterBuilder::new(snapshot.clone()).build().unwrap();
+        let mut txn = MvccTxn::new(snapshot, 10, true).unwrap();
         let key = Key::from_raw(k);
-        assert_eq!(txn.write_size, 0);
-
-        assert!(point_getter.read_next(&key, 10).unwrap().is_none());
         assert_eq!(txn.write_size, 0);
 
         txn.prewrite(
