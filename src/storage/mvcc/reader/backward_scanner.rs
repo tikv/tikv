@@ -312,14 +312,12 @@ impl<S: Snapshot> BackwardScanner<S> {
         if last_checked_commit_ts == ts {
             return Ok(self.handle_last_version(last_version, user_key)?);
         }
+        assert!(ts > last_checked_commit_ts);
 
         // After several `prev()`, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        assert!(ts > last_checked_commit_ts);
-
         // `user_key` must have reserved space here, so it's clone has reserved space too. So no
         // reallocation happends in `append_ts`.
-        // TODO: Try to avoid `clone` here.
         let seek_key = user_key.clone().append_ts(ts);
 
         // TODO: Replace by cast + seek().

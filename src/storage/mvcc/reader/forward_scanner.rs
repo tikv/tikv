@@ -316,7 +316,6 @@ impl<S: Snapshot> ForwardScanner<S> {
         if needs_seek {
             // `user_key` must have reserved space here, so it's clone has reserved space too. So no
             // reallocation happends in `append_ts`.
-            // TODO: Try to avoid `clone` here.
             self.write_cursor
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
             if !self.write_cursor.valid() {
@@ -420,7 +419,6 @@ impl<S: Snapshot> ForwardScanner<S> {
         // After that, we must pointing to another key, or out of bound.
         // `current_user_key` must have reserved space here, so it's clone has reserved space too.
         // So no reallocation happends in `append_ts`.
-        // TODO: Try to avoid `clone` here.
         self.write_cursor.seek(
             &current_user_key.clone().append_ts(0),
             &mut self.statistics.write,
