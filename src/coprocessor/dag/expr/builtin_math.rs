@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate rand;
-extern crate time;
-
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
@@ -22,6 +19,7 @@ use num::traits::Pow;
 use rand::{Rng, SeedableRng, XorShiftRng};
 use std::borrow::Cow;
 use std::{f64, i64};
+use time;
 
 impl ScalarFunc {
     #[inline]
@@ -119,33 +117,38 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn rand(&self, _: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
-        let x = rand::thread_rng().gen::<f64>();
-        Ok(Some(x))
+    pub fn rand(&self, _: &mut EvalContext, _: &[Datum]) -> Result<Option<f64>> {
+        let mut cus_rng = self.cus_rng.rng.borrow_mut();
+        if cus_rng.is_none() {
+            let mut rand = get_rand(None);
+            let res = rand.gen::<f64>();
+            *cus_rng = Some(rand);
+            Ok(Some(res))
+        } else {
+            let rand = cus_rng.as_mut().unwrap();
+            let res = rand.gen::<f64>();
+            Ok(Some(res))
+        }
     }
 
     #[inline]
     pub fn rand_with_seed(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let seed = match self.children[0].eval_int(ctx, row)? {
-            None => {
-                let current_time = time::get_time();
-                let nsec = current_time.nsec as u64;
-                let sec = (current_time.sec * 1000000000) as u64;
-                sec + nsec
-            }
-            Some(v) => v as u64,
+            Some(v) => Some(v as u64),
+            _ => None,
         };
 
-        let seeds: [u32; 4] = [
-            (seed & 0x0000_0000_0000_FFFF) as u32,
-            ((seed & 0x0000_0000_FFFF_0000) >> 16) as u32,
-            ((seed & 0x0000_FFFF_0000_0000) >> 32) as u32,
-            ((seed & 0xFFFF_0000_0000_0000) >> 48) as u32,
-        ];
-
-        let mut rng: XorShiftRng = SeedableRng::from_seed(seeds);
-        let x = rng.gen::<f64>();
-        Ok(Some(x))
+        let mut cus_rng = self.cus_rng.rng.borrow_mut();
+        if cus_rng.is_none() {
+            let mut rand = get_rand(seed);
+            let res = rand.gen::<f64>();
+            *cus_rng = Some(rand);
+            Ok(Some(res))
+        } else {
+            let rand = cus_rng.as_mut().unwrap();
+            let res = rand.gen::<f64>();
+            Ok(Some(res))
+        }
     }
 
     #[inline]
@@ -213,6 +216,28 @@ impl ScalarFunc {
         }
         Ok(Some(pow))
     }
+}
+
+fn get_rand(arg: Option<u64>) -> XorShiftRng {
+    let seed = match arg {
+        Some(v) => v,
+        None => {
+            let current_time = time::get_time();
+            let nsec = current_time.nsec as u64;
+            let sec = (current_time.sec * 1000000000) as u64;
+            sec + nsec
+        }
+    };
+
+    let seeds: [u32; 4] = [
+        (seed & 0x0000_0000_0000_FFFF) as u32,
+        ((seed & 0x0000_0000_FFFF_0000) >> 16) as u32,
+        ((seed & 0x0000_FFFF_0000_0000) >> 32) as u32,
+        ((seed & 0xFFFF_0000_0000_0000) >> 48) as u32,
+    ];
+
+    let rng: XorShiftRng = SeedableRng::from_seed(seeds);
+    rng
 }
 
 #[cfg(test)]
