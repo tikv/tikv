@@ -83,5 +83,4 @@ mod test {
         let is_ipv4 = is_given_string_ipv4("A.123.a.X");
         assert_eq!(is_ipv4, false);
     }
-
 }
