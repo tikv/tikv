@@ -228,6 +228,15 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
+        txn.collapse_rollback(false);
+        txn.rollback(&Key::from_raw(key)).unwrap();
+        write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_rollback_collapsed<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, None, IsolationLevel::SI, true);
         txn.rollback(&Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
