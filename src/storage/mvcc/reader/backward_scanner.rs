@@ -310,10 +310,8 @@ impl<S: Snapshot> BackwardScanner<S> {
 
         // After several `prev()`, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        let last_handled_key = self.write_cursor.key(&mut self.statistics.write).to_vec();
-
+        assert!(ts > last_checked_commit_ts);
         let seek_key = user_key.clone().append_ts(ts);
-        assert!(seek_key.encoded().as_slice() < last_handled_key.as_slice());
 
         // TODO: Replace by cast + seek().
         self.write_cursor
@@ -321,7 +319,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         assert!(self.write_cursor.valid());
 
         loop {
-            // After seek, or after some `next()`, we may reach `last_handled_key` again. It
+            // After seek, or after some `next()`, we may reach `last_checked_commit_ts` again. It
             // means we have checked all versions for this user key. We use `last_version` as
             // return.
             let mut is_done = false;
@@ -332,7 +330,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                     current_key,
                     user_key.encoded().as_slice()
                 ));
-                if current_key >= last_handled_key.as_slice() {
+                if Key::decode_ts_from(current_key)? <= last_checked_commit_ts {
                     // We reach the last handled key,
                     is_done = true;
                 }
