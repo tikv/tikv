@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
+use std::cell::UnsafeCell;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -335,8 +336,12 @@ pub struct Cursor<I: Iterator> {
     max_key: Option<Vec<u8>>,
     valid: bool, // whether or not the cursor is hitting the `min_key` and `max_key` bound
 
-    cur_key_has_read: bool,
-    cur_value_has_read: bool,
+    // Use `UnsafeCell` to wrap these flags to be efficient and provides interior mutability.
+    // We don't care the case that there might be race conditions over these flags: we allow
+    // this kind of inaccuracy in statistics. Also we don't need to use atomic variables since
+    // there is extra cost for atomic variables.
+    cur_key_has_read: UnsafeCell<bool>,
+    cur_value_has_read: UnsafeCell<bool>,
 }
 
 impl<I: Iterator> Cursor<I> {
@@ -348,16 +353,46 @@ impl<I: Iterator> Cursor<I> {
             max_key: None,
             valid: true,
 
-            cur_key_has_read: false,
-            cur_value_has_read: false,
+            cur_key_has_read: UnsafeCell::new(false),
+            cur_value_has_read: UnsafeCell::new(false),
         }
     }
 
     /// Mark key and value as unread. It will be invoked once cursor is moved.
     #[inline]
-    fn mark_unread(&mut self) {
-        self.cur_key_has_read = false;
-        self.cur_value_has_read = false;
+    fn mark_unread(&self) {
+        unsafe {
+            *(self.cur_key_has_read.get()) = false;
+            *(self.cur_value_has_read.get()) = false;
+        }
+    }
+
+    /// Mark key as read. Returns `true` if key was previously unread before marking.
+    /// There could be race condition here, but we don't care.
+    #[inline]
+    fn mark_key_read(&self) -> bool {
+        unsafe {
+            let read = self.cur_key_has_read.get();
+            if *read {
+                return false;
+            }
+            *read = true;
+            true
+        }
+    }
+
+    /// Mark value as read. Returns `true` if value was previously unread before marking.
+    /// There could be race condition here, but we don't care.
+    #[inline]
+    fn mark_value_read(&self) -> bool {
+        unsafe {
+            let read = self.cur_value_has_read.get();
+            if *read {
+                return false;
+            }
+            *read = true;
+            true
+        }
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
@@ -494,10 +529,9 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn key(&mut self, statistics: &mut CFStatistics) -> &[u8] {
+    pub fn key(&self, statistics: &mut CFStatistics) -> &[u8] {
         let key = self.iter.key();
-        if !self.cur_key_has_read {
-            self.cur_key_has_read = true;
+        if self.mark_key_read() {
             statistics.flow_stats.read_bytes += key.len();
             statistics.flow_stats.read_keys += 1;
         }
@@ -505,10 +539,9 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn value(&mut self, statistics: &mut CFStatistics) -> &[u8] {
+    pub fn value(&self, statistics: &mut CFStatistics) -> &[u8] {
         let value = self.iter.value();
-        if !self.cur_value_has_read {
-            self.cur_value_has_read = true;
+        if self.mark_value_read() {
             statistics.flow_stats.read_bytes += value.len();
         }
         value
