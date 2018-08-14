@@ -484,7 +484,10 @@ mod test {
             ),
         ];
         for (sig, cols, exp) in cases {
-            let col_expr = col_expr(0);
+            let mut col_expr = col_expr(0);
+            col_expr
+                .mut_field_type()
+                .set_charset(charset::CHARSET_UTF8.to_owned());
             let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
