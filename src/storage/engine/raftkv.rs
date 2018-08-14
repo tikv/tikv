@@ -250,6 +250,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         reqs: Vec<Request>,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
+        fail_point!("raftkv_early_error_report", |_| Err(
+            RaftServerError::RegionNotFound(ctx.get_region_id()).into()
+        ));
         let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::new();
