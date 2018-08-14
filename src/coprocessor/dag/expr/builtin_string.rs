@@ -29,6 +29,15 @@ impl ScalarFunc {
         Ok(Some(input.len() as i64 * 8))
     }
 
+    pub fn ascii(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        if input.len() == 0 {
+            Ok(Some(0))
+        } else {
+            Ok(Some(i64::from(input[0])))
+        }
+    }
+
     #[inline]
     pub fn bin<'a, 'b: 'a>(
         &'b self,
@@ -227,6 +236,41 @@ mod test {
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let op = scalar_func_expr(ScalarFuncSig::Reverse, &[datum_expr(arg)]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_ascii() {
+        let cases = vec![
+            (Datum::Bytes(b"1010".to_vec()), Datum::I64(49)),
+            (Datum::Bytes(b"-1".to_vec()), Datum::I64(45)),
+            (Datum::Bytes(b"".to_vec()), Datum::I64(0)),
+            (Datum::Bytes(b"999".to_vec()), Datum::I64(57)),
+            (Datum::Bytes(b"hello".to_vec()), Datum::I64(104)),
+            (Datum::Bytes("Grüße".as_bytes().to_vec()), Datum::I64(71)),
+            (Datum::Bytes("München".as_bytes().to_vec()), Datum::I64(77)),
+            (Datum::Null, Datum::Null),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::I64(230),
+            ),
+            (
+                Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                Datum::I64(229),
+            ),
+            (
+                Datum::Bytes("Αθήνα".as_bytes().to_vec()),
+                Datum::I64(206),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::ASCII, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
