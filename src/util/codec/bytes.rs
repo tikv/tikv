@@ -245,38 +245,37 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
         // everytime make ENC_GROUP_SIZE + 1 elements as a decode unit
         read_offset += ENC_GROUP_SIZE + 1;
 
-        unsafe {
-            // the last byte in decode unit is for marker which indicates pad size
-            let marker = data[marker_offset];
-            let pad_size = if desc {
-                marker as usize
-            } else {
-                (ENC_MARKER - marker) as usize
-            };
+        // the last byte in decode unit is for marker which indicates pad size
+        let marker = data[marker_offset];
+        let pad_size = if desc {
+            marker as usize
+        } else {
+            (ENC_MARKER - marker) as usize
+        };
 
-            if pad_size > 0 {
-                if pad_size > ENC_GROUP_SIZE {
-                    return Err(Error::KeyPadding);
-                }
-
-                // check the padding pattern whether validate or not
-                let padding_slice = if desc {
-                    &ENC_DESC_PADDING[..pad_size]
-                } else {
-                    &ENC_ASC_PADDING[..pad_size]
-                };
-                if &data[write_offset - pad_size..write_offset] != padding_slice {
-                    return Err(Error::KeyPadding);
-                }
-                data.set_len(write_offset - pad_size);
-
-                if desc {
-                    for k in data {
-                        *k = !*k;
-                    }
-                }
-                return Ok(());
+        if pad_size > 0 {
+            if pad_size > ENC_GROUP_SIZE {
+                return Err(Error::KeyPadding);
             }
+
+            // check the padding pattern whether validate or not
+            let padding_slice = if desc {
+                &ENC_DESC_PADDING[..pad_size]
+            } else {
+                &ENC_ASC_PADDING[..pad_size]
+            };
+            if &data[write_offset - pad_size..write_offset] != padding_slice {
+                return Err(Error::KeyPadding);
+            }
+            unsafe {
+                data.set_len(write_offset - pad_size);
+            }
+            if desc {
+                for k in data {
+                    *k = !*k;
+                }
+            }
+            return Ok(());
         }
     }
 }
@@ -352,7 +351,10 @@ mod tests {
                 let asc_offset = asc.as_ptr() as usize;
                 let mut asc_input = asc.as_slice();
                 assert_eq!(source, decode_bytes(&mut asc_input, false).unwrap());
-                assert_eq!(asc_input.as_ptr() as usize - asc_offset, asc.len() - number::U64_SIZE);
+                assert_eq!(
+                    asc_input.as_ptr() as usize - asc_offset,
+                    asc.len() - number::U64_SIZE
+                );
             }
             decode_bytes_in_place(&mut asc, false).unwrap();
             assert_eq!(source, asc);
@@ -361,7 +363,10 @@ mod tests {
                 let desc_offset = desc.as_ptr() as usize;
                 let mut desc_input = desc.as_slice();
                 assert_eq!(source, decode_bytes(&mut desc_input, true).unwrap());
-                assert_eq!(desc_input.as_ptr() as usize - desc_offset, desc.len() - number::U64_SIZE);
+                assert_eq!(
+                    desc_input.as_ptr() as usize - desc_offset,
+                    desc.len() - number::U64_SIZE
+                );
             }
             decode_bytes_in_place(&mut desc, true).unwrap();
             assert_eq!(source, desc);
@@ -505,15 +510,7 @@ mod tests {
             decode_bytes_in_place(&mut encoded, false).unwrap();
         });
     }
-#[bench]
-    fn bench_decode_inplace2(b: &mut Bencher) {
-        let key = [b'x'; 10000];
-        let encoded = encode_bytes(&key);
-        b.iter(|| {
-            let mut encoded = encoded.clone();
-            decode_bytes_in_place2(&mut encoded, false).unwrap();
-        });
-    }
+
     #[bench]
     fn bench_decode_small(b: &mut Bencher) {
         let key = [b'x'; 30];
@@ -531,16 +528,6 @@ mod tests {
         b.iter(|| {
             let mut encoded = encoded.clone();
             decode_bytes_in_place(&mut encoded, false).unwrap();
-        });
-    }
-
-    #[bench]
-    fn bench_decode_inplace_small2(b: &mut Bencher) {
-        let key = [b'x'; 30];
-        let encoded = encode_bytes(&key);
-        b.iter(|| {
-            let mut encoded = encoded.clone();
-            decode_bytes_in_place2(&mut encoded, false).unwrap();
         });
     }
 }
