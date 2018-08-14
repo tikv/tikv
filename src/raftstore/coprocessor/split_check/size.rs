@@ -161,7 +161,7 @@ pub mod tests {
     pub fn must_split_at(
         rx: &mpsc::Receiver<Msg>,
         exp_region: &Region,
-        exp_split_key: Vec<Vec<u8>>,
+        exp_split_keys: Vec<Vec<u8>>,
     ) {
         loop {
             match rx.try_recv() {
@@ -177,7 +177,7 @@ pub mod tests {
                 }) => {
                     assert_eq!(region_id, exp_region.get_id());
                     assert_eq!(&region_epoch, exp_region.get_region_epoch());
-                    assert_eq!(split_keys, exp_split_key);
+                    assert_eq!(split_keys, exp_split_keys);
                     break;
                 }
                 others => panic!("expect split check result, but got {:?}", others),

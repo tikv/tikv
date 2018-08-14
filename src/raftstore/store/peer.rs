@@ -1195,7 +1195,7 @@ impl Peer {
 
     pub fn maybe_campaign(
         &mut self,
-        is_parent_leader: bool,
+        parent_is_leader: bool,
         pending_raft_groups: &mut HashSet<u64>,
     ) -> bool {
         if self.region().get_peers().len() <= 1 {
@@ -1203,7 +1203,7 @@ impl Peer {
             return false;
         }
 
-        if !is_parent_leader {
+        if !parent_is_leader {
             return false;
         }
 
