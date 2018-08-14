@@ -190,6 +190,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::ASCII
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::Upper
@@ -775,6 +776,7 @@ dispatch_call! {
 
         Length => length,
         BitLength => bit_length,
+        IsIPv4 => is_ipv4,
         ASCII => ascii,
         IsIPv4 => is_ipv4,
     }
