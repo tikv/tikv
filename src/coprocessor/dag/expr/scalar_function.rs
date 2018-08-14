@@ -187,6 +187,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorIntToDec
             | ScalarFuncSig::FloorDecToDec
             | ScalarFuncSig::FloorDecToInt
+            | ScalarFuncSig::RoundDec
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
@@ -397,7 +398,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::RouldReal
-            | ScalarFuncSig::RoundDec
             | ScalarFuncSig::RoundInt
             | ScalarFuncSig::RoundWithFracDec
             | ScalarFuncSig::RoundWithFracInt
@@ -825,6 +825,7 @@ dispatch_call! {
         CeilIntToDec => cast_int_as_decimal,
         FloorDecToDec => floor_dec_to_dec,
         FloorIntToDec => cast_int_as_decimal,
+        RoundDec => round_dec,
 
         IfNullDecimal => if_null_decimal,
         IfDecimal => if_decimal,
@@ -1087,6 +1088,7 @@ mod test {
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
+                    ScalarFuncSig::RoundDec,
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
@@ -1341,7 +1343,6 @@ mod test {
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RightShift,
             ScalarFuncSig::RouldReal,
-            ScalarFuncSig::RoundDec,
             ScalarFuncSig::RoundInt,
             ScalarFuncSig::RoundWithFracDec,
             ScalarFuncSig::RoundWithFracInt,
