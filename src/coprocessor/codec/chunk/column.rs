@@ -20,7 +20,6 @@ use coprocessor::codec::Datum;
 use std::io::Write;
 use tipb::expression::FieldType;
 use util::codec::number::{self, NumberEncoder};
-#[cfg(test)]
 use util::codec::BytesSlice;
 
 /// `Column` stores the same column data of multi rows in one chunk.
@@ -326,7 +325,6 @@ impl Column {
         self.length
     }
 
-    #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice, tp: &FieldType) -> Result<Column> {
         use util::codec::read_slice;
         let length = number::decode_u32_le(buf)? as usize;

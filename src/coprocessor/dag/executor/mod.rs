@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, FieldType};
 use tipb::schema::ColumnInfo;
 
 use storage::{Snapshot, SnapshotStore};
@@ -107,6 +107,7 @@ pub struct AggCols {
     // row's suffix, may be the binary of the group by key.
     suffix: Vec<u8>,
     value: Vec<Datum>,
+    cols: Arc<Vec<FieldType>>,
 }
 
 impl AggCols {
@@ -118,6 +119,19 @@ impl AggCols {
             value.extend_from_slice(&self.suffix);
         }
         Ok(value)
+    }
+
+    pub fn into_datums(mut self) -> Result<Vec<Datum>> {
+        if self.suffix.is_empty() {
+            return Ok(self.value);
+        }
+        let suffix = datum::decode(&mut self.suffix.as_slice())?;
+        self.value.extend(suffix);
+        Ok(self.value)
+    }
+
+    pub fn get_field_types(&self) -> &[FieldType] {
+        self.cols.as_ref()
     }
 }
 
@@ -132,8 +146,12 @@ impl Row {
         Row::Origin(OriginCols::new(handle, data, cols))
     }
 
-    pub fn agg(value: Vec<Datum>, suffix: Vec<u8>) -> Row {
-        Row::Agg(AggCols { suffix, value })
+    pub fn agg(value: Vec<Datum>, suffix: Vec<u8>, cols: Arc<Vec<FieldType>>) -> Row {
+        Row::Agg(AggCols {
+            suffix,
+            value,
+            cols,
+        })
     }
 
     pub fn take_origin(self) -> OriginCols {
@@ -147,6 +165,13 @@ impl Row {
         match self {
             Row::Origin(row) => row.get_binary(output_offsets),
             Row::Agg(row) => row.get_binary(), // ignore output offsets for aggregation.
+        }
+    }
+
+    pub fn into_datums(self, ctx: &mut EvalContext, output_offsets: &[u32]) -> Result<Vec<Datum>> {
+        match self {
+            Row::Origin(row) => row.get_datums(ctx, output_offsets),
+            Row::Agg(row) => row.into_datums(),
         }
     }
 }
@@ -201,6 +226,47 @@ impl OriginCols {
                 None => {
                     box_try!(values.encode(&[Datum::Null], false));
                 }
+            }
+        }
+        Ok(values)
+    }
+
+    pub fn get_field_types(&self, output_offsets: &[u32]) -> Vec<FieldType> {
+        let mut values = Vec::with_capacity(output_offsets.len());
+        for offset in output_offsets {
+            let tp = self.cols[*offset as usize].get_tp();
+            let mut fp = FieldType::new();
+            fp.set_tp(tp);
+            values.push(fp);
+        }
+        values
+    }
+
+    pub fn get_datums(&self, ctx: &mut EvalContext, output_offsets: &[u32]) -> Result<Vec<Datum>> {
+        let mut values = Vec::with_capacity(output_offsets.len());
+        for offset in output_offsets {
+            let col = &self.cols[*offset as usize];
+            if col.get_pk_handle() {
+                let v = util::get_pk(col, self.handle);
+                values.push(v);
+            } else {
+                let col_id = col.get_column_id();
+                let value = match self.data.get(col_id) {
+                    None if col.has_default_val() => {
+                        // TODO: optimize it to decode default value only once.
+                        box_try!(table::decode_col_value(
+                            &mut col.get_default_val(),
+                            ctx,
+                            col
+                        ))
+                    }
+                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                        return Err(box_err!("column {} of {} is missing", col_id, self.handle));
+                    }
+                    None => Datum::Null,
+                    Some(mut bs) => box_try!(table::decode_col_value(&mut bs, ctx, col)),
+                };
+                values.push(value);
             }
         }
         Ok(values)

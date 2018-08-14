@@ -12,13 +12,29 @@
 // limitations under the License.
 
 use std::cmp::Ordering;
-use tipb::expression::ExprType;
+use tipb::expression::FieldType;
+use tipb::expression::{Expr, ExprType};
 
+use coprocessor::codec::mysql::types;
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
 use coprocessor::Result;
 
 use super::super::expr::{eval_arith, EvalContext};
+
+pub fn get_aggr_func_field_types(exprs: &[Expr]) -> Vec<FieldType> {
+    let mut field_types = Vec::with_capacity(exprs.len());
+    for expr in exprs {
+        if expr.get_tp() == ExprType::Avg {
+            let mut cnt_type = FieldType::new();
+            cnt_type.set_tp(i32::from(types::LONG));
+            cnt_type.set_flag(types::UNSIGNED_FLAG as u32);
+            field_types.push(cnt_type);
+        }
+        field_types.push(expr.get_field_type().clone());
+    }
+    field_types
+}
 
 pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
     match tp {

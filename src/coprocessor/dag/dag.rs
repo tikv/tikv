@@ -18,7 +18,9 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message as PbMsg, RepeatedField};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
-use coprocessor::dag::expr::EvalConfig;
+use coprocessor::codec::chunk::{Chunk as ArrowChunk, ChunkEncoder};
+use coprocessor::dag::executor::Row;
+use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
 use coprocessor::*;
 use storage::{Snapshot, SnapshotStore};
 
@@ -30,6 +32,8 @@ pub struct DAGContext<S: Snapshot + 'static> {
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    encode_type: EncodeType,
+    eval_cfg: Arc<EvalConfig>,
 }
 
 impl<S: Snapshot + 'static> DAGContext<S> {
@@ -68,11 +72,13 @@ impl<S: Snapshot + 'static> DAGContext<S> {
             !req_ctx.context.get_not_fill_cache(),
         );
 
+        let arc_eval_cfg = Arc::new(eval_cfg);
+
         let dag_executor = build_exec(
             req.take_executors().into_vec(),
             store,
             ranges,
-            Arc::new(eval_cfg),
+            arc_eval_cfg.clone(),
             req.get_collect_range_counts(),
         )?;
         Ok(Self {
@@ -81,60 +87,173 @@ impl<S: Snapshot + 'static> DAGContext<S> {
             exec: dag_executor,
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
+            encode_type: req.get_encode_type(),
+            eval_cfg: arc_eval_cfg,
         })
     }
+}
 
-    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
-        let mut s_resp = StreamResponse::new();
-        s_resp.set_encode_type(EncodeType::TypeDefault);
-        s_resp.set_data(box_try!(chunk.write_to_bytes()));
-        if let Some(eval_warnings) = self.exec.take_eval_warnings() {
-            s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
-            s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+enum ResChunks {
+    DEFAULT(Vec<Chunk>),
+    ARROW(Vec<ArrowChunk>),
+}
+
+impl ResChunks {
+    fn new(encode_type: EncodeType) -> ResChunks {
+        match encode_type {
+            EncodeType::TypeDefault => ResChunks::DEFAULT(Vec::new()),
+            EncodeType::TypeArrow => ResChunks::ARROW(Vec::new()),
         }
-        self.exec.collect_output_counts(s_resp.mut_output_counts());
+    }
+
+    fn push_row(&mut self, ctx: &mut EvalContext, row: Row, output_offsets: &[u32]) -> Result<()> {
+        match self {
+            ResChunks::DEFAULT(ref mut chunks) => {
+                let chunk = chunks.last_mut().unwrap();
+                let value = row.get_binary(output_offsets)?;
+                chunk.mut_rows_data().extend_from_slice(&value);
+                Ok(())
+            }
+            ResChunks::ARROW(ref mut chunks) => {
+                let chunk = chunks.last_mut().unwrap();
+                let datums = row.into_datums(ctx, &output_offsets)?;
+                chunk.append_row(&datums)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            ResChunks::DEFAULT(ref chunks) => chunks.is_empty(),
+            ResChunks::ARROW(ref chunks) => chunks.is_empty(),
+        }
+    }
+}
+
+struct ResponseData {
+    chunks: ResChunks,
+    ctx: EvalContext,
+    rows_in_last_chunk: usize,
+    chunk_rows_limit: usize,
+}
+
+impl ResponseData {
+    fn new(encode_type: EncodeType, cfg: Arc<EvalConfig>, chunk_rows_limit: usize) -> ResponseData {
+        ResponseData {
+            chunks: ResChunks::new(encode_type),
+            ctx: EvalContext::new(cfg),
+            rows_in_last_chunk: 0,
+            chunk_rows_limit,
+        }
+    }
+
+    fn last_chunk_is_full(&self) -> bool {
+        self.rows_in_last_chunk >= self.chunk_rows_limit
+    }
+
+    fn push_row(&mut self, row: Row, output_offsets: &[u32]) -> Result<()> {
+        if self.chunks.is_empty() || self.last_chunk_is_full() {
+            match self.chunks {
+                ResChunks::DEFAULT(ref mut chunks) => chunks.push(Chunk::new()),
+                ResChunks::ARROW(ref mut chunks) => match &row {
+                    Row::Origin(ref row) => chunks.push(ArrowChunk::new(
+                        &row.get_field_types(output_offsets),
+                        self.chunk_rows_limit,
+                    )),
+                    Row::Agg(ref row) => chunks.push(ArrowChunk::new(
+                        row.get_field_types(),
+                        self.chunk_rows_limit,
+                    )),
+                },
+            }
+            self.rows_in_last_chunk = 0;
+        }
+
+        self.chunks.push_row(&mut self.ctx, row, output_offsets)?;
+        self.rows_in_last_chunk += 1;
+
+        Ok(())
+    }
+
+    fn into_sel_response(
+        mut self,
+        eval_warnings: Option<EvalWarnings>,
+        output_counts: Vec<i64>,
+    ) -> Result<Response> {
+        let mut sel_resp = SelectResponse::new();
+        match self.chunks {
+            ResChunks::DEFAULT(chunks) => sel_resp.set_chunks(RepeatedField::from_vec(chunks)),
+            ResChunks::ARROW(chunks) => {
+                for c in &chunks {
+                    sel_resp.mut_row_batch_data().encode_chunk(c)?;
+                }
+            }
+        };
+        let mut eval_warnings = eval_warnings.unwrap_or_default();
+        eval_warnings.merge(self.ctx.take_warnings());
+        if eval_warnings.warning_cnt > 0 {
+            sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+            sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+        }
+        sel_resp.set_output_counts(output_counts);
+        let data = box_try!(sel_resp.write_to_bytes());
+        let mut resp = Response::new();
+        resp.set_data(data);
+        Ok(resp)
+    }
+
+    fn into_stream_response(
+        mut self,
+        eval_warnings: Option<EvalWarnings>,
+        output_counts: Vec<i64>,
+        range: Option<KeyRange>,
+    ) -> Result<(Option<Response>, bool)> {
+        let finished = !self.last_chunk_is_full();
+        if self.chunks.is_empty() {
+            return Ok((None, finished));
+        }
+        let mut sel_resp = StreamResponse::new();
+
+        match self.chunks {
+            ResChunks::DEFAULT(chunks) => sel_resp.set_data(box_try!(chunks[0].write_to_bytes())),
+            ResChunks::ARROW(chunks) => sel_resp.mut_data().encode_chunk(&chunks[0])?,
+        };
+
+        let mut eval_warnings = eval_warnings.unwrap_or_default();
+        eval_warnings.merge(self.ctx.take_warnings());
+        if eval_warnings.warning_cnt > 0 {
+            sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+            sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
+        }
+        sel_resp.set_output_counts(output_counts);
 
         let mut resp = Response::new();
-        resp.set_data(box_try!(s_resp.write_to_bytes()));
+        resp.set_data(box_try!(sel_resp.write_to_bytes()));
         if let Some(range) = range {
             resp.set_range(range);
         }
-        Ok(resp)
+        Ok((Some(resp), finished))
     }
 }
 
 impl<S: Snapshot> RequestHandler for DAGContext<S> {
     fn handle_request(&mut self) -> Result<Response> {
-        let mut record_cnt = 0;
-        let mut chunks = Vec::new();
+        let mut chunks = ResponseData::new(
+            self.encode_type,
+            self.eval_cfg.clone(),
+            self.batch_row_limit,
+        );
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
                     self.req_ctx.check_if_outdated()?;
-                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
-                        let chunk = Chunk::new();
-                        chunks.push(chunk);
-                        record_cnt = 0;
-                    }
-                    let chunk = chunks.last_mut().unwrap();
-                    record_cnt += 1;
-                    // for default encode type
-                    let value = row.get_binary(&self.output_offsets)?;
-                    chunk.mut_rows_data().extend_from_slice(&value);
+                    chunks.push_row(row, &self.output_offsets)?;
                 }
                 Ok(None) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    if let Some(eval_warnings) = self.exec.take_eval_warnings() {
-                        sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
-                        sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
-                    }
-                    self.exec
-                        .collect_output_counts(sel_resp.mut_output_counts());
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
-                    return Ok(resp);
+                    let mut output_counts = vec![];
+                    self.exec.collect_output_counts(&mut output_counts);
+                    return chunks.into_sel_response(self.exec.take_eval_warnings(), output_counts);
                 }
                 Err(Error::Eval(err)) => {
                     let mut resp = Response::new();
@@ -150,18 +269,18 @@ impl<S: Snapshot> RequestHandler for DAGContext<S> {
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        let (mut record_cnt, mut finished) = (0, false);
-        let mut chunk = Chunk::new();
         self.exec.start_scan();
-        while record_cnt < self.batch_row_limit {
+        let mut resp = ResponseData::new(
+            self.encode_type,
+            self.eval_cfg.clone(),
+            self.batch_row_limit,
+        );
+        while !resp.last_chunk_is_full() {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    record_cnt += 1;
-                    let value = row.get_binary(&self.output_offsets)?;
-                    chunk.mut_rows_data().extend_from_slice(&value);
+                    resp.push_row(row, &self.output_offsets)?;
                 }
                 Ok(None) => {
-                    finished = true;
                     break;
                 }
                 Err(Error::Eval(err)) => {
@@ -175,13 +294,13 @@ impl<S: Snapshot> RequestHandler for DAGContext<S> {
                 Err(e) => return Err(e),
             }
         }
-        if record_cnt > 0 {
-            let range = self.exec.stop_scan();
-            return self
-                .make_stream_response(chunk, range)
-                .map(|r| (Some(r), finished));
-        }
-        Ok((None, true))
+        let mut output_counts = vec![];
+        self.exec.collect_output_counts(&mut output_counts);
+        resp.into_stream_response(
+            self.exec.take_eval_warnings(),
+            output_counts,
+            self.exec.stop_scan(),
+        )
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {

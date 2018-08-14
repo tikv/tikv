@@ -11,14 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME(shirly): remove following later
-#![allow(dead_code)]
 use super::column::{Column, ColumnEncoder};
 use super::Result;
 use coprocessor::codec::Datum;
 use std::io::Write;
 use tipb::expression::FieldType;
-#[cfg(test)]
 use util::codec::BytesSlice;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.
@@ -69,6 +66,13 @@ impl Chunk {
         self.columns[col_idx].append_datum(v)
     }
 
+    pub fn append_row(&mut self, datums: &[Datum]) -> Result<()> {
+        for (col_id, data) in datums.iter().enumerate() {
+            self.append_datum(col_id, data)?;
+        }
+        Ok(())
+    }
+
     /// Get the Row in the chunk with the row index.
     #[inline]
     pub fn get_row(&self, idx: usize) -> Option<Row> {
@@ -85,7 +89,6 @@ impl Chunk {
         RowIterator::new(self)
     }
 
-    #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice, tps: &[FieldType]) -> Result<Chunk> {
         let mut chunk = Chunk {
             columns: Vec::with_capacity(tps.len()),

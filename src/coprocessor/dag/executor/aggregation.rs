@@ -16,6 +16,7 @@ use std::mem;
 use std::sync::Arc;
 
 use tipb::executor::Aggregation;
+use tipb::expression::FieldType;
 use tipb::expression::{Expr, ExprType};
 
 use util::collections::{OrderMap, OrderMapEntry};
@@ -76,6 +77,7 @@ struct AggExecutor {
     related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor + Send>,
     first_collect: bool,
+    ret_cols_types: Arc<Vec<FieldType>>,
 }
 
 impl AggExecutor {
@@ -90,6 +92,8 @@ impl AggExecutor {
         visitor.batch_visit(&group_by)?;
         visitor.batch_visit(&aggr_func)?;
         let mut ctx = EvalContext::new(eval_config);
+        let mut ret_cols_types = aggregate::get_aggr_func_field_types(&aggr_func);
+        ret_cols_types.extend(group_by.iter().map(|e| e.get_field_type().clone()));
         Ok(AggExecutor {
             group_by: Expression::batch_build(&mut ctx, group_by)?,
             aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
@@ -98,6 +102,7 @@ impl AggExecutor {
             related_cols_offset: visitor.column_offsets(),
             src,
             first_collect: true,
+            ret_cols_types: Arc::new(ret_cols_types),
         })
     }
 
@@ -229,9 +234,14 @@ impl Executor for HashAggExecutor {
                     Ok(Some(Row::agg(
                         aggr_cols,
                         mem::replace(&mut group_key, Vec::new()),
+                        self.inner.ret_cols_types.clone(),
                     )))
                 } else {
-                    Ok(Some(Row::agg(aggr_cols, Vec::default())))
+                    Ok(Some(Row::agg(
+                        aggr_cols,
+                        Vec::default(),
+                        self.inner.ret_cols_types.clone(),
+                    )))
                 }
             }
             None => Ok(None),
@@ -384,7 +394,11 @@ impl StreamAggExecutor {
         }
 
         self.count += 1;
-        Ok(Row::agg(cols, Vec::default()))
+        Ok(Row::agg(
+            cols,
+            Vec::default(),
+            self.inner.ret_cols_types.clone(),
+        ))
     }
 }
 
