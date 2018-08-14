@@ -190,6 +190,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -335,7 +336,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::IsIPv6
@@ -775,6 +775,8 @@ dispatch_call! {
 
         Length => length,
         BitLength => bit_length,
+
+        IsIPv4 => is_ipv4,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
