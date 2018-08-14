@@ -63,7 +63,7 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let pos = val.iter().rev().position(|&x| x != SPACE);
         if let Some(i) = pos {
-            Ok(Some(Cow::Owned(val[..val.len()-i].to_vec())))
+            Ok(Some(Cow::Owned(val[..val.len() - i].to_vec())))
         } else {
             Ok(Some(Cow::Owned(b"".to_vec())))
         }
