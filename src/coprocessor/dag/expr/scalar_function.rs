@@ -192,6 +192,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
             | ScalarFuncSig::Reverse
+            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -392,7 +393,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
-            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RightShift
@@ -854,6 +854,7 @@ dispatch_call! {
         DateFormatSig => date_format,
         Bin => bin,
         Reverse => reverse,
+        ReverseBinary => reverse_binary,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1097,6 +1098,7 @@ mod test {
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Reverse,
+                    ScalarFuncSig::ReverseBinary,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                 ],
@@ -1337,7 +1339,6 @@ mod test {
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
-            ScalarFuncSig::ReverseBinary,
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RightShift,

@@ -61,15 +61,27 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn reverse_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mut s = try_opt!(self.children[0].eval_string(ctx, row));
+        s.to_mut().reverse();
+        Ok(Some(s))
+    }
+
+    #[inline]
     pub fn upper<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if types::is_binary_str(self.children[0].get_tp()) {
-            return Ok(Some(Cow::Owned(s.as_bytes().to_vec())));
+            let s = try_opt!(self.children[0].eval_string(ctx, row));
+            return Ok(Some(s));
         }
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
     }
 
@@ -79,10 +91,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if types::is_binary_str(self.children[0].get_tp()) {
-            return Ok(Some(Cow::Owned(s.as_bytes().to_vec())));
+            let s = try_opt!(self.children[0].eval_string(ctx, row));
+            return Ok(Some(s));
         }
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         Ok(Some(Cow::Owned(s.to_lowercase().into_bytes())))
     }
 }
@@ -236,6 +249,37 @@ mod test {
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let op = scalar_func_expr(ScalarFuncSig::Reverse, &[datum_expr(arg)]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_reverse_binary() {
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::Bytes(b"olleh".to_vec()),
+            ),
+            (Datum::Bytes(b"".to_vec()), Datum::Bytes(b"".to_vec())),
+            (
+                Datum::Bytes("中国".as_bytes().to_vec()),
+                Datum::Bytes(vec![0o275u8, 0o233u8, 0o345u8, 0o255u8, 0o270u8, 0o344u8]),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let input = string_datum_expr_with_tp(
+                arg,
+                VAR_STRING,
+                BINARY_FLAG,
+                -1,
+                CHARSET_BIN.to_owned(),
+                COLLATION_BIN_ID,
+            );
+            let op = scalar_func_expr(ScalarFuncSig::ReverseBinary, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);

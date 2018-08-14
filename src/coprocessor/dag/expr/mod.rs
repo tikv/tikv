@@ -29,7 +29,7 @@ mod scalar_function;
 pub use self::ctx::*;
 pub use coprocessor::codec::{Error, Result};
 
-use coprocessor::codec::mysql::types;
+use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
 use std::borrow::Cow;
@@ -139,12 +139,15 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, str>>> {
         let bytes = try_opt!(self.eval_string(ctx, row));
-        // TODO: Deal with more supported codec in the future
-        let s = match bytes {
-            Cow::Borrowed(bs) => str::from_utf8(bs).map_err(Error::from).map(Cow::Borrowed),
-            Cow::Owned(bs) => String::from_utf8(bs).map_err(Error::from).map(Cow::Owned),
-        };
-        s.map(Some)
+        let chrst = self.get_tp().get_charset();
+        if charset::UTF8_CHARSETS.contains(&chrst) {
+            let s = match bytes {
+                Cow::Borrowed(bs) => str::from_utf8(bs).map_err(Error::from).map(Cow::Borrowed),
+                Cow::Owned(bs) => String::from_utf8(bs).map_err(Error::from).map(Cow::Owned),
+            };
+            return s.map(Some);
+        }
+        Err(box_err!("unsupported charset: {}", chrst))
     }
 
     fn eval_time<'a, 'b: 'a>(
