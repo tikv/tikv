@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::u64;
 use util;
 use util::collections::HashMap;
-use util::worker::{self, Builder, Worker};
+use util::worker::{self, Builder, ScheduleError, Worker};
 
 pub mod config;
 pub mod engine;
@@ -476,10 +476,14 @@ impl<E: Engine> Storage<E> {
         self.engine.clone()
     }
 
+    #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }));
-        Ok(())
+        match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {
+            Ok(()) => Ok(()),
+            Err(ScheduleError::Full(_)) => Err(Error::SchedTooBusy),
+            Err(ScheduleError::Stopped(_)) => Err(Error::Closed),
+        }
     }
 
     fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
