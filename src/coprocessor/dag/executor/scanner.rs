@@ -104,7 +104,7 @@ impl<S: Snapshot> Scanner<S> {
         };
 
         let (key, value) = match kv {
-            Some((k, v)) => (box_try!(k.raw()), v),
+            Some((k, v)) => (box_try!(k.take_raw()), v),
             None => {
                 self.no_more = true;
                 return Ok(None);
