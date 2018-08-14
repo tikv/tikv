@@ -192,6 +192,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::Tan
+            | ScalarFuncSig::Sin
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
@@ -414,7 +415,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::Sign
-            | ScalarFuncSig::Sin
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
             | ScalarFuncSig::Sqrt
@@ -808,6 +808,7 @@ dispatch_call! {
         CaseWhenReal => case_when_real,
 
         Tan => tan,
+        Sin => sin,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -1098,6 +1099,7 @@ mod test {
                     ScalarFuncSig::FloorDecToInt,
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::Tan,
+                    ScalarFuncSig::Sin,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
@@ -1364,7 +1366,6 @@ mod test {
             ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
             ScalarFuncSig::Sign,
-            ScalarFuncSig::Sin,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
             ScalarFuncSig::Sqrt,
