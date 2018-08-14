@@ -527,7 +527,7 @@ fn process_read_impl<E: Engine>(
                 let mut lock_info = LockInfo::new();
                 lock_info.set_primary_lock(lock.primary);
                 lock_info.set_lock_version(lock.ts);
-                lock_info.set_key(key.raw()?);
+                lock_info.set_key(key.take_raw()?);
                 locks.push(lock_info);
             }
             sched_ctx
