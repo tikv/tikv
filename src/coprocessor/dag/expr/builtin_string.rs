@@ -59,7 +59,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if types::is_binary_str(self.children[0].get_tp()) {
-            return Ok(Some(Cow::Owned(s.to_string().into_bytes())));
+            return Ok(Some(Cow::Owned(s.as_bytes().to_vec())));
         }
         Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
     }
@@ -72,7 +72,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if types::is_binary_str(self.children[0].get_tp()) {
-            return Ok(Some(Cow::Owned(s.to_string().into_bytes())));
+            return Ok(Some(Cow::Owned(s.as_bytes().to_vec())));
         }
         Ok(Some(Cow::Owned(s.to_lowercase().into_bytes())))
     }
