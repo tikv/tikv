@@ -256,10 +256,10 @@ pub struct PeerStorage {
     pub engines: Engines,
 
     region: metapb::Region,
-    pub raft_state: RaftLocalState,
-    pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
-    pub last_term: u64,
+    raft_state: RaftLocalState,
+    apply_state: RaftApplyState,
+    applied_index_term: u64,
+    last_term: u64,
 
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
@@ -608,6 +608,26 @@ impl PeerStorage {
     #[inline]
     pub fn applied_index(&self) -> u64 {
         self.apply_state.get_applied_index()
+    }
+
+    #[inline]
+    pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
+        self.apply_state = apply_state;
+    }
+
+    #[inline]
+    pub fn set_applied_term(&mut self, applied_index_term: u64) {
+        self.applied_index_term = applied_index_term;
+    }
+
+    #[inline]
+    pub fn apply_state(&self) -> &RaftApplyState {
+        &self.apply_state
+    }
+
+    #[inline]
+    pub fn applied_index_term(&self) -> u64 {
+        self.applied_index_term
     }
 
     #[inline]
@@ -1771,6 +1791,7 @@ mod test {
         ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
         s.engines.kv.write(kv_wb).unwrap();
         s.apply_state = ctx.apply_state;
+
         let (tx, rx) = channel();
         tx.send(snap.clone()).unwrap();
         s.set_snap_state(SnapState::Generating(rx));
