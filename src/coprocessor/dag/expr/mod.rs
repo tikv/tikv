@@ -22,7 +22,6 @@ mod builtin_miscellaneous;
 mod builtin_op;
 mod builtin_string;
 mod builtin_time;
-mod builtin_miscellaneous;
 mod column;
 mod constant;
 mod ctx;
