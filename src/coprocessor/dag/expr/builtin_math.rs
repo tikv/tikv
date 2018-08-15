@@ -359,7 +359,7 @@ mod test {
             (ScalarFuncSig::Tan, Datum::F64(f64::consts::PI), 0.0_f64),
             (
                 ScalarFuncSig::Tan,
-                Datum::F64(((f64::consts::PI*3.0)/4.0),
+                Datum::F64(((f64::consts::PI*3.0)/4.0)),
                 f64::tan((f64::consts::PI)*3.0/4.0) //in mysql and rust, it equals -1.0000000000000002, not -1
             ),
         ];
