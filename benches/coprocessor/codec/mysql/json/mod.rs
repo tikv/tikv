@@ -17,6 +17,7 @@ use std::io;
 use std::io::prelude::*;
 use std::process::{Command, Stdio};
 use std::thread;
+
 use test::Bencher;
 
 use tikv::coprocessor::codec::mysql::{Json, JsonEncoder};

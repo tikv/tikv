@@ -11,9 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::server::new_server_cluster;
 use std::thread;
 use std::time::Duration;
+
+use test_raftstore::*;
 use tikv::raftstore::store::SeekRegionResult;
 use tikv::storage::engine::RegionInfoProvider;
 use tikv::util::HandyRwLock;

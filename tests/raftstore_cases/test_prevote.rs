@@ -15,11 +15,9 @@ use std::sync::{atomic::AtomicBool, mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use super::cluster::{Cluster, Simulator};
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 use raft::eraftpb::MessageType;
+
+use test_raftstore::*;
 
 enum FailureType<'a> {
     Partition(&'a [u64], &'a [u64]),
