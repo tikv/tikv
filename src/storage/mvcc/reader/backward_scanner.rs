@@ -187,10 +187,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                 } else {
                     None
                 };
-                match (w_key, l_key) {
+
+                // `res` is `(current_user_key_slice, has_write, has_lock)`
+                let res = match (w_key, l_key) {
                     (None, None) => return Ok(None),
-                    (None, Some(lk)) => (lk.to_vec(), false, true),
-                    (Some(wk), None) => (Key::truncate_ts_for(wk)?.to_vec(), true, false),
+                    (None, Some(lk)) => (lk, false, true),
+                    (Some(wk), None) => (Key::truncate_ts_for(wk)?, true, false),
                     (Some(wk), Some(lk)) => {
                         let write_user_key = Key::truncate_ts_for(wk)?;
                         match write_user_key.cmp(lk) {
@@ -198,18 +200,21 @@ impl<S: Snapshot> BackwardScanner<S> {
                                 // We are scanning from largest user key to smallest user key, so this
                                 // indicate that we meet a lock first, thus its corresponding write
                                 // does not exist.
-                                (lk.to_vec(), false, true)
+                                (lk, false, true)
                             }
                             Ordering::Greater => {
                                 // We meet write first, so the lock of the write key does not exist.
-                                (write_user_key.to_vec(), true, false)
+                                (write_user_key, true, false)
                             }
-                            Ordering::Equal => (write_user_key.to_vec(), true, true),
+                            Ordering::Equal => (write_user_key, true, true),
                         }
                     }
-                }
+                };
+
+                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
+                // the key or its clones without reallocation.
+                (Key::from_encoded_slice(res.0), res.1, res.2)
             };
-            let current_user_key = Key::from_encoded(current_user_key);
 
             let result = self.reverse_get(&current_user_key, has_write, has_lock);
 
@@ -307,13 +312,13 @@ impl<S: Snapshot> BackwardScanner<S> {
         if last_checked_commit_ts == ts {
             return Ok(self.handle_last_version(last_version, user_key)?);
         }
+        assert!(ts > last_checked_commit_ts);
 
         // After several `prev()`, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        let last_handled_key = self.write_cursor.key(&mut self.statistics.write).to_vec();
-
+        // `user_key` must have reserved space here, so its clone has reserved space too. So no
+        // reallocation happends in `append_ts`.
         let seek_key = user_key.clone().append_ts(ts);
-        assert!(seek_key.encoded().as_slice() < last_handled_key.as_slice());
 
         // TODO: Replace by cast + seek().
         self.write_cursor
@@ -321,7 +326,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         assert!(self.write_cursor.valid());
 
         loop {
-            // After seek, or after some `next()`, we may reach `last_handled_key` again. It
+            // After seek, or after some `next()`, we may reach `last_checked_commit_ts` again. It
             // means we have checked all versions for this user key. We use `last_version` as
             // return.
             let mut is_done = false;
@@ -332,7 +337,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                     current_key,
                     user_key.encoded().as_slice()
                 ));
-                if current_key >= last_handled_key.as_slice() {
+                if Key::decode_ts_from(current_key)? <= last_checked_commit_ts {
                     // We reach the last handled key,
                     is_done = true;
                 }
