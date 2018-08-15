@@ -566,6 +566,7 @@ fn do_div_mod(
     frac_incr = frac_incr.saturating_sub(l_frac_cnt - lhs.frac_cnt + r_frac_cnt - rhs.frac_cnt);
     let mut int_cnt_to =
         (i32::from(l_prec) - i32::from(l_frac_cnt)) - (i32::from(r_prec) - i32::from(r_frac_cnt));
+
     if lhs.word_buf[l_idx] >= rhs.word_buf[r_idx] {
         int_cnt_to += 1;
     }
@@ -575,6 +576,7 @@ fn do_div_mod(
     } else {
         word_cnt!(int_cnt_to)
     };
+
     let mut frac_word_to;
     let mut res = if do_mod {
         frac_word_to = 0;
@@ -689,10 +691,10 @@ fn do_div_mod(
         }
         idx_to = 0;
 
-        int_cnt_to = l_prec.wrapping_sub(l_frac_cnt) as i8 - l_idx as i8 * DIGITS_PER_WORD as i8;
+        int_cnt_to = i32::from(l_prec) - i32::from(l_frac_cnt) - l_idx as i32 * i32::from(DIGITS_PER_WORD);
 
         let mut int_word_to = if int_cnt_to < 0 {
-            int_cnt_to / DIGITS_PER_WORD as i8
+            (int_cnt_to / i32::from(DIGITS_PER_WORD)) as i8
         } else {
             word_cnt!(int_cnt_to, i8)
         };
