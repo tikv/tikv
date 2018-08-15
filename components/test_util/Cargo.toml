@@ -1,0 +1,13 @@
+[package]
+name = "test_util"
+version = "0.0.1"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tikv = { path = "../../" }
+time = "0.1"
+rand = "0.3"
+slog = "2.2"
