@@ -212,7 +212,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 };
 
                 // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or it's clones without reallocation.
+                // the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
@@ -316,7 +316,7 @@ impl<S: Snapshot> BackwardScanner<S> {
 
         // After several `prev()`, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
-        // `user_key` must have reserved space here, so it's clone has reserved space too. So no
+        // `user_key` must have reserved space here, so its clone has reserved space too. So no
         // reallocation happends in `append_ts`.
         let seek_key = user_key.clone().append_ts(ts);
 

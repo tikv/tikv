@@ -231,7 +231,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 };
 
                 // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or it's clones without reallocation.
+                // the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
@@ -314,7 +314,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
         // If we have not found `${user_key}_${ts}` in a few `next()`, directly `seek()`.
         if needs_seek {
-            // `user_key` must have reserved space here, so it's clone has reserved space too. So no
+            // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happends in `append_ts`.
             self.write_cursor
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
@@ -417,7 +417,7 @@ impl<S: Snapshot> ForwardScanner<S> {
 
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
-        // `current_user_key` must have reserved space here, so it's clone has reserved space too.
+        // `current_user_key` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happends in `append_ts`.
         self.write_cursor.seek(
             &current_user_key.clone().append_ts(0),
