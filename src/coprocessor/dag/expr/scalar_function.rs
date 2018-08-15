@@ -191,6 +191,9 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::ASCII
+            | ScalarFuncSig::Upper
+            | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
@@ -263,7 +266,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
-            | ScalarFuncSig::ASCII
             | ScalarFuncSig::Asin
             | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Atan2Args
@@ -359,7 +361,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Log1Arg
             | ScalarFuncSig::Log2
             | ScalarFuncSig::Log2Args
-            | ScalarFuncSig::Lower
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::LTrim
@@ -478,7 +479,6 @@ impl ScalarFunc {
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
-            | ScalarFuncSig::Upper
             | ScalarFuncSig::User
             | ScalarFuncSig::UTCDate
             | ScalarFuncSig::UTCTimestampWithArg
@@ -775,6 +775,7 @@ dispatch_call! {
 
         Length => length,
         BitLength => bit_length,
+        ASCII => ascii,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -850,6 +851,8 @@ dispatch_call! {
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
+        Upper => upper,
+        Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
     }
@@ -1090,10 +1093,13 @@ mod test {
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
+                    ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::Lower,
+                    ScalarFuncSig::Upper,
                 ],
                 1,
                 1,
@@ -1206,7 +1212,6 @@ mod test {
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
-            ScalarFuncSig::ASCII,
             ScalarFuncSig::Asin,
             ScalarFuncSig::Atan1Arg,
             ScalarFuncSig::Atan2Args,
@@ -1302,7 +1307,6 @@ mod test {
             ScalarFuncSig::Log1Arg,
             ScalarFuncSig::Log2,
             ScalarFuncSig::Log2Args,
-            ScalarFuncSig::Lower,
             ScalarFuncSig::Lpad,
             ScalarFuncSig::LpadBinary,
             ScalarFuncSig::LTrim,
@@ -1421,7 +1425,6 @@ mod test {
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
-            ScalarFuncSig::Upper,
             ScalarFuncSig::User,
             ScalarFuncSig::UTCDate,
             ScalarFuncSig::UTCTimestampWithArg,

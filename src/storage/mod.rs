@@ -590,7 +590,7 @@ impl<E: Engine> Storage<E> {
                                 !(v.is_ok() && v.as_ref().unwrap().is_none())
                             )
                             .map(|(v, k)| match v {
-                                Ok(Some(x)) => Ok((k.raw().unwrap(), x)),
+                                Ok(Some(x)) => Ok((k.take_raw().unwrap(), x)),
                                 Err(e) => Err(Error::from(e)),
                                 _ => unreachable!(),
                             })
@@ -1102,7 +1102,7 @@ impl<E: Engine> Storage<E> {
         start_key: &Key,
         end_key: Option<Key>,
         limit: usize,
-        stats: &mut Statistics,
+        statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
@@ -1110,20 +1110,21 @@ impl<E: Engine> Storage<E> {
             option.set_upper_bound(end.take_encoded());
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
-        if !cursor.seek(start_key, &mut stats.data)? {
+        let statistics = statistics.mut_cf_statistics(cf);
+        if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
         while cursor.valid() && pairs.len() < limit {
             pairs.push(Ok((
-                cursor.key().to_owned(),
+                cursor.key(statistics).to_owned(),
                 if key_only {
                     vec![]
                 } else {
-                    cursor.value().to_owned()
+                    cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.next(&mut stats.data);
+            cursor.next(statistics);
         }
         Ok(pairs)
     }
@@ -1161,24 +1162,10 @@ impl<E: Engine> Storage<E> {
                         limit,
                         &mut statistics,
                         key_only,
-                    ).map_err(Error::from)
-                        .map(|r| {
-                            let mut valid_keys = 0;
-                            let mut bytes_read = 0;
-                            let mut stats = Statistics::default();
-                            r.iter().for_each(|r| {
-                                if let Ok(ref pair) = *r {
-                                    valid_keys += 1;
-                                    bytes_read += pair.0.len() + pair.1.len();
-                                }
-                            });
-                            stats.data.flow_stats.read_keys = valid_keys;
-                            stats.data.flow_stats.read_bytes = bytes_read;
-                            thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                            thread_ctx.collect_key_reads(CMD, valid_keys as u64);
-                            r
-                        });
+                    ).map_err(Error::from);
 
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     result
@@ -1258,7 +1245,7 @@ impl<E: Engine> Storage<E> {
                             if i + 1 == ranges_len {
                                 None
                             } else {
-                                Some(Key::from_encoded(ranges[i + 1].get_start_key().to_vec()))
+                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
                             }
                         } else {
                             Some(Key::from_encoded(end_key))
@@ -1272,22 +1259,11 @@ impl<E: Engine> Storage<E> {
                             &mut statistics,
                             key_only,
                         )?;
-                        let mut valid_keys = 0;
-                        let mut bytes_read = 0;
-                        let mut stats = Statistics::default();
-                        pairs.iter().for_each(|r| {
-                            if let Ok(ref pair) = *r {
-                                valid_keys += 1;
-                                bytes_read += pair.0.len() + pair.1.len();
-                            }
-                        });
-                        stats.data.flow_stats.read_keys = valid_keys;
-                        stats.data.flow_stats.read_bytes = bytes_read;
-                        thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                        thread_ctx.collect_key_reads(CMD, valid_keys as u64);
                         result.extend(pairs.into_iter());
                     }
 
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     Ok(result)
