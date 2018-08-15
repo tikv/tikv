@@ -69,8 +69,6 @@ mod test {
         assert_eq!(got, exp);
     }
 
-
-
     #[test]
     fn test_is_given_string_ipv4_success() {
         let is_ipv4 = is_given_string_ipv4("127.0.0.1");
