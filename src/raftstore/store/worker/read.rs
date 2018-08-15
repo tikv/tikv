@@ -60,7 +60,7 @@ impl ReadDelegate {
             region,
             peer_id,
             term: peer.term(),
-            applied_index_term: peer.get_store().applied_index_term,
+            applied_index_term: peer.get_store().applied_index_term(),
             leader_lease: None,
             tag: format!("[region {}] {}", region_id, peer_id),
         }

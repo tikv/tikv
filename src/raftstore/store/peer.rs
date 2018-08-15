@@ -831,7 +831,7 @@ impl Peer {
 
         // There may be some values that are not applied by this leader yet but the old leader,
         // if applied_index_term isn't equal to current term.
-        self.get_store().applied_index_term == self.term()
+        self.get_store().applied_index_term() == self.term()
             // There may be stale read if the old leader splits really slow,
             // the new region may already elected a new leader while
             // the old leader still think it owns the splitted range.
@@ -1122,9 +1122,11 @@ impl Peer {
             self.raft_group
                 .advance_apply(apply_state.get_applied_index());
         }
-        self.mut_store().apply_state = apply_state;
-        let progress_to_be_updated = self.mut_store().applied_index_term != applied_index_term;
-        self.mut_store().applied_index_term = applied_index_term;
+
+        let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
+        self.mut_store().set_applied_state(apply_state);
+        self.mut_store().set_applied_term(applied_index_term);
+
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
         self.delete_keys_hint += apply_metrics.delete_keys_hint;
@@ -1989,7 +1991,7 @@ pub trait RequestInspector {
 
 impl RequestInspector for Peer {
     fn has_applied_to_current_term(&mut self) -> bool {
-        self.get_store().applied_index_term == self.term()
+        self.get_store().applied_index_term() == self.term()
     }
 
     fn inspect_lease(&mut self) -> LeaseState {

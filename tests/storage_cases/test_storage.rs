@@ -11,14 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::sync_storage::SyncStorage;
-use kvproto::kvrpcpb::{Context, LockInfo};
-use rand::random;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use std::u64;
+
+use rand::random;
+
+use kvproto::kvrpcpb::{Context, LockInfo};
+
+use test_storage::*;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::engine::{RocksEngine, TEMP_DIR};
 use tikv::storage::gc_worker::GC_BATCH_SIZE;
@@ -26,9 +30,6 @@ use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::{self, Engine, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
 use tikv::util::worker::FutureWorker;
-
-use super::assert_storage::AssertionStorage;
-use std::u64;
 
 #[test]
 fn test_txn_store_get() {

@@ -592,8 +592,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let timer = LocalReader::new_timer();
         box_try!(self.local_reader.start_with_timer(reader, timer));
 
-        if let Err(e) = util_sys::pri::set_priority(util_sys::HIGH_PRI) {
-            warn!("set priority for raftstore failed, error: {:?}", e);
+        if let Err(e) = util_sys::thread::set_priority(util_sys::HIGH_PRI) {
+            warn!("set thread priority for raftstore failed, error: {:?}", e);
         }
 
         event_loop.run(self)?;
