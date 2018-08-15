@@ -11,26 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::*;
+use std::sync::*;
+use std::thread;
+use std::time::Duration;
+
+use rand;
+use rand::Rng;
+
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
+
+use test_raftstore::*;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
-
-use rand;
-use rand::Rng;
-use std::sync::atomic::*;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();

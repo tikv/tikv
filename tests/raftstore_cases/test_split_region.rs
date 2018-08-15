@@ -11,20 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{self, Rng};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, thread};
 
+use rand::{self, Rng};
+
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
 
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util;
+use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
@@ -85,12 +82,7 @@ where
         assert_eq!(cluster.get(right_key).unwrap(), b"vv3".to_vec());
 
         let epoch = left.get_region_epoch().clone();
-        let get = util::new_request(
-            left.get_id(),
-            epoch,
-            vec![util::new_get_cmd(right_key)],
-            false,
-        );
+        let get = new_request(left.get_id(), epoch, vec![new_get_cmd(right_key)], false);
         debug!("requesting {:?}", get);
         let resp = cluster
             .call_command_on_leader(get, Duration::from_secs(5))
@@ -275,17 +267,12 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         })
         .expect("");
     assert!(size <= REGION_SPLIT_SIZE);
-    // although size may be smaller than util::REGION_SPLIT_SIZE, but the diff should
+    // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
     // be small.
     assert!(size > REGION_SPLIT_SIZE - 1000);
 
     let epoch = left.get_region_epoch().clone();
-    let get = util::new_request(
-        left.get_id(),
-        epoch,
-        vec![util::new_get_cmd(&max_key)],
-        false,
-    );
+    let get = new_request(left.get_id(), epoch, vec![new_get_cmd(&max_key)], false);
     let resp = cluster
         .call_command_on_leader(get, Duration::from_secs(5))
         .unwrap();
@@ -324,8 +311,8 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // check all nodes apply the logs.
     for i in 0..3 {
         let engine = cluster.get_engine(i + 1);
-        util::must_get_equal(&engine, k1, b"v1");
-        util::must_get_equal(&engine, k3, b"v3");
+        must_get_equal(&engine, k1, b"v1");
+        must_get_equal(&engine, k3, b"v3");
     }
 
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
@@ -344,7 +331,7 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Wait a long time to guarantee node joined.
     // TODO: we should think a better to check instead of sleep.
-    util::sleep_ms(3000);
+    sleep_ms(3000);
 
     let k4 = b"k4";
     cluster.must_put(k4, b"v4");
@@ -352,7 +339,7 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(k4).unwrap(), b"v4".to_vec());
 
     let engine = cluster.get_engine(index);
-    util::must_get_equal(&engine, k4, b"v4");
+    must_get_equal(&engine, k4, b"v4");
 }
 
 #[test]
@@ -372,9 +359,9 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     // guarantee node 1 is leader
-    cluster.must_transfer_leader(1, util::new_peer(1, 1));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
-    assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
 
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -392,11 +379,11 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // node 1 and node 2 must have k2, but node 3 must not.
     for i in 1..3 {
         let engine = cluster.get_engine(i);
-        util::must_get_equal(&engine, b"k2", b"v2");
+        must_get_equal(&engine, b"k2", b"v2");
     }
 
     let engine3 = cluster.get_engine(3);
-    util::must_get_none(&engine3, b"k2");
+    must_get_none(&engine3, b"k2");
 
     thread::sleep(Duration::from_secs(1));
     let snap_dir = cluster.get_snap_dir(3);
@@ -410,9 +397,9 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.clear_send_filters();
     cluster.must_put(b"k3", b"v3");
 
-    util::sleep_ms(3000);
+    sleep_ms(3000);
     // node 3 must have k3.
-    util::must_get_equal(&engine3, b"k3", b"v3");
+    must_get_equal(&engine3, b"k3", b"v3");
 }
 
 #[test]
@@ -438,9 +425,9 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     // guarantee node 1 is leader
-    cluster.must_transfer_leader(1, util::new_peer(1, 1));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k0", b"v0");
-    assert_eq!(cluster.leader_of_region(1), Some(util::new_peer(1, 1)));
+    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
 
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -457,14 +444,14 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // node 1 and node 2 must have k2, but node 3 must not.
     for i in 1..3 {
         let engine = cluster.get_engine(i);
-        util::must_get_equal(&engine, b"k2", b"v2");
+        must_get_equal(&engine, b"k2", b"v2");
     }
 
     let engine3 = cluster.get_engine(3);
-    util::must_get_none(&engine3, b"k2");
+    must_get_none(&engine3, b"k2");
 
     // transfer leader to ease the preasure of store 1.
-    cluster.must_transfer_leader(1, util::new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
 
     for _ in 0..100 {
         // write many logs to force log GC for region 1 and region 2.
@@ -474,10 +461,10 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.clear_send_filters();
 
-    util::sleep_ms(3000);
+    sleep_ms(3000);
     // node 3 must have k1, k2.
-    util::must_get_equal(&engine3, b"k1", b"v1");
-    util::must_get_equal(&engine3, b"k2", b"v2");
+    must_get_equal(&engine3, b"k1", b"v1");
+    must_get_equal(&engine3, b"k2", b"v2");
 }
 
 #[test]
@@ -503,18 +490,18 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     let r1 = cluster.run_conf_change();
 
     // add peer (2,2) to region 1.
-    pd_client.must_add_peer(r1, util::new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(2, 2));
 
     // add peer (3,3) to region 1.
-    pd_client.must_add_peer(r1, util::new_peer(3, 3));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
 
     cluster.must_put(b"k0", b"v0");
     // check node 3 has k0.
     let engine3 = cluster.get_engine(3);
-    util::must_get_equal(&engine3, b"k0", b"v0");
+    must_get_equal(&engine3, b"k0", b"v0");
 
     // guarantee node 1 is leader.
-    cluster.must_transfer_leader(r1, util::new_peer(1, 1));
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
 
     // isolate node 3 for region 1.
     // only filter MsgAppend to avoid election when recover.
@@ -531,7 +518,7 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     let region2 = pd_client.get_region(b"k2").unwrap();
 
     // remove peer3 in region 2.
-    let peer3 = util::find_peer(&region2, 3).unwrap();
+    let peer3 = find_peer(&region2, 3).unwrap();
     pd_client.must_remove_peer(region2.get_id(), peer3.clone());
 
     // clear isolation so node 3 can split region 1.
@@ -541,22 +528,22 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
 
     // check node 3 has k1
-    util::must_get_equal(&engine3, b"k1", b"v1");
+    must_get_equal(&engine3, b"k1", b"v1");
 
     // split [k2, +inf) -> [k2, k3), [k3, +inf]
     cluster.must_split(&region2, b"k3");
     let region3 = pd_client.get_region(b"k3").unwrap();
     // region 3 can't contain node 3.
     assert_eq!(region3.get_peers().len(), 2);
-    assert!(util::find_peer(&region3, 3).is_none());
+    assert!(find_peer(&region3, 3).is_none());
 
     let new_peer_id = pd_client.alloc_id().unwrap();
     // add peer (3, new_peer_id) to region 3
-    pd_client.must_add_peer(region3.get_id(), util::new_peer(3, new_peer_id));
+    pd_client.must_add_peer(region3.get_id(), new_peer(3, new_peer_id));
 
     cluster.must_put(b"k3", b"v3");
     // node 3 must have k3.
-    util::must_get_equal(&engine3, b"k3", b"v3");
+    must_get_equal(&engine3, b"k3", b"v3");
 }
 
 #[test]
@@ -600,7 +587,7 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let mut try_cnt = 0;
     loop {
-        util::sleep_ms(20);
+        sleep_ms(20);
         let region_cnt = pd_client.get_split_count() + 1;
         if region_cnt >= min_region_cnt as usize {
             return;
@@ -635,10 +622,10 @@ fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
     let pd_client = Arc::clone(&cluster.pd_client);
     let old = pd_client.get_region(b"k1").unwrap();
     // Construct a get command using old region meta.
-    let get = util::new_request(
+    let get = new_request(
         old.get_id(),
         old.get_region_epoch().clone(),
-        vec![util::new_get_cmd(b"k1")],
+        vec![new_get_cmd(b"k1")],
         false,
     );
     cluster.must_split(&old, b"k2");
