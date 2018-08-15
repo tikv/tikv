@@ -354,13 +354,21 @@ mod test {
     fn test_tan() {
         let tests = vec![
             (ScalarFuncSig::Tan, Datum::F64(0.0_f64), 0.0_f64),
-            (ScalarFuncSig::Tan, Datum::F64(f64::consts::PI / 4.0_f64), 1.0_f64),
-            (ScalarFuncSig::Tan, Datum::F64(-f64::consts::PI / 4.0_f64), -1.0_f64),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64(f64::consts::PI / 4.0_f64),
+                1.0_f64,
+            ),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64(-f64::consts::PI / 4.0_f64),
+                -1.0_f64,
+            ),
             (ScalarFuncSig::Tan, Datum::F64(f64::consts::PI), 0.0_f64),
             (
                 ScalarFuncSig::Tan,
-                Datum::F64(((f64::consts::PI*3.0)/4.0)),
-                f64::tan((f64::consts::PI)*3.0/4.0) //in mysql and rust, it equals -1.0000000000000002, not -1
+                Datum::F64(((f64::consts::PI * 3.0) / 4.0)),
+                f64::tan((f64::consts::PI) * 3.0 / 4.0), //in mysql and rust, it equals -1.0000000000000002, not -1
             ),
         ];
         let tests_invalid_f64 = vec![
