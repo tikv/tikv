@@ -2025,15 +2025,18 @@ impl<'a> ReadExecutor<'a> {
         }
     }
 
+    #[inline]
     pub fn set_snapshot_time(&mut self, snapshot_time: Timespec) -> &mut Self {
         self.snapshot_time = Some(snapshot_time);
         self
     }
 
+    #[inline]
     pub fn snapshot_time(&self) -> Option<Timespec> {
         self.snapshot_time
     }
 
+    #[inline]
     pub fn set_region(&mut self, region: &'a metapb::Region) -> &mut Self {
         self.region = Some(region);
         self

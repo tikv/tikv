@@ -836,16 +836,14 @@ mod tests {
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
         // But the applied_index_term is stale.
         let register_region1 = Task {
-            action: Some(
-                Action::Register(ReadDelegate {
-                    tag: String::new(),
-                    region: region1.clone(),
-                    peer_id: leader2.get_id(),
-                    term: term6,
-                    applied_index_term: term6 - 1,
-                    leader_lease: Some(remote),
-                })
-            ),
+            action: Some(Action::Register(ReadDelegate {
+                tag: String::new(),
+                region: region1.clone(),
+                peer_id: leader2.get_id(),
+                term: term6,
+                applied_index_term: term6 - 1,
+                leader_lease: Some(remote),
+            })),
         };
         reader.run_batch(&mut vec![register_region1]);
         assert!(reader.delegates.get(&1).is_some());
