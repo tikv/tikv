@@ -2289,6 +2289,34 @@ impl Runner {
         }
     }
 
+    fn handle_applies(&mut self, applies: ApplyBatch) {
+        let start = applies.start;
+        let vec = applies.vec;
+        for apply in vec {
+            if apply.entries.is_empty() {
+                continue;
+            }
+
+            // Dispatch the apply task to related region.
+            let region_id = apply.region_id;
+            let mut removed = false;
+            if let Some(tx) = self.region_task_senders.get(&region_id) {
+                tx.unbounded_send(RegionTask::apply(apply, start))
+                    .unwrap_or_else(|_e| {
+                        error!("[region {}] has been removed", region_id);
+                        removed = true;
+                    });
+            } else {
+                error!("[region {}] is missing", region_id);
+                continue;
+            }
+
+            if removed {
+                self.region_task_senders.remove(&region_id).unwrap();
+            }
+        }
+    }
+
     fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
         let mut propose_num = 0;
         for mut region_proposal in proposals {
@@ -2340,182 +2368,177 @@ impl Runner {
         delegate: ApplyDelegate,
         rx: UnboundedReceiver<RegionTask>,
     ) {
-        apply_pool
-            .spawn(move |_| {
-                rx.fold(delegate, move |mut delegate, task| {
-                    match task {
-                        RegionTask::Apply((apply, start)) => {
-                            if delegate.stopping {
-                                info!("{} is stopping, ignore new apply tasks", delegate.tag);
-                                return box future::ok(delegate)
-                                    as Box<Future<Item = ApplyDelegate, Error = ()> + Send>;
+        let task_handler = move |mut delegate: ApplyDelegate, task: RegionTask| {
+            match task {
+                RegionTask::Apply((apply, start)) => {
+                    if delegate.stopping {
+                        info!("{} is stopping, ignore new apply tasks", delegate.tag);
+                        return box future::ok(delegate)
+                            as Box<Future<Item = ApplyDelegate, Error = ()> + Send>;
+                    }
+
+                    assert_eq!(apply.region_id, delegate.region_id());
+
+                    let elapsed = duration_to_sec(start.elapsed());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+
+                    delegate.metrics = ApplyMetrics::default();
+                    delegate.term = apply.term;
+
+                    if apply.entries.is_empty() {
+                        return box future::ok(delegate)
+                            as Box<Future<Item = ApplyDelegate, Error = ()> + Send>;
+                    }
+
+                    let t = SlowTimer::new();
+                    let ctx = ApplyContext::new(delegate.host.clone(), delegate.importer.clone());
+                    box delegate
+                        .handle_raft_committed_entries(ctx, apply.entries)
+                        .then(move |res| {
+                            let (mut delegate, ctx, stopping) = match res {
+                                Ok((delegate, mut ctx)) => {
+                                    ctx.write_to_db(&delegate.engines.kv);
+                                    (delegate, ctx, false)
+                                }
+                                Err((delegate, ctx, e)) => {
+                                    let mut stopping = false;
+                                    if let Error::Canceled = e {
+                                        stopping = true;
+                                    }
+                                    (delegate, ctx, stopping)
+                                }
+                            };
+                            if stopping {
+                                delegate.stopping = true;
                             }
 
-                            assert_eq!(apply.region_id, delegate.region_id());
-
-                            let elapsed = duration_to_sec(start.elapsed());
-                            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
-
-                            delegate.metrics = ApplyMetrics::default();
-                            delegate.term = apply.term;
-
-                            if apply.entries.is_empty() {
-                                return box future::ok(delegate)
-                                    as Box<Future<Item = ApplyDelegate, Error = ()> + Send>;
+                            if !ctx.apply_res.is_empty() {
+                                delegate
+                                    .notifier
+                                    .send(TaskRes::Applys(ctx.apply_res))
+                                    .unwrap();
                             }
 
-                            let t = SlowTimer::new();
-                            let ctx =
-                                ApplyContext::new(delegate.host.clone(), delegate.importer.clone());
-                            box delegate
-                                .handle_raft_committed_entries(ctx, apply.entries)
-                                .then(move |res| {
-                                    let (mut delegate, ctx, stopping) = match res {
-                                        Ok((delegate, mut ctx)) => {
-                                            ctx.write_to_db(&delegate.engines.kv);
-                                            (delegate, ctx, false)
-                                        }
-                                        Err((delegate, ctx, e)) => {
-                                            let mut stopping = false;
-                                            if let Error::Canceled = e {
-                                                stopping = true;
-                                            }
-                                            (delegate, ctx, stopping)
-                                        }
-                                    };
-                                    if stopping {
-                                        delegate.stopping = true;
+                            if delegate.pending_remove {
+                                info!("{} destroyed due to pending_remove", delegate.tag);
+                                delegate.destroy();
+                                return Err(());
+                            }
+
+                            STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+
+                            slow_log!(
+                                t,
+                                "{} handle ready {} committed entries",
+                                delegate.tag,
+                                ctx.committed_count
+                            );
+
+                            Ok(delegate)
+                        })
+                        as Box<Future<Item = ApplyDelegate, Error = ()> + Send>
+                }
+                RegionTask::Destroy(region_id) => {
+                    assert_eq!(delegate.region_id(), region_id);
+                    info!("{} remove from apply pool", delegate.tag);
+                    delegate.destroy();
+                    let notifier = delegate.notifier.clone();
+                    notifier.send(TaskRes::Destroy(delegate)).unwrap();
+
+                    // Exit current task
+                    box future::err(())
+                }
+                RegionTask::Update(u) => {
+                    assert_eq!(delegate.region_id(), u.region_id);
+                    delegate.term = u.new_delegate.term;
+                    delegate.clear_all_commands_as_stale();
+
+                    box future::ok(u.new_delegate)
+                }
+                RegionTask::Stop((region_id, stop_tx)) => {
+                    assert_eq!(delegate.region_id(), region_id);
+                    delegate.destroy();
+                    stop_tx.send(()).unwrap();
+
+                    // Exit current task
+                    box future::err(())
+                }
+                RegionTask::ApplyTo(a) => {
+                    let need_apply_to = a.merge_req.get_commit();
+                    let applied_index = delegate.apply_state.applied_index;
+                    assert_eq!(delegate.region_id(), a.source_region);
+
+                    if applied_index >= need_apply_to {
+                        // Current applied index >= need_apply_to, don't need to catch up log.
+                        a.tx.send(delegate.region.clone()).unwrap();
+                        delegate.destroy();
+
+                        // Exit current task
+                        box future::err(())
+                    } else {
+                        // Apply left entries.
+                        let entries = delegate.load_entries_for_merge(&a.merge_req, applied_index);
+                        assert_eq!(entries.len() as u64, need_apply_to - applied_index);
+                        let ctx =
+                            ApplyContext::new(delegate.host.clone(), delegate.importer.clone());
+                        box delegate
+                            .handle_raft_committed_entries(ctx, entries)
+                            .then(move |res| {
+                                let (mut delegate, mut ctx) = match res {
+                                    Ok((delegate, mut ctx)) => {
+                                        ctx.write_to_db(&delegate.engines.kv);
+                                        (delegate, ctx)
                                     }
+                                    Err((delegate, _ctx, e)) => panic!(
+                                        "{} catch up log failed, error {:?}",
+                                        delegate.tag, e
+                                    ),
+                                };
 
-                                    if !ctx.apply_res.is_empty() {
-                                        delegate
-                                            .notifier
-                                            .send(TaskRes::Applys(ctx.apply_res))
-                                            .unwrap();
+                                if !ctx.apply_res.is_empty() {
+                                    for res in &mut ctx.apply_res {
+                                        res.merged = true;
                                     }
+                                    delegate
+                                        .notifier
+                                        .send(TaskRes::Applys(ctx.apply_res))
+                                        .unwrap();
+                                }
 
-                                    if delegate.pending_remove {
-                                        info!("{} destroyed due to pending_remove", delegate.tag);
-                                        delegate.destroy();
-                                        return Err(());
-                                    }
-
-                                    STORE_APPLY_LOG_HISTOGRAM
-                                        .observe(duration_to_sec(t.elapsed()) as f64);
-
-                                    slow_log!(
-                                        t,
-                                        "{} handle ready {} committed entries",
-                                        delegate.tag,
-                                        ctx.committed_count
-                                    );
-
-                                    Ok(delegate)
-                                })
-                                as Box<Future<Item = ApplyDelegate, Error = ()> + Send>
-                        }
-                        RegionTask::Destroy(region_id) => {
-                            assert_eq!(delegate.region_id(), region_id);
-                            info!("{} remove from apply pool", delegate.tag);
-                            delegate.destroy();
-                            let notifier = delegate.notifier.clone();
-                            notifier.send(TaskRes::Destroy(delegate)).unwrap();
-
-                            // Exit current task
-                            box future::err(())
-                        }
-                        RegionTask::Update(u) => {
-                            assert_eq!(delegate.region_id(), u.region_id);
-                            delegate.term = u.new_delegate.term;
-                            delegate.clear_all_commands_as_stale();
-
-                            box future::ok(u.new_delegate)
-                        }
-                        RegionTask::Stop((region_id, stop_tx)) => {
-                            assert_eq!(delegate.region_id(), region_id);
-                            delegate.destroy();
-                            stop_tx.send(()).unwrap();
-
-                            // Exit current task
-                            box future::err(())
-                        }
-                        RegionTask::ApplyTo(a) => {
-                            let need_apply_to = a.merge_req.get_commit();
-                            let applied_index = delegate.apply_state.applied_index;
-                            assert_eq!(delegate.region_id(), a.source_region);
-
-                            if applied_index >= need_apply_to {
-                                // Current applied index >= need_apply_to, don't need to catch up log.
+                                // Tell target region, has applied to specified position, and destroy itself.
                                 a.tx.send(delegate.region.clone()).unwrap();
                                 delegate.destroy();
 
-                                // Exit current task
-                                box future::err(())
-                            } else {
-                                // Apply left entries.
-                                let entries =
-                                    delegate.load_entries_for_merge(&a.merge_req, applied_index);
-                                assert_eq!(entries.len() as u64, need_apply_to - applied_index);
-                                let ctx = ApplyContext::new(
-                                    delegate.host.clone(),
-                                    delegate.importer.clone(),
-                                );
-                                box delegate.handle_raft_committed_entries(ctx, entries).then(
-                                    move |res| {
-                                        let (mut delegate, mut ctx) = match res {
-                                            Ok((delegate, mut ctx)) => {
-                                                ctx.write_to_db(&delegate.engines.kv);
-                                                (delegate, ctx)
-                                            }
-                                            Err((delegate, _ctx, e)) => panic!(
-                                                "{} catch up log failed, error {:?}",
-                                                delegate.tag, e
-                                            ),
-                                        };
-
-                                        if !ctx.apply_res.is_empty() {
-                                            for res in &mut ctx.apply_res {
-                                                res.merged = true;
-                                            }
-                                            delegate
-                                                .notifier
-                                                .send(TaskRes::Applys(ctx.apply_res))
-                                                .unwrap();
-                                        }
-
-                                        // Tell target region, has applied to specified position, and destroy itself.
-                                        a.tx.send(delegate.region.clone()).unwrap();
-                                        delegate.destroy();
-
-                                        Err(())
-                                    },
-                                )
-                                    as Box<Future<Item = ApplyDelegate, Error = ()> + Send>
+                                Err(())
+                            })
+                            as Box<Future<Item = ApplyDelegate, Error = ()> + Send>
+                    }
+                }
+                RegionTask::Proposal(region_proposal) => {
+                    assert_eq!(delegate.id, region_proposal.id);
+                    for p in region_proposal.props {
+                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                        if p.is_conf_change {
+                            if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
+                                // if it loses leadership before conf change is replicated, there may be
+                                // a stale pending conf change before next conf change is applied. If it
+                                // becomes leader again with the stale pending conf change, will enter
+                                // this block, so we notify leadership may have been changed.
+                                notify_stale_command(&delegate.tag, delegate.term, cmd);
                             }
-                        }
-                        RegionTask::Proposal(region_proposal) => {
-                            assert_eq!(delegate.id, region_proposal.id);
-                            for p in region_proposal.props {
-                                let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                                if p.is_conf_change {
-                                    if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                                        // if it loses leadership before conf change is replicated, there may be
-                                        // a stale pending conf change before next conf change is applied. If it
-                                        // becomes leader again with the stale pending conf change, will enter
-                                        // this block, so we notify leadership may have been changed.
-                                        notify_stale_command(&delegate.tag, delegate.term, cmd);
-                                    }
-                                    delegate.pending_cmds.set_conf_change(cmd);
-                                } else {
-                                    delegate.pending_cmds.append_normal(cmd);
-                                }
-                            }
-
-                            box future::ok(delegate)
+                            delegate.pending_cmds.set_conf_change(cmd);
+                        } else {
+                            delegate.pending_cmds.append_normal(cmd);
                         }
                     }
-                })
-            })
+
+                    box future::ok(delegate)
+                }
+            }
+        };
+
+        apply_pool
+            .spawn(move |_| rx.fold(delegate, task_handler))
             .forget();
     }
 
@@ -2617,34 +2640,6 @@ impl Runner {
         // Wait all regions have stopped.
         for _ in 0..total {
             let _ = stop_rx.recv();
-        }
-    }
-
-    fn handle_applies(&mut self, applies: ApplyBatch) {
-        let start = applies.start;
-        let vec = applies.vec;
-        for apply in vec {
-            if apply.entries.is_empty() {
-                continue;
-            }
-
-            // Dispatch the apply task to related region.
-            let region_id = apply.region_id;
-            let mut removed = false;
-            if let Some(tx) = self.region_task_senders.get(&region_id) {
-                tx.unbounded_send(RegionTask::apply(apply, start))
-                    .unwrap_or_else(|_e| {
-                        error!("[region {}] has been removed", region_id);
-                        removed = true;
-                    });
-            } else {
-                error!("[region {}] is missing", region_id);
-                continue;
-            }
-
-            if removed {
-                self.region_task_senders.remove(&region_id).unwrap();
-            }
         }
     }
 }
