@@ -746,7 +746,7 @@ mod tests {
         // Call reverse scan
         let ts = 2;
         let mut scanner = BackwardScannerBuilder::new(snapshot, ts)
-            .range(None, Some(k.take_encoded()))
+            .range(None, Some(k.into_encoded()))
             .build()
             .unwrap();
         assert_eq!(scanner.read_next().unwrap(), None);

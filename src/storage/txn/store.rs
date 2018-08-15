@@ -299,7 +299,7 @@ mod test {
             .scanner(
                 ScanMode::Forward,
                 false,
-                Some(start_key.take_encoded()),
+                Some(start_key.into_encoded()),
                 None,
             )
             .unwrap();
@@ -330,7 +330,7 @@ mod test {
                 ScanMode::Backward,
                 false,
                 None,
-                Some(start_key.take_encoded()),
+                Some(start_key.into_encoded()),
             )
             .unwrap();
 
@@ -358,7 +358,7 @@ mod test {
             .scanner(
                 ScanMode::Forward,
                 false,
-                Some(start_key.take_encoded()),
+                Some(start_key.into_encoded()),
                 None,
             )
             .unwrap();
@@ -382,7 +382,7 @@ mod test {
                 ScanMode::Backward,
                 false,
                 None,
-                Some(start_key.take_encoded()),
+                Some(start_key.into_encoded()),
             )
             .unwrap();
 
@@ -426,8 +426,8 @@ mod test {
             .scanner(
                 ScanMode::Backward,
                 false,
-                Some(lower_bound.take_encoded()),
-                Some(upper_bound.take_encoded()),
+                Some(lower_bound.into_encoded()),
+                Some(upper_bound.into_encoded()),
             )
             .unwrap();
 

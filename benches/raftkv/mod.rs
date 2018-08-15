@@ -13,12 +13,14 @@
 
 use std::sync::Arc;
 
-use kvproto::kvrpcpb::Context;
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
 use rocksdb::DB;
 use tempdir::TempDir;
 use test;
+
+use kvproto::kvrpcpb::Context;
+use kvproto::metapb::Region;
+use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
+
 use tikv::raftstore::store::{
     cmd_resp, engine, util, BatchReadCallback, Callback, Msg, ReadResponse, RegionSnapshot,
     SignificantMsg, WriteResponse,

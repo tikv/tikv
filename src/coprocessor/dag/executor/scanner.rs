@@ -88,8 +88,8 @@ impl<S: Snapshot> Scanner<S> {
         key_only: bool,
         range: &KeyRange,
     ) -> Result<StoreScanner<S>> {
-        let lower_bound = Some(Key::from_raw(range.get_start()).take_encoded());
-        let upper_bound = Some(Key::from_raw(range.get_end()).take_encoded());
+        let lower_bound = Some(Key::from_raw(range.get_start()).into_encoded());
+        let upper_bound = Some(Key::from_raw(range.get_end()).into_encoded());
         store.scanner(scan_mode, key_only, lower_bound, upper_bound)
     }
 
@@ -117,7 +117,7 @@ impl<S: Snapshot> Scanner<S> {
         let kv = self.scanner.next()?;
 
         let (key, value) = match kv {
-            Some((k, v)) => (box_try!(k.raw()), v),
+            Some((k, v)) => (box_try!(k.into_raw()), v),
             None => {
                 self.no_more = true;
                 return Ok(None);

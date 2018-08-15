@@ -183,7 +183,7 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
     if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).raw() {
         table_codec::extract_table_prefix(&raw_key)
-            .map(|k| Key::from_raw(k).take_encoded())
+            .map(|k| Key::from_raw(k).into_encoded())
             .ok()
     } else {
         None
@@ -265,12 +265,12 @@ mod test {
             for (start_id, end_id, want) in cases {
                 region.set_start_key(
                     start_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).into_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 region.set_end_key(
                     end_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).into_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
@@ -347,7 +347,7 @@ mod test {
 
         let gen_encoded_table_prefix = |table_id| {
             let key = Key::from_raw(&gen_table_prefix(table_id));
-            key.take_encoded()
+            key.into_encoded()
         };
 
         // arbitrary padding.
