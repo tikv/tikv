@@ -803,6 +803,8 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+
+        Tan => tan,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -831,8 +833,6 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
-
-        Tan => tan,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
