@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,6 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod assert_storage;
-pub mod sync_storage;
-pub mod util;
+#![feature(box_syntax)]
+
+extern crate futures;
+extern crate kvproto;
+
+#[macro_use]
+extern crate tikv;
+extern crate test_raftstore;
+
+mod assert_storage;
+mod sync_storage;
+mod util;
+
+pub use assert_storage::*;
+pub use sync_storage::*;
+pub use util::*;

@@ -11,11 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use kvproto::metapb;
-use kvproto::raft_serverpb::RegionLocalState;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
+
 use tempdir::TempDir;
+
+use kvproto::metapb;
+use kvproto::raft_serverpb::RegionLocalState;
+
+use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{
@@ -25,12 +29,6 @@ use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;
 use tikv::util::worker::{FutureWorker, Worker};
-
-use super::cluster::{Cluster, Simulator};
-use super::node::{new_node_cluster, ChannelTransport};
-use super::pd::{bootstrap_with_first_region, TestPdClient};
-use super::transport_simulate::SimulateTransport;
-use super::util::*;
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
