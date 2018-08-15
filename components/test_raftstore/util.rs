@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,10 +16,9 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use tempdir::TempDir;
-
 use protobuf;
 use rocksdb::{CompactionJobInfo, DB};
+use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -38,7 +37,7 @@ use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
 use tikv::util::transport::SendCh;
 
-use super::cluster::{Cluster, Simulator};
+use super::*;
 
 pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
