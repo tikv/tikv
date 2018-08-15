@@ -168,15 +168,13 @@ fn assert_none_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
 
 fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot
+    let mut cursor = snapshot
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
-    assert_eq!(
-        (iter.key(), iter.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn assert_seek_cf<E: Engine>(
@@ -187,15 +185,13 @@ fn assert_seek_cf<E: Engine>(
     pair: (&[u8], &[u8]),
 ) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot
+    let mut cursor = snapshot
         .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    iter.seek(&Key::from_raw(key), &mut statistics).unwrap();
-    assert_eq!(
-        (iter.key(), iter.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
@@ -206,10 +202,8 @@ fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8
             .unwrap(),
         escape(key)
     );
-    assert_eq!(
-        (cursor.key(), cursor.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
@@ -220,10 +214,8 @@ fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pai
             .unwrap(),
         escape(key)
     );
-    assert_eq!(
-        (cursor.key(), cursor.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn get_put<E: Engine>(ctx: &Context, engine: &E) {

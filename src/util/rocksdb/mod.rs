@@ -26,11 +26,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
 use rocksdb::{
-    ColumnFamilyOptions, CompactOptions, CompactionOptions, DBCompressionType, DBOptions, Range,
-    SliceTransform, DB,
+    CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
+    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
 use storage::{ALL_CFS, CF_DEFAULT};
 use sys_info;
@@ -101,6 +102,34 @@ pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Res
     new_engine_opt(path, db_opts, cf_opts)
 }
 
+// Turn "dynamic level size" off for existing column family which was off before.
+// column families are small, HashMap isn't necessary
+fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: &mut CFOptions) {
+    if let Some(ref cf_desc) = cf_descs
+        .iter()
+        .find(|cf_desc| cf_desc.name() == cf_options.cf)
+    {
+        let existed_dynamic_level_bytes =
+            cf_desc.options().get_level_compaction_dynamic_level_bytes();
+        if existed_dynamic_level_bytes
+            != cf_options
+                .options
+                .get_level_compaction_dynamic_level_bytes()
+        {
+            warn!(
+                "change dynamic_level_bytes for existing column family is danger, old: {}, new: {}",
+                existed_dynamic_level_bytes,
+                cf_options
+                    .options
+                    .get_level_compaction_dynamic_level_bytes()
+            );
+        }
+        cf_options
+            .options
+            .set_level_compaction_dynamic_level_bytes(existed_dynamic_level_bytes);
+    }
+}
+
 fn check_and_open(
     path: &str,
     mut db_opt: DBOptions,
@@ -134,11 +163,22 @@ fn check_and_open(
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
+    let cf_descs = if !existed.is_empty() {
+        // panic if OPTIONS not found for existing instance?
+        let (_, tmp) = load_latest_options(path, &Env::default(), false)
+            .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
+            .unwrap_or_else(|| panic!("couldn't find the OPTIONS file"));
+        tmp
+    } else {
+        vec![]
+    };
+
     // If all column families are exist, just open db.
     if existed == needed {
         let mut cfs_v = vec![];
         let mut cfs_opts_v = vec![];
-        for x in cfs_opts {
+        for mut x in cfs_opts {
+            adjust_dynamic_level_bytes(&cf_descs, &mut x);
             cfs_v.push(x.cf);
             cfs_opts_v.push(x.options);
         }
@@ -153,7 +193,9 @@ fn check_and_open(
         cfs_v.push(cf);
         match cfs_opts.iter().find(|x| x.cf == *cf) {
             Some(x) => {
-                cfs_opts_v.push(x.options.clone());
+                let mut tmp = CFOptions::new(x.cf, x.options.clone());
+                adjust_dynamic_level_bytes(&cf_descs, &mut tmp);
+                cfs_opts_v.push(tmp.options);
             }
             None => {
                 cfs_opts_v.push(ColumnFamilyOptions::new());
@@ -528,22 +570,38 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
-        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT]);
+        let mut cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
+        let mut opts = ColumnFamilyOptions::new();
+        opts.set_level_compaction_dynamic_level_bytes(true);
+        cfs_opts.push(CFOptions::new("cf_dynamic_level_bytes", opts.clone()));
+        {
+            let mut db = check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+            column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
+            check_dynamic_level_bytes(&mut db);
+        }
 
         // add cf1.
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-            CFOptions::new("cf1", ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, opts.clone()),
+            CFOptions::new("cf_dynamic_level_bytes", opts.clone()),
+            CFOptions::new("cf1", opts.clone()),
         ];
-        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf1"]);
+        {
+            let mut db = check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+            column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
+            check_dynamic_level_bytes(&mut db);
+        }
 
         // drop cf1.
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
-        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT]);
+        let cfs_opts = vec![
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new("cf_dynamic_level_bytes", ColumnFamilyOptions::new()),
+        ];
+        {
+            let mut db = check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+            column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
+            check_dynamic_level_bytes(&mut db);
+        }
 
         // never drop default cf
         let cfs_opts = vec![];
@@ -560,6 +618,15 @@ mod tests {
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
+    }
+
+    fn check_dynamic_level_bytes(db: &mut DB) {
+        let cf_default = db.cf_handle(CF_DEFAULT).unwrap();
+        let tmp_cf_opts = db.get_options_cf(cf_default);
+        assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+        let cf_test = db.cf_handle("cf_dynamic_level_bytes").unwrap();
+        let tmp_cf_opts = db.get_options_cf(cf_test);
+        assert!(tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
     }
 
     #[test]
