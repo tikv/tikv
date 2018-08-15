@@ -1576,12 +1576,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
-            let missing = self
+            let not_exist = self
                 .region_ranges
                 .insert(enc_end_key(&new_region), new_region_id)
                 .is_none();
             assert!(
-                missing,
+                not_exist,
                 "[region {}] should not exists",
                 new_region.get_id()
             );
