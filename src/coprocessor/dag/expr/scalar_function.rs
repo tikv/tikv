@@ -192,6 +192,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -271,7 +272,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
-            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
@@ -774,6 +774,7 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        CharLength => char_length,
         BitLength => bit_length,
         ASCII => ascii,
     }
@@ -1097,6 +1098,7 @@ mod test {
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
+                    ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
@@ -1217,7 +1219,6 @@ mod test {
             ScalarFuncSig::Atan2Args,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
-            ScalarFuncSig::CharLength,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
             ScalarFuncSig::ConcatWS,
