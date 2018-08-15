@@ -190,7 +190,6 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
-            | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::ASCII
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::Upper
