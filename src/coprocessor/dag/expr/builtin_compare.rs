@@ -13,7 +13,6 @@
 
 use std::borrow::Cow;
 use std::cmp::{max, min, Ordering};
-use std::str;
 use std::{f64, i64};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
@@ -185,12 +184,11 @@ impl ScalarFunc {
         let mut greatest = mysql::time::zero_datetime(ctx.cfg.tz);
 
         for exp in &self.children {
-            let val = try_opt!(exp.eval_string(ctx, row));
-            let s = str::from_utf8(&val)?;
-            match Time::parse_datetime(s, Time::parse_fsp(s), ctx.cfg.tz) {
+            let s = try_opt!(exp.eval_string_and_decode(ctx, row));
+            match Time::parse_datetime(&s, Time::parse_fsp(&s), ctx.cfg.tz) {
                 Ok(t) => greatest = max(greatest, t),
                 Err(_) => {
-                    if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(s)) {
+                    if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                         return Err(e);
                     }
                 }
@@ -242,13 +240,14 @@ impl ScalarFunc {
 
         for exp in &self.children {
             let val = try_opt!(exp.eval_string(ctx, row));
-            let s = str::from_utf8(&val)?;
-            match Time::parse_datetime(s, Time::parse_fsp(s), ctx.cfg.tz) {
+            let s = super::decode(val.clone(), exp.get_tp().get_charset())?;
+            // let s = try_opt!(exp.eval_string_and_decode(ctx, row));
+            match Time::parse_datetime(&s, Time::parse_fsp(&s), ctx.cfg.tz) {
                 Ok(t) => least = min(least, t),
-                Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(s)) {
+                Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
                     _ => if !find_invalid_time {
-                        res = val.clone();
+                        res = val;
                         find_invalid_time = true;
                     },
                 },
@@ -486,7 +485,7 @@ mod test {
     use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{col_expr, str2dec};
+    use coprocessor::dag::expr::test::{col_expr, datum_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;
     use std::sync::Arc;
@@ -908,28 +907,24 @@ mod test {
             for (row, greatest_exp, least_exp) in cases {
                 // Evaluate and test greatest
                 {
-                    let children: Vec<Expr> =
-                        (0..row.len()).map(|id| col_expr(id as i64)).collect();
+                    let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
                     let mut expr = Expr::new();
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(greatest_sig);
-
                     expr.set_children(RepeatedField::from_vec(children));
                     let e = Expression::build(&mut ctx, expr).unwrap();
-                    let res = e.eval(&mut ctx, &row).unwrap();
+                    let res = e.eval(&mut ctx, &[]).unwrap();
                     assert_eq!(res, greatest_exp);
                 }
                 // Evaluate and test least
                 {
-                    let children: Vec<Expr> =
-                        (0..row.len()).map(|id| col_expr(id as i64)).collect();
+                    let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
                     let mut expr = Expr::new();
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(least_sig);
-
                     expr.set_children(RepeatedField::from_vec(children));
                     let e = Expression::build(&mut ctx, expr).unwrap();
-                    let res = e.eval(&mut ctx, &row).unwrap();
+                    let res = e.eval(&mut ctx, &[]).unwrap();
                     assert_eq!(res, least_exp);
                 }
             }
@@ -971,14 +966,13 @@ mod test {
                 Datum::Bytes(t3.clone()),
                 Datum::Bytes(t4.clone()),
             ];
-            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let mut expr = Expr::new();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(ScalarFuncSig::GreatestTime);
-
             expr.set_children(RepeatedField::from_vec(children));
             let e = Expression::build(&mut ctx, expr).unwrap();
-            let err = e.eval(&mut ctx, &row).unwrap_err();
+            let err = e.eval(&mut ctx, &[]).unwrap_err();
             assert_eq!(err.code(), ERR_TRUNCATE_WRONG_VALUE);
         }
     }
