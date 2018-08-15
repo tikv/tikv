@@ -1457,7 +1457,7 @@ mod tests {
             .unwrap();
 
         let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
-            .raw()
+            .take_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
     }

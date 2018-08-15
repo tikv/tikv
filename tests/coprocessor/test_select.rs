@@ -11,17 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::sync::{mpsc as futures_mpsc, oneshot};
-use futures::{Future, Stream};
 use std::collections::{BTreeMap, HashMap};
 use std::i64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::{cmp, mem};
 
+use futures::sync::{mpsc as futures_mpsc, oneshot};
+use futures::{Future, Stream};
+use protobuf::{Message, RepeatedField};
+
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::kvrpcpb::Context;
-use protobuf::{Message, RepeatedField};
+use tipb::executor::{
+    Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN,
+};
+use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
+use tipb::schema::{self, ColumnInfo};
+use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
+
+use test_storage::*;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::coprocessor::*;
 use tikv::server::readpool::{self, ReadPool};
@@ -30,15 +39,6 @@ use tikv::storage::engine::{self, Engine, RocksEngine, TEMP_DIR};
 use tikv::storage::{self, Key, Mutation, ALL_CFS};
 use tikv::util::codec::number::*;
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
-use tipb::executor::{
-    Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN,
-};
-use tipb::expression::{ByItem, Expr, ExprType, ScalarFuncSig};
-use tipb::schema::{self, ColumnInfo};
-use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
-
-use storage::sync_storage::SyncStorage;
-use storage::util::new_raft_engine;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
 const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
