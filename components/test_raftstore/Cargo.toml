@@ -1,0 +1,24 @@
+[package]
+name = "test_raftstore"
+version = "0.0.1"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tikv = { path = "../../" }
+protobuf = "~2.0"
+tempdir = "0.3"
+raft = "0.3"
+futures = "0.1"
+tokio-timer = "0.2"
+grpcio = { version = "0.3", features = [ "secure" ] }
+rand = "0.3"
+log = "0.3.9"
+
+[dependencies.kvproto]
+git = "https://github.com/pingcap/kvproto.git"
+
+[dependencies.rocksdb]
+git = "https://github.com/pingcap/rust-rocksdb.git"

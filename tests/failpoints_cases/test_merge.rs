@@ -16,16 +16,14 @@ use std::time::*;
 
 use fail;
 use futures::Future;
+
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+
+use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
 use tikv::storage::CF_RAFT;
-
-use raftstore::node::new_node_cluster;
-use raftstore::transport_simulate::*;
-use raftstore::util;
-use raftstore::util::*;
 
 /// Test if merge is rollback as expected.
 #[test]
@@ -61,7 +59,7 @@ fn test_node_merge_rollback() {
     // Add a peer to trigger rollback.
     pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
     cluster.must_put(b"k4", b"v4");
-    util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 
     let mut region = pd_client.get_region(b"k1").unwrap();
     // After split and prepare_merge, version becomes 1 + 2 = 3;
@@ -170,7 +168,7 @@ fn test_node_merge_restart() {
     cluster.must_put(b"k4", b"v4");
 
     for i in 1..4 {
-        util::must_get_equal(&cluster.get_engine(i), b"k4", b"v4");
+        must_get_equal(&cluster.get_engine(i), b"k4", b"v4");
         let state_key = keys::region_state_key(left.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
@@ -245,7 +243,7 @@ fn test_node_merge_recover_snapshot() {
 
     // Remove a peer to trigger rollback.
     pd_client.must_remove_peer(left.get_id(), left.get_peers()[0].to_owned());
-    util::must_get_none(&cluster.get_engine(3), b"k4");
+    must_get_none(&cluster.get_engine(3), b"k4");
 
     let step_store_3_region_1 = "step_message_3_1";
     fail::cfg(step_store_3_region_1, "return()").unwrap();
@@ -255,7 +253,7 @@ fn test_node_merge_recover_snapshot() {
         cluster.must_put(format!("k4{}", i).as_bytes(), b"v4");
     }
     fail::remove(step_store_3_region_1);
-    util::must_get_equal(&cluster.get_engine(3), b"k40", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k40", b"v4");
     cluster.must_transfer_leader(1, new_peer(3, 3));
     cluster.must_put(b"k40", b"v5");
 }

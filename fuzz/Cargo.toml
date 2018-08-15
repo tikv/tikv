@@ -1,5 +1,5 @@
 [package]
-name = "tikv-fuzz"
+name = "tikv_fuzz"
 version = "0.0.1"
 publish = false
 
