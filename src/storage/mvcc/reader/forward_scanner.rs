@@ -297,19 +297,17 @@ impl<S: Snapshot> ForwardScanner<S> {
                     return Ok(None);
                 }
             }
-            {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
-                    // Meet another key.
-                    // TODO: If we meet another user key here, we don't need to compare the key
-                    // again when trying to move to next user key in `read_next` later.
-                    return Ok(None);
-                }
-                if Key::decode_ts_from(current_key)? <= ts {
-                    // Founded, don't need to seek again.
-                    needs_seek = false;
-                    break;
-                }
+            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
+                // Meet another key.
+                // TODO: If we meet another user key here, we don't need to compare the key
+                // again when trying to move to next user key in `read_next` later.
+                return Ok(None);
+            }
+            if Key::decode_ts_from(current_key)? <= ts {
+                // Founded, don't need to seek again.
+                needs_seek = false;
+                break;
             }
         }
         // If we have not found `${user_key}_${ts}` in a few `next()`, directly `seek()`.
@@ -406,12 +404,10 @@ impl<S: Snapshot> ForwardScanner<S> {
                 // Key space ended. We are done here.
                 return Ok(());
             }
-            {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
-                    // Found another user key. We are done here.
-                    return Ok(());
-                }
+            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
+                // Found another user key. We are done here.
+                return Ok(());
             }
         }
 
