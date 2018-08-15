@@ -29,7 +29,7 @@ impl ScalarFunc {
     }
 }
 
-// Useful utility method - should it go to util.rs in coprocessor?
+
 fn is_given_string_ipv4(some_str: &str) -> bool {
     let address = IpAddr::from_str(some_str);
     if let Ok(add) = address {
