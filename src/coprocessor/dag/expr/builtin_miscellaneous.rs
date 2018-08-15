@@ -19,16 +19,14 @@ use coprocessor::codec::Datum;
 
 impl ScalarFunc {
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = String::from_utf8(input.into_owned())?;
-        if is_given_string_ipv4(&s) {
+        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        if is_given_string_ipv4(&input) {
             Ok(Some(1))
         } else {
             Ok(Some(0))
         }
     }
 }
-
 
 fn is_given_string_ipv4(some_str: &str) -> bool {
     let address = IpAddr::from_str(some_str);
@@ -47,7 +45,7 @@ mod test {
     use tipb::expression::ScalarFuncSig;
 
     #[test]
-    fn test_is_ipv4_success() {
+    fn test_is_ipv4() {
         let mut ctx = EvalContext::default();
         let input_str = "127.0.0.1";
         let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
@@ -57,10 +55,7 @@ mod test {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::from(1i64);
         assert_eq!(got, exp);
-    }
 
-    #[test]
-    fn test_is_ipv4_fail() {
         let mut ctx = EvalContext::default();
         let input_str = "127.0.0.256";
         let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
