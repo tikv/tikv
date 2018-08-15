@@ -11,18 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::util::collections::HashMap;
-
-use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 use protobuf;
 use rocksdb::DB;
+
+use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
+
+use test_raftstore::*;
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
+use tikv::util::collections::HashMap;
 use tikv::util::config::*;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::util::*;
 
 fn get_msg_cf_or_default<M: protobuf::Message + Default>(engine: &DB, cf: &str, key: &[u8]) -> M {
     engine.get_msg_cf(cf, key).unwrap().unwrap_or_default()
