@@ -190,6 +190,45 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
+    fn handle_ask_split(
+        &self,
+        handle: &Handle,
+        mut region: metapb::Region,
+        split_key: Vec<u8>,
+        peer: metapb::Peer,
+        right_derive: bool,
+        callback: Callback,
+    ) {
+        let ch = self.ch.clone();
+        let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
+            match resp {
+                Ok(mut resp) => {
+                    info!(
+                        "[region {}] try to split with new region id {} for region {:?}",
+                        region.get_id(),
+                        resp.get_new_region_id(),
+                        region
+                    );
+
+                    let req = new_split_region_request(
+                        split_key,
+                        resp.get_new_region_id(),
+                        resp.take_new_peer_ids(),
+                        right_derive,
+                    );
+                    let region_id = region.get_id();
+                    let epoch = region.take_region_epoch();
+                    send_admin_request(&ch, region_id, epoch, peer, req, callback)
+                }
+                Err(e) => {
+                    debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
+                }
+            }
+            Ok(())
+        });
+        handle.spawn(f)
+    }
+
     fn handle_ask_batch_split(
         &self,
         handle: &Handle,
@@ -222,8 +261,12 @@ impl<T: PdClient> Runner<T> {
                         let epoch = region.take_region_epoch();
                         send_admin_request(&ch, region_id, epoch, peer, req, callback)
                     }
+                    // When rolling update, there might be some old version tikvs that doesn't support batch split in cluster.
+                    // In this situation, pd version check would refuse ask_batch_split.
+                    // But if update time is long, it may cause large regions, so call ask_split instead.
+                    Err(Error::Incompatible) => self.handle_ask_split(handle, region, split_keys[0], peer, right_derive, callback),
                     Err(e) => {
-                        debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
+                        debug!("[region {}] failed to ask batch split: {:?}", region.get_id(), e);
                     }
                 }
                 Ok(())
@@ -630,6 +673,21 @@ fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> A
     req.set_cmd_type(AdminCmdType::ChangePeer);
     req.mut_change_peer().set_change_type(change_type);
     req.mut_change_peer().set_peer(peer);
+    req
+}
+
+fn new_split_region_request(
+    split_key: Vec<u8>,
+    new_region_id: u64,
+    peer_ids: Vec<u64>,
+    right_derive: bool,
+) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::Split);
+    req.mut_split().set_split_key(split_key);
+    req.mut_split().set_new_region_id(new_region_id);
+    req.mut_split().set_new_peer_ids(peer_ids);
+    req.mut_split().set_right_derive(right_derive);
     req
 }
 

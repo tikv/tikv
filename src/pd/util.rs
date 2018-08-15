@@ -466,6 +466,7 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
     match err.get_field_type() {
         ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
         ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
+        ErrorType::INCOMPATIABLE => Err(Error::Incompatible),
         _ => Err(box_err!(err.get_message())),
     }
 }
