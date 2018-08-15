@@ -17,29 +17,29 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{error, result};
 
-pub use self::rocksdb::{RocksEngine, RocksSnapshot};
+use config;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use raftstore::store::engine::IterOption;
 use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-
-use config;
-
 use util::rocksdb::CFOptions;
 
+mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
 mod rocksdb;
-use super::super::raftstore::store::engine::IterOption;
 
+pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
+pub const SEEK_BOUND: usize = 30;
 
-const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 const STAT_TOTAL: &str = "total";
@@ -442,7 +442,7 @@ impl<I: Iterator> Cursor<I> {
         Ok(None)
     }
 
-    fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             self.iter.validate_key(key)?;
