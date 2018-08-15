@@ -11,7 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod test_raft_storage;
-mod test_raftkv;
-mod test_seek_region;
-mod test_storage;
+#![feature(box_syntax)]
+
+extern crate futures;
+extern crate grpcio as grpc;
+extern crate kvproto;
+extern crate protobuf;
+extern crate raft;
+extern crate rand;
+extern crate rocksdb;
+extern crate tempdir;
+extern crate tokio_timer;
+#[macro_use]
+extern crate log;
+
+#[macro_use]
+extern crate tikv;
+
+mod cluster;
+mod node;
+mod pd;
+mod server;
+mod transport_simulate;
+mod util;
+
+pub use cluster::*;
+pub use node::*;
+pub use pd::*;
+pub use server::*;
+pub use transport_simulate::*;
+pub use util::*;
