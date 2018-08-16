@@ -69,11 +69,12 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
-    /// Set iterator lower and upper bound.
+    /// Set iterator range by giving lower and upper bound.
+    /// The range is left closed right open.
     ///
     /// Both defaults to `None`.
     #[inline]
-    pub fn bound(mut self, lower: Option<Vec<u8>>, upper: Option<Vec<u8>>) -> Self {
+    pub fn range(mut self, lower: Option<Vec<u8>>, upper: Option<Vec<u8>>) -> Self {
         self.lower_bound = lower;
         self.upper_bound = upper;
         self

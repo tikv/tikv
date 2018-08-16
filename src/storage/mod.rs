@@ -650,26 +650,20 @@ impl<E: Engine> Storage<E> {
                         !ctx.get_not_fill_cache(),
                     );
 
-                    let scan_mode = if options.reverse_scan {
-                        ScanMode::Backward
-                    } else {
-                        ScanMode::Forward
-                    };
-
                     let mut scanner;
-                    if options.reverse_scan {
+                    if !options.reverse_scan {
                         scanner = snap_store.scanner(
-                            scan_mode,
+                            ScanMode::Forward,
                             options.key_only,
-                            None,
                             Some(start_key.take_encoded()),
+                            None,
                         )?;
                     } else {
                         scanner = snap_store.scanner(
-                            scan_mode,
+                            ScanMode::Backward,
                             options.key_only,
-                            Some(start_key.take_encoded()),
                             None,
+                            Some(start_key.take_encoded()),
                         )?;
                     };
                     let res = scanner.scan(limit);

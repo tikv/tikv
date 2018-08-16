@@ -98,13 +98,13 @@ impl<S: Snapshot> BackwardScannerBuilder<S> {
     /// Build `BackwardScanner` from the current configuration.
     pub fn build(self) -> Result<BackwardScanner<S>> {
         let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
 
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
@@ -449,7 +449,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .bound(self.lower_bound.take(), self.upper_bound.take())
+            .range(self.lower_bound.take(), self.upper_bound.take())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;

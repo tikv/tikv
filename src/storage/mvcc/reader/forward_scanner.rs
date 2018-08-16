@@ -90,12 +90,12 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
     /// Build `ForwardScanner` from the current configuration.
     pub fn build(self) -> Result<ForwardScanner<S>> {
         let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .build()?;
 
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .build()?;
 
@@ -235,19 +235,52 @@ impl<S: Snapshot> ForwardScanner<S> {
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
-            // Attempt to read specified version of the key. Note that we may get `None`
-            // indicating that no desired version is found, or a DELETE version is found, or
-            // when `has_write == false`. We may also get `Err` due to key lock. We need to
-            // ensure that the scanner keeps working for future calls even when meeting key
-            // lock errors (why??), so we don't apply `?` operator to the result here thus
-            // iterators can be moved forward.
-            let result = self.get(&current_user_key, has_write, has_lock);
+            // `result` stores intermediate values, including errors. When there is an error, for
+            // example, key locked error, we need to do the rest of the work like stepping cursors
+            // instead of stop there.
+            let mut result = Ok(None);
 
-            if has_write {
-                self.move_write_cursor_to_next_user_key(&current_user_key)?;
-            }
+            // `get_ts` is the real used timestamp. If user specifies `MaxInt64` as the timestamp,
+            // we need to change it to a most recently available one.
+            let mut get_ts = self.ts;
+
+            // `met_next_user_key` stores whether the write cursor has been already pointing to
+            // the next user key. If so, we don't need to compare it again when trying to step
+            // to the next user key later.
+            let mut met_next_user_key = false;
+
             if has_lock {
+                match self.isolation_level {
+                    IsolationLevel::SI => {
+                        assert!(self.lock_cursor.valid());
+                        let lock_result = {
+                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                            Lock::parse(lock_value)
+                        };
+                        match lock_result.and_then(|lock| {
+                            super::util::check_lock(&current_user_key, self.ts, &lock)
+                        }) {
+                            Ok(ts) => get_ts = ts,
+                            Err(e) => result = Err(e),
+                        }
+                    }
+                    IsolationLevel::RC => {}
+                }
                 self.lock_cursor.next(&mut self.statistics.lock);
+            }
+            if has_write {
+                // We don't need to read version if there is a lock error already.
+                if result.is_ok() {
+                    // Attempt to read specified version of the key. Note that we may get `None`
+                    // indicating that no desired version is found, or a DELETE version is found
+                    result = self.get(&current_user_key, get_ts, &mut met_next_user_key);
+                }
+                // Even if there is a lock error, we still need to step the cursor for future
+                // calls. However if we are already pointing at next user key, we don't need to
+                // move it any more. `met_next_user_key` eliminates a key compare.
+                if !met_next_user_key {
+                    self.move_write_cursor_to_next_user_key(&current_user_key)?;
+                }
             }
 
             // If we got something, it can be just used as the return value. Otherwise, we need
@@ -261,24 +294,12 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// Attempt to get the value of a key specified by `user_key` and `self.ts`. This function
     /// requires that the write cursor is currently pointing to the latest version of `user_key`.
     #[inline]
-    fn get(&mut self, user_key: &Key, has_write: bool, has_lock: bool) -> Result<Option<Value>> {
-        let mut ts = self.ts;
-
-        if has_lock {
-            match self.isolation_level {
-                IsolationLevel::SI => {
-                    assert!(self.lock_cursor.valid());
-                    let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                    let lock = Lock::parse(lock_value)?;
-                    ts = super::util::check_lock(user_key, ts, &lock)?
-                }
-                IsolationLevel::RC => {}
-            }
-        }
-
-        if !has_write {
-            return Ok(None);
-        }
+    fn get(
+        &mut self,
+        user_key: &Key,
+        ts: u64,
+        met_next_user_key: &mut bool,
+    ) -> Result<Option<Value>> {
         assert!(self.write_cursor.valid());
 
         // The logic starting from here is similar to `PointGetter`.
@@ -301,8 +322,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                     // Meet another key.
-                    // TODO: If we meet another user key here, we don't need to compare the key
-                    // again when trying to move to next user key in `read_next` later.
+                    *met_next_user_key = true;
                     return Ok(None);
                 }
                 if Key::decode_ts_from(current_key)? <= ts {
@@ -325,8 +345,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
-                // TODO: If we meet another user key here, we don't need to compare the key
-                // again when trying to move to next user key in `read_next` later.
+                *met_next_user_key = true;
                 return Ok(None);
             }
         }
@@ -354,8 +373,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             let current_key = self.write_cursor.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
                 // Meet another key.
-                // TODO: If we meet another user key here, we don't need to compare the key
-                // again when trying to move to next user key in `read_next` later.
+                *met_next_user_key = true;
                 return Ok(None);
             }
         }
@@ -419,7 +437,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         // After that, we must pointing to another key, or out of bound.
         // `current_user_key` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happends in `append_ts`.
-        self.write_cursor.seek(
+        self.write_cursor.internal_seek(
             &current_user_key.clone().append_ts(0),
             &mut self.statistics.write,
         )?;
@@ -434,7 +452,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .bound(self.lower_bound.take(), self.upper_bound.take())
+            .range(self.lower_bound.take(), self.upper_bound.take())
             .fill_cache(self.fill_cache)
             .build()?;
         self.default_cursor = Some(cursor);
