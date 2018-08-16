@@ -46,25 +46,22 @@ mod test {
 
     #[test]
     fn test_is_ipv4() {
-        let mut ctx = EvalContext::default();
-        let input_str = "127.0.0.1";
-        let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
-
-        let op = scalar_func_expr(ScalarFuncSig::IsIPv4, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]).unwrap();
-        let exp = Datum::from(1i64);
-        assert_eq!(got, exp);
+        let cases = vec![
+            // input, expected
+            ("127.0.0.1", 1i64),
+            ("127.0.0.256", 0i64),
+        ];
 
         let mut ctx = EvalContext::default();
-        let input_str = "127.0.0.256";
-        let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+        for (input_str, expected) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
 
-        let op = scalar_func_expr(ScalarFuncSig::IsIPv4, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]).unwrap();
-        let exp = Datum::from(0i64);
-        assert_eq!(got, exp);
+            let op = scalar_func_expr(ScalarFuncSig::IsIPv4, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::from(expected);
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
