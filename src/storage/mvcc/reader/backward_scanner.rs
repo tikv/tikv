@@ -224,13 +224,11 @@ impl<S: Snapshot> BackwardScanner<S> {
                 match self.isolation_level {
                     IsolationLevel::SI => {
                         assert!(self.lock_cursor.valid());
-                        let lock_result = {
+                        let lock = {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)
+                            Lock::parse(lock_value)?
                         };
-                        match lock_result.and_then(|lock| {
-                            super::util::check_lock(&current_user_key, self.ts, &lock)
-                        }) {
+                        match super::util::check_lock(&current_user_key, self.ts, &lock) {
                             Ok(ts) => get_ts = ts,
                             Err(e) => result = Err(e),
                         }
