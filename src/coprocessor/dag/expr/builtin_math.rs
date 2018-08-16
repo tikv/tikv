@@ -290,22 +290,22 @@ mod test {
     fn test_round() {
         let tests = vec![
             (
-                ScalarFuncSig::RoundReal, 
+                ScalarFuncSig::RouldReal, 
                 Datum::F64(3.45), 
                 Datum::F64(3f64)
             ),
-            (
-                ScalarFuncSig::RoundReal,
+			(
+                ScalarFuncSig::RouldReal,
                 Datum::F64(-3.45),
                 Datum::F64(-3f64),
             ),
             (
-                ScalarFuncSig::RoundReal,
+                ScalarFuncSig::RouldReal,
                 Datum::F64(f64::MAX),
                 Datum::F64(f64::MAX),
             ),
             (
-                ScalarFuncSig::RoundReal,
+                ScalarFuncSig::RouldReal,
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MIN),
             ),
