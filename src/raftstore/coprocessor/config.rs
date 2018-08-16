@@ -31,7 +31,7 @@ pub struct Config {
     /// [c,d), [d,e) will be region_split_size (maybe a little larger).
     pub region_max_size: ReadableSize,
     pub region_split_size: ReadableSize,
-    
+
     /// When the number of keys in region [a,b) meets the region_max_keys,
     /// it will be split into two several regions [a,c), [c,d), [d,e), [e,b).
     /// And the number of keys in [a,c), [c,d), [d,e) will be region_split_keys.

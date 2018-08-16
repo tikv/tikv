@@ -129,12 +129,20 @@ impl CoprocessorHost {
         ch: RetryableSendCh<Msg, C>,
     ) -> CoprocessorHost {
         let mut registry = Registry::default();
-        let split_size_check_observer =
-            SizeCheckObserver::new(cfg.region_max_size.0, cfg.region_split_size.0, cfg.batch_split_limit, ch.clone());
+        let split_size_check_observer = SizeCheckObserver::new(
+            cfg.region_max_size.0,
+            cfg.region_split_size.0,
+            cfg.batch_split_limit,
+            ch.clone(),
+        );
         registry.register_split_check_observer(200, Box::new(split_size_check_observer));
 
-        let split_keys_check_observer =
-            KeysCheckObserver::new(cfg.region_max_keys, cfg.region_split_keys, cfg.batch_split_limit, ch);
+        let split_keys_check_observer = KeysCheckObserver::new(
+            cfg.region_max_keys,
+            cfg.region_split_keys,
+            cfg.batch_split_limit,
+            ch,
+        );
         registry.register_split_check_observer(200, Box::new(split_keys_check_observer));
 
         // TableCheckObserver has higher priority than SizeCheckObserver.
