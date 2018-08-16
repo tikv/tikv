@@ -2020,7 +2020,7 @@ impl<'a> ReadExecutor<'a> {
         ReadExecutor {
             check_epoch,
             region: None,
-            snapshot: Snapshot::new(engine.clone()).into_sync(),
+            snapshot: Snapshot::new(engine).into_sync(),
             snapshot_time: None,
         }
     }

@@ -413,7 +413,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             match self.pre_propose_raft_command(&req) {
                 Ok(true) => (),
                 // It can not handle the rquest, instead of forwarding to raftstore,
-                // it returns a `None` which means users need to retry the requsets
+                // it returns a `Ok(false)` or `Err` means users need to retry the requsets
                 // via `async_snapshot`.
                 Ok(false) | Err(_) => {
                     need_redirect = true;
@@ -435,8 +435,9 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         }
     }
 
-    fn handle_tasks(&mut self, tasks: &mut Vec<Task>) -> Option<Instant> {
+    fn pre_handle_tasks(&mut self, tasks: &mut Vec<Task>) -> (Option<Instant>, bool) {
         let mut sent = None;
+        let mut to_be_handled = false;
         for task in tasks {
             match task.action.take() {
                 Some(Action::Register(delegate)) => {
@@ -453,6 +454,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
                 })) => {
                     if let Some(cmd) = self.propose_raft_command(request, callback, send_time) {
                         task.action = Some(Action::Read(cmd));
+                        to_be_handled = true;
                     }
                     if sent.is_none() {
                         sent = Some(send_time);
@@ -467,6 +469,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
                         self.propose_batch_raft_snapshot_command(batch, on_finished, send_time)
                     {
                         task.action = Some(Action::Read(cmd));
+                        to_be_handled = true;
                     }
                     if sent.is_none() {
                         sent = Some(send_time);
@@ -490,10 +493,10 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
                 }
             }
         }
-        sent
+        (sent, to_be_handled)
     }
 
-    fn handle_ready_tasks(&mut self, tasks: &mut Vec<Task>) {
+    fn handle_tasks(&mut self, tasks: &mut Vec<Task>) {
         // Dont check region epoch.
         let mut executor = ReadExecutor::new(self.kv_engine.clone(), false);
         // TODO: should we issue an fence to guarantee we take snapshot first
@@ -533,14 +536,15 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
                     let size = batch.len();
                     let mut ret = Vec::with_capacity(size);
                     for req in batch {
+                        let mut resp = None;
                         let region_id = req.get_header().get_region_id();
                         if let Some(delegate) = self.delegates.get(&region_id) {
-                            let resp = delegate.handle_read(&req, &mut executor);
-                            // No matter it is `Some` or `None`, we always response,
-                            // If it's `None` users need to retry the requsets
-                            // via `async_snapshot`.
-                            ret.push(resp);
+                            resp = delegate.handle_read(&req, &mut executor);
                         }
+                        // No matter it is `Some` or `None`, we always response,
+                        // If it's `None` users need to retry the requsets
+                        // via `async_snapshot`.
+                        ret.push(resp);
                     }
                     on_finished.invoke_batch_read(ret);
                 }
@@ -595,8 +599,10 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
             .batch_requests_size
             .observe(tasks.len() as _);
 
-        let sent = self.handle_tasks(tasks);
-        self.handle_ready_tasks(tasks);
+        let (sent, to_be_handled) = self.pre_handle_tasks(tasks);
+        if to_be_handled {
+            self.handle_tasks(tasks);
+        }
 
         if let Some(send_time) = sent {
             self.metrics
