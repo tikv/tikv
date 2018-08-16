@@ -15,17 +15,27 @@ use kvproto::coprocessor::KeyRange;
 
 use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
-use std::cmp::max;
 use storage::txn::Result;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
 use util::escape;
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum ScanOn {
     Table,
     Index,
+}
+
+fn create_range_scanner<S: Snapshot>(
+    store: &SnapshotStore<S>,
+    scan_mode: ScanMode,
+    key_only: bool,
+    range: &KeyRange,
+) -> Result<StoreScanner<S>> {
+    let lower_bound = Some(Key::from_raw(range.get_start()).take_encoded());
+    let upper_bound = Some(Key::from_raw(range.get_end()).take_encoded());
+    store.scanner(scan_mode, key_only, lower_bound, upper_bound)
 }
 
 // `Scanner` is a helper struct to wrap all common scan operations
@@ -34,13 +44,12 @@ pub struct Scanner<S: Snapshot> {
     scan_mode: ScanMode,
     scan_on: ScanOn,
     key_only: bool,
-    seek_key: Vec<u8>,
+    last_scanned_key: Vec<u8>,
     scanner: StoreScanner<S>,
     range: KeyRange,
     no_more: bool,
-    // statistics_cache caches Statistics because
-    // reset_range may re-initialize a StoreScanner.
-    statistics_cache: Statistics,
+    /// `reset_range` may re-initialize a StoreScanner, so we need to backlog statistics.
+    statistics_backlog: Statistics,
 }
 
 impl<S: Snapshot> Scanner<S> {
@@ -57,56 +66,24 @@ impl<S: Snapshot> Scanner<S> {
             ScanMode::Forward
         };
 
-        let seek_key = {
-            let seek_key_slice = if desc {
-                range.get_end()
-            } else {
-                range.get_start()
-            };
-            let mut buffer = Vec::with_capacity(max(MIN_KEY_BUFFER_CAPACITY, seek_key_slice.len()));
-            buffer.extend_from_slice(seek_key_slice);
-            buffer
-        };
-
-        let scanner = Self::range_scanner(store, scan_mode, key_only, &range)?;
-
         Ok(Self {
             scan_mode,
             scan_on,
             key_only,
-            seek_key,
-            scanner,
+            last_scanned_key: Vec::with_capacity(MIN_KEY_BUFFER_CAPACITY),
+            scanner: create_range_scanner(store, scan_mode, key_only, &range)?,
             range,
             no_more: false,
-            statistics_cache: Statistics::default(),
+            statistics_backlog: Statistics::default(),
         })
-    }
-
-    fn range_scanner(
-        store: &SnapshotStore<S>,
-        scan_mode: ScanMode,
-        key_only: bool,
-        range: &KeyRange,
-    ) -> Result<StoreScanner<S>> {
-        let lower_bound = Some(Key::from_raw(range.get_start()).take_encoded());
-        let upper_bound = Some(Key::from_raw(range.get_end()).take_encoded());
-        store.scanner(scan_mode, key_only, lower_bound, upper_bound)
     }
 
     pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
         self.range = range;
         self.no_more = false;
-        unsafe {
-            self.seek_key.set_len(0);
-        }
-        match self.scan_mode {
-            ScanMode::Backward => self.seek_key.extend_from_slice(self.range.get_end()),
-            ScanMode::Forward => self.seek_key.extend_from_slice(self.range.get_start()),
-            ScanMode::Mixed => unreachable!(),
-        };
-
-        self.statistics_cache.add(&self.scanner.take_statistics());
-        self.scanner = Self::range_scanner(store, self.scan_mode, self.key_only, &self.range)?;
+        self.last_scanned_key.clear();
+        self.statistics_backlog.add(&self.scanner.take_statistics());
+        self.scanner = create_range_scanner(store, self.scan_mode, self.key_only, &self.range)?;
         Ok(())
     }
 
@@ -118,7 +95,7 @@ impl<S: Snapshot> Scanner<S> {
         let kv = self.scanner.next()?;
 
         let (key, value) = match kv {
-            Some((k, v)) => (box_try!(k.raw()), v),
+            Some((k, v)) => (box_try!(k.take_raw()), v),
             None => {
                 self.no_more = true;
                 return Ok(None);
@@ -134,51 +111,79 @@ impl<S: Snapshot> Scanner<S> {
             );
         }
 
-        {
-            let seek_key_slice = match (self.scan_mode, self.scan_on) {
-                (ScanMode::Forward, _) | (ScanMode::Backward, ScanOn::Index) => key.as_slice(),
-                (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)),
-                _ => unreachable!(),
-            };
-            unsafe {
-                self.seek_key.set_len(0);
-            }
-            self.seek_key.extend_from_slice(seek_key_slice);
+        // `Vec::clear()` produce 2 more instructions than `set_len(0)`, so we directly use
+        // `set_len()` here.
+        unsafe {
+            self.last_scanned_key.set_len(0);
         }
+        self.last_scanned_key.extend_from_slice(key.as_slice());
 
         Ok(Some((key, value)))
     }
 
     pub fn start_scan(&self, range: &mut KeyRange) {
         assert!(!self.no_more);
-        match self.scan_mode {
-            ScanMode::Forward => range.set_start(self.seek_key.clone()),
-            ScanMode::Backward => range.set_end(self.seek_key.clone()),
-            _ => unreachable!(),
-        };
+        if self.last_scanned_key.is_empty() {
+            match self.scan_mode {
+                ScanMode::Forward => range.set_start(self.range.get_start().to_owned()),
+                ScanMode::Backward => range.set_end(self.range.get_end().to_owned()),
+                _ => unreachable!(),
+            }
+        } else {
+            match self.scan_mode {
+                ScanMode::Forward => {
+                    // In `stop_scan`, we will `next(last_scanned_key)`, so we don't need to next()
+                    // again here.
+                    range.set_start(self.last_scanned_key.clone())
+                }
+                ScanMode::Backward => {
+                    // In `stop_scan`, we have already truncated to row key, so we don't need to
+                    // do it again here.
+                    range.set_end(self.last_scanned_key.clone())
+                }
+                _ => unreachable!(),
+            }
+        }
     }
 
     pub fn stop_scan(&mut self, range: &mut KeyRange) -> bool {
         if self.no_more {
             return false;
         }
-
-        match self.scan_mode {
-            ScanMode::Forward => {
-                // Increase seek_key, so that stop_scan returns a key that is exclusive, producing
-                // a half-close range
-                util::convert_to_prefix_next(&mut self.seek_key);
-                range.set_end(self.seek_key.clone())
+        if self.last_scanned_key.is_empty() {
+            // No more future requests will be send, so this is acceptable.
+            match self.scan_mode {
+                ScanMode::Forward => range.set_end(self.range.get_start().to_owned()),
+                ScanMode::Backward => range.set_start(self.range.get_end().to_owned()),
+                _ => unreachable!(),
             }
-            ScanMode::Backward => range.set_start(self.seek_key.clone()),
-            _ => unreachable!(),
-        };
+        } else {
+            match self.scan_mode {
+                ScanMode::Forward => {
+                    // Make range_end exclusive. Note that next `start_scan` will also use this
+                    // key as the range_start.
+                    util::convert_to_prefix_next(&mut self.last_scanned_key);
+                    range.set_end(self.last_scanned_key.clone());
+                }
+                ScanMode::Backward => {
+                    // TODO: We may don't need `truncate_as_row_key`. Needs investigation.
+                    if self.scan_on == ScanOn::Table {
+                        let row_key_len =
+                            truncate_as_row_key(&self.last_scanned_key).unwrap().len();
+                        self.last_scanned_key.truncate(row_key_len);
+                    }
+                    range.set_start(self.last_scanned_key.clone());
+                }
+                _ => unreachable!(),
+            }
+        }
         true
     }
 
     pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
-        stats.add(&self.statistics_cache);
+        stats.add(&self.statistics_backlog);
         stats.add(&self.scanner.take_statistics());
+        self.statistics_backlog = Statistics::default();
     }
 }
 
@@ -423,26 +428,6 @@ pub mod test {
         let mut scanner = Scanner::new(&store, ScanOn::Table, false, true, range).unwrap();
         let (_, value) = scanner.next_row().unwrap().unwrap();
         assert!(value.is_empty());
-    }
-
-    #[test]
-    fn test_seek_key() {
-        let table_id = 1;
-        let pk = table::encode_row_key(table_id, 1);
-        let pv = b"value1";
-        let test_data = vec![(pk.clone(), pv.to_vec())];
-        let mut test_store = TestStore::new(&test_data);
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let range = get_range(table_id, i64::MIN, i64::MAX);
-
-        // 1. desc scan
-        let scanner = Scanner::new(&store, ScanOn::Table, true, false, range.clone()).unwrap();
-        assert_eq!(scanner.seek_key, range.get_end());
-
-        // 2.asc scan
-        let scanner = Scanner::new(&store, ScanOn::Table, false, false, range.clone()).unwrap();
-        assert_eq!(scanner.seek_key, range.get_start());
     }
 
     #[test]
