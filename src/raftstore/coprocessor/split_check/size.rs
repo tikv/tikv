@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -23,35 +25,41 @@ pub struct Checker {
     max_size: u64,
     split_size: u64,
     current_size: u64,
-    split_key: Option<Vec<u8>>,
+    total_size: u64,
+    split_keys: Vec<Vec<u8>>,
+    batch_split_limit: u64,
 }
 
 impl Checker {
-    pub fn new(max_size: u64, split_size: u64) -> Checker {
+    pub fn new(max_size: u64, split_size: u64, batch_split_limit: u64) -> Checker {
         Checker {
             max_size,
             split_size,
             current_size: 0,
-            split_key: None,
+            total_size: 0,
+            split_keys: Vec::with_capacity(1),
+            batch_split_limit,
         }
     }
 }
 
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+        self.total_size += entry.entry_size() as u64;
         self.current_size += entry.entry_size() as u64;
-        if self.current_size > self.split_size && self.split_key.is_none() {
-            self.split_key = Some(entry.key().to_vec());
+        if self.current_size > self.split_size {
+            self.split_keys.push(keys::origin_key(entry.key()).to_vec());
+            self.current_size = 0;
         }
-        // should consider max_size may equal to split_size
-        self.current_size > self.max_size
+
+        // For a large region, scan over the range maybe cost too much time,
+        // so limit the number of produced split_key for one batch.
+        self.split_keys.len() as u64 >= self.batch_split_limit
     }
 
     fn split_keys(&mut self) -> Vec<Vec<u8>> {
-        if self.current_size >= self.max_size {
-            let data_key = self.split_key.take().unwrap();
-            let key = keys::origin_key(&data_key).to_vec();
-            vec![key]
+        if self.total_size >= self.max_size {
+            mem::replace(&mut self.split_keys, vec![])
         } else {
             vec![]
         }
@@ -61,6 +69,7 @@ impl SplitChecker for Checker {
 pub struct SizeCheckObserver<C> {
     region_max_size: u64,
     split_size: u64,
+    split_limit: u64,
     ch: RetryableSendCh<Msg, C>,
 }
 
@@ -68,11 +77,13 @@ impl<C: Sender<Msg>> SizeCheckObserver<C> {
     pub fn new(
         region_max_size: u64,
         split_size: u64,
+        split_limit: u64,
         ch: RetryableSendCh<Msg, C>,
     ) -> SizeCheckObserver<C> {
         SizeCheckObserver {
             region_max_size,
             split_size,
+            split_limit,
             ch,
         }
     }
@@ -95,6 +106,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 host.add_checker(Box::new(Checker::new(
                     self.region_max_size,
                     self.split_size,
+                    self.split_limit,
                 )));
                 return;
             }
@@ -123,6 +135,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
             host.add_checker(Box::new(Checker::new(
                 self.region_max_size,
                 self.split_size,
+                self.split_limit,
             )));
         } else {
             // Does not need to check size.

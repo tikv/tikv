@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -20,19 +22,23 @@ use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, S
 use super::Host;
 
 pub struct Checker {
-    max_keys: u64,
-    split_keys: u64,
-    current_keys: u64,
-    split_key: Option<Vec<u8>>,
+    max_count: u64,
+    split_count: u64,
+    current_count: u64,
+    total_count: u64,
+    split_keys: Vec<Vec<u8>>,
+    batch_split_limit: u64,
 }
 
 impl Checker {
-    pub fn new(max_keys: u64, split_keys: u64) -> Checker {
+    pub fn new(max_count: u64, split_count: u64, batch_split_limit: u64) -> Checker {
         Checker {
-            max_keys,
-            split_keys,
-            current_keys: 0,
-            split_key: None,
+            max_count,
+            split_count,
+            current_count: 0,
+            total_count: 0,
+            split_keys: Vec::with_capacity(1),
+            batch_split_limit,
         }
     }
 }
@@ -40,17 +46,20 @@ impl Checker {
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext, key: &KeyEntry) -> bool {
         if key.is_commit_version() {
-            self.current_keys += 1;
+            self.current_count += 1;
+            self.total_count += 1;
         }
-        if self.current_keys > self.split_keys && self.split_key.is_none() {
-            self.split_key = Some(keys::origin_key(key.key()).to_vec());
+        if self.current_count > self.split_count {
+            self.split_keys.push(keys::origin_key(key.key()).to_vec());
+            self.current_count = 0;
         }
-        self.current_keys > self.max_keys
+
+        self.split_keys.len() as u64 >= self.batch_split_limit
     }
 
     fn split_keys(&mut self) -> Vec<Vec<u8>> {
-        if self.current_keys > self.max_keys {
-            self.split_key.take().map_or_else(Vec::new, |k| vec![k])
+        if self.total_count > self.max_count {
+            mem::replace(&mut self.split_keys, vec![])
         } else {
             vec![]
         }
@@ -60,6 +69,7 @@ impl SplitChecker for Checker {
 pub struct KeysCheckObserver<C> {
     region_max_keys: u64,
     split_keys: u64,
+    batch_split_limit: u64,
     ch: RetryableSendCh<Msg, C>,
 }
 
@@ -67,11 +77,13 @@ impl<C: Sender<Msg>> KeysCheckObserver<C> {
     pub fn new(
         region_max_keys: u64,
         split_keys: u64,
+        batch_split_limit: u64,
         ch: RetryableSendCh<Msg, C>,
     ) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             region_max_keys,
             split_keys,
+            batch_split_limit,
             ch,
         }
     }
@@ -94,6 +106,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 host.add_checker(Box::new(Checker::new(
                     self.region_max_keys,
                     self.split_keys,
+                    self.batch_split_limit,
                 )));
                 return;
             }
@@ -122,6 +135,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             host.add_checker(Box::new(Checker::new(
                 self.region_max_keys,
                 self.split_keys,
+                self.batch_split_limit,
             )));
         } else {
             // Does not need to check keys.

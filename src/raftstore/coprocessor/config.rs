@@ -22,14 +22,19 @@ pub struct Config {
     /// that region crosses tables.
     pub split_region_on_table: bool,
 
-    /// When region [a, b) size meets region_max_size, it will be split
-    /// into two region into [a, c), [c, b). And the size of [a, c) will
-    /// be region_split_size (or a little bit smaller).
+    /// For once split check, there are several split_key produced for batch.
+    /// batch_split_limit limits the number of produced split-key for one batch.
+    pub batch_split_limit: u64,
+
+    /// When region [a,b) size meets region_max_size, it will be split into
+    /// several regions [a,c), [c,d), [d,e), [e,b). And the size of [a,c),
+    /// [c,d), [d,e) will be region_split_size (maybe a little larger).
     pub region_max_size: ReadableSize,
     pub region_split_size: ReadableSize,
-    /// When the number of keys in region [a,d) meets the region_max_keys,
-    /// it will be split into two regions [a,c),[c,d). And the keys of [a,c)
-    /// will be region_split_keys.
+    
+    /// When the number of keys in region [a,b) meets the region_max_keys,
+    /// it will be split into two several regions [a,c), [c,d), [d,e), [e,b).
+    /// And the number of keys in [a,c), [c,d), [d,e) will be region_split_keys.
     pub region_max_keys: u64,
     pub region_split_keys: u64,
 }
@@ -38,12 +43,15 @@ pub struct Config {
 pub const SPLIT_SIZE_MB: u64 = 96;
 /// Default region split keys.
 pub const SPLIT_KEYS: u64 = 960000;
+/// Default batch split limit.
+pub const BATCH_SPLIT_LIMIT: u64 = 100;
 
 impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
         Config {
             split_region_on_table: true,
+            batch_split_limit: BATCH_SPLIT_LIMIT,
             region_split_size: split_size,
             region_max_size: split_size / 2 * 3,
             region_split_keys: SPLIT_KEYS,
