@@ -197,7 +197,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
-            | ScalarFuncSig::BitNegSig => (1, 1),
+            | ScalarFuncSig::BitNegSig
+            | ScalarFuncSig::IsIPv4 => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -336,7 +337,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::IsIPv6
@@ -776,6 +776,7 @@ dispatch_call! {
         Length => length,
         BitLength => bit_length,
         ASCII => ascii,
+        IsIPv4 => is_ipv4,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1100,6 +1101,7 @@ mod test {
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
+                    ScalarFuncSig::IsIPv4,
                 ],
                 1,
                 1,
@@ -1282,7 +1284,6 @@ mod test {
             ScalarFuncSig::Instr,
             ScalarFuncSig::InstrBinary,
             ScalarFuncSig::IntAnyValue,
-            ScalarFuncSig::IsIPv4,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
             ScalarFuncSig::IsIPv6,
