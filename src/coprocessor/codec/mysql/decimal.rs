@@ -691,7 +691,8 @@ fn do_div_mod(
         }
         idx_to = 0;
 
-        int_cnt_to = i32::from(l_prec) - i32::from(l_frac_cnt) - l_idx as i32 * i32::from(DIGITS_PER_WORD);
+        int_cnt_to =
+            i32::from(l_prec) - i32::from(l_frac_cnt) - l_idx as i32 * i32::from(DIGITS_PER_WORD);
 
         let mut int_word_to = if int_cnt_to < 0 {
             (int_cnt_to / i32::from(DIGITS_PER_WORD)) as i8
