@@ -22,12 +22,12 @@ use grpc::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
+use test_util;
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
-use util;
 
 fn new_config(eps: Vec<(String, u16)>) -> Config {
     let mut cfg = Config::default();
@@ -248,7 +248,7 @@ fn test_restart_leader_insecure() {
 
 #[test]
 fn test_restart_leader_secure() {
-    let security_cfg = util::new_security_cfg();
+    let security_cfg = test_util::new_security_cfg();
     let mgr = SecurityManager::new(&security_cfg).unwrap();
     restart_leader(mgr)
 }

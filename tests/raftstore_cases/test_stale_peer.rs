@@ -12,20 +12,17 @@
 // limitations under the License.
 
 //! A module contains test cases of stale peers gc.
+
 use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
+
+use test_raftstore::*;
 use tikv::raftstore::store::{keys, Peekable};
 use tikv::storage::CF_RAFT;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.

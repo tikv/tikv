@@ -23,16 +23,18 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
-use super::util::*;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
+
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::timer::GLOBAL_TIMER_HANDLE;
 use tikv::util::{escape, Either, HandyRwLock};
+
+use super::*;
 
 struct Store {
     store: metapb::Store,
