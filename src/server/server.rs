@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::{cmp, i32};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
@@ -62,7 +62,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
     pub fn new(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        region_split_size: usize,
         storage: Storage<E>,
         // TODO: Remove once endpoint itself is passed to here.
         cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
@@ -301,7 +300,6 @@ mod tests {
         let mut server = Server::new(
             &cfg,
             &security_mgr,
-            1024,
             storage,
             cop_read_pool,
             router,
