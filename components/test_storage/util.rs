@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::Context;
-use raftstore::cluster::Cluster;
-use raftstore::server::new_server_cluster;
-use raftstore::server::{ServerCluster, SimulateEngine};
+
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateEngine};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;
 use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
+
+use super::*;
 
 pub fn new_raft_engine(
     count: usize,

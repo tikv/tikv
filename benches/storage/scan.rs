@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,24 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test::BenchSamples;
+use test::Bencher;
 
-#[allow(dead_code)]
-#[path = "../../tests/storage/sync_storage.rs"]
-mod sync_storage;
-
-use self::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::Context;
+
+use test_storage::SyncStorage;
 use test_util::*;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Key, Mutation};
 use tikv::util::worker::FutureWorker;
 
-use super::print_result;
-
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
-fn bench_tombstone_scan() -> BenchSamples {
+#[bench]
+fn bench_tombstone_scan(b: &mut Bencher) {
     let pd_worker = FutureWorker::new("test-pd-worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
@@ -77,7 +73,7 @@ fn bench_tombstone_scan() -> BenchSamples {
     }
 
     kvs = KvGenerator::new(100, 1000);
-    bench!("bench_tombstone_scan", || {
+    b.iter(|| {
         let (k, _) = kvs.next().unwrap();
         assert!(
             store
@@ -92,9 +88,4 @@ fn bench_tombstone_scan() -> BenchSamples {
                 .is_empty()
         )
     })
-}
-
-pub fn bench_engine() {
-    printf!("benching tombstone scan with rocksdb\t...\t");
-    print_result(bench_tombstone_scan());
 }

@@ -18,9 +18,7 @@ use std::time::Duration;
 use fail;
 use kvproto::metapb::{Peer, Region};
 
-use raftstore::cluster::Cluster;
-use raftstore::node::{new_node_cluster, NodeCluster};
-use raftstore::util::*;
+use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::Callback;
 
