@@ -22,21 +22,19 @@ use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, S
 use super::Host;
 
 pub struct Checker {
-    max_count: u64,
-    split_count: u64,
+    max_keys_count: u64,
+    split_keys_count: u64,
     current_count: u64,
-    total_count: u64,
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
 }
 
 impl Checker {
-    pub fn new(max_count: u64, split_count: u64, batch_split_limit: u64) -> Checker {
+    pub fn new(max_keys_count: u64, split_keys_count: u64, batch_split_limit: u64) -> Checker {
         Checker {
-            max_count,
-            split_count,
+            max_keys_count,
+            split_keys_count,
             current_count: 0,
-            total_count: 0,
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
         }
@@ -47,9 +45,8 @@ impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext, key: &KeyEntry) -> bool {
         if key.is_commit_version() {
             self.current_count += 1;
-            self.total_count += 1;
         }
-        if self.current_count > self.split_count {
+        if self.current_count > self.split_keys_count {
             self.split_keys.push(keys::origin_key(key.key()).to_vec());
             self.current_count = 0;
         }
@@ -58,7 +55,12 @@ impl SplitChecker for Checker {
     }
 
     fn split_keys(&mut self) -> Vec<Vec<u8>> {
-        if self.total_count > self.max_count {
+        // make sure not to split when less than max_keys_count for last part
+        if self.current_count + self.split_keys_count < self.max_keys_count 
+        && (self.split_keys.len() as u64) < self.batch_split_limit {
+            self.split_keys.pop();
+        }
+        if !self.split_keys.is_empty() {
             mem::replace(&mut self.split_keys, vec![])
         } else {
             vec![]

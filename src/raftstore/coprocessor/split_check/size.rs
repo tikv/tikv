@@ -25,7 +25,6 @@ pub struct Checker {
     max_size: u64,
     split_size: u64,
     current_size: u64,
-    total_size: u64,
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
 }
@@ -36,7 +35,6 @@ impl Checker {
             max_size,
             split_size,
             current_size: 0,
-            total_size: 0,
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
         }
@@ -45,7 +43,6 @@ impl Checker {
 
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
-        self.total_size += entry.entry_size() as u64;
         self.current_size += entry.entry_size() as u64;
         if self.current_size > self.split_size {
             self.split_keys.push(keys::origin_key(entry.key()).to_vec());
@@ -58,7 +55,12 @@ impl SplitChecker for Checker {
     }
 
     fn split_keys(&mut self) -> Vec<Vec<u8>> {
-        if self.total_size >= self.max_size {
+        // make sure not to split when less than max_size for last part
+        if self.current_size + self.split_size < self.max_size
+        && (self.split_keys.len() as u64) < self.batch_split_limit {
+            self.split_keys.pop();
+        }
+        if !self.split_keys.is_empty() {
             mem::replace(&mut self.split_keys, vec![])
         } else {
             vec![]
