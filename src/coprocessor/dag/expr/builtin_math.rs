@@ -294,7 +294,7 @@ mod test {
                 Datum::F64(3.45), 
                 Datum::F64(3f64)
             ),
-			(
+            (
                 ScalarFuncSig::RouldReal,
                 Datum::F64(-3.45),
                 Datum::F64(-3f64),
