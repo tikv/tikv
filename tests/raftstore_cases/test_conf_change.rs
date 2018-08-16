@@ -11,32 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+use futures::Future;
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
+
+use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::storage::CF_RAFT;
 use tikv::util::config::ReadableDuration;
 use tikv::util::HandyRwLock;
-
-use futures::Future;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::pd::TestPdClient;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
