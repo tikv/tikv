@@ -30,6 +30,7 @@ pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
 pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_DATA_TOO_LONG: i32 = 1406;
+pub const ERR_WRONG_VALUE_FOR_TYPE: i32 = 1411;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 
 quick_error! {
@@ -107,6 +108,14 @@ impl Error {
         } else {
             Error::Eval(msg, ERR_DATA_TOO_LONG)
         }
+    }
+
+    pub fn wrong_value_for_type(data_type: &str, data: &str, fn_name: &str) -> Error {
+        let msg = format!(
+            "Incorrect {} value: '{}' for function {}",
+            data_type, data, fn_name
+        );
+        Error::Eval(msg, ERR_WRONG_VALUE_FOR_TYPE)
     }
 
     pub fn code(&self) -> i32 {
