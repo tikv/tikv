@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::test_select::*;
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::{Message, RepeatedField};
@@ -19,6 +18,8 @@ use tipb::analyze::{
     AnalyzeColumnsReq, AnalyzeColumnsResp, AnalyzeIndexReq, AnalyzeIndexResp, AnalyzeReq,
     AnalyzeType,
 };
+
+use super::test_select::*;
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 

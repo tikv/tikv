@@ -47,7 +47,7 @@ quick_error! {
         }
         FileSystem(msg: String) {
             description(msg)
-            display("{}", msg)
+            display("config fs: {}", msg)
         }
     }
 }
@@ -715,6 +715,8 @@ mod check_data_dir {
             static ref GETMNTENT_LOCK: Mutex<()> = Mutex::new(());
         }
 
+        let op = "data-dir.fsinfo.get";
+
         unsafe {
             let _lock = GETMNTENT_LOCK.lock().unwrap();
 
@@ -740,8 +742,8 @@ mod check_data_dir {
             libc::endmntent(afile);
             if fs.mnt_dir.is_empty() {
                 return Err(ConfigError::FileSystem(format!(
-                    "path: {:?} not find in mountable",
-                    path
+                    "{}: path: {:?} not find in mountable",
+                    op, path
                 )));
             }
             Ok(fs)
@@ -749,6 +751,7 @@ mod check_data_dir {
     }
 
     fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
+        let op = "data-dir.rotation.get";
         // get device path
         let device = match fs::canonicalize(fsname) {
             Ok(path) => format!("{}", path.display()),
@@ -759,7 +762,10 @@ mod check_data_dir {
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
             let dir = fs::read_dir(&block_dir).map_err(|e| {
-                ConfigError::FileSystem(format!("read block dir {:?} failed: {:?}", block_dir, e))
+                ConfigError::FileSystem(format!(
+                    "{}: read block dir {:?} failed: {:?}",
+                    op, block_dir, e
+                ))
             })?;
             let mut find = false;
             for entry in dir {
@@ -777,8 +783,8 @@ mod check_data_dir {
             }
             if !find {
                 return Err(ConfigError::FileSystem(format!(
-                    "fs: {:?} no device find in block",
-                    fsname
+                    "{}: {:?} no device find in block",
+                    op, fsname
                 )));
             }
         }
@@ -786,8 +792,8 @@ mod check_data_dir {
         let rota_path = format!("{}/queue/rotational", device_dir);
         if !Path::new(&rota_path).exists() {
             return Err(ConfigError::FileSystem(format!(
-                "block {:?} has no rotational file",
-                device_dir
+                "{}: block {:?} has no rotational file",
+                op, device_dir
             )));
         }
 
@@ -795,22 +801,20 @@ mod check_data_dir {
         File::open(&rota_path)
             .and_then(|mut f| f.read_to_string(&mut buffer))
             .map_err(|e| {
-                ConfigError::FileSystem(format!(
-                    "get_rotational_info from {:?} failed: {:?}",
-                    rota_path, e
-                ))
+                ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
             })?;
         Ok(buffer.trim_matches('\n').to_owned())
     }
 
     // check device && fs
     pub fn check_data_dir(data_path: &str, mnt_file: &str) -> Result<(), ConfigError> {
+        let op = "data-dir.check";
         let real_path = match canonicalize_path(data_path) {
             Ok(path) => path,
             Err(e) => {
                 return Err(ConfigError::FileSystem(format!(
-                    "path: {:?} canonicalize failed: {:?}",
-                    data_path, e
+                    "{}: path: {:?} canonicalize failed: {:?}",
+                    op, data_path, e
                 )))
             }
         };

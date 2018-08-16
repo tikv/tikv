@@ -24,6 +24,8 @@ use super::util::*;
 use raft::eraftpb::MessageType;
 use tikv::util::HandyRwLock;
 
+use test_raftstore::*;
+
 enum FailureType<'a> {
     Partition(&'a [u64], &'a [u64]),
     Reboot(&'a [u64]),
