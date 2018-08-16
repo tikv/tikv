@@ -183,6 +183,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CeilDecToDec
             | ScalarFuncSig::CeilDecToInt
             | ScalarFuncSig::FloorReal
+			| ScalarFuncSig::RouldReal
             | ScalarFuncSig::FloorIntToInt
             | ScalarFuncSig::FloorIntToDec
             | ScalarFuncSig::FloorDecToDec
@@ -397,7 +398,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RightShift
-            | ScalarFuncSig::RouldReal
             | ScalarFuncSig::RoundDec
             | ScalarFuncSig::RoundInt
             | ScalarFuncSig::RoundWithFracDec
@@ -796,6 +796,7 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
+		RouldReal => round_real,
         PI => pi,
 
         IfNullReal => if_null_real,
@@ -1085,6 +1086,7 @@ mod test {
                     ScalarFuncSig::CeilDecToDec,
                     ScalarFuncSig::CeilDecToInt,
                     ScalarFuncSig::FloorReal,
+					ScalarFuncSig::RouldReal,
                     ScalarFuncSig::FloorIntToInt,
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
@@ -1343,7 +1345,6 @@ mod test {
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RightShift,
-            ScalarFuncSig::RouldReal,
             ScalarFuncSig::RoundDec,
             ScalarFuncSig::RoundInt,
             ScalarFuncSig::RoundWithFracDec,
