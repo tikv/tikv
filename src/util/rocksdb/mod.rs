@@ -103,7 +103,7 @@ pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Res
 // Turn "dynamic level size" off for existing column family which was off before.
 // column families are small, HashMap isn't necessary
 fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: &mut CFOptions) {
-    if let Some(ref cf_desc) = cf_descs
+    if let Some(cf_desc) = cf_descs
         .iter()
         .find(|cf_desc| cf_desc.name() == cf_options.cf)
     {
