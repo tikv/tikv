@@ -98,13 +98,13 @@ impl<S: Snapshot> BackwardScannerBuilder<S> {
     /// Build `BackwardScanner` from the current configuration.
     pub fn build(self) -> Result<BackwardScanner<S>> {
         let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
 
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
@@ -216,14 +216,35 @@ impl<S: Snapshot> BackwardScanner<S> {
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
-            let result = self.reverse_get(&current_user_key, has_write, has_lock);
+            let mut result = Ok(None);
+            let mut get_ts = self.ts;
+            let mut met_prev_user_key = false;
 
-            if has_write {
-                // Skip rest later versions and point to previous user key.
-                self.move_write_cursor_to_prev_user_key(&current_user_key)?;
-            }
             if has_lock {
+                match self.isolation_level {
+                    IsolationLevel::SI => {
+                        assert!(self.lock_cursor.valid());
+                        let lock = {
+                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                            Lock::parse(lock_value)?
+                        };
+                        match super::util::check_lock(&current_user_key, self.ts, &lock) {
+                            Ok(ts) => get_ts = ts,
+                            Err(e) => result = Err(e),
+                        }
+                    }
+                    IsolationLevel::RC => {}
+                }
                 self.lock_cursor.prev(&mut self.statistics.lock);
+            }
+            if has_write {
+                if result.is_ok() {
+                    result = self.reverse_get(&current_user_key, get_ts, &mut met_prev_user_key);
+                }
+                if !met_prev_user_key {
+                    // Skip rest later versions and point to previous user key.
+                    self.move_write_cursor_to_prev_user_key(&current_user_key)?;
+                }
             }
 
             if let Some(v) = result? {
@@ -239,26 +260,9 @@ impl<S: Snapshot> BackwardScanner<S> {
     fn reverse_get(
         &mut self,
         user_key: &Key,
-        has_write: bool,
-        has_lock: bool,
+        ts: u64,
+        met_prev_user_key: &mut bool,
     ) -> Result<Option<Value>> {
-        let mut ts = self.ts;
-
-        if has_lock {
-            match self.isolation_level {
-                IsolationLevel::SI => {
-                    assert!(self.lock_cursor.valid());
-                    let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                    let lock = Lock::parse(lock_value)?;
-                    ts = super::util::check_lock(user_key, ts, &lock)?
-                }
-                IsolationLevel::RC => {}
-            }
-        }
-
-        if !has_write {
-            return Ok(None);
-        }
         assert!(self.write_cursor.valid());
 
         // At first, we try to use several `prev()` to get the desired version.
@@ -285,12 +289,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 last_checked_commit_ts = Key::decode_ts_from(current_key)?;
 
-                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice())
-                    || last_checked_commit_ts > ts
-                {
-                    // Meet another key or meet an unwanted version. We use `last_version` as the return.
-                    // TODO: If we meet another user key here, we don't need to compare the key
-                    // again when trying to move to prev user key in `read_next`.
+                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
+                    // Meet another key, use `last_version` as the return.
+                    *met_prev_user_key = true;
+                    is_done = true;
+                } else if last_checked_commit_ts > ts {
+                    // Meet an unwanted version, use `last_version` as the return as well.
                     is_done = true;
                 }
             }
@@ -438,7 +442,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         // We have not found another user key for now, so we directly `seek_for_prev()`.
         // After that, we must pointing to another key, or out of bound.
         self.write_cursor
-            .seek_for_prev(current_user_key, &mut self.statistics.write)?;
+            .internal_seek_for_prev(current_user_key, &mut self.statistics.write)?;
 
         Ok(())
     }
@@ -449,7 +453,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .bound(self.lower_bound.take(), self.upper_bound.take())
+            .range(self.lower_bound.take(), self.upper_bound.take())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
