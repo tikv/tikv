@@ -79,7 +79,7 @@ impl ScalarFunc {
         self.children[0].eval_int(ctx, row)
     }
 	
-	#[inline]
+    #[inline]
     pub fn round_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.round()))
@@ -287,10 +287,9 @@ mod test {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
-            let mut op =
-                Expression::build(&mut ctx, scalar_func_expr(sig, &[arg.clone()])).unwrap();
-                if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
-					op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            let mut op = Expression::build(&mut ctx, scalar_func_expr(sig, &[arg.clone()])).unwrap();
+            if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
+                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
             
             let got = op.eval(&mut ctx, &[]).unwrap();
