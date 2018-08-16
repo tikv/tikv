@@ -147,7 +147,7 @@ Our CI systems automatically test all the pull requests, so making sure the full
 
 ### Getting the rest of the system working
 
-To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
+To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd)) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
 
 ### Configuration
 
