@@ -189,6 +189,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::RoundDec
             | ScalarFuncSig::CRC32
+            | ScalarFuncSig::Tan
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
@@ -197,7 +198,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
-            | ScalarFuncSig::BitNegSig => (1, 1),
+            | ScalarFuncSig::BitNegSig
+            | ScalarFuncSig::IsIPv4 => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -336,7 +338,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::IsIPv6
@@ -450,7 +451,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubTimeStringNull
             | ScalarFuncSig::SysDateWithFsp
             | ScalarFuncSig::SysDateWithoutFsp
-            | ScalarFuncSig::Tan
             | ScalarFuncSig::TiDBVersion
             | ScalarFuncSig::Time
             | ScalarFuncSig::TimeAnyValue
@@ -776,6 +776,7 @@ dispatch_call! {
         Length => length,
         BitLength => bit_length,
         ASCII => ascii,
+        IsIPv4 => is_ipv4,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -803,6 +804,8 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+
+        Tan => tan,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -1090,6 +1093,7 @@ mod test {
                     ScalarFuncSig::FloorDecToInt,
                     ScalarFuncSig::RoundDec,
                     ScalarFuncSig::CRC32,
+                    ScalarFuncSig::Tan,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
@@ -1099,6 +1103,7 @@ mod test {
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
+                    ScalarFuncSig::IsIPv4,
                 ],
                 1,
                 1,
@@ -1281,7 +1286,6 @@ mod test {
             ScalarFuncSig::Instr,
             ScalarFuncSig::InstrBinary,
             ScalarFuncSig::IntAnyValue,
-            ScalarFuncSig::IsIPv4,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
             ScalarFuncSig::IsIPv6,
@@ -1395,7 +1399,6 @@ mod test {
             ScalarFuncSig::SubTimeStringNull,
             ScalarFuncSig::SysDateWithFsp,
             ScalarFuncSig::SysDateWithoutFsp,
-            ScalarFuncSig::Tan,
             ScalarFuncSig::TiDBVersion,
             ScalarFuncSig::Time,
             ScalarFuncSig::TimeAnyValue,

@@ -11,20 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fs;
+use std::io;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc};
+use std::thread;
 use std::time::*;
-use std::*;
 
 use fail;
 use raft::eraftpb::MessageType;
-use tikv::util::config::*;
 
-use raftstore::cluster::Simulator;
-use raftstore::node::new_node_cluster;
-use raftstore::server::new_server_cluster;
-use raftstore::transport_simulate::*;
-use raftstore::util::*;
+use test_raftstore::*;
+use tikv::util::config::*;
 
 #[test]
 fn test_overlap_cleanup() {

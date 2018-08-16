@@ -798,6 +798,12 @@ mod test {
             ),
             (
                 ScalarFuncSig::ModDecimal,
+                str2dec("0.0000000001"),
+                str2dec("1.0"),
+                str2dec("0.0000000001"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
                 str2dec("1"),
                 str2dec("1.1"),
                 str2dec("1"),
