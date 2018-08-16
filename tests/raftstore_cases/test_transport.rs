@@ -11,11 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::util::{must_get_equal, new_peer};
-use util;
+use test_raftstore::*;
+use test_util;
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -66,7 +63,7 @@ fn test_server_partition_write() {
 #[test]
 fn test_secure_connect() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.security = util::new_security_cfg();
+    cluster.cfg.security = test_util::new_security_cfg();
     cluster.run_conf_change();
 
     let (key, value) = (b"k1", b"v1");
