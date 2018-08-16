@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use coprocessor::codec::Datum;
 use crc::{crc32, Hasher32};
 use std::borrow::Cow;
@@ -106,6 +106,20 @@ impl ScalarFunc {
     #[inline]
     pub fn floor_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
+    }
+
+    #[inline]
+    pub fn round_dec<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let result: Result<Decimal> = d
+            .into_owned()
+            .round(DEFAULT_FSP, RoundMode::HalfEven)
+            .into();
+        result.map(|t| Some(Cow::Owned(t)))
     }
 
     #[inline]
@@ -314,6 +328,35 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round() {
+        let tests = vec![
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("123.456"),
+                str2dec("123.000"),
+            ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("123.656"),
+                str2dec("124.000"),
+            ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("-123.456"),
+                str2dec("-123.000"),
+            ),
+        ];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let expr = scalar_func_expr(sig, &[arg.clone()]);
+            let op = Expression::build(&mut ctx, expr).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
