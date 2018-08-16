@@ -79,6 +79,8 @@ impl<S: Snapshot> Scanner<S> {
     }
 
     pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
+        // TODO: Recreating range scanner is a time consuming operation. We need to provide
+        // operation to reset range for scanners.
         self.range = range;
         self.no_more = false;
         self.last_scanned_key.clear();
@@ -124,12 +126,14 @@ impl<S: Snapshot> Scanner<S> {
     pub fn start_scan(&self, range: &mut KeyRange) {
         assert!(!self.no_more);
         if self.last_scanned_key.is_empty() {
+            // Happens when new() -> start_scan().
             match self.scan_mode {
                 ScanMode::Forward => range.set_start(self.range.get_start().to_owned()),
                 ScanMode::Backward => range.set_end(self.range.get_end().to_owned()),
                 _ => unreachable!(),
             }
         } else {
+            // Happens when new() -> start_scan() -> next_row() ... -> stop_scan() -> start_scan().
             match self.scan_mode {
                 ScanMode::Forward => {
                     // In `stop_scan`, we will `next(last_scanned_key)`, so we don't need to next()
@@ -150,32 +154,24 @@ impl<S: Snapshot> Scanner<S> {
         if self.no_more {
             return false;
         }
-        if self.last_scanned_key.is_empty() {
-            // No more future requests will be send, so this is acceptable.
-            match self.scan_mode {
-                ScanMode::Forward => range.set_end(self.range.get_start().to_owned()),
-                ScanMode::Backward => range.set_start(self.range.get_end().to_owned()),
-                _ => unreachable!(),
+        // `next_row()` should have been called when calling `stop_scan()` after `start_scan()`.
+        assert!(!self.last_scanned_key.is_empty());
+        match self.scan_mode {
+            ScanMode::Forward => {
+                // Make range_end exclusive. Note that next `start_scan` will also use this
+                // key as the range_start.
+                util::convert_to_prefix_next(&mut self.last_scanned_key);
+                range.set_end(self.last_scanned_key.clone());
             }
-        } else {
-            match self.scan_mode {
-                ScanMode::Forward => {
-                    // Make range_end exclusive. Note that next `start_scan` will also use this
-                    // key as the range_start.
-                    util::convert_to_prefix_next(&mut self.last_scanned_key);
-                    range.set_end(self.last_scanned_key.clone());
+            ScanMode::Backward => {
+                // TODO: We may don't need `truncate_as_row_key`. Needs investigation.
+                if self.scan_on == ScanOn::Table {
+                    let row_key_len = truncate_as_row_key(&self.last_scanned_key).unwrap().len();
+                    self.last_scanned_key.truncate(row_key_len);
                 }
-                ScanMode::Backward => {
-                    // TODO: We may don't need `truncate_as_row_key`. Needs investigation.
-                    if self.scan_on == ScanOn::Table {
-                        let row_key_len =
-                            truncate_as_row_key(&self.last_scanned_key).unwrap().len();
-                        self.last_scanned_key.truncate(row_key_len);
-                    }
-                    range.set_start(self.last_scanned_key.clone());
-                }
-                _ => unreachable!(),
+                range.set_start(self.last_scanned_key.clone());
             }
+            _ => unreachable!(),
         }
         true
     }
