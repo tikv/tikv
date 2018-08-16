@@ -27,8 +27,9 @@ use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
 
 use super::metrics::*;
-use pd::{PdClient, RegionStat};
+use pd::{Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
+use raftstore::store::cmd_resp::new_error;
 use raftstore::store::store::StoreInfo;
 use raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
@@ -37,13 +38,22 @@ use raftstore::store::Callback;
 use raftstore::store::Msg;
 use storage::FlowStatistics;
 use util::collections::HashMap;
+use util::escape;
 use util::rocksdb::*;
 use util::time::time_now_sec;
 use util::transport::SendCh;
-use util::worker::FutureRunnable as Runnable;
+use util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
+    AskSplit {
+        region: metapb::Region,
+        split_key: Vec<u8>,
+        peer: metapb::Peer,
+        // If true, right region derive origin region_id.
+        right_derive: bool,
+        callback: Callback,
+    },
     AskBatchSplit {
         region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
@@ -126,6 +136,16 @@ pub struct PeerStat {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
+            Task::AskSplit {
+                ref region,
+                ref split_key,
+                ..
+            } => write!(
+                f,
+                "ask split region {} with key {}",
+                region.get_id(),
+                escape(split_key)
+            ),
             Task::AskBatchSplit {
                 ref region,
                 ref split_keys,
@@ -175,10 +195,21 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
+
+    // use for Runner inner handle function to send Task to itself
+    // actually it is the sender connected to Runner's Worker which
+    // calls Runner's run() on Task recevied.
+    scheduler: Scheduler<Task>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
+    pub fn new(
+        store_id: u64,
+        pd_client: Arc<T>,
+        ch: SendCh<Msg>,
+        db: Arc<DB>,
+        scheduler: Scheduler<Task>,
+    ) -> Runner<T> {
         Runner {
             store_id,
             pd_client,
@@ -187,6 +218,7 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
+            scheduler,
         }
     }
 
@@ -239,6 +271,7 @@ impl<T: PdClient> Runner<T> {
         callback: Callback,
     ) {
         let ch = self.ch.clone();
+        let scheduler = self.scheduler.clone();
         let f = self
             .pd_client
             .ask_batch_split(region.clone(), split_keys.len())
@@ -264,9 +297,33 @@ impl<T: PdClient> Runner<T> {
                     // When rolling update, there might be some old version tikvs that doesn't support batch split in cluster.
                     // In this situation, pd version check would refuse ask_batch_split.
                     // But if update time is long, it may cause large regions, so call ask_split instead.
-                    Err(Error::Incompatible) => self.handle_ask_split(handle, region, split_keys[0], peer, right_derive, callback),
+                    Err(Error::Incompatible) => {
+                        let tag = format!("[region {}] {}", region.id, peer.id);
+                        let task = Task::AskSplit {
+                            region,
+                            split_key: split_keys[0].clone(),
+                            peer,
+                            right_derive,
+                            callback,
+                        };
+                        if let Err(Stopped(t)) = scheduler.schedule(task) {
+                            error!("{} failed to notify pd to split: Stopped", tag);
+                            match t {
+                                Task::AskSplit { callback, .. } => {
+                                    callback.invoke_with_response(new_error(box_err!(
+                                        "failed to split: Stopped"
+                                    )));
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
                     Err(e) => {
-                        debug!("[region {}] failed to ask batch split: {:?}", region.get_id(), e);
+                        debug!(
+                            "[region {}] failed to ask batch split: {:?}",
+                            region.get_id(),
+                            e
+                        );
                     }
                 }
                 Ok(())
@@ -577,6 +634,13 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         }
 
         match task {
+            Task::AskSplit {
+                region,
+                split_key,
+                peer,
+                right_derive,
+                callback,
+            } => self.handle_ask_split(handle, region, split_key, peer, right_derive, callback),
             Task::AskBatchSplit {
                 region,
                 split_keys,

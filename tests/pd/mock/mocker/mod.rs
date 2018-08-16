@@ -83,6 +83,10 @@ pub trait PdMocker {
         None
     }
 
+    fn ask_split(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
+        None
+    }
+
     fn ask_batch_split(&self, _: &AskBatchSplitRequest) -> Option<Result<AskBatchSplitResponse>> {
         None
     }
