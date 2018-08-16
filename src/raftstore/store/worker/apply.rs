@@ -1847,7 +1847,6 @@ impl ApplyDelegate {
             });
 
         // Delete all remaining keys.
-        // If it's not CF_LOCK and use_delete_range is false, skip this step to speed up (#3034)
         util::delete_all_in_range_cf(
             &self.engines.kv,
             cf,
