@@ -181,7 +181,7 @@ mod test {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, ScanMode, Statistics, Value, ALL_CFS};
+    use storage::{Key, KvPair, Mutation, Options, ScanMode, Statistics, ALL_CFS};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -358,53 +358,6 @@ mod test {
             .collect();
         expect.reverse();
 
-        assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
-    }
-
-    #[test]
-    fn test_snapshot_store_seek() {
-        let key_num = 100;
-        let store = TestStore::new(key_num);
-        let snapshot_store = store.store();
-
-        let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
-        let start_key = Key::from_raw(key.as_bytes());
-        let mut scanner = snapshot_store
-            .scanner(
-                ScanMode::Forward,
-                false,
-                Some(start_key.take_encoded()),
-                None,
-            )
-            .unwrap();
-        let result = scanner.next().unwrap();
-        let expect_key = format!("{}{}", KEY_PREFIX, START_ID + 1);
-        let expect_value = expect_key.clone().into_bytes();
-        let expect = Some((Key::from_raw(expect_key.as_bytes()), expect_value as Value));
-        assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
-    }
-
-    #[test]
-    fn test_snapshot_store_reverse_seek() {
-        let key_num = 100;
-        let store = TestStore::new(key_num);
-        let snapshot_store = store.store();
-
-        let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
-        let start_key = Key::from_raw(key.as_bytes());
-        let mut scanner = snapshot_store
-            .scanner(
-                ScanMode::Backward,
-                false,
-                None,
-                Some(start_key.take_encoded()),
-            )
-            .unwrap();
-
-        let result = scanner.next().unwrap();
-        let expect_key = format!("{}{}", KEY_PREFIX, START_ID);
-        let expect_value = expect_key.clone().into_bytes();
-        let expect = Some((Key::from_raw(expect_key.as_bytes()), expect_value as Value));
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
     }
 
