@@ -197,7 +197,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
-            | ScalarFuncSig::BitNegSig => (1, 1),
+            | ScalarFuncSig::BitNegSig
+            | ScalarFuncSig::UnHex => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -475,7 +476,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
-            | ScalarFuncSig::UnHex
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -855,6 +855,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        UnHex => un_hex,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1421,7 +1422,6 @@ mod test {
             ScalarFuncSig::TruncateReal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
-            ScalarFuncSig::UnHex,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
