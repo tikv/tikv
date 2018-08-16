@@ -282,7 +282,7 @@ pub mod tests {
 
     #[test]
     fn test_checker_with_same_max_and_split_size() {
-        let mut checker = Checker::new(24, 24);
+        let mut checker = Checker::new(24, 24, 100);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
