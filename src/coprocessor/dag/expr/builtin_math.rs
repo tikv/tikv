@@ -120,6 +120,12 @@ impl ScalarFunc {
         digest.write(&d);
         Ok(Some(i64::from(digest.sum32())))
     }
+
+    #[inline]
+    pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(n.tan()))
+    }
 }
 
 #[cfg(test)]
@@ -341,6 +347,48 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::I64(exp);
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_tan() {
+        let tests = vec![
+            (ScalarFuncSig::Tan, Datum::F64(0.0_f64), 0.0_f64),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64(f64::consts::PI / 4.0_f64),
+                1.0_f64,
+            ),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64(-f64::consts::PI / 4.0_f64),
+                -1.0_f64,
+            ),
+            (ScalarFuncSig::Tan, Datum::F64(f64::consts::PI), 0.0_f64),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64((f64::consts::PI * 3.0) / 4.0),
+                f64::tan((f64::consts::PI * 3.0) / 4.0), //in mysql and rust, it equals -1.0000000000000002, not -1
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Tan, Datum::F64(f64::INFINITY)),
+            (ScalarFuncSig::Tan, Datum::F64(f64::NAN)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!(got.f64().is_nan());
         }
     }
 }
