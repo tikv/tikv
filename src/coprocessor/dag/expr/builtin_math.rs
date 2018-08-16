@@ -258,14 +258,14 @@ mod test {
         }
     }
 
-	#[test]
+    #[test]
     fn test_round() {
         let tests = vec![
             (
-			    ScalarFuncSig::RouldReal, 
-			    Datum::F64(3.45), 
-				Datum::F64(3f64)
-			),
+                ScalarFuncSig::RouldReal, 
+                Datum::F64(3.45), 
+                Datum::F64(3f64)
+            ),
 			(
                 ScalarFuncSig::RouldReal,
                 Datum::F64(-3.45),
