@@ -27,7 +27,7 @@ use super::coprocessor::Error as CopError;
 use super::store::SnapError;
 use util::{escape, transport};
 
-const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
+pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
 quick_error!{
     #[derive(Debug)]

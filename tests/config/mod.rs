@@ -153,6 +153,7 @@ fn test_serde_custom_tikv_config() {
         cleanup_import_sst_interval: ReadableDuration::minutes(12),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
+        local_read_batch_size: 33,
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
@@ -409,6 +410,8 @@ fn test_serde_custom_tikv_config() {
         split_region_on_table: true,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
+        region_max_keys: 100000,
+        region_split_keys: 100000,
     };
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),

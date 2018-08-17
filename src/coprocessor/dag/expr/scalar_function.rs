@@ -191,6 +191,9 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::ASCII
+            | ScalarFuncSig::Upper
+            | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
@@ -239,6 +242,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonInsertSig
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
 
+            ScalarFuncSig::PI => (0, 0),
+
             // unimplement signature
             ScalarFuncSig::Acos
             | ScalarFuncSig::AddDateAndDuration
@@ -261,7 +266,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
-            | ScalarFuncSig::ASCII
             | ScalarFuncSig::Asin
             | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Atan2Args
@@ -357,7 +361,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Log1Arg
             | ScalarFuncSig::Log2
             | ScalarFuncSig::Log2Args
-            | ScalarFuncSig::Lower
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::LTrim
@@ -378,7 +381,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
-            | ScalarFuncSig::PI
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::Radians
@@ -477,7 +479,6 @@ impl ScalarFunc {
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
-            | ScalarFuncSig::Upper
             | ScalarFuncSig::User
             | ScalarFuncSig::UTCDate
             | ScalarFuncSig::UTCTimestampWithArg
@@ -774,6 +775,7 @@ dispatch_call! {
 
         Length => length,
         BitLength => bit_length,
+        ASCII => ascii,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -794,6 +796,7 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
+        PI => pi,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -848,6 +851,8 @@ dispatch_call! {
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
+        Upper => upper,
+        Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
     }
@@ -1088,10 +1093,13 @@ mod test {
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
+                    ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::Lower,
+                    ScalarFuncSig::Upper,
                 ],
                 1,
                 1,
@@ -1162,6 +1170,7 @@ mod test {
                 3,
                 usize::MAX,
             ),
+            (vec![ScalarFuncSig::PI], 0, 0),
         ];
         for (sigs, min, max) in cases {
             for sig in sigs {
@@ -1203,7 +1212,6 @@ mod test {
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
-            ScalarFuncSig::ASCII,
             ScalarFuncSig::Asin,
             ScalarFuncSig::Atan1Arg,
             ScalarFuncSig::Atan2Args,
@@ -1299,7 +1307,6 @@ mod test {
             ScalarFuncSig::Log1Arg,
             ScalarFuncSig::Log2,
             ScalarFuncSig::Log2Args,
-            ScalarFuncSig::Lower,
             ScalarFuncSig::Lpad,
             ScalarFuncSig::LpadBinary,
             ScalarFuncSig::LTrim,
@@ -1320,7 +1327,6 @@ mod test {
             ScalarFuncSig::Password,
             ScalarFuncSig::PeriodAdd,
             ScalarFuncSig::PeriodDiff,
-            ScalarFuncSig::PI,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::Radians,
@@ -1419,7 +1425,6 @@ mod test {
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
-            ScalarFuncSig::Upper,
             ScalarFuncSig::User,
             ScalarFuncSig::UTCDate,
             ScalarFuncSig::UTCTimestampWithArg,
