@@ -202,7 +202,7 @@ fn test_retry_sync() {
 
 fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
     let eps_count = 1;
-    // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
+    // NotRetry mocker returns Ok() with error header first, and next returns Ok() without any error header.
     let not_retry = Arc::new(NotRetry::new());
     let server = MockServer::with_case(eps_count, not_retry);
     let eps = server.bind_addrs();
