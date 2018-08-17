@@ -29,10 +29,8 @@ use std::sync::Arc;
 use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
-use rocksdb::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
-    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
-};
+use rocksdb::{CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
+              DBCompressionType, DBOptions, Env, Range, SliceTransform, DB};
 use storage::{ALL_CFS, CF_DEFAULT};
 use sys_info;
 use util::file::{copy_and_sync, calc_crc32};
