@@ -126,6 +126,12 @@ impl ScalarFunc {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.cos()))
     }
+
+    #[inline]
+    pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(n.tan()))
+    }
 }
 
 #[cfg(test)]
@@ -133,7 +139,7 @@ mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
@@ -234,7 +240,7 @@ mod test {
         ];
 
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -302,7 +308,7 @@ mod test {
             ),
         ];
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -358,7 +364,7 @@ mod test {
             (ScalarFuncSig::Cos, Datum::F64(f64::consts::PI), -1f64),
             (ScalarFuncSig::Cos, Datum::F64(-f64::consts::PI), -1f64),
         ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let expr = scalar_func_expr(sig, &[arg.clone()]);
@@ -368,6 +374,48 @@ mod test {
                 Datum::F64(result) => assert!((result - exp).abs() < f64::EPSILON),
                 _ => panic!("F64 result was expected"),
             }
+        }
+    }
+
+    #[test]
+    fn test_tan() {
+        let tests = vec![
+            (ScalarFuncSig::Tan, Datum::F64(0.0_f64), 0.0_f64),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64(f64::consts::PI / 4.0_f64),
+                1.0_f64,
+            ),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64(-f64::consts::PI / 4.0_f64),
+                -1.0_f64,
+            ),
+            (ScalarFuncSig::Tan, Datum::F64(f64::consts::PI), 0.0_f64),
+            (
+                ScalarFuncSig::Tan,
+                Datum::F64((f64::consts::PI * 3.0) / 4.0),
+                f64::tan((f64::consts::PI * 3.0) / 4.0), //in mysql and rust, it equals -1.0000000000000002, not -1
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Tan, Datum::F64(f64::INFINITY)),
+            (ScalarFuncSig::Tan, Datum::F64(f64::NAN)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!(got.f64().is_nan());
         }
     }
 }
