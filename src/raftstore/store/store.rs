@@ -758,6 +758,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let message = msg.get_message();
         let msg_type = message.get_msg_type();
         if msg_type != MessageType::MsgRequestVote
+            && msg_type != MessageType::MsgRequestPreVote
             && (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX)
         {
             debug!(
