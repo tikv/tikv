@@ -712,7 +712,7 @@ mod test {
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time, Tz};
     use coprocessor::codec::{convert, Datum};
     use coprocessor::dag::expr::test::{col_expr as base_col_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{self, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {
         let mut expr = base_col_expr(col_id);
@@ -727,7 +727,7 @@ mod test {
 
     #[test]
     fn test_cast_as_int() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let time_int = 2012_12_12_12_00_23i64;
@@ -823,7 +823,7 @@ mod test {
 
     #[test]
     fn test_cast_as_real() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let int_t = 2012_12_12_12_00_23u64;
@@ -960,7 +960,7 @@ mod test {
 
     #[test]
     fn test_cast_as_decimal() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         let int_t = 20121212120023u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
@@ -1096,7 +1096,7 @@ mod test {
 
     #[test]
     fn test_cast_as_str() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t_str = "2012-12-12 12:00:23";
         let t = Time::parse_utc_datetime(t_str, 0).unwrap();
         let dur_str = b"12:00:23";
@@ -1259,7 +1259,7 @@ mod test {
 
     #[test]
     fn test_cast_as_time() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
         let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
@@ -1440,7 +1440,7 @@ mod test {
 
     #[test]
     fn test_cast_as_duration() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
 
@@ -1600,7 +1600,7 @@ mod test {
 
     #[test]
     fn test_cast_int_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 Some(types::UNSIGNED_FLAG),
@@ -1638,7 +1638,7 @@ mod test {
 
     #[test]
     fn test_cast_real_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (vec![Datum::F64(32.0001)], Some(Json::Double(32.0001))),
             (vec![Datum::Null], None),
@@ -1658,7 +1658,7 @@ mod test {
 
     #[test]
     fn test_cast_decimal_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
@@ -1682,7 +1682,7 @@ mod test {
 
     #[test]
     fn test_cast_str_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 false,
@@ -1717,8 +1717,7 @@ mod test {
 
     #[test]
     fn test_cast_time_as_json() {
-        let mut cfg = EvalConfig::default();
-        cfg.ignore_truncate = true;
+        let cfg = EvalConfig::default_for_test();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let time_str = "2012-12-12 11:11:11";
         let date_str = "2012-12-12";
@@ -1767,7 +1766,7 @@ mod test {
 
     #[test]
     fn test_cast_duration_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let dur_str = "11:12:08";
         let dur_str_expect = "11:12:08.000000";
 
@@ -1793,7 +1792,7 @@ mod test {
 
     #[test]
     fn test_cast_json_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 vec![Datum::Json(Json::Boolean(true))],
@@ -1838,9 +1837,8 @@ mod test {
             ex.mut_field_type().set_flag(flag as u32);
 
             // test with overflow as warning
-            let mut ctx = EvalContext::new(Arc::new(
-                EvalConfig::new(expr::FLAG_OVERFLOW_AS_WARNING).unwrap(),
-            ));
+            let mut ctx =
+                EvalContext::new(Arc::new(EvalConfig::new().set_overflow_as_warning(true)));
             let e = Expression::build(&mut ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
@@ -1907,8 +1905,9 @@ mod test {
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut ctx = EvalContext::new(Arc::new(
-                EvalConfig::new(expr::FLAG_OVERFLOW_AS_WARNING | expr::FLAG_IN_SELECT_STMT)
-                    .unwrap(),
+                EvalConfig::new()
+                    .set_overflow_as_warning(true)
+                    .set_in_select_stmt(true),
             ));
             let e = Expression::build(&mut ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
@@ -1937,7 +1936,7 @@ mod test {
 
     //     // test with overflow as warning
     //     let mut ctx = EvalContext::new(Arc::new(
-    //         EvalConfig::new(expr::FLAG_OVERFLOW_AS_WARNING).unwrap(),
+    //         EvalConfig::new().set_overflow_as_warning(true),
     //     ));
     //     let e = Expression::build(&mut ctx, ex.clone()).unwrap();
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
