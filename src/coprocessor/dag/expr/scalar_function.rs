@@ -105,6 +105,8 @@ impl ScalarFunc {
             | ScalarFuncSig::BitXorSig
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
+            | ScalarFuncSig::LeftShift
+            | ScalarFuncSig::RightShift
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -353,7 +355,6 @@ impl ScalarFunc {
             | ScalarFuncSig::LeastTime
             | ScalarFuncSig::Left
             | ScalarFuncSig::LeftBinary
-            | ScalarFuncSig::LeftShift
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::LocateBinary2Args
@@ -396,7 +397,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Replace
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
-            | ScalarFuncSig::RightShift
             | ScalarFuncSig::RouldReal
             | ScalarFuncSig::RoundDec
             | ScalarFuncSig::RoundInt
@@ -775,6 +775,8 @@ dispatch_call! {
 
         Length => length,
         BitLength => bit_length,
+        LeftShift => left_shift,
+        RightShift => right_shift,
         ASCII => ascii,
         IsIPv4 => is_ipv4,
     }
@@ -1006,6 +1008,8 @@ mod test {
                     ScalarFuncSig::BitOrSig,
                     ScalarFuncSig::BitXorSig,
                     ScalarFuncSig::DateFormatSig,
+                    ScalarFuncSig::LeftShift,
+                    ScalarFuncSig::RightShift,
                 ],
                 2,
                 2,
@@ -1302,7 +1306,6 @@ mod test {
             ScalarFuncSig::LeastTime,
             ScalarFuncSig::Left,
             ScalarFuncSig::LeftBinary,
-            ScalarFuncSig::LeftShift,
             ScalarFuncSig::Locate2Args,
             ScalarFuncSig::Locate3Args,
             ScalarFuncSig::LocateBinary2Args,
@@ -1345,7 +1348,6 @@ mod test {
             ScalarFuncSig::Replace,
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
-            ScalarFuncSig::RightShift,
             ScalarFuncSig::RouldReal,
             ScalarFuncSig::RoundDec,
             ScalarFuncSig::RoundInt,
