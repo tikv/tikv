@@ -577,8 +577,14 @@ impl Lease {
 
     pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
         if self.remote.is_some() {
-            // At most one connected RemoteLease.
-            return None;
+            let remote = self.remote.as_ref().unwrap();
+            if remote.term() == term {
+                // At most one connected RemoteLease in the same term.
+                return None;
+            } else {
+                // Term has changed, expire the old and create a new one.
+                remote.expire();
+            }
         }
         let expired_time = match self.bound {
             Some(Either::Right(ts)) => timespec_to_u64(ts),
