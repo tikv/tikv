@@ -17,10 +17,12 @@ use std::sync::Arc;
 
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
-use futures::{stream, Future, Sink, Stream};
+use futures::{Future, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
+use protobuf::RepeatedField;
 
 use super::metrics::*;
 use super::{Config, Error, Result};
@@ -34,8 +36,8 @@ const PRESERVED_MSG_BUFFER_COUNT: usize = 1024;
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 struct Conn {
-    stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
-    buffer: Option<Vec<(RaftMessage, WriteFlags)>>,
+    stream: UnboundedSender<BatchRaftMessage>,
+    buffer: Option<Vec<RaftMessage>>,
     store_id: u64,
     alive: Arc<AtomicBool>,
 
@@ -71,14 +73,17 @@ impl Conn {
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft().unwrap();
+        let (sink, _) = client.batch_raft().unwrap();
         let addr = addr.to_owned();
         client.spawn(
             rx_close
                 .map_err(|_| ())
                 .select(
                     sink.sink_map_err(Error::from)
-                        .send_all(rx.map(stream::iter_ok).flatten().map_err(|()| Error::Sink))
+                        .send_all(
+                            rx.map(|v| (v, WriteFlags::default().buffer_hint(false)))
+                                .map_err(|_| Error::Sink),
+                        )
                         .then(move |r| {
                             alive.store(false, Ordering::SeqCst);
                             r
@@ -144,10 +149,7 @@ impl RaftClient {
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {
         let conn = self.get_conn(addr, msg.region_id, store_id);
-        conn.buffer
-            .as_mut()
-            .unwrap()
-            .push((msg, WriteFlags::default().buffer_hint(true)));
+        conn.buffer.as_mut().unwrap().push(msg);
         Ok(())
     }
 
@@ -170,9 +172,10 @@ impl RaftClient {
             }
 
             counter += 1;
-            let mut msgs = conn.buffer.take().unwrap();
-            msgs.last_mut().unwrap().1 = WriteFlags::default();
-            if let Err(e) = conn.stream.unbounded_send(msgs) {
+
+            let mut batch_msgs = BatchRaftMessage::new();
+            batch_msgs.set_msgs(RepeatedField::from_vec(conn.buffer.take().unwrap()));
+            if let Err(e) = conn.stream.unbounded_send(batch_msgs) {
                 error!(
                     "server: drop conn with tikv endpoint {} flush conn error: {:?}",
                     addr, e

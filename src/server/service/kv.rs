@@ -22,6 +22,7 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::*;
+use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc;
 use protobuf::RepeatedField;
 use std::iter::{self, FromIterator};
@@ -1003,6 +1004,30 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 .map_err(|e| error!("send raft msg to raft store fail: {}", e))
                 .then(|_| future::ok::<_, ()>(())),
         );
+    }
+
+    fn batch_raft(
+        &self,
+        ctx: RpcContext,
+        stream: RequestStream<BatchRaftMessage>,
+        _: ClientStreamingSink<Done>,
+    ) {
+        let ch = self.ch.clone();
+        ctx.spawn(
+            stream
+                .map_err(Error::from)
+                .for_each(move |mut msgs| {
+                    RAFT_MESSAGE_RECV_COUNTER.inc_by(msgs.get_msgs().len() as i64);
+                    for msg in msgs.take_msgs().into_iter() {
+                        if let Err(e) = ch.send_raft_msg(msg) {
+                            return Err(Error::from(e));
+                        }
+                    }
+                    Ok(())
+                })
+                .map_err(|e| error!("send raft msg to raft store fail: {}", e))
+                .then(|_| future::ok::<_, ()>(())),
+        )
     }
 
     fn snapshot(

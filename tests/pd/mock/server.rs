@@ -328,4 +328,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         unimplemented!()
     }
+
+    fn get_prev_region(&self, _: RpcContext, _: GetRegionRequest, _: UnarySink<GetRegionResponse>) {
+        unimplemented!()
+    }
 }
