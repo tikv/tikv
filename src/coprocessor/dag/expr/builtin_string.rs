@@ -87,6 +87,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
         let hex_string = if s.len() % 2 == 1 {
+            // Add a '0' to the front, if the length is not the multiple of 2
             let mut vec = vec![b'0'];
             vec.extend_from_slice(&s);
             vec
