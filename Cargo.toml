@@ -115,6 +115,7 @@ test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 criterion = "0.2"
+arrow = "0.10.0"
 
 [workspace]
 members = [
