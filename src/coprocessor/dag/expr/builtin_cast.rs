@@ -363,7 +363,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_real_as_time<'a, 'b: 'a>(
@@ -373,7 +373,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_decimal_as_time<'a, 'b: 'a>(
@@ -383,7 +383,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_str_as_time<'a, 'b: 'a>(
@@ -391,9 +391,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = String::from_utf8(val.into_owned())?;
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(Some(self.produce_time_with_str(ctx, &val)?))
     }
 
     pub fn cast_time_as_time<'a, 'b: 'a>(
@@ -427,7 +426,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_int_as_duration<'a, 'b: 'a>(
@@ -558,13 +557,12 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = String::from_utf8(val.into_owned())?;
+        let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         if mysql::has_parse_to_json_flag(self.tp.get_flag()) {
-            let j: Json = s.parse()?;
+            let j: Json = val.parse()?;
             Ok(Some(Cow::Owned(j)))
         } else {
-            Ok(Some(Cow::Owned(Json::String(s))))
+            Ok(Some(Cow::Owned(Json::String(val.into_owned()))))
         }
     }
 
@@ -675,8 +673,8 @@ impl ScalarFunc {
         Ok(s)
     }
 
-    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: String) -> Result<Cow<Time>> {
-        let mut t = Time::parse_datetime(s.as_ref(), self.tp.get_decimal() as i8, ctx.cfg.tz)?;
+    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
+        let mut t = Time::parse_datetime(s, self.tp.get_decimal() as i8, ctx.cfg.tz)?;
         t.set_tp(self.tp.get_tp() as u8)?;
         Ok(Cow::Owned(t))
     }
@@ -720,6 +718,9 @@ mod test {
         let mut expr = base_col_expr(col_id);
         let mut fp = FieldType::new();
         fp.set_tp(tp);
+        if tp == i32::from(types::STRING) {
+            fp.set_charset(charset::CHARSET_UTF8.to_owned());
+        }
         expr.set_field_type(fp);
         expr
     }
