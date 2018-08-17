@@ -18,6 +18,7 @@ mod builtin_control;
 mod builtin_json;
 mod builtin_like;
 mod builtin_math;
+mod builtin_miscellaneous;
 mod builtin_op;
 mod builtin_string;
 mod builtin_time;
@@ -299,7 +300,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{
@@ -450,7 +451,7 @@ mod test {
 
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
