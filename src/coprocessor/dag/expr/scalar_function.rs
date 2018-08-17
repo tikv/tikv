@@ -803,7 +803,6 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
-
         Pow => pow,
     }
     DEC_CALLS {

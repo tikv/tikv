@@ -374,8 +374,8 @@ mod test {
             (
                 ScalarFuncSig::Pow,
                 Datum::F64(2.0),
-                Datum::F64(3.0),
-                Datum::F64(8.0),
+                Datum::F64(4.0),
+                Datum::F64(16.0),
             ),
         ];
         let mut ctx = EvalContext::default();
