@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Debug;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -227,7 +226,7 @@ const MAX_REQUEST_COUNT: usize = 3;
 impl<Req, Resp, F> Request<Req, Resp, F>
 where
     Req: Clone + Send + 'static,
-    Resp: Send + Debug + 'static,
+    Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
     fn reconnect_if_needed(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
