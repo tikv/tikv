@@ -1011,6 +1011,7 @@ mod test {
                     ScalarFuncSig::DateFormatSig,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
+                    ScalarFuncSig::Pow,
                 ],
                 2,
                 2,
