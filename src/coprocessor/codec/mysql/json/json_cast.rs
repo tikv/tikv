@@ -44,7 +44,7 @@ impl Json {
 #[cfg(test)]
 mod test {
     use super::*;
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext};
     use std::f64;
     use std::sync::Arc;
 
@@ -84,8 +84,7 @@ mod test {
             (r#""hello""#, 0f64),
             (r#""1234""#, 1234f64),
         ];
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();
             let get = json.cast_to_real(&mut ctx).unwrap();
