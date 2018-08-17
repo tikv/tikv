@@ -133,7 +133,7 @@ mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
@@ -234,7 +234,7 @@ mod test {
         ];
 
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -302,7 +302,7 @@ mod test {
             ),
         ];
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
