@@ -13,6 +13,7 @@
 
 use coprocessor::codec::mysql::Time;
 use coprocessor::dag::expr::EvalContext;
+use regex::Error as RegexpError;
 use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
@@ -21,7 +22,6 @@ use std::string::FromUtf8Error;
 use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
-use regex::Error as RegexpError;
 use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
@@ -109,11 +109,6 @@ impl Error {
     pub fn invalid_timezone(given_time_zone: &str) -> Error {
         let msg = format!("unknown or incorrect time zone: {}", given_time_zone);
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
-    }
-
-    pub fn invalid_time_format(val: &str) -> Error {
-        let msg = format!("invalid time format: {}", val);
-        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
 
     pub fn division_by_zero() -> Error {

@@ -239,15 +239,13 @@ impl ScalarFunc {
         let mut find_invalid_time = false;
 
         for exp in &self.children {
-            let val = try_opt!(exp.eval_string(ctx, row));
-            let s = super::decode(val.clone(), exp.get_tp().get_charset())?;
-            // let s = try_opt!(exp.eval_string_and_decode(ctx, row));
+            let s = try_opt!(exp.eval_string_and_decode(ctx, row));
             match Time::parse_datetime(&s, Time::parse_fsp(&s), ctx.cfg.tz) {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
                     _ => if !find_invalid_time {
-                        res = val;
+                        res = Cow::Owned(s.into_owned().into_bytes());
                         find_invalid_time = true;
                     },
                 },
@@ -480,7 +478,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::super::{EvalConfig, FLAG_IN_INSERT_STMT};
+    use super::super::EvalConfig;
     use super::*;
     use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
@@ -957,8 +955,9 @@ mod test {
         );
 
         {
-            let mut eval_config = EvalConfig::new(FLAG_IN_INSERT_STMT).unwrap();
-            eval_config.set_strict_sql_mode(true);
+            let eval_config = EvalConfig::new()
+                .set_in_insert_stmt(true)
+                .set_strict_sql_mode(true);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![
                 Datum::Bytes(t1.clone()),

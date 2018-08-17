@@ -424,7 +424,7 @@ mod test {
     #[test]
     fn test_handle_invalid_time_error() {
         let cases = vec![
-            //(flag,strict_sql_mode,is_ok,is_empty)
+            //(flags,strict_sql_mode,is_ok,is_empty)
             (0, false, true, false),                             //warning
             (0, true, true, false),                              //warning
             (FLAG_IN_INSERT_STMT, false, true, false),           //warning
@@ -432,10 +432,11 @@ mod test {
             (FLAG_IN_UPDATE_OR_DELETE_STMT, true, false, true),  //error
             (FLAG_IN_INSERT_STMT, true, false, true),            //error
         ];
-        for (flag, strict_sql_mode, is_ok, is_empty) in cases {
+        for (flags, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");
-            let mut cfg = EvalConfig::new(flag).unwrap();
-            cfg.set_strict_sql_mode(strict_sql_mode);
+            let cfg = EvalConfig::new()
+                .set_by_flags(flags)
+                .set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_invalid_time_error(err).is_ok(), is_ok);
             assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);

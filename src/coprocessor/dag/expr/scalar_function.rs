@@ -372,12 +372,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
-            | ScalarFuncSig::LeastDecimal
-            | ScalarFuncSig::LeastInt
-            | ScalarFuncSig::LeastReal
-            | ScalarFuncSig::LeastString
-            | ScalarFuncSig::LeastTime
-            | ScalarFuncSig::Left
             | ScalarFuncSig::LeftBinary
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::Locate3Args
@@ -1371,12 +1365,6 @@ mod test {
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
-            ScalarFuncSig::LeastDecimal,
-            ScalarFuncSig::LeastInt,
-            ScalarFuncSig::LeastReal,
-            ScalarFuncSig::LeastString,
-            ScalarFuncSig::LeastTime,
-            ScalarFuncSig::Left,
             ScalarFuncSig::LeftBinary,
             ScalarFuncSig::Locate2Args,
             ScalarFuncSig::Locate3Args,
