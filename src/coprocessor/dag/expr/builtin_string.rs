@@ -14,10 +14,10 @@
 use hex::FromHex;
 use std::{i64, str};
 
-use super::{Error, EvalContext, Result, ScalarFunc};
+use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Cow;
 
 impl ScalarFunc {
     pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -94,11 +94,7 @@ impl ScalarFunc {
             s.to_vec()
         };
         let result = Vec::from_hex(hex_string);
-        result
-            .map_err(|_e| {
-                Error::wrong_value_for_type("string", str::from_utf8(s.borrow()).unwrap(), "unhex")
-            })
-            .map(|t| Some(Cow::Owned(t)))
+        result.map(|t| Some(Cow::Owned(t))).or(Ok(None))
     }
 }
 
@@ -449,43 +445,29 @@ mod test {
         let cases = vec![
             (
                 Datum::Bytes(b"4D7953514C".to_vec()),
-                false,
                 Datum::Bytes(b"MySQL".to_vec()),
             ),
             (
                 Datum::Bytes(b"1267".to_vec()),
-                false,
                 Datum::Bytes(vec![0x12, 0x67]),
             ),
             (
                 Datum::Bytes(b"126".to_vec()),
-                false,
                 Datum::Bytes(vec![0x01, 0x26]),
             ),
-            (
-                Datum::Bytes(b"".to_vec()),
-                false,
-                Datum::Bytes(b"".to_vec()),
-            ),
-            (Datum::Bytes(b"string".to_vec()), true, Datum::Null),
-            (
-                Datum::Bytes("你好".as_bytes().to_vec()),
-                true,
-                Datum::Null,
-            ),
-            (Datum::Null, false, Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Bytes(b"".to_vec())),
+            (Datum::Bytes(b"string".to_vec()), Datum::Null),
+            (Datum::Bytes("你好".as_bytes().to_vec()), Datum::Null),
+            (Datum::Null, Datum::Null),
         ];
 
         let mut ctx = EvalContext::default();
-        for (input, is_err, exp) in cases {
+        for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::UnHex, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]);
-            assert_eq!(got.is_err(), is_err);
-            if !is_err {
-                assert_eq!(got.unwrap(), exp);
-            }
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
