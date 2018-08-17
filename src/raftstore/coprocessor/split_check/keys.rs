@@ -56,8 +56,9 @@ impl SplitChecker for Checker {
 
     fn split_keys(&mut self) -> Vec<Vec<u8>> {
         // make sure not to split when less than max_keys_count for last part
-        if self.current_count + self.split_keys_count < self.max_keys_count 
-        && (self.split_keys.len() as u64) < self.batch_split_limit {
+        if self.current_count + self.split_keys_count < self.max_keys_count
+            && (self.split_keys.len() as u64) < self.batch_split_limit
+        {
             self.split_keys.pop();
         }
         if !self.split_keys.is_empty() {
