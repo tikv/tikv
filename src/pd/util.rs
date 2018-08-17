@@ -291,7 +291,7 @@ where
     fn should_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => false,
-            // all grpc related error are mapped to Error::Grpc
+            // all grpc related errors are mapped to Error::Grpc
             Err(Error::Grpc(err)) => {
                 error!("request failed: {:?}, retry", err);
                 true
@@ -304,7 +304,7 @@ where
     fn post_loop(ctx: Result<Self>) -> Result<Resp> {
         let ctx = ctx.expect("end loop with Ok(_)");
         ctx.resp
-            .unwrap_or_else(|| Err(box_err!("response in empty")))
+            .unwrap_or_else(|| Err(box_err!("response is empty")))
     }
 
     /// Returns a Future, it is resolves once a future returned by the closure

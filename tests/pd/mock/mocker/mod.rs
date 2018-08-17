@@ -23,7 +23,7 @@ mod split;
 
 pub use self::bootstrap::AlreadyBootstrapped;
 pub use self::leader_change::LeaderChange;
-pub use self::retry::Retry;
+pub use self::retry::{NotRetry, Retry};
 pub use self::service::Service;
 pub use self::split::Split;
 
