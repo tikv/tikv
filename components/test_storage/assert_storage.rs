@@ -11,11 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::sync_storage::SyncStorage;
-use super::util::new_raft_storage_with_store_count;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use raftstore::cluster::Cluster;
-use raftstore::server::{ServerCluster, SimulateEngine};
+
+use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
 use tikv::storage::engine::{self, RocksEngine};
@@ -24,6 +22,8 @@ use tikv::storage::txn;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
 use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
+
+use super::*;
 
 #[derive(Clone)]
 pub struct AssertionStorage<E: Engine> {

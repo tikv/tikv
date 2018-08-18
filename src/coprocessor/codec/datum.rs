@@ -1019,7 +1019,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 mod test {
     use super::*;
     use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext};
     use util::as_slice;
 
     use std::cmp::Ordering;
@@ -1708,8 +1708,7 @@ mod test {
             (Datum::Dec(0u64.into()), Some(false)),
         ];
 
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
 
         for (d, b) in tests {
             if d.clone().into_bool(&mut ctx).unwrap() != b {
@@ -1888,8 +1887,7 @@ mod test {
             ),
         ];
 
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
             let got = d.into_f64(&mut ctx).unwrap();
             assert_eq!(Datum::F64(got), Datum::F64(exp));
@@ -1919,8 +1917,7 @@ mod test {
             (Datum::Json(Json::from_str(r#"false"#).unwrap()), 0),
         ];
 
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
             let got = d.into_i64(&mut ctx).unwrap();
             assert_eq!(got, exp);

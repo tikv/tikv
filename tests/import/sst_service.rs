@@ -25,12 +25,10 @@ use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 
+use test_raftstore::*;
 use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
-
-use raftstore::cluster::Cluster;
-use raftstore::server::*;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 

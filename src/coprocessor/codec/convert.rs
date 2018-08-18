@@ -329,7 +329,7 @@ mod test {
     use std::{f64, i64, isize, u64};
 
     use coprocessor::codec::mysql::types;
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext};
 
     use super::*;
 
@@ -443,8 +443,7 @@ mod test {
             ("123.e", "123."),
         ];
 
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (i, o) in cases {
             assert_eq!(super::get_valid_float_prefix(&mut ctx, i).unwrap(), o);
         }

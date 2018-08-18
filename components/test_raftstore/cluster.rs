@@ -15,27 +15,27 @@ use std::path::Path;
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
-use tikv::util::collections::{HashMap, HashSet};
 
 use futures::Future;
 use rocksdb::DB;
 use tempdir::TempDir;
 
-use super::pd::TestPdClient;
-use super::transport_simulate::*;
-use super::util::*;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
+
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::storage::CF_DEFAULT;
+use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::transport::SendCh;
 use tikv::util::{escape, rocksdb, HandyRwLock};
+
+use super::*;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -810,7 +810,7 @@ impl<T: Simulator> Cluster<T> {
         ch.try_send(Msg::SplitRegion {
             region_id: region.get_id(),
             region_epoch: region.get_region_epoch().clone(),
-            split_key: split_key.clone(),
+            split_keys: vec![split_key.clone()],
             callback: cb,
         }).unwrap();
     }
@@ -837,11 +837,11 @@ impl<T: Simulator> Cluster<T> {
                         panic!("failed to split: {:?}", resp);
                     }
                     let admin_resp = resp.mut_admin_response();
-                    let split_resp = admin_resp.mut_split();
-                    let mut left = split_resp.take_left();
-                    let mut right = split_resp.take_right();
-                    assert_eq!(left.get_end_key(), key.as_slice());
-                    assert_eq!(left.take_end_key(), right.take_start_key());
+                    let split_resp = admin_resp.mut_splits();
+                    let regions = split_resp.get_regions();
+                    assert_eq!(regions.len(), 2);
+                    assert_eq!(regions[0].get_end_key(), key.as_slice());
+                    assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                 });
                 self.split_region(region, split_key, Callback::Write(check));
             }
