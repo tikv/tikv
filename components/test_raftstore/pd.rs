@@ -643,14 +643,16 @@ pub struct TestPdClient {
     cluster_id: u64,
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
+    is_incompatible: bool,
 }
 
 impl TestPdClient {
-    pub fn new(cluster_id: u64) -> TestPdClient {
+    pub fn new(cluster_id: u64, is_incompatible: bool) -> TestPdClient {
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            is_incompatible, 
         }
     }
 
@@ -1037,6 +1039,14 @@ impl PdClient for TestPdClient {
         region: metapb::Region,
         count: usize,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+        if self.is_incompatible {
+            let mut err = pdpb::Error::new();
+            err.set_field_type(pdpb::ErrorType::INCOMPATIBLE_VERSION);
+            let mut resp = pdpb::AskBatchSplitResponse::new();
+            resp.mut_header().set_error(err);
+            return Box::new(ok(resp))
+        }
+
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }

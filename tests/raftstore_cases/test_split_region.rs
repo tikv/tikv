@@ -243,7 +243,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         &mut range,
     );
 
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(3));
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
@@ -289,9 +289,23 @@ fn test_node_auto_split_region() {
 }
 
 #[test]
+fn test_incompatible_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
 fn test_server_auto_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_incompatible_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_server_cluster(0, count);
     test_auto_split_region(&mut cluster);
 }
 
