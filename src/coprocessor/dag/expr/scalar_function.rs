@@ -108,6 +108,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
+            | ScalarFuncSig::Pow
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -202,7 +203,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
-            | ScalarFuncSig::IsIPv4 => (1, 1),
+            | ScalarFuncSig::IsIPv4
+            | ScalarFuncSig::UnHex => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -383,7 +385,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
-            | ScalarFuncSig::Pow
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::Radians
@@ -475,7 +476,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
-            | ScalarFuncSig::UnHex
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -809,6 +809,7 @@ dispatch_call! {
 
         Sqrt => sqrt,
         Tan => tan,
+        Pow => pow,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -860,6 +861,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        UnHex => un_hex,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1011,6 +1013,7 @@ mod test {
                     ScalarFuncSig::DateFormatSig,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
+                    ScalarFuncSig::Pow,
                 ],
                 2,
                 2,
@@ -1334,7 +1337,6 @@ mod test {
             ScalarFuncSig::Password,
             ScalarFuncSig::PeriodAdd,
             ScalarFuncSig::PeriodDiff,
-            ScalarFuncSig::Pow,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::Radians,
@@ -1426,7 +1428,6 @@ mod test {
             ScalarFuncSig::TruncateReal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
-            ScalarFuncSig::UnHex,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
