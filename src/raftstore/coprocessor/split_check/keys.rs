@@ -23,17 +23,17 @@ use super::Host;
 
 pub struct Checker {
     max_keys_count: u64,
-    split_keys_count: u64,
+    split_threshold: u64,
     current_count: u64,
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
 }
 
 impl Checker {
-    pub fn new(max_keys_count: u64, split_keys_count: u64, batch_split_limit: u64) -> Checker {
+    pub fn new(max_keys_count: u64, split_threshold: u64, batch_split_limit: u64) -> Checker {
         Checker {
             max_keys_count,
-            split_keys_count,
+            split_threshold,
             current_count: 0,
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
@@ -48,19 +48,19 @@ impl SplitChecker for Checker {
         }
 
         let mut over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
-        if self.current_count >= self.split_keys_count && !over_limit {
+        if self.current_count >= self.split_threshold && !over_limit {
             self.split_keys.push(keys::origin_key(key.key()).to_vec());
             self.current_count = 0;
             over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         }
         self.current_count += 1;
 
-        over_limit && self.current_count + self.split_keys_count >= self.max_keys_count
+        over_limit && self.current_count + self.split_threshold >= self.max_keys_count
     }
 
     fn split_keys(&mut self) -> Vec<Vec<u8>> {
         // make sure not to split when less than max_keys_count for last part
-        if self.current_count + self.split_keys_count < self.max_keys_count {
+        if self.current_count + self.split_threshold < self.max_keys_count {
             self.split_keys.pop();
         }
         if !self.split_keys.is_empty() {
