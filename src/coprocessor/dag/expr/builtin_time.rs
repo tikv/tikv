@@ -150,7 +150,7 @@ mod test {
         }
 
         // test zero case
-        let mut cfg = EvalConfig::new(FLAG_IN_UPDATE_OR_DELETE_STMT);
+        let mut cfg = EvalConfig::new().set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT);
         cfg.set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO);
         cfg.set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
