@@ -21,6 +21,8 @@ use storage::mvcc::{Lock, Result};
 use storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
+use super::util::CheckLockResult;
+
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
 // the write cf's iterator's direction inside RocksDB, and the next user key
@@ -237,9 +239,10 @@ impl<S: Snapshot> BackwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock) {
-                            Ok(ts) => get_ts = ts,
-                            Err(e) => result = Err(e),
+                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                            CheckLockResult::Locked(e) => result = Err(e),
+                            CheckLockResult::NotLocked => {}
+                            CheckLockResult::Ignored(ts) => get_ts = ts,
                         }
                     }
                     IsolationLevel::RC => {}

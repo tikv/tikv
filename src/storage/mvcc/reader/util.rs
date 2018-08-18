@@ -15,12 +15,26 @@ use storage::mvcc::{Error, Result};
 use storage::mvcc::{Lock, LockType, Write};
 use storage::{Cursor, Iterator, Key, Statistics, Value};
 
-/// Checks whether the lock conflicts with the given `ts`. If there is no conflict,
-/// the safe `ts` will be returned.
-pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
+/// Representing check lock result.
+#[derive(Debug)]
+pub enum CheckLockResult {
+    /// Key is locked. The key lock error is included.
+    Locked(Error),
+
+    /// Key is not locked.
+    NotLocked,
+
+    /// Key's lock exists but was ignored because of requesting the latest committed version
+    /// for the primary key. The committed version is included.
+    Ignored(u64),
+}
+
+/// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the latest
+/// committed version will be returned for primary key instead of leading to lock conflicts.
+pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
     if lock.ts > ts || lock.lock_type == LockType::Lock {
         // Ignore lock when lock.ts > ts or lock's type is Lock
-        return Ok(ts);
+        return Ok(CheckLockResult::NotLocked);
     }
 
     let raw_key = key.raw()?;
@@ -29,16 +43,16 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
         // When `ts == u64::MAX` (which means to get latest committed version for
         // primary key), and current key is the primary key, we return the latest
         // committed version.
-        return Ok(lock.ts - 1);
+        return Ok(CheckLockResult::Ignored(lock.ts - 1));
     }
 
     // There is a pending lock. Client should wait or clean it.
-    Err(Error::KeyIsLocked {
+    Ok(CheckLockResult::Locked(Error::KeyIsLocked {
         key: raw_key,
         primary: lock.primary.clone(),
         ts: lock.ts,
         ttl: lock.ttl,
-    })
+    }))
 }
 
 /// Reads user key's value in default CF according to the given write CF value

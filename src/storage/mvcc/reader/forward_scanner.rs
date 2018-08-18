@@ -21,6 +21,8 @@ use storage::mvcc::{Lock, Result};
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
+use super::util::CheckLockResult;
+
 /// `ForwardScanner` factory.
 pub struct ForwardScannerBuilder<S: Snapshot> {
     snapshot: S,
@@ -244,9 +246,8 @@ impl<S: Snapshot> ForwardScanner<S> {
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
-            // `result` stores intermediate values, including errors. When there is an error, for
-            // example, key locked error, we need to do the rest of the work like stepping cursors
-            // instead of stop there.
+            // `result` stores intermediate values, including KeyLocked errors (but not other kind
+            // of errors). If there is KeyLocked errors, we should be able to continue scanning.
             let mut result = Ok(None);
 
             // `get_ts` is the real used timestamp. If user specifies `MaxInt64` as the timestamp,
@@ -266,9 +267,10 @@ impl<S: Snapshot> ForwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock) {
-                            Ok(ts) => get_ts = ts,
-                            Err(e) => result = Err(e),
+                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                            CheckLockResult::Locked(e) => result = Err(e),
+                            CheckLockResult::NotLocked => {}
+                            CheckLockResult::Ignored(ts) => get_ts = ts,
                         }
                     }
                     IsolationLevel::RC => {}
