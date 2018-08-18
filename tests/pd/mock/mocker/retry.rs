@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -66,6 +66,57 @@ impl PdMocker for Retry {
         } else {
             info!("[Retry] get_store returns Err(_)");
             Some(Err("please retry".to_owned()))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct NotRetry {
+    is_visited: AtomicBool,
+}
+
+impl NotRetry {
+    pub fn new() -> NotRetry {
+        info!(
+            "[NotRetry] return error response for the first time and return Ok() for reset times."
+        );
+
+        NotRetry {
+            is_visited: AtomicBool::new(false),
+        }
+    }
+}
+
+impl PdMocker for NotRetry {
+    fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+        if !self.is_visited.swap(true, Ordering::Relaxed) {
+            info!(
+                "[NotRetry] get_region_by_id returns Ok(_) with header has NotBootstrapped error"
+            );
+            let mut err = Error::new();
+            err.set_field_type(ErrorType::NOT_BOOTSTRAPPED);
+            let mut resp = GetRegionResponse::new();
+            resp.mut_header().set_error(err);
+            Some(Ok(resp))
+        } else {
+            info!("[NotRetry] get_region_by_id returns Ok()");
+            Some(Ok(GetRegionResponse::new()))
+        }
+    }
+
+    fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
+        if !self.is_visited.swap(true, Ordering::Relaxed) {
+            info!(
+                "[NotRetry] get_region_by_id returns Ok(_) with header has NotBootstrapped error"
+            );
+            let mut err = Error::new();
+            err.set_field_type(ErrorType::NOT_BOOTSTRAPPED);
+            let mut resp = GetStoreResponse::new();
+            resp.mut_header().set_error(err);
+            Some(Ok(resp))
+        } else {
+            info!("[NotRetry] get_region_by_id returns Ok()");
+            Some(Ok(GetStoreResponse::new()))
         }
     }
 }
