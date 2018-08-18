@@ -128,8 +128,9 @@ pub struct ForwardScanner<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
 
-    /// `lower_bound` and `upper_bound` is only used to create `default_cursor`. It will be
-    /// consumed after `default_cursor` is being created.
+    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `lower_bound`
+    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
+    /// created.
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
 
@@ -156,8 +157,16 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            self.write_cursor.seek_to_first(&mut self.statistics.write);
-            self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+            // TODO: `seek_to_first` is better, however it has performance issues currently.
+            // TODO: We can eliminate clones here.
+            self.write_cursor.seek(
+                &Key::from_encoded(self.lower_bound.as_ref().unwrap().clone()),
+                &mut self.statistics.write,
+            )?;
+            self.lock_cursor.seek(
+                &Key::from_encoded(self.lower_bound.as_ref().unwrap().clone()),
+                &mut self.statistics.lock,
+            )?;
             self.is_started = true;
         }
 

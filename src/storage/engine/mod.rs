@@ -38,7 +38,7 @@ pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
-pub const SEEK_BOUND: usize = 30;
+pub const SEEK_BOUND: usize = 8;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 

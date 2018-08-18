@@ -27,7 +27,7 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 // need to turn back the direction to backward. As we have tested, turn around
 // iterator's direction from forward to backward is as expensive as seek in
 // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
-const REVERSE_SEEK_BOUND: u64 = 32;
+const REVERSE_SEEK_BOUND: u64 = 16;
 
 /// `BackwardScanner` factory.
 pub struct BackwardScannerBuilder<S: Snapshot> {
@@ -139,8 +139,9 @@ pub struct BackwardScanner<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
 
-    /// `lower_bound` and `upper_bound` is only used to create `default_cursor`. It will be
-    /// consumed after `default_cursor` is being created.
+    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
+    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
+    /// created.
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
 
@@ -167,8 +168,16 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            self.write_cursor.seek_to_last(&mut self.statistics.write);
-            self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+            // TODO: `seek_to_last` is better, however it has performance issues currently.
+            // TODO: We can eliminate clones here.
+            self.write_cursor.reverse_seek(
+                &Key::from_encoded(self.upper_bound.as_ref().unwrap().clone()),
+                &mut self.statistics.write,
+            )?;
+            self.lock_cursor.reverse_seek(
+                &Key::from_encoded(self.upper_bound.as_ref().unwrap().clone()),
+                &mut self.statistics.lock,
+            )?;
             self.is_started = true;
         }
 
@@ -333,20 +342,17 @@ impl<S: Snapshot> BackwardScanner<S> {
             // After seek, or after some `next()`, we may reach `last_checked_commit_ts` again. It
             // means we have checked all versions for this user key. We use `last_version` as
             // return.
-            let mut is_done = false;
-            {
+            let current_ts = {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 // We should never reach another user key.
                 assert!(Key::is_user_key_eq(
                     current_key,
                     user_key.encoded().as_slice()
                 ));
-                if Key::decode_ts_from(current_key)? <= last_checked_commit_ts {
-                    // We reach the last handled key,
-                    is_done = true;
-                }
-            }
-            if is_done {
+                Key::decode_ts_from(current_key)?
+            };
+            if current_ts <= last_checked_commit_ts {
+                // We reach the last handled key
                 return Ok(self.handle_last_version(last_version, user_key)?);
             }
 
@@ -569,9 +575,9 @@ mod tests {
         );
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.prev, REVERSE_SEEK_BOUND as usize / 2);
-        assert_eq!(statistics.write.seek, 1); // 1 seek_to_last
+        assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
-        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.seek_for_prev, 1);
 
         // Before get key [9]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
@@ -755,7 +761,7 @@ mod tests {
             .unwrap();
         assert_eq!(scanner.read_next().unwrap(), None);
         let statistics = scanner.take_statistics();
-        assert_eq!(statistics.lock.prev, 255);
+        assert_eq!(statistics.lock.prev, 256);
         assert_eq!(statistics.write.prev, 1);
     }
 
