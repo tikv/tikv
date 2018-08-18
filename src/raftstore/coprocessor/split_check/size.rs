@@ -43,10 +43,11 @@ impl Checker {
 
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
-        let over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
+        let mut over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         if self.current_size >= self.split_size && !over_limit {
             self.split_keys.push(keys::origin_key(entry.key()).to_vec());
             self.current_size = 0;
+            over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         }
         self.current_size += entry.entry_size() as u64;
 
@@ -388,6 +389,21 @@ pub mod tests {
         let mut ctx = ObserverContext::new(&region);
         loop {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 4, CF_WRITE);
+            if checker.on_kv(&mut ctx, &data) {
+                break;
+            }
+        }
+
+        assert!(!checker.split_keys().is_empty());
+    }
+
+    #[test]
+    fn test_checker_with_max_twice_bigger_than_split_size() {
+        let mut checker = Checker::new(20, 10, 1);
+        let region = Region::default();
+        let mut ctx = ObserverContext::new(&region);
+        for _ in 0..2 {
+            let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 5, CF_WRITE);
             if checker.on_kv(&mut ctx, &data) {
                 break;
             }

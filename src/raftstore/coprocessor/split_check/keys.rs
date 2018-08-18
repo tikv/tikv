@@ -47,10 +47,11 @@ impl SplitChecker for Checker {
             return false;
         }
 
-        let over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
+        let mut over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         if self.current_count >= self.split_keys_count && !over_limit {
             self.split_keys.push(keys::origin_key(key.key()).to_vec());
             self.current_count = 0;
+            over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         }
         self.current_count += 1;
 

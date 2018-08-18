@@ -111,11 +111,11 @@ local-read-batch-size = 33
 
 [coprocessor]
 split-region-on-table = true
+batch-split-limit = 1
 region-max-size = "12MB"
 region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
-batch-split-limit = 1
 
 [rocksdb]
 wal-recovery-mode = 1

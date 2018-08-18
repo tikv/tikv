@@ -408,11 +408,11 @@ fn test_serde_custom_tikv_config() {
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
+        batch_split_limit: 1,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
         region_max_keys: 100000,
         region_split_keys: 100000,
-        batch_split_limit: 1,
     };
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),
