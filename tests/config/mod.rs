@@ -412,7 +412,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(12),
         region_max_keys: 100000,
         region_split_keys: 100000,
-        batch_split_limit: 10,
+        batch_split_limit: 1,
     };
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),

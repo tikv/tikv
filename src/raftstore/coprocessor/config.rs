@@ -44,7 +44,7 @@ pub const SPLIT_SIZE_MB: u64 = 96;
 /// Default region split keys.
 pub const SPLIT_KEYS: u64 = 960000;
 /// Default batch split limit.
-pub const BATCH_SPLIT_LIMIT: u64 = 100;
+pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
 impl Default for Config {
     fn default() -> Config {
