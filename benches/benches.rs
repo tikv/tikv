@@ -13,50 +13,38 @@
 
 #![feature(test)]
 
+extern crate arrow;
+extern crate byteorder;
 extern crate crossbeam_channel;
 extern crate kvproto;
 extern crate log;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
-extern crate byteorder;
 extern crate mio;
 extern crate protobuf;
 extern crate raft;
 extern crate rand;
 extern crate rocksdb;
-extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
-extern crate slog_term;
 extern crate tempdir;
 extern crate test;
-extern crate tikv;
-extern crate time;
 extern crate tipb;
+
+extern crate test_storage;
+extern crate test_util;
+extern crate tikv;
 
 mod channel;
 mod coprocessor;
 mod raftkv;
 mod serialization;
+mod storage;
 mod writebatch;
-
-#[allow(dead_code)]
-#[path = "../tests/util/mod.rs"]
-mod util;
 
 use test::Bencher;
 
-use util::KvGenerator;
+use test_util::KvGenerator;
 
 #[bench]
 fn _bench_check_requirement(_: &mut test::Bencher) {
-    if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
-        panic!(
-            "To run bench, please make sure the maximum number of open file descriptors not \
-             less than 4096: {:?}",
-            e
-        );
-    }
+    tikv::util::config::check_max_open_fds(4096).unwrap();
 }
 
 #[bench]

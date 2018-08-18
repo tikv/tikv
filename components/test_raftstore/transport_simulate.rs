@@ -11,21 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use kvproto::raft_serverpb::RaftMessage;
-use raft::eraftpb::MessageType;
-use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
-use tikv::raftstore::{Error, Result};
-use tikv::server::transport::*;
-use tikv::server::StoreAddrResolver;
-use tikv::util::{transport, Either, HandyRwLock};
-
-use rand;
 use std::marker::PhantomData;
 use std::sync::atomic::*;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{thread, time, usize};
+
+use rand;
+
+use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::MessageType;
+
+use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
+use tikv::raftstore::{Error, Result};
+use tikv::server::transport::*;
+use tikv::server::StoreAddrResolver;
 use tikv::util::collections::{HashMap, HashSet};
+use tikv::util::{transport, Either, HandyRwLock};
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;

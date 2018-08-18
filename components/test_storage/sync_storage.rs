@@ -11,9 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
+use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::readpool::ReadPool;

@@ -23,7 +23,7 @@ mod split;
 
 pub use self::bootstrap::AlreadyBootstrapped;
 pub use self::leader_change::LeaderChange;
-pub use self::retry::Retry;
+pub use self::retry::{NotRetry, Retry};
 pub use self::service::Service;
 pub use self::split::Split;
 
@@ -83,11 +83,14 @@ pub trait PdMocker {
         None
     }
 
-    fn ask_split(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
+    fn ask_batch_split(&self, _: &AskBatchSplitRequest) -> Option<Result<AskBatchSplitResponse>> {
         None
     }
 
-    fn report_split(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
+    fn report_batch_split(
+        &self,
+        _: &ReportBatchSplitRequest,
+    ) -> Option<Result<ReportBatchSplitResponse>> {
         None
     }
 
