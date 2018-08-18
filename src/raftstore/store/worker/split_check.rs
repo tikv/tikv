@@ -195,7 +195,7 @@ impl<C: Sender<Msg>> Runner<C> {
             return;
         }
 
-        let split_key = match task.policy {
+        let split_keys = match task.policy {
             CheckPolicy::SCAN => {
                 let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
                 let res = MergedIterator::new(
@@ -218,7 +218,7 @@ impl<C: Sender<Msg>> Runner<C> {
                     return;
                 }
 
-                host.split_key()
+                host.split_keys()
             }
             CheckPolicy::APPROXIMATE => {
                 let res = host.approximate_split_key(region, &self.engine);
@@ -230,14 +230,15 @@ impl<C: Sender<Msg>> Runner<C> {
                     return;
                 }
                 res.unwrap()
+                    .map_or_else(Vec::new, |r| vec![keys::origin_key(&r).to_vec()])
             }
         };
 
-        if let Some(key) = split_key {
+        if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
             let res = self
                 .ch
-                .try_send(new_split_region(region_id, region_epoch, key));
+                .try_send(new_split_region(region_id, region_epoch, split_keys));
             if let Err(e) = res {
                 warn!("[region {}] failed to send check result: {}", region_id, e);
             }
@@ -262,12 +263,11 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     }
 }
 
-fn new_split_region(region_id: u64, region_epoch: RegionEpoch, key: Vec<u8>) -> Msg {
-    let split_key = keys::origin_key(key.as_slice()).to_vec();
+fn new_split_region(region_id: u64, region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> Msg {
     Msg::SplitRegion {
         region_id,
         region_epoch,
-        split_key,
+        split_keys,
         callback: Callback::None,
     }
 }

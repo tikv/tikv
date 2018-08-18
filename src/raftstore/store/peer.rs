@@ -1197,7 +1197,7 @@ impl Peer {
 
     pub fn maybe_campaign(
         &mut self,
-        last_peer: &Peer,
+        parent_is_leader: bool,
         pending_raft_groups: &mut HashSet<u64>,
     ) -> bool {
         if self.region().get_peers().len() <= 1 {
@@ -1205,7 +1205,7 @@ impl Peer {
             return false;
         }
 
-        if !last_peer.is_leader() {
+        if !parent_is_leader {
             return false;
         }
 
@@ -1628,8 +1628,14 @@ impl Peer {
             return Ok(ctx);
         }
 
-        if req.get_admin_request().has_split() {
-            ctx.insert(ProposalContext::SPLIT);
+        match req.get_admin_request().get_cmd_type() {
+            AdminCmdType::Split => {
+                return Err(box_err!(
+                    "Command type Split is deprecated, use BatchSplit instead."
+                ))
+            }
+            AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            _ => {}
         }
 
         if req.get_admin_request().has_prepare_merge() {
@@ -2113,6 +2119,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
             | AdminCmdType::Split
+            | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
             | AdminCmdType::RollbackMerge => true,

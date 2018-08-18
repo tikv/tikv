@@ -168,7 +168,6 @@ impl Simulator for ServerCluster {
             server = Some(Server::new(
                 &server_cfg,
                 &security_mgr,
-                cfg.coprocessor.region_split_size.0 as usize,
                 store.clone(),
                 cop_read_pool.clone(),
                 sim_router.clone(),
