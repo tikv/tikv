@@ -119,31 +119,48 @@ impl AdminObserver for SplitObserver {
     ) -> CopResult<()> {
         match req.get_cmd_type() {
             AdminCmdType::Split => {
-                return Err(box_err!(
-                    "Command type Split is deprecated, use BatchSplit instead."
-                ));
+                if !req.has_split() {
+                    box_try!(Err(
+                        "cmd_type is Split but it doesn't have split request, message maybe \
+                         corrupted!"
+                            .to_owned()
+                    ));
+                }
+                let mut request = vec![req.take_split()];
+                if let Err(e) = self.on_split(ctx, &mut request) {
+                    error!(
+                        "[region {}] failed to handle split req: {:?}",
+                        ctx.region().get_id(),
+                        e
+                    );
+                    return Err(box_err!(e));
+                }
+                // self.on_split() makes sure request is not empty, or it will return error.
+                // so directly unwrap here.
+                req.set_split(request.pop().unwrap());
             }
-            AdminCmdType::BatchSplit => {}
+            AdminCmdType::BatchSplit => {
+                if !req.has_splits() {
+                    return Err(box_err!(
+                        "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
+                         corrupted!"
+                            .to_owned()
+                    ));
+                }
+                let mut requests = req.mut_splits().take_requests().into_vec();
+                if let Err(e) = self.on_split(ctx, &mut requests) {
+                    error!(
+                        "[region {}] failed to handle split req: {:?}",
+                        ctx.region().get_id(),
+                        e
+                    );
+                    return Err(box_err!(e));
+                }
+                req.mut_splits()
+                    .set_requests(RepeatedField::from_vec(requests));
+            }
             _ => return Ok(()),
         }
-        if !req.has_splits() {
-            return Err(box_err!(
-                "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
-                 corrupted!"
-                    .to_owned()
-            ));
-        }
-        let mut requests = req.mut_splits().take_requests().into_vec();
-        if let Err(e) = self.on_split(ctx, &mut requests) {
-            error!(
-                "[region {}] failed to handle split req: {:?}",
-                ctx.region().get_id(),
-                e
-            );
-            return Err(box_err!(e));
-        }
-        req.mut_splits()
-            .set_requests(RepeatedField::from_vec(requests));
         Ok(())
     }
 }
