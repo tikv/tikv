@@ -279,7 +279,7 @@ impl<T: PdClient> Runner<T> {
                 match resp {
                     Ok(mut resp) => {
                         info!(
-                            "[region {}] try to split region {:?} with {:?}",
+                            "[region {}] try to batch split region {:?} with {:?}",
                             region.get_id(),
                             region,
                             resp.get_ids()
@@ -299,6 +299,7 @@ impl<T: PdClient> Runner<T> {
                     // But if update time is long, it may cause large regions, so call ask_split instead.
                     Err(Error::Incompatible) => {
                         let tag = format!("[region {}] {}", region.id, peer.id);
+                        info!("{} ask_batch_split is incompatible, use ask_split instead", tag); 
                         let task = Task::AskSplit {
                             region,
                             split_key: split_keys[0].clone(),
