@@ -268,7 +268,7 @@ where
                     Ok(ctx)
                 }
                 Err(err) => {
-                    error!("request failed: {:?}", err);
+                    ctx.resp = Some(Err(err));
                     Err(ctx)
                 }
             })
@@ -279,7 +279,8 @@ where
         let ctx = match ctx {
             Ok(ctx) | Err(ctx) => ctx,
         };
-        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
+        let done = ctx.reconnect_count == 0
+            || (ctx.resp.is_some() && !Self::should_retry(ctx.resp.as_ref().unwrap()));
         if done {
             Ok(Loop::Break(ctx))
         } else {
@@ -287,9 +288,23 @@ where
         }
     }
 
+    fn should_retry(resp: &Result<Resp>) -> bool {
+        match resp {
+            Ok(_) => false,
+            // all grpc related errors are mapped to Error::Grpc
+            Err(Error::Grpc(err)) => {
+                error!("request failed: {:?}, retry", err);
+                true
+            }
+            // other err are returned by response header from pd, no need to retry
+            Err(_) => false,
+        }
+    }
+
     fn post_loop(ctx: Result<Self>) -> Result<Resp> {
         let ctx = ctx.expect("end loop with Ok(_)");
-        ctx.resp.unwrap_or_else(|| Err(box_err!("fail to request")))
+        ctx.resp
+            .unwrap_or_else(|| Err(box_err!("response is empty")))
     }
 
     /// Returns a Future, it is resolves once a future returned by the closure
