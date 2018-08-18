@@ -108,6 +108,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
+            | ScalarFuncSig::Pow
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -384,7 +385,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
-            | ScalarFuncSig::Pow
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::Radians
@@ -809,6 +809,7 @@ dispatch_call! {
 
         Sqrt => sqrt,
         Tan => tan,
+        Pow => pow,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -1012,6 +1013,7 @@ mod test {
                     ScalarFuncSig::DateFormatSig,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
+                    ScalarFuncSig::Pow,
                 ],
                 2,
                 2,
@@ -1335,7 +1337,6 @@ mod test {
             ScalarFuncSig::Password,
             ScalarFuncSig::PeriodAdd,
             ScalarFuncSig::PeriodDiff,
-            ScalarFuncSig::Pow,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::Radians,
