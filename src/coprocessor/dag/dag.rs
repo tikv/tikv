@@ -40,26 +40,24 @@ impl<S: Snapshot + 'static> DAGContext<S> {
         req_ctx: ReqContext,
         batch_row_limit: usize,
     ) -> Result<Self> {
-        let mut eval_cfg = box_try!(EvalConfig::new(req.get_flags()));
-
+        let mut eval_cfg = EvalConfig::new().set_by_flags(req.get_flags());
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
-            box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
+            eval_cfg = box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
         } else if req.has_time_zone_offset() {
-            box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
+            eval_cfg = box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
         } else {
             // This should not be reachable. However we will not panic here in case
             // of compatibility issues.
         }
-
         if req.has_max_warning_count() {
-            eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
+            eval_cfg = eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }
         if req.has_sql_mode() {
-            eval_cfg.set_sql_mode(req.get_sql_mode())
+            eval_cfg = eval_cfg.set_sql_mode(req.get_sql_mode());
         }
         if req.has_is_strict_sql_mode() {
-            eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
+            eval_cfg = eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
         }
         let store = SnapshotStore::new(
             snap,

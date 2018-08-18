@@ -122,6 +122,16 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn sqrt(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let f = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if f < 0f64 {
+            Ok(None)
+        } else {
+            Ok(Some(f.sqrt()))
+        }
+    }
+
+    #[inline]
     pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.tan()))
@@ -133,7 +143,7 @@ mod test {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
@@ -234,7 +244,7 @@ mod test {
         ];
 
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -302,7 +312,7 @@ mod test {
             ),
         ];
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -346,6 +356,26 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::I64(exp);
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_sqrt() {
+        let tests = vec![
+            (Datum::F64(64f64), Datum::F64(8f64)),
+            (Datum::F64(2f64), Datum::F64(f64::consts::SQRT_2)),
+            (Datum::F64(-16f64), Datum::Null),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let op = scalar_func_expr(ScalarFuncSig::Sqrt, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }

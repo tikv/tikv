@@ -300,7 +300,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{
@@ -451,7 +451,7 @@ mod test {
 
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
@@ -485,7 +485,10 @@ mod test {
             ),
         ];
         for (sig, cols, exp) in cases {
-            let col_expr = col_expr(0);
+            let mut col_expr = col_expr(0);
+            col_expr
+                .mut_field_type()
+                .set_charset(charset::CHARSET_UTF8.to_owned());
             let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
