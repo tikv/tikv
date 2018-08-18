@@ -43,13 +43,21 @@ impl Checker {
 
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+        let size = entry.entry_size() as u64;
+        self.current_size += size;
+
         let mut over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
-        if self.current_size >= self.split_size && !over_limit {
+        if self.current_size > self.split_size && !over_limit {
             self.split_keys.push(keys::origin_key(entry.key()).to_vec());
-            self.current_size = 0;
+            // if for previous on_kv() self.current_size == self.split_size,
+            // the split key would be pushed this time, but the entry size for this time should not be ignored.
+            self.current_size = if self.current_size - size == self.split_size {
+                size
+            } else {
+                0
+            };
             over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         }
-        self.current_size += entry.entry_size() as u64;
 
         // For a large region, scan over the range maybe cost too much time,
         // so limit the number of produced split_key for one batch.

@@ -267,10 +267,10 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
             Ok(true)
         })
         .expect("");
-    assert!(size >= REGION_SPLIT_SIZE);
-    // although size may be larger than REGION_SPLIT_SIZE, but the diff should
+    assert!(size <= REGION_SPLIT_SIZE);
+    // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
     // be small.
-    assert!(size < REGION_SPLIT_SIZE + 1000);
+    assert!(size > REGION_SPLIT_SIZE - 1000);
 
     let epoch = left.get_region_epoch().clone();
     let get = new_request(left.get_id(), epoch, vec![new_get_cmd(&max_key)], false);

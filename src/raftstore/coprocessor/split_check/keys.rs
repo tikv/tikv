@@ -46,15 +46,20 @@ impl SplitChecker for Checker {
         if !key.is_commit_version() {
             return false;
         }
-
-        let mut over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
-        if self.current_count >= self.split_threshold && !over_limit {
-            self.split_keys.push(keys::origin_key(key.key()).to_vec());
-            self.current_count = 0;
-            over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
-        }
         self.current_count += 1;
 
+        let mut over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
+        if self.current_count > self.split_threshold && !over_limit {
+            self.split_keys.push(keys::origin_key(key.key()).to_vec());
+            // if for previous on_kv() self.current_count == self.split_threshold,
+            // the split key would be pushed this time, but the entry for this time should not be ignored.
+            self.current_count = 1;
+            over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
+        }
+
+        // For a large region, scan over the range maybe cost too much time,
+        // so limit the number of produced split_key for one batch.
+        // Also need to scan over self.max_keys_count for last part.
         over_limit && self.current_count + self.split_threshold >= self.max_keys_count
     }
 
