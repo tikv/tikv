@@ -123,6 +123,16 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn sqrt(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let f = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if f < 0f64 {
+            Ok(None)
+        } else {
+            Ok(Some(f.sqrt()))
+        }
+    }
+
+    #[inline]
     pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.tan()))
@@ -358,6 +368,26 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::I64(exp);
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_sqrt() {
+        let tests = vec![
+            (Datum::F64(64f64), Datum::F64(8f64)),
+            (Datum::F64(2f64), Datum::F64(f64::consts::SQRT_2)),
+            (Datum::F64(-16f64), Datum::Null),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let op = scalar_func_expr(ScalarFuncSig::Sqrt, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
