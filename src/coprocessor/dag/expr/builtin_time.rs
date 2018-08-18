@@ -150,9 +150,10 @@ mod test {
         }
 
         // test zero case
-        let mut cfg = EvalConfig::new(FLAG_IN_UPDATE_OR_DELETE_STMT).unwrap();
-        cfg.set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO);
-        cfg.set_strict_sql_mode(true);
+        let cfg = EvalConfig::new()
+            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
         let arg = datum_expr(Datum::Time(
             Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
