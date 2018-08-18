@@ -14,7 +14,6 @@
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::{cmp, i32};
 
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
@@ -62,7 +61,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
     pub fn new(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        region_split_size: usize,
         storage: Storage<E>,
         // TODO: Remove once endpoint itself is passed to here.
         cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
@@ -103,7 +101,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(cmp::max(region_split_size * 4, i32::MAX as usize) as i32)
+            .max_send_message_len(-1)
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -301,7 +299,6 @@ mod tests {
         let mut server = Server::new(
             &cfg,
             &security_mgr,
-            1024,
             storage,
             cop_read_pool,
             router,
