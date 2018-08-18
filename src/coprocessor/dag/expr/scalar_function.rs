@@ -191,6 +191,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToDec
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::CRC32
+            | ScalarFuncSig::Sqrt
             | ScalarFuncSig::Tan
             | ScalarFuncSig::Sin
             | ScalarFuncSig::JsonTypeSig
@@ -417,7 +418,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Sign
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
-            | ScalarFuncSig::Sqrt
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::StringAnyValue
             | ScalarFuncSig::StringDurationTimeDiff
@@ -807,6 +807,7 @@ dispatch_call! {
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
 
+        Sqrt => sqrt,
         Tan => tan,
         Sin => sin,
     }
@@ -1098,6 +1099,7 @@ mod test {
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
                     ScalarFuncSig::CRC32,
+                    ScalarFuncSig::Sqrt,
                     ScalarFuncSig::Tan,
                     ScalarFuncSig::Sin,
                     ScalarFuncSig::JsonTypeSig,
@@ -1368,7 +1370,6 @@ mod test {
             ScalarFuncSig::Sign,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
-            ScalarFuncSig::Sqrt,
             ScalarFuncSig::Strcmp,
             ScalarFuncSig::StringAnyValue,
             ScalarFuncSig::StringDurationTimeDiff,
