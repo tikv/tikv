@@ -398,7 +398,7 @@ mod test {
             let arg = datum_expr(arg);
             let expr = scalar_func_expr(sig, &[arg.clone()]);
             let op = Expression::build(&mut ctx, expr).unwrap();
-                        let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
