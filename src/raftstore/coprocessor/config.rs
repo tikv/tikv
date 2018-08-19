@@ -26,15 +26,15 @@ pub struct Config {
     /// batch_split_limit limits the number of produced split-key for one batch.
     pub batch_split_limit: u64,
 
-    /// When region [a,b) size meets region_max_size, it will be split into
-    /// several regions [a,c), [c,d), [d,e), [e,b). And the size of [a,c),
-    /// [c,d), [d,e) will be region_split_size (maybe a little larger).
+    /// When region [a,e) size meets region_max_size, it will be split into
+    /// several regions [a,b), [b,c), [c,d), [d,e). And the size of [a,b),
+    /// [b,c), [c,d) will be region_split_size (maybe a little larger).
     pub region_max_size: ReadableSize,
     pub region_split_size: ReadableSize,
 
-    /// When the number of keys in region [a,b) meets the region_max_keys,
-    /// it will be split into two several regions [a,c), [c,d), [d,e), [e,b).
-    /// And the number of keys in [a,c), [c,d), [d,e) will be region_split_keys.
+    /// When the number of keys in region [a,e) meets the region_max_keys,
+    /// it will be split into two several regions [a,b), [b,c), [c,d), [d,e).
+    /// And the number of keys in [a,b), [b,c), [c,d) will be region_split_keys.
     pub region_max_keys: u64,
     pub region_split_keys: u64,
 }
