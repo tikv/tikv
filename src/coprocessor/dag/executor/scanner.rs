@@ -444,7 +444,7 @@ pub mod test {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         // `test_take` is used to take `count` keys from the scanner. It calls `start_scan` at
-        // beginning, `stop_scan` in the end, producing a range. the range will be cheched against
+        // beginning, `stop_scan` in the end, producing a range. the range will be checked against
         // `expect_start_pk` and `expect_end_pk`. Pass -1 as pk means the end.
         let test_take = |scanner: &mut Scanner<_>, count, expect_start_pk, expect_end_pk| {
             let mut range = KeyRange::new();
