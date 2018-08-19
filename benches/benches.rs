@@ -13,6 +13,7 @@
 
 #![feature(test)]
 
+extern crate arrow;
 extern crate byteorder;
 extern crate crossbeam_channel;
 extern crate kvproto;
