@@ -38,7 +38,7 @@ pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
-pub const SEEK_BOUND: usize = 8;
+pub const SEEK_BOUND: u64 = 8;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
@@ -988,14 +988,14 @@ pub mod tests {
     ) {
         let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
-        let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
+        let limit = (SEEK_BOUND as usize * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (start_idx..(SEEK_BOUND * 30))
+        for (_, mut i) in (start_idx..(SEEK_BOUND as usize * 30))
             .enumerate()
             .filter(|&(i, _)| i % step == 0)
         {
             if seek_mode != SeekMode::Normal {
-                i = SEEK_BOUND * 30 - 1 - i;
+                i = SEEK_BOUND as usize * 30 - 1 - i;
             }
             let key = format!("key_{:03}", i);
             let seek_key = Key::from_raw(key.as_bytes());
@@ -1059,39 +1059,39 @@ pub mod tests {
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
-        for step in 1..SEEK_BOUND * 3 {
+        for step in 1..SEEK_BOUND as usize * 3 {
             for start in 0..10 {
                 test_linear_seek(
                     &snapshot,
                     ScanMode::Forward,
                     SeekMode::Normal,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND as usize,
                     step,
                 );
                 test_linear_seek(
                     &snapshot,
                     ScanMode::Backward,
                     SeekMode::Reverse,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND as usize,
                     step,
                 );
                 test_linear_seek(
                     &snapshot,
                     ScanMode::Backward,
                     SeekMode::ForPrev,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND as usize,
                     step,
                 );
             }
         }
         for &seek_mode in &[SeekMode::Reverse, SeekMode::Normal, SeekMode::ForPrev] {
-            for step in 1..SEEK_BOUND * 3 {
+            for step in 1..SEEK_BOUND as usize * 3 {
                 for start in 0..10 {
                     test_linear_seek(
                         &snapshot,
                         ScanMode::Mixed,
                         seek_mode,
-                        start * SEEK_BOUND,
+                        start * SEEK_BOUND as usize,
                         step,
                     );
                 }
