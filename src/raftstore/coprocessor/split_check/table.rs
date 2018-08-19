@@ -65,9 +65,11 @@ impl SplitChecker for Checker {
         self.split_key.is_some()
     }
 
-    fn split_key(&mut self) -> Option<Vec<u8>> {
-        let key = self.split_key.take()?;
-        Some(keys::data_key(&key))
+    fn split_keys(&mut self) -> Vec<Vec<u8>> {
+        match self.split_key.take() {
+            None => vec![],
+            Some(key) => vec![key],
+        }
     }
 }
 
@@ -331,8 +333,8 @@ mod test {
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
-                        Ok(Msg::SplitRegion { split_key, .. }) => {
-                            assert_eq!(&split_key, key.encoded());
+                        Ok(Msg::SplitRegion { split_keys, .. }) => {
+                            assert_eq!(split_keys, vec![key.take_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),
                     }
