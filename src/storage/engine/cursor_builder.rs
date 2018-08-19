@@ -13,7 +13,7 @@
 
 use raftstore::store::engine::IterOption;
 use storage::engine::Result;
-use storage::{CfName, Cursor, ScanMode, Snapshot};
+use storage::{CfName, Cursor, Key, ScanMode, Snapshot};
 
 /// A handy utility to build a snapshot cursor according to various configurations.
 pub struct CursorBuilder<'a, S: 'a + Snapshot> {
@@ -23,8 +23,8 @@ pub struct CursorBuilder<'a, S: 'a + Snapshot> {
     scan_mode: ScanMode,
     fill_cache: bool,
     prefix_seek: bool,
-    upper_bound: Option<Vec<u8>>,
-    lower_bound: Option<Vec<u8>>,
+    upper_bound: Option<Key>,
+    lower_bound: Option<Key>,
 }
 
 impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
@@ -74,7 +74,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     ///
     /// Both defaults to `None`.
     #[inline]
-    pub fn range(mut self, lower: Option<Vec<u8>>, upper: Option<Vec<u8>>) -> Self {
+    pub fn range(mut self, lower: Option<Key>, upper: Option<Key>) -> Self {
         self.lower_bound = lower;
         self.upper_bound = upper;
         self
@@ -82,7 +82,11 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
-        let mut iter_opt = IterOption::new(self.lower_bound, self.upper_bound, self.fill_cache);
+        let mut iter_opt = IterOption::new(
+            self.lower_bound.map(|k| k.take_encoded()),
+            self.upper_bound.map(|k| k.take_encoded()),
+            self.fill_cache,
+        );
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }

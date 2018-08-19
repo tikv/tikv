@@ -33,8 +33,8 @@ fn create_range_scanner<S: Snapshot>(
     key_only: bool,
     range: &KeyRange,
 ) -> Result<StoreScanner<S>> {
-    let lower_bound = Some(Key::from_raw(range.get_start()).take_encoded());
-    let upper_bound = Some(Key::from_raw(range.get_end()).take_encoded());
+    let lower_bound = Some(Key::from_raw(range.get_start()));
+    let upper_bound = Some(Key::from_raw(range.get_end()));
     store.scanner(scan_mode, key_only, lower_bound, upper_bound)
 }
 

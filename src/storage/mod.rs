@@ -655,7 +655,7 @@ impl<E: Engine> Storage<E> {
                         scanner = snap_store.scanner(
                             ScanMode::Forward,
                             options.key_only,
-                            Some(start_key.take_encoded()),
+                            Some(start_key),
                             None,
                         )?;
                     } else {
@@ -663,7 +663,7 @@ impl<E: Engine> Storage<E> {
                             ScanMode::Backward,
                             options.key_only,
                             None,
-                            Some(start_key.take_encoded()),
+                            Some(start_key),
                         )?;
                     };
                     let res = scanner.scan(limit);

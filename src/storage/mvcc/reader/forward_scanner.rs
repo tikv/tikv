@@ -17,7 +17,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::{Lock, Result};
+use storage::mvcc::Result;
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
@@ -29,8 +29,8 @@ pub struct ForwardScannerBuilder<S: Snapshot> {
     fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
     ts: u64,
 }
 
@@ -83,7 +83,7 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
     ///
     /// Default is `(None, None)`.
     #[inline]
-    pub fn range(mut self, lower_bound: Option<Vec<u8>>, upper_bound: Option<Vec<u8>>) -> Self {
+    pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.lower_bound = lower_bound;
         self.upper_bound = upper_bound;
         self
@@ -133,8 +133,8 @@ pub struct ForwardScanner<S: Snapshot> {
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `lower_bound`
     /// is used in initial seek as well. They will be consumed after `default_cursor` is being
     /// created.
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
 
     ts: u64,
 
@@ -160,13 +160,12 @@ impl<S: Snapshot> ForwardScanner<S> {
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
             // TODO: `seek_to_first` is better, however it has performance issues currently.
-            // TODO: We can eliminate clones here.
             self.write_cursor.seek(
-                &Key::from_encoded(self.lower_bound.as_ref().unwrap().clone()),
+                self.lower_bound.as_ref().unwrap(),
                 &mut self.statistics.write,
             )?;
             self.lock_cursor.seek(
-                &Key::from_encoded(self.lower_bound.as_ref().unwrap().clone()),
+                self.lower_bound.as_ref().unwrap(),
                 &mut self.statistics.lock,
             )?;
             self.is_started = true;
@@ -262,14 +261,15 @@ impl<S: Snapshot> ForwardScanner<S> {
             if has_lock {
                 match self.isolation_level {
                     IsolationLevel::SI => {
-                        assert!(self.lock_cursor.valid());
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
-                            CheckLockResult::Locked(e) => result = Err(e),
+                        // Only needs to check lock in SI
+                        match super::util::load_and_check_lock_from_cursor(
+                            &mut self.lock_cursor,
+                            &current_user_key,
+                            self.ts,
+                            &mut self.statistics,
+                        )? {
                             CheckLockResult::NotLocked => {}
+                            CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,
                         }
                     }

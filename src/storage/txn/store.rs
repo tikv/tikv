@@ -83,8 +83,8 @@ impl<S: Snapshot> SnapshotStore<S> {
         &self,
         mode: ScanMode,
         key_only: bool,
-        lower_bound: Option<Vec<u8>>,
-        upper_bound: Option<Vec<u8>>,
+        lower_bound: Option<Key>,
+        upper_bound: Option<Key>,
     ) -> Result<StoreScanner<S>> {
         let (forward_scanner, backward_scanner) = match mode {
             ScanMode::Forward => {
@@ -148,7 +148,7 @@ impl<S: Snapshot> StoreScanner<S> {
     }
 
     pub fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
-        let mut results = vec![];
+        let mut results = Vec::with_capacity(limit);
         while results.len() < limit {
             match self.next() {
                 Ok(Some((k, v))) => {
@@ -311,12 +311,7 @@ mod test {
         let key = format!("{}{}", KEY_PREFIX, START_ID);
         let start_key = Key::from_raw(key.as_bytes());
         let mut scanner = snapshot_store
-            .scanner(
-                ScanMode::Forward,
-                false,
-                Some(start_key.take_encoded()),
-                None,
-            )
+            .scanner(ScanMode::Forward, false, Some(start_key), None)
             .unwrap();
 
         let half = (key_num / 2) as usize;
@@ -341,12 +336,7 @@ mod test {
         let start_key = Key::from_raw(key.as_bytes());
         let expect = &store.keys[0..half - 1];
         let mut scanner = snapshot_store
-            .scanner(
-                ScanMode::Backward,
-                false,
-                None,
-                Some(start_key.take_encoded()),
-            )
+            .scanner(ScanMode::Backward, false, None, Some(start_key))
             .unwrap();
 
         let result = scanner.scan(half).unwrap();
@@ -378,8 +368,8 @@ mod test {
             .scanner(
                 ScanMode::Forward,
                 false,
-                Some(lower_bound.encoded().to_vec()),
-                Some(upper_bound.encoded().to_vec()),
+                Some(lower_bound.clone()),
+                Some(upper_bound.clone()),
             )
             .unwrap();
 
@@ -394,8 +384,8 @@ mod test {
             .scanner(
                 ScanMode::Backward,
                 false,
-                Some(lower_bound.take_encoded()),
-                Some(upper_bound.take_encoded()),
+                Some(lower_bound),
+                Some(upper_bound),
             )
             .unwrap();
 

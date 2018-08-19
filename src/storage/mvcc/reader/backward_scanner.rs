@@ -17,7 +17,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::{Lock, Result};
+use storage::mvcc::Result;
 use storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
@@ -37,8 +37,8 @@ pub struct BackwardScannerBuilder<S: Snapshot> {
     fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
     ts: u64,
 }
 
@@ -91,7 +91,7 @@ impl<S: Snapshot> BackwardScannerBuilder<S> {
     ///
     /// Default is `(None, None)`.
     #[inline]
-    pub fn range(mut self, lower_bound: Option<Vec<u8>>, upper_bound: Option<Vec<u8>>) -> Self {
+    pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.lower_bound = lower_bound;
         self.upper_bound = upper_bound;
         self
@@ -144,8 +144,8 @@ pub struct BackwardScanner<S: Snapshot> {
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
     /// is used in initial seek as well. They will be consumed after `default_cursor` is being
     /// created.
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
 
     ts: u64,
 
@@ -173,11 +173,11 @@ impl<S: Snapshot> BackwardScanner<S> {
             // TODO: `seek_to_last` is better, however it has performance issues currently.
             // TODO: We can eliminate clones here.
             self.write_cursor.reverse_seek(
-                &Key::from_encoded(self.upper_bound.as_ref().unwrap().clone()),
+                self.upper_bound.as_ref().unwrap(),
                 &mut self.statistics.write,
             )?;
             self.lock_cursor.reverse_seek(
-                &Key::from_encoded(self.upper_bound.as_ref().unwrap().clone()),
+                self.upper_bound.as_ref().unwrap(),
                 &mut self.statistics.lock,
             )?;
             self.is_started = true;
@@ -233,18 +233,16 @@ impl<S: Snapshot> BackwardScanner<S> {
 
             if has_lock {
                 match self.isolation_level {
-                    IsolationLevel::SI => {
-                        assert!(self.lock_cursor.valid());
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
-                            CheckLockResult::Locked(e) => result = Err(e),
-                            CheckLockResult::NotLocked => {}
-                            CheckLockResult::Ignored(ts) => get_ts = ts,
-                        }
-                    }
+                    IsolationLevel::SI => match super::util::load_and_check_lock_from_cursor(
+                        &mut self.lock_cursor,
+                        &current_user_key,
+                        self.ts,
+                        &mut self.statistics,
+                    )? {
+                        CheckLockResult::NotLocked => {}
+                        CheckLockResult::Locked(e) => result = Err(e),
+                        CheckLockResult::Ignored(ts) => get_ts = ts,
+                    },
                     IsolationLevel::RC => {}
                 }
                 self.lock_cursor.prev(&mut self.statistics.lock);
@@ -555,7 +553,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
         let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND)
-            .range(None, Some(vec![11 as u8]))
+            .range(None, Some(Key::from_raw(&[11 as u8])))
             .build()
             .unwrap();
 
@@ -759,7 +757,7 @@ mod tests {
         // Call reverse scan
         let ts = 2;
         let mut scanner = BackwardScannerBuilder::new(snapshot, ts)
-            .range(None, Some(k.take_encoded()))
+            .range(None, Some(k))
             .build()
             .unwrap();
         assert_eq!(scanner.read_next().unwrap(), None);
