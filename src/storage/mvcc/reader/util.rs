@@ -41,7 +41,6 @@ pub fn load_and_check_lock_from_cursor<I>(
 where
     I: Iterator,
 {
-    assert!(lock_cursor.valid());
     let lock_value = lock_cursor.value(&mut statistics.lock);
     let lock = Lock::parse(lock_value)?;
     check_lock(user_key, ts, &lock)
