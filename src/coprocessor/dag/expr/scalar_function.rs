@@ -204,7 +204,8 @@ impl ScalarFunc {
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
-            | ScalarFuncSig::UnHex => (1, 1),
+            | ScalarFuncSig::UnHex
+            | ScalarFuncSig::IsIPv6 => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -345,7 +346,6 @@ impl ScalarFunc {
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
-            | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastDay
             | ScalarFuncSig::LastInsertID
@@ -779,6 +779,7 @@ dispatch_call! {
         RightShift => right_shift,
         ASCII => ascii,
         IsIPv4 => is_ipv4,
+        IsIPv6 => is_ipv6,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1113,6 +1114,7 @@ mod test {
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
+                    ScalarFuncSig::IsIPv6,
                 ],
                 1,
                 1,
@@ -1297,7 +1299,6 @@ mod test {
             ScalarFuncSig::IntAnyValue,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
-            ScalarFuncSig::IsIPv6,
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastDay,
             ScalarFuncSig::LastInsertID,
