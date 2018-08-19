@@ -16,12 +16,14 @@ use std::result;
 use kvproto::pdpb::*;
 
 mod bootstrap;
+mod incompatible;
 mod leader_change;
 mod retry;
 mod service;
 mod split;
 
 pub use self::bootstrap::AlreadyBootstrapped;
+pub use self::incompatible::Incompatible;
 pub use self::leader_change::LeaderChange;
 pub use self::retry::Retry;
 pub use self::service::Service;
