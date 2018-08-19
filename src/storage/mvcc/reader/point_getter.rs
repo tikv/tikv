@@ -18,6 +18,8 @@ use storage::mvcc::Result;
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_WRITE};
 
+use super::util::CheckLockResult;
+
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
     snapshot: S,
@@ -141,7 +143,7 @@ impl<S: Snapshot> PointGetter<S> {
     }
 
     /// Get the value of a user key. See `PointGetter` for details.
-    pub fn read_next(&mut self, user_key: &Key, mut ts: u64) -> Result<Option<Value>> {
+    pub fn get(&mut self, user_key: &Key, mut get_ts: u64) -> Result<Option<Value>> {
         // Attempting to read multiple values when `multi == false`, directly returns `None`.
         if !self.multi && self.read_once {
             return Ok(None);
@@ -149,20 +151,27 @@ impl<S: Snapshot> PointGetter<S> {
 
         self.read_once = true;
 
-        if self.isolation_level == IsolationLevel::SI {
-            // Check for locks that signal concurrent writes in SI.
-            ts = super::util::load_and_check_lock(
-                &self.snapshot,
-                user_key,
-                ts,
-                &mut self.statistics,
-            )?;
+        match self.isolation_level {
+            IsolationLevel::SI => {
+                // Check for locks that signal concurrent writes in SI.
+                match super::util::load_and_check_lock(
+                    &self.snapshot,
+                    user_key,
+                    get_ts,
+                    &mut self.statistics,
+                )? {
+                    CheckLockResult::NotLocked => {}
+                    CheckLockResult::Locked(e) => return Err(e),
+                    CheckLockResult::Ignored(ts) => get_ts = ts,
+                }
+            }
+            IsolationLevel::RC => {}
         }
 
-        // First seek to `${user_key}_${ts}`. In multi-read mode, the keys may given out of
-        // order, so we allow re-seek.
+        // First seek to `${user_key}_${get_ts}`. In multi-read mode, the keys may given out
+        // of order, so we allow re-seek.
         self.write_cursor.near_seek(
-            &user_key.clone().append_ts(ts),
+            &user_key.clone().append_ts(get_ts),
             true,
             &mut self.statistics.write,
         )?;
@@ -228,9 +237,9 @@ impl<S: Snapshot> PointGetter<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
+        // Note: we can't use prefix seek for default CF.
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
             .fill_cache(self.fill_cache)
-            .prefix_seek(!self.multi)
             .build()?;
         self.default_cursor = Some(cursor);
         Ok(())
@@ -266,7 +275,7 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .get(&Key::from_raw(b"foo1"), 2)
                     .unwrap()
                     .is_none()
             );
@@ -280,7 +289,7 @@ mod tests {
 
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .get(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .is_none()
             );
@@ -297,7 +306,7 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .get(&Key::from_raw(b"foo1"), 2)
                     .unwrap()
                     .is_none()
             );
@@ -311,7 +320,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -326,7 +335,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -342,7 +351,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .get(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -362,13 +371,13 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .get(&Key::from_raw(b"foo1"), 2)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -377,7 +386,7 @@ mod tests {
             point_getter.take_statistics();
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .get(&Key::from_raw(b"foo1"), 4)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -392,7 +401,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .get(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -407,7 +416,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -426,13 +435,13 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .get(&Key::from_raw(b"foo1"), 2)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -441,7 +450,7 @@ mod tests {
             point_getter.take_statistics();
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .get(&Key::from_raw(b"foo1"), 4)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -456,7 +465,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .get(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
                 version2_value,
@@ -471,7 +480,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 7)
+                    .get(&Key::from_raw(b"foo1"), 7)
                     .unwrap()
                     .unwrap(),
                 version2_value,
@@ -486,7 +495,7 @@ mod tests {
 
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .get(&Key::from_raw(b"foo1"), 2)
                     .unwrap()
                     .is_none()
             );
@@ -501,7 +510,7 @@ mod tests {
 
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -517,7 +526,7 @@ mod tests {
 
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 1)
+                    .get(&Key::from_raw(b"foo1"), 1)
                     .unwrap()
                     .is_none()
             );
@@ -535,34 +544,34 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .get(&Key::from_raw(b"foo1"), 2)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .get(&Key::from_raw(b"foo1"), 4)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .get(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
                 version2_value,
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 7)
+                    .get(&Key::from_raw(b"foo1"), 7)
                     .unwrap()
                     .unwrap(),
                 version2_value,
@@ -571,7 +580,7 @@ mod tests {
             point_getter.take_statistics();
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -590,41 +599,41 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 2)
+                    .get(&Key::from_raw(b"foo1"), 2)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 4)
+                    .get(&Key::from_raw(b"foo1"), 4)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 5)
+                    .get(&Key::from_raw(b"foo1"), 5)
                     .unwrap()
                     .unwrap(),
                 version2_value,
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 6)
+                    .get(&Key::from_raw(b"foo1"), 6)
                     .unwrap()
                     .unwrap(),
                 version2_value,
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 7)
+                    .get(&Key::from_raw(b"foo1"), 7)
                     .unwrap()
                     .is_none()
             );
@@ -632,7 +641,7 @@ mod tests {
             point_getter.take_statistics();
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(b"foo1"), 3)
+                    .get(&Key::from_raw(b"foo1"), 3)
                     .unwrap()
                     .unwrap(),
                 b"bar1_1".to_vec()
@@ -674,7 +683,7 @@ mod tests {
         thread_rng().shuffle(test_cases.as_mut_slice());
         for (user_key, ts) in test_cases {
             let val = point_getter
-                .read_next(&Key::from_raw(&[user_key as u8]), ts)
+                .get(&Key::from_raw(&[user_key as u8]), ts)
                 .unwrap();
             if user_key >= UPPER_KEY || user_key < LOWER_KEY {
                 // key not exist
@@ -706,7 +715,7 @@ mod tests {
         thread_rng().shuffle(test_cases.as_mut_slice());
         for (user_key, ts) in test_cases {
             let val = point_getter
-                .read_next(&Key::from_raw(&[user_key as u8]), ts)
+                .get(&Key::from_raw(&[user_key as u8]), ts)
                 .unwrap();
             if user_key >= UPPER_KEY || user_key < LOWER_KEY {
                 // key not exist
@@ -739,7 +748,7 @@ mod tests {
         thread_rng().shuffle(test_cases.as_mut_slice());
         for (user_key, ts) in test_cases {
             let val = point_getter
-                .read_next(&Key::from_raw(&[user_key as u8]), ts)
+                .get(&Key::from_raw(&[user_key as u8]), ts)
                 .unwrap();
             if user_key >= UPPER_KEY || user_key < LOWER_KEY {
                 // key not exist
@@ -832,7 +841,7 @@ mod tests {
         // First operation, 1 seek.
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[55u8]), SEEK_BOUND)
+                .get(&Key::from_raw(&[55u8]), SEEK_BOUND)
                 .unwrap(),
             None
         );
@@ -846,7 +855,7 @@ mod tests {
         // N denotes to SEEK_BOUND.
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[55u8]), SEEK_BOUND)
+                .get(&Key::from_raw(&[55u8]), SEEK_BOUND)
                 .unwrap(),
             None
         );
@@ -860,7 +869,7 @@ mod tests {
         // SEEK_BOUND / 2 rollbacks.
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[60u8]), SEEK_BOUND)
+                .get(&Key::from_raw(&[60u8]), SEEK_BOUND)
                 .unwrap(),
             None
         );
@@ -874,7 +883,7 @@ mod tests {
         // and next to skip SEEK_BOUND / 2 rollbacks.
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[60u8]), SEEK_BOUND)
+                .get(&Key::from_raw(&[60u8]), SEEK_BOUND)
                 .unwrap(),
             None
         );
@@ -888,7 +897,7 @@ mod tests {
         // There will be SEEK_BOUND next() + 1 seek.
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[80u8]), 1)
+                .get(&Key::from_raw(&[80u8]), 1)
                 .unwrap()
                 .unwrap(),
             vec![1]
@@ -900,10 +909,7 @@ mod tests {
         assert_eq!(statistics.data.next, 0);
 
         // Currently pointing at key [80_1], getting [70_3], use seek.
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[70u8]), 3).unwrap(),
-            None
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[70u8]), 3).unwrap(), None);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 0);
@@ -913,7 +919,7 @@ mod tests {
         // Currently pointing at key [70_2], getting [0_N], use seek.
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[0u8]), SEEK_BOUND)
+                .get(&Key::from_raw(&[0u8]), SEEK_BOUND)
                 .unwrap(),
             None
         );
@@ -928,7 +934,7 @@ mod tests {
         value.push(SEEK_BOUND as u8);
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[10u8]), SEEK_BOUND)
+                .get(&Key::from_raw(&[10u8]), SEEK_BOUND)
                 .unwrap()
                 .unwrap(),
             value
@@ -945,7 +951,7 @@ mod tests {
         value.push((SEEK_BOUND / 2) as u8);
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[10u8]), SEEK_BOUND / 2)
+                .get(&Key::from_raw(&[10u8]), SEEK_BOUND / 2)
                 .unwrap()
                 .unwrap(),
             value
@@ -965,7 +971,7 @@ mod tests {
         // Use (SEEK_BOUND / 2 - 1) next() to reach [20_N/2+2].
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[20u8]), SEEK_BOUND / 2 + 2)
+                .get(&Key::from_raw(&[20u8]), SEEK_BOUND / 2 + 2)
                 .unwrap()
                 .unwrap(),
             vec![(SEEK_BOUND / 2 + 2) as u8]
@@ -979,7 +985,7 @@ mod tests {
         // Currently pointing at key [20_N/2+2]. Use (SEEK_BOUND / 2 + 2) next() to reach [20_0].
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[20u8]), 0)
+                .get(&Key::from_raw(&[20u8]), 0)
                 .unwrap()
                 .unwrap(),
             vec![0u8]
@@ -996,7 +1002,7 @@ mod tests {
         value.push((SEEK_BOUND / 2) as u8);
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[50u8]), SEEK_BOUND)
+                .get(&Key::from_raw(&[50u8]), SEEK_BOUND)
                 .unwrap()
                 .unwrap(),
             value,
@@ -1040,7 +1046,7 @@ mod tests {
         // First operation, 1 seek.
         assert_eq!(
             point_getter
-                .read_next(&Key::from_raw(&[20u8]), 5)
+                .get(&Key::from_raw(&[20u8]), 5)
                 .unwrap()
                 .unwrap(),
             vec![20u8]
@@ -1050,37 +1056,25 @@ mod tests {
         assert_eq!(statistics.write.next, 0);
 
         // Next (same key): no operation
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[20u8]), 5).unwrap(),
-            None,
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[20u8]), 5).unwrap(), None,);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
 
         // Next (different key): no operation
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[10u8]), 5).unwrap(),
-            None,
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[10u8]), 5).unwrap(), None,);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
 
         // Next (different key): no operation
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[30u8]), 5).unwrap(),
-            None,
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[30u8]), 5).unwrap(), None,);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
 
         // Next (no key): no operation
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[55u8]), 5).unwrap(),
-            None,
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[55u8]), 5).unwrap(), None,);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
@@ -1091,28 +1085,19 @@ mod tests {
             .multi(false)
             .build()
             .unwrap();
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[50u8]), 5).unwrap(),
-            None,
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[50u8]), 5).unwrap(), None,);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 0);
 
         // Future requests are `None` as well, even if key exists.
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[10u8]), 5).unwrap(),
-            None,
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[10u8]), 5).unwrap(), None,);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
 
         // Future requests are `None` as well, even if key exists.
-        assert_eq!(
-            point_getter.read_next(&Key::from_raw(&[30u8]), 5).unwrap(),
-            None,
-        );
+        assert_eq!(point_getter.get(&Key::from_raw(&[30u8]), 5).unwrap(), None,);
         let statistics = point_getter.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
@@ -1140,39 +1125,39 @@ mod tests {
 
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[0u8]), 5)
+                .get(&Key::from_raw(&[0u8]), 5)
                 .unwrap()
                 .is_none(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[20u8]), 5)
+                .get(&Key::from_raw(&[20u8]), 5)
                 .unwrap()
                 .unwrap()
                 .is_empty(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[35u8]), 5)
+                .get(&Key::from_raw(&[35u8]), 5)
                 .unwrap()
                 .is_none(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[30u8]), 5)
+                .get(&Key::from_raw(&[30u8]), 5)
                 .unwrap()
                 .unwrap()
                 .is_empty(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[30u8]), 1)
+                .get(&Key::from_raw(&[30u8]), 1)
                 .unwrap()
                 .is_none(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[10u8]), 5)
+                .get(&Key::from_raw(&[10u8]), 5)
                 .unwrap()
                 .unwrap()
                 .is_empty(),
@@ -1213,39 +1198,39 @@ mod tests {
 
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[0u8]), 5)
+                .get(&Key::from_raw(&[0u8]), 5)
                 .unwrap()
                 .is_none(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[20u8]), 5)
+                .get(&Key::from_raw(&[20u8]), 5)
                 .unwrap()
                 .unwrap()
                 .is_empty(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[35u8]), 5)
+                .get(&Key::from_raw(&[35u8]), 5)
                 .unwrap()
                 .is_none(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[30u8]), 5)
+                .get(&Key::from_raw(&[30u8]), 5)
                 .unwrap()
                 .unwrap()
                 .is_empty(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[30u8]), 1)
+                .get(&Key::from_raw(&[30u8]), 1)
                 .unwrap()
                 .is_none(),
         );
         assert!(
             point_getter
-                .read_next(&Key::from_raw(&[10u8]), 5)
+                .get(&Key::from_raw(&[10u8]), 5)
                 .unwrap()
                 .unwrap()
                 .is_empty(),
@@ -1272,7 +1257,7 @@ mod tests {
         // key [10_5] not prewritten.
         assert!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[10u8]), 5)
+                .get(&Key::from_raw(&[10u8]), 5)
                 .unwrap()
                 .is_none()
         );
@@ -1283,35 +1268,35 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[30u8]), 5)
+                    .get(&Key::from_raw(&[30u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[30u8]
             );
-            assert!(point_getter.read_next(&Key::from_raw(&[10u8]), 5).is_err());
+            assert!(point_getter.get(&Key::from_raw(&[10u8]), 5).is_err());
             // if we get the value with a smaller ts, we should success.
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[30u8]), 4)
+                    .get(&Key::from_raw(&[30u8]), 4)
                     .unwrap()
                     .is_none()
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 3)
+                    .get(&Key::from_raw(&[10u8]), 3)
                     .unwrap()
                     .is_none()
             );
             // if we directly get the value, we should fail as well.
             assert!(
                 new_point_getter(&engine)
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .is_err()
             );
             // if we directly get the value with a smaller ts, we should success.
             assert!(
                 new_point_getter(&engine)
-                    .read_next(&Key::from_raw(&[10u8]), 4)
+                    .get(&Key::from_raw(&[10u8]), 4)
                     .unwrap()
                     .is_none()
             );
@@ -1320,7 +1305,7 @@ mod tests {
         must_commit(&engine, &[10u8], 5, 5);
         assert_eq!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[10u8]), 8)
+                .get(&Key::from_raw(&[10u8]), 8)
                 .unwrap()
                 .unwrap(),
             &[10u8]
@@ -1332,27 +1317,27 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .get(&Key::from_raw(&[10u8]), 1)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .get(&Key::from_raw(&[10u8]), 9)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             // we should not be able to read key >= version 10
-            assert!(point_getter.read_next(&Key::from_raw(&[10u8]), 10).is_err());
-            assert!(point_getter.read_next(&Key::from_raw(&[10u8]), 11).is_err());
+            assert!(point_getter.get(&Key::from_raw(&[10u8]), 10).is_err());
+            assert!(point_getter.get(&Key::from_raw(&[10u8]), 11).is_err());
         }
         must_commit(&engine, &[10u8], 10, 20);
         {
@@ -1360,34 +1345,34 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .get(&Key::from_raw(&[10u8]), 9)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 15)
+                    .get(&Key::from_raw(&[10u8]), 15)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .get(&Key::from_raw(&[10u8]), 1)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 20)
+                    .get(&Key::from_raw(&[10u8]), 20)
                     .unwrap()
                     .unwrap(),
                 &[100u8]
@@ -1396,7 +1381,7 @@ mod tests {
         // key [20_5] not prewritten
         assert!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[20u8]), 5)
+                .get(&Key::from_raw(&[20u8]), 5)
                 .unwrap()
                 .is_none()
         );
@@ -1405,10 +1390,10 @@ mod tests {
         {
             // even if there was an error previously, we are able to read another committed key.
             let mut point_getter = new_point_getter(&engine);
-            assert!(point_getter.read_next(&Key::from_raw(&[20u8]), 5).is_err());
+            assert!(point_getter.get(&Key::from_raw(&[20u8]), 5).is_err());
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
@@ -1416,7 +1401,7 @@ mod tests {
             // or course we should be able to directly read the committed key.
             assert_eq!(
                 new_point_getter(&engine)
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
@@ -1426,14 +1411,14 @@ mod tests {
         must_prewrite_put(&engine, &[40u8], &[40u8], &[40u8], 5);
         {
             let mut point_getter = new_point_getter(&engine);
-            assert!(point_getter.read_next(&Key::from_raw(&[20u8]), 5).is_err());
-            assert!(point_getter.read_next(&Key::from_raw(&[40u8]), 5).is_err());
+            assert!(point_getter.get(&Key::from_raw(&[20u8]), 5).is_err());
+            assert!(point_getter.get(&Key::from_raw(&[40u8]), 5).is_err());
         }
         // key [20_5] committed
         must_commit(&engine, &[20u8], 5, 5);
         assert_eq!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[20u8]), 5)
+                .get(&Key::from_raw(&[20u8]), 5)
                 .unwrap()
                 .unwrap(),
             &[20u8]
@@ -1461,7 +1446,7 @@ mod tests {
         // key [10_5] not prewritten.
         assert!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[10u8]), 5)
+                .get(&Key::from_raw(&[10u8]), 5)
                 .unwrap()
                 .is_none()
         );
@@ -1471,39 +1456,39 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[30u8]), 5)
+                    .get(&Key::from_raw(&[30u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[30u8]
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .is_none()
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[30u8]), 4)
+                    .get(&Key::from_raw(&[30u8]), 4)
                     .unwrap()
                     .is_none()
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 3)
+                    .get(&Key::from_raw(&[10u8]), 3)
                     .unwrap()
                     .is_none()
             );
             assert!(
                 new_point_getter(&engine)
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .is_none()
             );
             // if we directly get the value with a smaller ts, we should success.
             assert!(
                 new_point_getter(&engine)
-                    .read_next(&Key::from_raw(&[10u8]), 4)
+                    .get(&Key::from_raw(&[10u8]), 4)
                     .unwrap()
                     .is_none()
             );
@@ -1512,7 +1497,7 @@ mod tests {
         must_commit(&engine, &[10u8], 5, 5);
         assert_eq!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[10u8]), 8)
+                .get(&Key::from_raw(&[10u8]), 8)
                 .unwrap()
                 .unwrap(),
             &[10u8]
@@ -1523,34 +1508,34 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .get(&Key::from_raw(&[10u8]), 1)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .get(&Key::from_raw(&[10u8]), 9)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 10)
+                    .get(&Key::from_raw(&[10u8]), 10)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 11)
+                    .get(&Key::from_raw(&[10u8]), 11)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
@@ -1561,34 +1546,34 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 9)
+                    .get(&Key::from_raw(&[10u8]), 9)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 15)
+                    .get(&Key::from_raw(&[10u8]), 15)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 1)
+                    .get(&Key::from_raw(&[10u8]), 1)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 20)
+                    .get(&Key::from_raw(&[10u8]), 20)
                     .unwrap()
                     .unwrap(),
                 &[100u8]
@@ -1597,7 +1582,7 @@ mod tests {
         // key [20_5] not prewritten
         assert!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[20u8]), 5)
+                .get(&Key::from_raw(&[20u8]), 5)
                 .unwrap()
                 .is_none()
         );
@@ -1607,20 +1592,20 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[20u8]), 5)
+                    .get(&Key::from_raw(&[20u8]), 5)
                     .unwrap()
                     .is_none()
             );
             assert_eq!(
                 point_getter
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
             );
             assert_eq!(
                 new_point_getter(&engine)
-                    .read_next(&Key::from_raw(&[10u8]), 5)
+                    .get(&Key::from_raw(&[10u8]), 5)
                     .unwrap()
                     .unwrap(),
                 &[10u8]
@@ -1632,13 +1617,13 @@ mod tests {
             let mut point_getter = new_point_getter(&engine);
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[20u8]), 5)
+                    .get(&Key::from_raw(&[20u8]), 5)
                     .unwrap()
                     .is_none()
             );
             assert!(
                 point_getter
-                    .read_next(&Key::from_raw(&[40u8]), 5)
+                    .get(&Key::from_raw(&[40u8]), 5)
                     .unwrap()
                     .is_none()
             );
@@ -1647,7 +1632,7 @@ mod tests {
         must_commit(&engine, &[20u8], 5, 5);
         assert_eq!(
             new_point_getter(&engine)
-                .read_next(&Key::from_raw(&[20u8]), 5)
+                .get(&Key::from_raw(&[20u8]), 5)
                 .unwrap()
                 .unwrap(),
             &[20u8]

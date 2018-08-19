@@ -17,9 +17,11 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::{Lock, Result};
+use storage::mvcc::Result;
 use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+
+use super::util::CheckLockResult;
 
 /// `ForwardScanner` factory.
 pub struct ForwardScannerBuilder<S: Snapshot> {
@@ -27,8 +29,8 @@ pub struct ForwardScannerBuilder<S: Snapshot> {
     fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
     ts: u64,
 }
 
@@ -81,7 +83,7 @@ impl<S: Snapshot> ForwardScannerBuilder<S> {
     ///
     /// Default is `(None, None)`.
     #[inline]
-    pub fn range(mut self, lower_bound: Option<Vec<u8>>, upper_bound: Option<Vec<u8>>) -> Self {
+    pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.lower_bound = lower_bound;
         self.upper_bound = upper_bound;
         self
@@ -128,10 +130,11 @@ pub struct ForwardScanner<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
 
-    /// `lower_bound` and `upper_bound` is only used to create `default_cursor`. It will be
-    /// consumed after `default_cursor` is being created.
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `lower_bound`
+    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
+    /// created.
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
 
     ts: u64,
 
@@ -156,8 +159,20 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            self.write_cursor.seek_to_first(&mut self.statistics.write);
-            self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+            if self.lower_bound.is_some() {
+                // TODO: `seek_to_first` is better, however it has performance issues currently.
+                self.write_cursor.seek(
+                    self.lower_bound.as_ref().unwrap(),
+                    &mut self.statistics.write,
+                )?;
+                self.lock_cursor.seek(
+                    self.lower_bound.as_ref().unwrap(),
+                    &mut self.statistics.lock,
+                )?;
+            } else {
+                self.write_cursor.seek_to_first(&mut self.statistics.write);
+                self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+            }
             self.is_started = true;
         }
 
@@ -235,9 +250,8 @@ impl<S: Snapshot> ForwardScanner<S> {
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
-            // `result` stores intermediate values, including errors. When there is an error, for
-            // example, key locked error, we need to do the rest of the work like stepping cursors
-            // instead of stop there.
+            // `result` stores intermediate values, including KeyLocked errors (but not other kind
+            // of errors). If there is KeyLocked errors, we should be able to continue scanning.
             let mut result = Ok(None);
 
             // `get_ts` is the real used timestamp. If user specifies `MaxInt64` as the timestamp,
@@ -252,14 +266,16 @@ impl<S: Snapshot> ForwardScanner<S> {
             if has_lock {
                 match self.isolation_level {
                     IsolationLevel::SI => {
-                        assert!(self.lock_cursor.valid());
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock) {
-                            Ok(ts) => get_ts = ts,
-                            Err(e) => result = Err(e),
+                        // Only needs to check lock in SI
+                        match super::util::load_and_check_lock_from_cursor(
+                            &mut self.lock_cursor,
+                            &current_user_key,
+                            self.ts,
+                            &mut self.statistics,
+                        )? {
+                            CheckLockResult::NotLocked => {}
+                            CheckLockResult::Locked(e) => result = Err(e),
+                            CheckLockResult::Ignored(ts) => get_ts = ts,
                         }
                     }
                     IsolationLevel::RC => {}
@@ -455,5 +471,293 @@ impl<S: Snapshot> ForwardScanner<S> {
             .build()?;
         self.default_cursor = Some(cursor);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use storage::engine::{self, TEMP_DIR};
+    use storage::mvcc::tests::*;
+    use storage::ALL_CFS;
+    use storage::{Engine, Key};
+
+    use kvproto::kvrpcpb::Context;
+
+    /// Check whether everything works as usual when `ForwardScanner::get()` goes out of bound.
+    #[test]
+    fn test_get_out_of_bound() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"value", b"a", 7);
+        must_commit(&engine, b"a", 7, 7);
+
+        // Generate 5 rollback for [b].
+        for ts in 0..5 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = ForwardScannerBuilder::new(snapshot, 10)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // Initial position: 1 seek_to_first:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //       ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"a"), b"value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Use 5 next and reach out of bound:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //                           ^cursor
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 5);
+
+        // Cursor remains invalid, so nothing should happen.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `ForwardScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    ///
+    /// Case 1. next() out of bound
+    #[test]
+    fn test_move_next_user_key_out_of_bound_1() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
+        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+
+        // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
+        for ts in 0..SEEK_BOUND / 2 {
+            must_rollback(&engine, b"b", ts as u64);
+        }
+        must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
+        must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = ForwardScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_first:
+        //   a_8 b_2 b_1 b_0
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_8 b_2 b_1 b_0
+        //       ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"a"), b"a_value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Before:
+        //   a_8 b_2 b_1 b_0
+        //       ^cursor
+        // We should be able to get wanted value without any operation.
+        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and stop:
+        //   a_8 b_2 b_1 b_0
+        //                   ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"b"), b"b_value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `ForwardScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    ///
+    /// Case 2. seek() out of bound
+    #[test]
+    fn test_move_next_user_key_out_of_bound_2() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
+        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+
+        // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
+        for ts in 1..SEEK_BOUND {
+            must_rollback(&engine, b"b", ts as u64);
+        }
+        must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
+        must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = ForwardScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_first:
+        //   a_8 b_4 b_3 b_2 b_1
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_8 b_4 b_3 b_2 b_1
+        //       ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"a"), b"a_value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Before:
+        //   a_8 b_4 b_3 b_2 b_1
+        //       ^cursor
+        // We should be able to get wanted value without any operation.
+        // After get the value, use SEEK_BOUND-1 next: (TODO: fix it to SEEK_BOUND)
+        //   a_8 b_4 b_3 b_2 b_1
+        //                   ^cursor
+        // We still pointing at current user key, so a seek:
+        //   a_8 b_4 b_3 b_2 b_1
+        //                       ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"b"), b"b_value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
+
+    /// Range is left open right closed.
+    #[test]
+    fn test_range() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put for [1], [2] ... [6].
+        for i in 1..7 {
+            // ts = 1: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 1);
+            must_commit(&engine, &[i], 1, 1);
+
+            // ts = 7: value = [ts]
+            must_prewrite_put(&engine, &[i], &[i], &[i], 7);
+            must_commit(&engine, &[i], 7, 7);
+
+            // ts = 14: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 14);
+            must_commit(&engine, &[i], 14, 14);
+        }
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+
+        // Test both bound specified.
+        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[3u8]), vec![3u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[4u8]), vec![4u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
+
+        // Test left bound not specified.
+        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(None, Some(Key::from_raw(&[3u8])))
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[1u8]), vec![1u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[2u8]), vec![2u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
+
+        // Test right bound not specified.
+        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(Some(Key::from_raw(&[5u8])), None)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[5u8]), vec![5u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[6u8]), vec![6u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
+
+        // Test both bound not specified.
+        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(None, None)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[1u8]), vec![1u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[2u8]), vec![2u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[3u8]), vec![3u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[4u8]), vec![4u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[5u8]), vec![5u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[6u8]), vec![6u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
     }
 }

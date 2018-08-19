@@ -33,8 +33,8 @@ fn create_range_scanner<S: Snapshot>(
     key_only: bool,
     range: &KeyRange,
 ) -> Result<StoreScanner<S>> {
-    let lower_bound = Some(Key::from_raw(range.get_start()).into_encoded());
-    let upper_bound = Some(Key::from_raw(range.get_end()).into_encoded());
+    let lower_bound = Some(Key::from_raw(range.get_start()));
+    let upper_bound = Some(Key::from_raw(range.get_end()));
     store.scanner(scan_mode, key_only, lower_bound, upper_bound)
 }
 
@@ -429,7 +429,7 @@ pub mod test {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
         // `test_take` is used to take `count` keys from the scanner. It calls `start_scan` at
-        // beginning, `stop_scan` in the end, producing a range. the range will be cheched against
+        // beginning, `stop_scan` in the end, producing a range. the range will be checked against
         // `expect_start_pk` and `expect_end_pk`. Pass -1 as pk means the end.
         let test_take = |scanner: &mut Scanner<_>, count, expect_start_pk, expect_end_pk| {
             let mut range = KeyRange::new();

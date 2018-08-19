@@ -17,6 +17,47 @@ use storage::{Cursor, Iterator, Key, Snapshot, Statistics, Value};
 use storage::{CF_LOCK, CF_WRITE};
 use util::properties::MvccProperties;
 
+/// Representing check lock result.
+#[derive(Debug)]
+pub enum CheckLockResult {
+    /// Key is locked. The key lock error is included.
+    Locked(Error),
+
+    /// Key is not locked.
+    NotLocked,
+
+    /// Key's lock exists but was ignored because of requesting the latest committed version
+    /// for the primary key. The committed version is included.
+    Ignored(u64),
+}
+
+/// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the latest
+/// committed version will be returned for primary key instead of leading to lock conflicts.
+#[inline]
+pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
+    if lock.ts > ts || lock.lock_type == LockType::Lock {
+        // Ignore lock when lock.ts > ts or lock's type is Lock
+        return Ok(CheckLockResult::NotLocked);
+    }
+
+    let raw_key = key.raw()?;
+
+    if ts == ::std::u64::MAX && raw_key == lock.primary {
+        // When `ts == u64::MAX` (which means to get latest committed version for
+        // primary key), and current key is the primary key, we return the latest
+        // committed version.
+        return Ok(CheckLockResult::Ignored(lock.ts - 1));
+    }
+
+    // There is a pending lock. Client should wait or clean it.
+    Ok(CheckLockResult::Locked(Error::KeyIsLocked {
+        key: raw_key,
+        primary: lock.primary.clone(),
+        ts: lock.ts,
+        ttl: lock.ttl,
+    }))
+}
+
 /// Get the lock of a user key in the lock CF.
 ///
 /// Internally, there is a db `get`.
@@ -50,40 +91,31 @@ pub fn load_and_check_lock<S>(
     key: &Key,
     ts: u64,
     statistics: &mut Statistics,
-) -> Result<u64>
+) -> Result<CheckLockResult>
 where
     S: Snapshot,
 {
     if let Some(lock) = load_lock(snapshot, key, statistics)? {
         return check_lock(key, ts, &lock);
     }
-    Ok(ts)
+    Ok(CheckLockResult::NotLocked)
 }
 
-/// Checks whether the lock conflicts with the given `ts`. If there is no conflict,
-/// the safe `ts` will be returned.
-pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<u64> {
-    if lock.ts > ts || lock.lock_type == LockType::Lock {
-        // Ignore lock when lock.ts > ts or lock's type is Lock
-        return Ok(ts);
-    }
-
-    let raw_key = key.raw()?;
-
-    if ts == ::std::u64::MAX && raw_key == lock.primary {
-        // When `ts == u64::MAX` (which means to get latest committed version for
-        // primary key), and current key is the primary key, we return the latest
-        // committed version.
-        return Ok(lock.ts - 1);
-    }
-
-    // There is a pending lock. Client should wait or clean it.
-    Err(Error::KeyIsLocked {
-        key: raw_key,
-        primary: lock.primary.clone(),
-        ts: lock.ts,
-        ttl: lock.ttl,
-    })
+/// Load the lock from current cursor and check lock.
+/// This function requires that the cursor is pointing at the lock of the user key.
+#[inline]
+pub fn load_and_check_lock_from_cursor<I>(
+    lock_cursor: &mut Cursor<I>,
+    user_key: &Key,
+    ts: u64,
+    statistics: &mut Statistics,
+) -> Result<CheckLockResult>
+where
+    I: Iterator,
+{
+    let lock_value = lock_cursor.value(&mut statistics.lock);
+    let lock = Lock::parse(lock_value)?;
+    check_lock(user_key, ts, &lock)
 }
 
 /// Reads user key's value in default CF according to the given write CF value

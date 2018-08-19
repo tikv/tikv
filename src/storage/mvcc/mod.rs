@@ -18,10 +18,10 @@ mod txn;
 mod write;
 
 pub use self::lock::{Lock, LockType};
-pub use self::reader::{
-    BackwardScanner, BackwardScannerBuilder, CfReader, CfReaderBuilder, ForwardScanner,
-    ForwardScannerBuilder, PointGetter, PointGetterBuilder,
-};
+pub use self::reader::{BackwardScanner, BackwardScannerBuilder};
+pub use self::reader::{CfReader, CfReaderBuilder};
+pub use self::reader::{ForwardScanner, ForwardScannerBuilder};
+pub use self::reader::{PointGetter, PointGetterBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 use std::error;
@@ -146,10 +146,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
         assert_eq!(
-            point_getter
-                .read_next(&Key::from_raw(key), ts)
-                .unwrap()
-                .unwrap(),
+            point_getter.get(&Key::from_raw(key), ts).unwrap().unwrap(),
             expect
         );
     }
@@ -162,10 +159,7 @@ pub mod tests {
             .build()
             .unwrap();
         assert_eq!(
-            point_getter
-                .read_next(&Key::from_raw(key), ts)
-                .unwrap()
-                .unwrap(),
+            point_getter.get(&Key::from_raw(key), ts).unwrap().unwrap(),
             expect
         )
     }
@@ -174,19 +168,14 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
-        assert!(
-            point_getter
-                .read_next(&Key::from_raw(key), ts)
-                .unwrap()
-                .is_none()
-        );
+        assert!(point_getter.get(&Key::from_raw(key), ts).unwrap().is_none());
     }
 
     pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut point_getter = PointGetterBuilder::new(snapshot).build().unwrap();
-        assert!(point_getter.read_next(&Key::from_raw(key), ts).is_err());
+        assert!(point_getter.get(&Key::from_raw(key), ts).is_err());
     }
 
     pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {

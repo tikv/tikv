@@ -17,15 +17,13 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{error, result};
 
-pub use self::rocksdb::{RocksEngine, RocksSnapshot};
+use config;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use raftstore::store::engine::IterOption;
 use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-
-use config;
-
 use util::rocksdb::CFOptions;
 
 mod cursor_builder;
@@ -34,15 +32,14 @@ mod perf_context;
 pub mod raftkv;
 mod rocksdb;
 
-use super::super::raftstore::store::engine::IterOption;
-
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &str = "";
+pub const SEEK_BOUND: u64 = 8;
 
-pub const SEEK_BOUND: u64 = 6;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 const STAT_TOTAL: &str = "total";
@@ -490,6 +487,20 @@ impl<I: Iterator> Cursor<I> {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
         }
+        Ok(true)
+    }
+
+    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        if !self.seek_for_prev(key, statistics)? {
+            return Ok(false);
+        }
+
+        if self.key(statistics) == &**key.encoded() {
+            // should not update min_key here. otherwise reverse_seek_le may not
+            // work as expected.
+            return Ok(self.prev(statistics));
+        }
+
         Ok(true)
     }
 
@@ -995,14 +1006,14 @@ pub mod tests {
     ) {
         let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
-        let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
+        let limit = (SEEK_BOUND as usize * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (start_idx..(SEEK_BOUND * 30))
+        for (_, mut i) in (start_idx..(SEEK_BOUND as usize * 30))
             .enumerate()
             .filter(|&(i, _)| i % step == 0)
         {
             if seek_mode != SeekMode::Normal {
-                i = SEEK_BOUND * 30 - 1 - i;
+                i = SEEK_BOUND as usize * 30 - 1 - i;
             }
             let key = format!("key_{:03}", i);
             let seek_key = Key::from_raw(key.as_bytes());
@@ -1056,32 +1067,32 @@ pub mod tests {
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
-        for step in 1..SEEK_BOUND * 3 {
+        for step in 1..SEEK_BOUND as usize * 3 {
             for start in 0..10 {
                 test_linear_seek(
                     &snapshot,
                     ScanMode::Forward,
                     SeekMode::Normal,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND as usize,
                     step,
                 );
                 test_linear_seek(
                     &snapshot,
                     ScanMode::Backward,
                     SeekMode::ForPrev,
-                    start * SEEK_BOUND,
+                    start * SEEK_BOUND as usize,
                     step,
                 );
             }
         }
         for &seek_mode in &[SeekMode::Normal, SeekMode::ForPrev] {
-            for step in 1..SEEK_BOUND * 3 {
+            for step in 1..SEEK_BOUND as usize * 3 {
                 for start in 0..10 {
                     test_linear_seek(
                         &snapshot,
                         ScanMode::Mixed,
                         seek_mode,
-                        start * SEEK_BOUND,
+                        start * SEEK_BOUND as usize,
                         step,
                     );
                 }
