@@ -170,12 +170,12 @@ mod tests {
             CheckPolicy::SCAN,
         ));
         let split_key = Key::from_raw(b"0005");
-        must_split_at(&rx, &region, vec![split_key.clone().take_encoded()]);
+        must_split_at(&rx, &region, vec![split_key.clone().into_encoded()]);
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
             CheckPolicy::APPROXIMATE,
         ));
-        must_split_at(&rx, &region, vec![split_key.take_encoded()]);
+        must_split_at(&rx, &region, vec![split_key.into_encoded()]);
     }
 }

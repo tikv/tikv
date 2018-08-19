@@ -334,7 +334,7 @@ mod test {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
                         Ok(Msg::SplitRegion { split_keys, .. }) => {
-                            assert_eq!(split_keys, vec![key.take_encoded()]);
+                            assert_eq!(split_keys, vec![key.into_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),
                     }

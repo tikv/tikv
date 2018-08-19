@@ -241,7 +241,7 @@ mod tests {
         must_split_at(
             &rx,
             &region,
-            vec![Key::from_raw(b"0080").append_ts(2).take_encoded()],
+            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
         );
 
         drop(rx);
