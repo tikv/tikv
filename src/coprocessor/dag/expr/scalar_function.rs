@@ -204,6 +204,8 @@ impl ScalarFunc {
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
+            | ScalarFuncSig::HexIntArg
+            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::UnHex => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -331,8 +333,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GreatestReal
             | ScalarFuncSig::GreatestString
             | ScalarFuncSig::GreatestTime
-            | ScalarFuncSig::HexIntArg
-            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
             | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
@@ -861,6 +861,8 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        HexIntArg => hex_int_arg,
+        HexStrArg => hex_str_arg,
         UnHex => un_hex,
     }
     TIME_CALLS {
@@ -1283,8 +1285,6 @@ mod test {
             ScalarFuncSig::GreatestReal,
             ScalarFuncSig::GreatestString,
             ScalarFuncSig::GreatestTime,
-            ScalarFuncSig::HexIntArg,
-            ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
             ScalarFuncSig::Inet6Aton,
             ScalarFuncSig::Inet6Ntoa,
