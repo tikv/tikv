@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{util, Msg};
+use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
 
@@ -43,16 +43,16 @@ impl SplitChecker for Checker {
             self.current_keys += 1;
         }
         if self.current_keys > self.split_keys && self.split_key.is_none() {
-            self.split_key = Some(key.key().to_vec());
+            self.split_key = Some(keys::origin_key(key.key()).to_vec());
         }
         self.current_keys > self.max_keys
     }
 
-    fn split_key(&mut self) -> Option<Vec<u8>> {
+    fn split_keys(&mut self) -> Vec<Vec<u8>> {
         if self.current_keys > self.max_keys {
-            self.split_key.take()
+            self.split_key.take().map_or_else(Vec::new, |k| vec![k])
         } else {
-            None
+            vec![]
         }
     }
 }
@@ -238,7 +238,11 @@ mod tests {
         }
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        must_split_at(&rx, &region, Key::from_raw(b"0080").append_ts(2).encoded());
+        must_split_at(
+            &rx,
+            &region,
+            vec![Key::from_raw(b"0080").append_ts(2).take_encoded()],
+        );
 
         drop(rx);
         // It should be safe even the result can't be sent back.
