@@ -15,7 +15,6 @@ use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
-use tikv::util::collections::{HashMap, HashSet};
 
 use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
@@ -38,18 +37,17 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage::{self, RaftKv};
+use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
 
-use super::cluster::{Cluster, Simulator};
-use super::pd::TestPdClient;
-use super::transport_simulate::*;
-use super::util::create_test_engine;
+use super::*;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
     SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
@@ -121,7 +119,13 @@ impl Simulator for ServerCluster {
         let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
-        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender);
+
+        // Create localreader.
+        let local_reader = Worker::new("test-local-reader");
+        let local_ch = local_reader.scheduler();
+
+        let raft_router =
+            ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender, local_ch);
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create engine
@@ -164,7 +168,6 @@ impl Simulator for ServerCluster {
             server = Some(Server::new(
                 &server_cfg,
                 &security_mgr,
-                cfg.coprocessor.region_split_size.0 as usize,
                 store.clone(),
                 cop_read_pool.clone(),
                 sim_router.clone(),
@@ -210,6 +213,7 @@ impl Simulator for ServerCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            local_reader,
             coprocessor_host,
             importer,
         ).unwrap();

@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use fail;
-use kvproto::kvrpcpb::Context;
-use raftstore::server::new_server_cluster;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
-use storage::util::new_raft_engine;
+
+use fail;
+use kvproto::kvrpcpb::Context;
+
+use test_raftstore::new_server_cluster;
+use test_storage::new_raft_engine;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;
@@ -108,7 +110,7 @@ fn test_scheduler_leader_change_twice() {
     storage0
         .async_prewrite(
             ctx0,
-            vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+            vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
             b"k".to_vec(),
             10,
             Options::default(),

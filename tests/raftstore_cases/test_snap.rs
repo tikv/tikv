@@ -19,16 +19,12 @@ use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::{Message, MessageType};
+
+use test_raftstore::*;
 use tikv::raftstore::store::Msg;
 use tikv::raftstore::Result;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -296,28 +292,33 @@ fn test_server_snapshot() {
 }
 
 // replace content of all the snapshots with the first snapshot it received.
+#[derive(Clone)]
 struct StaleSnap {
+    inner: Arc<StaleSnapInner>,
+}
+
+struct StaleSnapInner {
     first_snap: RwLock<Option<Message>>,
     sent: Mutex<Sender<()>>,
 }
 
-impl Filter<RaftMessage> for Arc<StaleSnap> {
+impl Filter<RaftMessage> for StaleSnap {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
             if m.get_message().get_msg_type() == MessageType::MsgSnapshot
                 && m.get_to_peer().get_store_id() == 3
             {
-                if self.first_snap.rl().is_none() {
-                    *self.first_snap.wl() = Some(m.take_message());
+                if self.inner.first_snap.rl().is_none() {
+                    *self.inner.first_snap.wl() = Some(m.take_message());
                     continue;
                 } else {
                     let from = m.get_message().get_from();
                     let to = m.get_message().get_to();
-                    m.set_message(self.first_snap.rl().as_ref().unwrap().clone());
+                    m.set_message(self.inner.first_snap.rl().as_ref().unwrap().clone());
                     m.mut_message().set_from(from);
                     m.mut_message().set_to(to);
-                    let _ = self.sent.lock().unwrap().send(());
+                    let _ = self.inner.sent.lock().unwrap().send(());
                 }
             }
             res.push(m);
@@ -346,10 +347,12 @@ fn test_node_stale_snap() {
 
     let (tx, rx) = mpsc::channel();
     let filter = StaleSnap {
-        first_snap: RwLock::default(),
-        sent: Mutex::new(tx),
+        inner: Arc::new(StaleSnapInner {
+            first_snap: RwLock::default(),
+            sent: Mutex::new(tx),
+        }),
     };
-    cluster.add_send_filter(CloneFilterFactory(Arc::new(filter)));
+    cluster.add_send_filter(CloneFilterFactory(filter));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");

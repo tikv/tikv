@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::{util, Msg};
+use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 pub struct Checker {
@@ -38,20 +38,22 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], value_size: u64) -> bool {
-        self.current_size += key.len() as u64 + value_size;
+    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+        self.current_size += entry.entry_size() as u64;
         if self.current_size > self.split_size && self.split_key.is_none() {
-            self.split_key = Some(key.to_vec());
+            self.split_key = Some(entry.key().to_vec());
         }
         // should consider max_size may equal to split_size
         self.current_size > self.max_size
     }
 
-    fn split_key(&mut self) -> Option<Vec<u8>> {
-        if self.current_size > self.max_size {
-            self.split_key.take()
+    fn split_keys(&mut self) -> Vec<Vec<u8>> {
+        if self.current_size >= self.max_size {
+            let data_key = self.split_key.take().unwrap();
+            let key = keys::origin_key(&data_key).to_vec();
+            vec![key]
         } else {
-            None
+            vec![]
         }
     }
 }
@@ -135,7 +137,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
@@ -148,13 +150,40 @@ mod tests {
 
     use super::Checker;
     use raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::ALL_CFS;
+    use raftstore::store::{keys, KeyEntry, Msg, SplitCheckRunner, SplitCheckTask};
+    use storage::{ALL_CFS, CF_WRITE};
     use util::config::ReadableSize;
     use util::properties::RangePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
+
+    pub fn must_split_at(
+        rx: &mpsc::Receiver<Msg>,
+        exp_region: &Region,
+        exp_split_keys: Vec<Vec<u8>>,
+    ) {
+        loop {
+            match rx.try_recv() {
+                Ok(Msg::RegionApproximateSize { region_id, .. })
+                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                }
+                Ok(Msg::SplitRegion {
+                    region_id,
+                    region_epoch,
+                    split_keys,
+                    ..
+                }) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                    assert_eq!(&region_epoch, exp_region.get_region_epoch());
+                    assert_eq!(split_keys, exp_split_keys);
+                    break;
+                }
+                others => panic!("expect split check result, but got {:?}", others),
+            }
+        }
+    }
 
     #[test]
     fn test_split_check() {
@@ -216,25 +245,7 @@ mod tests {
         engine.flush(true).unwrap();
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
-            }
-            others => panic!("expect approximate region size, but got {:?}", others),
-        }
-        match rx.try_recv() {
-            Ok(Msg::SplitRegion {
-                region_id,
-                region_epoch,
-                split_key,
-                ..
-            }) => {
-                assert_eq!(region_id, region.get_id());
-                assert_eq!(&region_epoch, region.get_region_epoch());
-                assert_eq!(split_key, b"0006");
-            }
-            others => panic!("expect split check result, but got {:?}", others),
-        }
+        must_split_at(&rx, &region, vec![b"0006".to_vec()]);
 
         // So split key will be z0003
         for i in 0..6 {
@@ -250,26 +261,7 @@ mod tests {
         }
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
-            }
-            others => panic!("expect approximate region size, but got {:?}", others),
-        }
-        match rx.try_recv() {
-            Ok(Msg::SplitRegion {
-                region_id,
-                region_epoch,
-                split_key,
-                ..
-            }) => {
-                assert_eq!(region_id, region.get_id());
-                assert_eq!(&region_epoch, region.get_region_epoch());
-                assert_eq!(split_key, b"0003");
-            }
-            others => panic!("expect split check result, but got {:?}", others),
-        }
-
+        must_split_at(&rx, &region, vec![b"0003".to_vec()]);
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
@@ -281,12 +273,12 @@ mod tests {
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
-            let data = b"xxxx";
-            if checker.on_kv(&mut ctx, data, data.len() as u64) {
+            let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 4, CF_WRITE);
+            if checker.on_kv(&mut ctx, &data) {
                 break;
             }
         }
 
-        assert!(checker.split_key().is_some());
+        assert!(!checker.split_keys().is_empty());
     }
 }

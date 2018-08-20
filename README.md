@@ -51,7 +51,7 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 TiKV is a component of the [TiDB project](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage the cluster. You can use TiKV together with TiDB. You can also use TiKV separately.
 
-We provide multiple deployment methods, but it is recommended to use the Ansible deployment for the production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/pingcap/tikv/wiki/TiKV-Documentation).
+We provide multiple deployment methods, but it is recommended to use the Ansible deployment for the production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/TiKV-Documentation).
 
 ### Testing deployment
 
@@ -96,7 +96,7 @@ To build TiKV you'll need to at least have the following installed:
 ### Getting the repository
 
 ```
-git clone https://github.com/pingcap/tikv.git
+git clone https://github.com/tikv/tikv.git
 cd tikv
 # Future instructions assume you are in this repository
 ```
@@ -147,7 +147,7 @@ Our CI systems automatically test all the pull requests, so making sure the full
 
 ### Getting the rest of the system working
 
-To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
+To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd)) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
 
 ### Configuration
 
@@ -157,7 +157,7 @@ Read our configuration guide to learn about various [configuration options](http
 
 Contributions are welcome! See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
 
-For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/pingcap/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level.
+For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level.
 
 If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on.
 

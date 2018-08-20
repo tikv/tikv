@@ -23,7 +23,9 @@ use storage::types::Key;
 use storage::CF_WRITE;
 use util::escape;
 
-use super::super::{Coprocessor, ObserverContext, Result, SplitCheckObserver, SplitChecker};
+use super::super::{
+    Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
+};
 use super::Host;
 
 #[derive(Default)]
@@ -36,12 +38,12 @@ impl SplitChecker for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], _: u64) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
         if self.split_key.is_some() {
             return true;
         }
 
-        let current_encoded_key = keys::origin_key(key);
+        let current_encoded_key = keys::origin_key(entry.key());
 
         let split_key = if self.first_encoded_table_prefix.is_some() {
             if !is_same_table(
@@ -63,9 +65,11 @@ impl SplitChecker for Checker {
         self.split_key.is_some()
     }
 
-    fn split_key(&mut self) -> Option<Vec<u8>> {
-        let key = self.split_key.take()?;
-        Some(keys::data_key(&key))
+    fn split_keys(&mut self) -> Vec<Vec<u8>> {
+        match self.split_key.take() {
+            None => vec![],
+            Some(key) => vec![key],
+        }
     }
 }
 
@@ -179,7 +183,7 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
 }
 
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
-    if let Ok(raw_key) = Key::from_encoded(encoded_key.to_vec()).raw() {
+    if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).raw() {
         table_codec::extract_table_prefix(&raw_key)
             .map(|k| Key::from_raw(k).take_encoded())
             .ok()
@@ -311,7 +315,9 @@ mod test {
         // Try to "disable" size split.
         cfg.region_max_size = ReadableSize::gb(2);
         cfg.region_split_size = ReadableSize::gb(1);
-
+        // Try to "disable" keys split
+        cfg.region_max_keys = 2000000000;
+        cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
         let coprocessor = CoprocessorHost::new(cfg, sch);
         let mut runnable =
@@ -327,8 +333,8 @@ mod test {
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
-                        Ok(Msg::SplitRegion { split_key, .. }) => {
-                            assert_eq!(&split_key, key.encoded());
+                        Ok(Msg::SplitRegion { split_keys, .. }) => {
+                            assert_eq!(split_keys, vec![key.take_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),
                     }

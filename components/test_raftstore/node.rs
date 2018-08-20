@@ -14,19 +14,15 @@
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
-use tikv::util::collections::{HashMap, HashSet};
 
 use tempdir::TempDir;
 
-use super::cluster::{Cluster, Simulator};
-use super::pd::TestPdClient;
-use super::transport_simulate::*;
-use super::util::create_test_engine;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
+
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -34,9 +30,12 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
+use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::transport::SendCh;
-use tikv::util::worker::FutureWorker;
+use tikv::util::worker::{FutureWorker, Worker};
 use tikv::util::HandyRwLock;
+
+use super::*;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -164,6 +163,10 @@ impl Simulator for NodeCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
         let pd_worker = FutureWorker::new("test-pd-worker");
 
+        // Create localreader.
+        let local_reader = Worker::new("test-local-reader");
+        let local_ch = local_reader.scheduler();
+
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
             &mut event_loop,
@@ -201,6 +204,7 @@ impl Simulator for NodeCluster {
             snap_mgr.clone(),
             snap_status_receiver,
             pd_worker,
+            local_reader,
             coprocessor_host,
             importer,
         ).unwrap();
@@ -225,7 +229,8 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone());
+        let router =
+            ServerRaftStoreRouter::new(node.get_sendch(), snap_status_sender.clone(), local_ch);
         self.trans
             .wl()
             .routers

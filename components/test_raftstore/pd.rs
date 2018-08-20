@@ -23,16 +23,18 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
-use super::util::*;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
+
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::timer::GLOBAL_TIMER_HANDLE;
 use tikv::util::{escape, Either, HandyRwLock};
+
+use super::*;
 
 struct Store {
     store: metapb::Store,
@@ -1003,7 +1005,11 @@ impl PdClient for TestPdClient {
         )
     }
 
-    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+    fn ask_batch_split(
+        &self,
+        region: metapb::Region,
+        count: usize,
+    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
@@ -1019,13 +1025,15 @@ impl PdClient for TestPdClient {
             return Box::new(err(e));
         }
 
-        let mut resp = pdpb::AskSplitResponse::new();
-        resp.set_new_region_id(self.alloc_id().unwrap());
-        let mut peer_ids = vec![];
-        for _ in region.get_peers() {
-            peer_ids.push(self.alloc_id().unwrap());
+        let mut resp = pdpb::AskBatchSplitResponse::new();
+        for _ in 0..count {
+            let mut id = pdpb::SplitID::new();
+            id.set_new_region_id(self.alloc_id().unwrap());
+            for _ in region.get_peers() {
+                id.mut_new_peer_ids().push(self.alloc_id().unwrap());
+            }
+            resp.mut_ids().push(id);
         }
-        resp.set_new_peer_ids(peer_ids);
 
         Box::new(ok(resp))
     }
@@ -1042,12 +1050,12 @@ impl PdClient for TestPdClient {
         Box::new(ok(()))
     }
 
-    fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
+    fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
         // pd just uses this for history show, so here we just count it.
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
-        self.cluster.wl().split_count += 1;
+        self.cluster.wl().split_count += regions.len() - 1;
         Box::new(ok(()))
     }
 }

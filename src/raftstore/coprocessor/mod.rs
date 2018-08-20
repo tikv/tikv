@@ -28,8 +28,11 @@ pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
 pub use self::split_check::{
-    HalfCheckObserver, Host as SplitCheckerHost, SizeCheckObserver, TableCheckObserver,
+    HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
+    TableCheckObserver,
 };
+
+pub use raftstore::store::KeyEntry;
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
@@ -96,12 +99,12 @@ pub trait SplitChecker {
     /// Hook to call for every kv scanned during split.
     ///
     /// Return true to abort scan early.
-    fn on_kv(&mut self, _: &mut ObserverContext, _: &[u8], _: u64) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, &KeyEntry) -> bool {
         false
     }
 
     /// Get the desired split keys.
-    fn split_key(&mut self) -> Option<Vec<u8>>;
+    fn split_keys(&mut self) -> Vec<Vec<u8>>;
 
     /// Get approximate split keys without scan.
     fn approximate_split_key(&self, _: &Region, _: &DB) -> Result<Option<Vec<u8>>> {

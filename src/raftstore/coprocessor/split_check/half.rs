@@ -13,10 +13,11 @@
 
 use rocksdb::DB;
 
+use raftstore::store::keys;
 use util::config::ReadableSize;
 
 use super::super::error::Result;
-use super::super::{Coprocessor, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 use kvproto::metapb::Region;
 use raftstore::store::util as raftstore_util;
@@ -41,21 +42,23 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &[u8], value_size: u64) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
-            self.buckets.push(key.to_vec());
+            self.buckets.push(entry.key().to_vec());
             self.cur_bucket_size = 0;
         }
-        self.cur_bucket_size += key.len() as u64 + value_size;
+        self.cur_bucket_size += entry.entry_size() as u64;
         false
     }
 
-    fn split_key(&mut self) -> Option<Vec<u8>> {
+    fn split_keys(&mut self) -> Vec<Vec<u8>> {
         let mid = self.buckets.len() / 2;
         if mid == 0 {
-            None
+            vec![]
         } else {
-            Some(self.buckets.swap_remove(mid))
+            let data_key = self.buckets.swap_remove(mid);
+            let key = keys::origin_key(&data_key).to_vec();
+            vec![key]
         }
     }
 
@@ -108,15 +111,15 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
     use storage::{Key, ALL_CFS, CF_DEFAULT};
     use util::config::ReadableSize;
-    use util::escape;
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
     use util::transport::RetryableSendCh;
     use util::worker::Runnable;
 
+    use super::super::size::tests::must_split_at;
     use super::*;
     use raftstore::coprocessor::{Config, CoprocessorHost};
 
@@ -161,39 +164,18 @@ mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
-
-        let check = || loop {
-            match rx.try_recv() {
-                Ok(Msg::SplitRegion {
-                    region_id,
-                    region_epoch,
-                    split_key,
-                    ..
-                }) => {
-                    assert_eq!(region_id, region.get_id());
-                    assert_eq!(&region_epoch, region.get_region_epoch());
-                    let split_key = Key::from_encoded(split_key).raw().unwrap();
-                    assert_eq!(escape(&split_key), "0005");
-                    break;
-                }
-                Ok(Msg::RegionApproximateSize { region_id, .. }) => {
-                    assert_eq!(region_id, region.get_id());
-                    continue;
-                }
-                others => panic!("expect split check result, but got {:?}", others),
-            }
-        };
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
             CheckPolicy::SCAN,
         ));
-        check();
+        let split_key = Key::from_raw(b"0005");
+        must_split_at(&rx, &region, vec![split_key.clone().take_encoded()]);
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
             CheckPolicy::APPROXIMATE,
         ));
-        check();
+        must_split_at(&rx, &region, vec![split_key.take_encoded()]);
     }
 }

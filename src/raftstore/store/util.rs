@@ -13,6 +13,7 @@
 
 use std::collections::Bound::Excluded;
 use std::option::Option;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
@@ -70,6 +71,17 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = new_peer(store_id, peer_id);
     peer.set_is_learner(true);
     peer
+}
+
+/// Check if key in region range (`start_key`, `end_key`).
+pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if start_key < key && (key < end_key || end_key.is_empty()) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
 }
 
 /// Check if key in region range [`start_key`, `end_key`].
@@ -144,7 +156,7 @@ pub fn delete_all_in_range_cf(
     // traditional way to cleanup.
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
         if cf == CF_WRITE {
-            let start = Key::from_encoded(start_key.to_vec()).append_ts(u64::MAX);
+            let start = Key::from_encoded_slice(start_key).append_ts(u64::MAX);
             wb.delete_range_cf(handle, start.encoded(), end_key)?;
         } else {
             wb.delete_range_cf(handle, start_key, end_key)?;
@@ -209,7 +221,7 @@ pub fn check_region_epoch(
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
             | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
+            AdminCmdType::Split | AdminCmdType::BatchSplit => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
@@ -478,14 +490,15 @@ pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool
 ///   - The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
 ///     And the expired timestamp for that leader lease is `commit_ts + lease`,
 ///     which is `send_ts + max_lease` in short.
-// TODO: add a remote Lease. A special lease that derives from Lease, it will be sent
-//       to the local read thread, so name it remote. If Lease expires, the remote must
-//       expire too.
 pub struct Lease {
     // A suspect timestamp is in the Either::Left(_),
     // a valid timestamp is in the Either::Right(_).
     bound: Option<Either<Timespec, Timespec>>,
     max_lease: Duration,
+
+    max_drift: Duration,
+    last_update: Timespec,
+    remote: Option<RemoteLease>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -503,6 +516,10 @@ impl Lease {
         Lease {
             bound: None,
             max_lease,
+
+            max_drift: max_lease / 3,
+            last_update: Timespec::new(0, 0),
+            remote: None,
         }
     }
 
@@ -526,10 +543,20 @@ impl Lease {
                 self.bound = Some(Either::Right(bound));
             }
         }
+        // Renew remote if it's valid.
+        if let Some(Either::Right(bound)) = self.bound {
+            if bound - self.last_update > self.max_drift {
+                self.last_update = bound;
+                if let Some(ref r) = self.remote {
+                    r.renew(bound);
+                }
+            }
+        }
     }
 
     /// Suspect the lease to the bound.
     pub fn suspect(&mut self, send_ts: Timespec) {
+        self.expire_remote_lease();
         let bound = self.next_expired_time(send_ts);
         self.bound = Some(Either::Left(bound));
     }
@@ -548,7 +575,35 @@ impl Lease {
     }
 
     pub fn expire(&mut self) {
+        self.expire_remote_lease();
         self.bound = None;
+    }
+
+    pub fn expire_remote_lease(&mut self) {
+        // Expire remote lease if there is any.
+        if let Some(r) = self.remote.take() {
+            r.expire();
+        }
+    }
+
+    pub fn maybe_new_remote_lease(&mut self) -> Option<RemoteLease> {
+        if self.remote.is_some() {
+            // At most one connected RemoteLease.
+            return None;
+        }
+        let expired_time = match self.bound {
+            Some(Either::Right(ts)) => timespec_to_u64(ts),
+            _ => 0,
+        };
+        let remote = RemoteLease {
+            expired_time: Arc::new(AtomicU64::new(expired_time)),
+        };
+        // Clone the remote.
+        let remote_clone = RemoteLease {
+            expired_time: Arc::clone(&remote.expired_time),
+        };
+        self.remote = Some(remote);
+        Some(remote_clone)
     }
 }
 
@@ -561,6 +616,81 @@ impl fmt::Debug for Lease {
             None => fmter.finish(),
         }
     }
+}
+
+/// A remote lease, it can only be derived by `Lease`. It will be sent
+/// to the local read thread, so name it remote. If Lease expires, the remote must
+/// expire too.
+#[derive(Debug)]
+pub struct RemoteLease {
+    expired_time: Arc<AtomicU64>,
+}
+
+impl RemoteLease {
+    pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
+        let expired_time = self.expired_time.load(AtomicOrdering::Acquire);
+        if ts.unwrap_or_else(monotonic_raw_now) < u64_to_timespec(expired_time) {
+            LeaseState::Valid
+        } else {
+            LeaseState::Expired
+        }
+    }
+
+    fn renew(&self, bound: Timespec) {
+        self.expired_time
+            .store(timespec_to_u64(bound), AtomicOrdering::Release);
+    }
+
+    fn expire(&self) {
+        self.expired_time.store(0, AtomicOrdering::Release);
+    }
+}
+
+// Contants used in `timespec_to_u64` and `u64_to_timespec`.
+const NSEC_PER_MSEC: i32 = 1_000_000;
+const TIMESPEC_NSEC_SHIFT: usize = 32 - NSEC_PER_MSEC.leading_zeros() as usize;
+
+const MSEC_PER_SEC: i64 = 1_000;
+const TIMESPEC_SEC_SHIFT: usize = 64 - MSEC_PER_SEC.leading_zeros() as usize;
+
+const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
+
+/// Convert Timespec to u64. It's millisecond precision and
+/// covers a range of about 571232829 years in total.
+///
+/// # Panics
+///
+/// If Timespecs have negative sec.
+#[inline]
+fn timespec_to_u64(ts: Timespec) -> u64 {
+    // > Darwin's and Linux's struct timespec functions handle pre-
+    // > epoch timestamps using a "two steps back, one step forward" representation,
+    // > though the man pages do not actually document this. For example, the time
+    // > -1.2 seconds before the epoch is represented by `Timespec { sec: -2_i64,
+    // > nsec: 800_000_000 }`.
+    //
+    // Quote from crate time,
+    //   https://github.com/rust-lang-deprecated/time/blob/
+    //   e313afbd9aad2ba7035a23754b5d47105988789d/src/lib.rs#L77
+    assert!(ts.sec >= 0 && ts.sec < (1i64 << (64 - TIMESPEC_SEC_SHIFT)));
+    assert!(ts.nsec >= 0);
+
+    // Round down to millisecond precision.
+    let ms = ts.nsec >> TIMESPEC_NSEC_SHIFT;
+    let sec = ts.sec << TIMESPEC_SEC_SHIFT;
+    sec as u64 | ms as u64
+}
+
+/// Convert Timespec to u64.
+///
+/// # Panics
+///
+/// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
+#[inline]
+fn u64_to_timespec(u: u64) -> Timespec {
+    let sec = u >> TIMESPEC_SEC_SHIFT;
+    let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
+    Timespec::new(sec as i64, nsec as i32)
 }
 
 /// Parse data of entry `index`.
@@ -667,64 +797,127 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
+        let remote = lease.maybe_new_remote_lease().unwrap();
+        let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
+            assert_eq!(lease.inspect(ts), state);
+            if state == LeaseState::Expired || state == LeaseState::Suspect {
+                assert_eq!(remote.inspect(ts), LeaseState::Expired);
+            }
+        };
+
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
 
         let now = monotonic_raw_now();
         let next_expired_time = lease.next_expired_time(now);
-        assert_eq!(next_expired_time, now + duration);
+        assert_eq!(now + duration, next_expired_time);
 
         // Transit to the Valid state.
         lease.renew(now);
-        assert_eq!(lease.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
-        assert_eq!(lease.inspect(None), LeaseState::Valid);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Valid);
+        inspect_test(&lease, None, LeaseState::Valid);
 
         // After lease expired time.
         sleep_test(duration, &lease, LeaseState::Expired);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, None, LeaseState::Expired);
 
         // Transit to the Suspect state.
         lease.suspect(monotonic_raw_now());
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Suspect
-        );
-        assert_eq!(lease.inspect(None), LeaseState::Suspect);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
+        inspect_test(&lease, None, LeaseState::Suspect);
 
-        // After lease expired time. Always suspect.
+        // After lease expired time, still suspect.
         sleep_test(duration, &lease, LeaseState::Suspect);
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
 
         // Clear lease.
         lease.expire();
-        assert_eq!(
-            lease.inspect(Some(monotonic_raw_now())),
-            LeaseState::Expired
-        );
+        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, None, LeaseState::Expired);
+    }
+
+    #[test]
+    fn test_timespec_u64() {
+        let cases = vec![
+            (Timespec::new(0, 0), 0x0000_0000_0000_0000u64),
+            (Timespec::new(0, 1), 0x0000_0000_0000_0000u64), // 1ns is round down to 0ms.
+            (Timespec::new(0, 999_999), 0x0000_0000_0000_0000u64), // 999_999ns is round down to 0ms.
+            (
+                // 1_048_575ns is round down to 0ms.
+                Timespec::new(0, 1_048_575 /* 0x0FFFFF */),
+                0x0000_0000_0000_0000u64,
+            ),
+            (
+                // 1_048_576ns is round down to 1ms.
+                Timespec::new(0, 1_048_576 /* 0x100000 */),
+                0x0000_0000_0000_0001u64,
+            ),
+            (Timespec::new(1, 0), 1 << TIMESPEC_SEC_SHIFT),
+            (Timespec::new(1, 0x100000), 1 << TIMESPEC_SEC_SHIFT | 1),
+            (
+                // Max seconds.
+                Timespec::new((1i64 << (64 - TIMESPEC_SEC_SHIFT)) - 1, 0),
+                (-1i64 as u64) << TIMESPEC_SEC_SHIFT,
+            ),
+            (
+                // Max nano seconds.
+                Timespec::new(
+                    0,
+                    (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT,
+                ),
+                999_999_999 >> TIMESPEC_NSEC_SHIFT,
+            ),
+            (
+                Timespec::new(
+                    (1i64 << (64 - TIMESPEC_SEC_SHIFT)) - 1,
+                    (999_999_999 >> TIMESPEC_NSEC_SHIFT) << TIMESPEC_NSEC_SHIFT,
+                ),
+                (-1i64 as u64) << TIMESPEC_SEC_SHIFT | (999_999_999 >> TIMESPEC_NSEC_SHIFT),
+            ),
+        ];
+
+        for (ts, u) in cases {
+            assert!(u64_to_timespec(timespec_to_u64(ts)) <= ts);
+            assert!(u64_to_timespec(u) <= ts);
+            assert_eq!(timespec_to_u64(u64_to_timespec(u)), u);
+            assert_eq!(timespec_to_u64(ts), u);
+        }
+
+        let start = monotonic_raw_now();
+        let mut now = monotonic_raw_now();
+        while now - start < Duration::seconds(1) {
+            let u = timespec_to_u64(now);
+            let round = u64_to_timespec(u);
+            assert!(round <= now, "{:064b} = {:?} > {:?}", u, round, now);
+            now = monotonic_raw_now();
+        }
     }
 
     // Tests the util function `check_key_in_region`.
     #[test]
     fn test_check_key_in_region() {
         let test_cases = vec![
-            ("", "", "", true, true),
-            ("", "", "6", true, true),
-            ("", "3", "6", false, false),
-            ("4", "3", "6", true, true),
-            ("4", "3", "", true, true),
-            ("2", "3", "6", false, false),
-            ("", "3", "6", false, false),
-            ("", "3", "", false, false),
-            ("6", "3", "6", false, true),
+            ("", "", "", true, true, false),
+            ("", "", "6", true, true, false),
+            ("", "3", "6", false, false, false),
+            ("4", "3", "6", true, true, true),
+            ("4", "3", "", true, true, true),
+            ("3", "3", "", true, true, false),
+            ("2", "3", "6", false, false, false),
+            ("", "3", "6", false, false, false),
+            ("", "3", "", false, false, false),
+            ("6", "3", "6", false, true, false),
         ];
-        for (key, start_key, end_key, is_in_region, is_in_region_inclusive) in test_cases {
+        for (key, start_key, end_key, is_in_region, inclusive, exclusive) in test_cases {
             let mut region = metapb::Region::new();
             region.set_start_key(start_key.as_bytes().to_vec());
             region.set_end_key(end_key.as_bytes().to_vec());
             let mut result = check_key_in_region(key.as_bytes(), &region);
             assert_eq!(result.is_ok(), is_in_region);
             result = check_key_in_region_inclusive(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), is_in_region_inclusive)
+            assert_eq!(result.is_ok(), inclusive);
+            result = check_key_in_region_exclusive(key.as_bytes(), &region);
+            assert_eq!(result.is_ok(), exclusive);
         }
     }
 
@@ -1270,8 +1463,8 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let middle_key = Key::from_encoded(keys::origin_key(&middle_key).to_owned())
-            .raw()
+        let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
+            .take_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
     }

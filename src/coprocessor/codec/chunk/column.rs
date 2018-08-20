@@ -23,6 +23,7 @@ use util::codec::number::{self, NumberEncoder};
 #[cfg(test)]
 use util::codec::BytesSlice;
 
+/// `Column` stores the same column data of multi rows in one chunk.
 #[derive(Default)]
 pub struct Column {
     length: usize,
@@ -35,6 +36,7 @@ pub struct Column {
 }
 
 impl Column {
+    /// Create the column with a specified type and capacity.
     pub fn new(tp: &FieldType, init_cap: usize) -> Column {
         match tp.get_tp() as u8 {
             types::TINY
@@ -56,6 +58,7 @@ impl Column {
         }
     }
 
+    /// Get the datum of one row with the specified type.
     pub fn get_datum(&self, idx: usize, tp: &FieldType) -> Result<Datum> {
         if self.is_null(idx) {
             return Ok(Datum::Null);
@@ -96,6 +99,7 @@ impl Column {
         Ok(d)
     }
 
+    /// Append datum to the column.
     pub fn append_datum(&mut self, data: &Datum) -> Result<()> {
         match data {
             Datum::Null => self.append_null(),
@@ -111,6 +115,7 @@ impl Column {
         }
     }
 
+    /// Create a column with a fixed element length.
     pub fn new_fixed_len(element_len: usize, init_cap: usize) -> Column {
         Column {
             fixed_len: element_len,
@@ -120,6 +125,7 @@ impl Column {
         }
     }
 
+    /// Create a column with variant element length.
     pub fn new_var_len_column(init_cap: usize) -> Column {
         let mut offsets = Vec::with_capacity(init_cap + 1);
         offsets.push(0);
@@ -131,11 +137,13 @@ impl Column {
         }
     }
 
+    /// Return whether the column has a fixed length or not.
     #[inline]
     fn is_fixed(&self) -> bool {
         self.fixed_len > 0
     }
 
+    /// Reset the column
     pub fn reset(&mut self) {
         self.length = 0;
         self.null_cnt = 0;
@@ -147,7 +155,12 @@ impl Column {
         self.data.clear();
     }
 
+    /// Return whether the datum for the row is null or not.
     pub fn is_null(&self, row_idx: usize) -> bool {
+        if self.null_cnt == 0 {
+            return false;
+        }
+
         if let Some(null_byte) = self.null_bitmap.get(row_idx >> 3) {
             null_byte & (1 << ((row_idx) & 7)) == 0
         } else {
@@ -155,6 +168,8 @@ impl Column {
         }
     }
 
+    /// Update the null bitmap and count when append a datum.
+    /// `on` is false means the datum is null.
     fn append_null_bitmap(&mut self, on: bool) {
         let idx = self.length >> 3;
         if idx >= self.null_bitmap.len() {
@@ -168,6 +183,7 @@ impl Column {
         }
     }
 
+    /// Append null to the column.
     pub fn append_null(&mut self) -> Result<()> {
         self.append_null_bitmap(false);
         if self.is_fixed() {
@@ -181,6 +197,7 @@ impl Column {
         Ok(())
     }
 
+    /// Called when the fixed datum has been appended.
     fn finish_append_fixed(&mut self) -> Result<()> {
         self.append_null_bitmap(true);
         self.length += 1;
@@ -188,11 +205,13 @@ impl Column {
         Ok(())
     }
 
+    /// Append i64 datum to the column.
     pub fn append_i64(&mut self, v: i64) -> Result<()> {
         self.data.encode_i64_le(v)?;
         self.finish_append_fixed()
     }
 
+    /// Get the i64 datum of the row in the column.
     pub fn get_i64(&self, idx: usize) -> Result<i64> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -200,11 +219,13 @@ impl Column {
         number::decode_i64_le(&mut data).map_err(Error::from)
     }
 
+    /// Append u64 datum to the column.
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
         self.data.encode_u64_le(v)?;
         self.finish_append_fixed()
     }
 
+    /// Get the u64 datum of the row in the column.
     pub fn get_u64(&self, idx: usize) -> Result<u64> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -212,11 +233,13 @@ impl Column {
         number::decode_u64_le(&mut data).map_err(Error::from)
     }
 
+    /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
         self.data.encode_f64_le(v)?;
         self.finish_append_fixed()
     }
 
+    /// Get the f64 datum of the row in the column.
     pub fn get_f64(&self, idx: usize) -> Result<f64> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -224,6 +247,7 @@ impl Column {
         number::decode_f64_le(&mut data).map_err(Error::from)
     }
 
+    /// Called when the variant datum has been appended.
     fn finished_append_var(&mut self) -> Result<()> {
         self.append_null_bitmap(true);
         let offset = self.data.len();
@@ -232,22 +256,26 @@ impl Column {
         Ok(())
     }
 
+    /// Append a bytes datum to the column.
     pub fn append_bytes(&mut self, byte: &[u8]) -> Result<()> {
         self.data.extend_from_slice(byte);
         self.finished_append_var()
     }
 
+    /// Get the bytes datum of the row in the column.
     pub fn get_bytes(&self, idx: usize) -> &[u8] {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
         &self.data[start..end]
     }
 
+    /// Append a time datum to the column.
     pub fn append_time(&mut self, t: &Time) -> Result<()> {
         self.data.encode_time(t)?;
         self.finish_append_fixed()
     }
 
+    /// Get the time datum of the row in the column.
     pub fn get_time(&self, idx: usize) -> Result<Time> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -255,11 +283,13 @@ impl Column {
         Time::decode(&mut data)
     }
 
+    /// Append a duration datum to the column.
     pub fn append_duration(&mut self, d: &Duration) -> Result<()> {
         self.data.encode_duration(d)?;
         self.finish_append_fixed()
     }
 
+    /// Get the duration datum of the row in the column.
     pub fn get_duration(&self, idx: usize) -> Result<Duration> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -267,11 +297,13 @@ impl Column {
         Duration::decode(&mut data)
     }
 
+    /// Append a decimal datum to the column.
     pub fn append_decimal(&mut self, d: &Decimal) -> Result<()> {
         self.data.encode_decimal_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
+    /// Get the decimal datum of the row in the column.
     pub fn get_decimal(&self, idx: usize) -> Result<Decimal> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
@@ -279,11 +311,13 @@ impl Column {
         Decimal::decode_from_chunk(&mut data)
     }
 
+    /// Append a json datum to the column.
     pub fn append_json(&mut self, j: &Json) -> Result<()> {
         self.data.encode_json(j)?;
         self.finished_append_var()
     }
 
+    /// Get the json datum of the row in the column.
     pub fn get_json(&self, idx: usize) -> Result<Json> {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
@@ -291,6 +325,7 @@ impl Column {
         Json::decode(&mut data)
     }
 
+    /// Return the total rows in the column.
     pub fn len(&self) -> usize {
         self.length
     }
@@ -323,6 +358,7 @@ impl Column {
     }
 }
 
+/// `ColumnEncoder` encodes the column.
 pub trait ColumnEncoder: NumberEncoder {
     fn encode_column(&mut self, col: &Column) -> Result<()> {
         // length

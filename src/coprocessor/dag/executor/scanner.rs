@@ -104,7 +104,7 @@ impl<S: Snapshot> Scanner<S> {
         };
 
         let (key, value) = match kv {
-            Some((k, v)) => (box_try!(k.raw()), v),
+            Some((k, v)) => (box_try!(k.take_raw()), v),
             None => {
                 self.no_more = true;
                 return Ok(None);
@@ -121,7 +121,11 @@ impl<S: Snapshot> Scanner<S> {
         }
 
         self.seek_key = match (self.scan_mode, self.scan_on) {
-            (ScanMode::Forward, _) => util::prefix_next(&key),
+            (ScanMode::Forward, _) => {
+                let mut seek_key = key.clone();
+                util::convert_to_prefix_next(&mut seek_key);
+                seek_key
+            }
             (ScanMode::Backward, ScanOn::Table) => box_try!(truncate_as_row_key(&key)).to_vec(),
             (ScanMode::Backward, ScanOn::Index) => key.clone(),
             _ => unreachable!(),
@@ -173,7 +177,7 @@ pub mod test {
     use coprocessor::util;
     use storage::engine::{self, Engine, Modify, RocksEngine, RocksSnapshot, TEMP_DIR};
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, Options, SnapshotStore, ALL_CFS};
+    use storage::{Key, Mutation, Options, SnapshotStore, ALL_CFS};
     use util::collections::HashMap;
 
     use super::*;
@@ -289,7 +293,7 @@ pub mod test {
                         pk = key.clone();
                     }
                     txn.prewrite(
-                        Mutation::Put((make_key(key), value.to_vec())),
+                        Mutation::Put((Key::from_raw(key), value.to_vec())),
                         &pk,
                         &Options::default(),
                     ).unwrap();
@@ -308,7 +312,7 @@ pub mod test {
                     true,
                 );
                 for &(ref key, _) in kv_data {
-                    txn.commit(&make_key(key), COMMIT_TS).unwrap();
+                    txn.commit(&Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 txn.into_modifies()
             };
@@ -336,7 +340,8 @@ pub mod test {
 
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {
         let start_key = table::encode_row_key(table_id, handle);
-        let end = util::prefix_next(&start_key);
+        let mut end = start_key.clone();
+        util::convert_to_prefix_next(&mut end);
         let mut key_range = KeyRange::new();
         key_range.set_start(start_key);
         key_range.set_end(end);

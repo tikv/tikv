@@ -107,7 +107,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
     let mut legs = vec![];
     let mut flags = PathExpressionFlag::default();
     let mut last_end = 0;
-    for (start, end) in RE.find_iter(expr) {
+    for m in RE.find_iter(expr) {
+        let (start, end) = (m.start(), m.end());
         // Check all characters between two legs are blank.
         if expr
             .index(last_end..start)

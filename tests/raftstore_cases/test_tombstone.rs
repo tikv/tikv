@@ -18,12 +18,9 @@ use std::time::Duration;
 use protobuf::Message;
 use rocksdb::Writable;
 
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
+
+use test_raftstore::*;
 use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
 use tikv::storage::CF_RAFT;
 use tikv::util::rocksdb::get_cf_handle;
