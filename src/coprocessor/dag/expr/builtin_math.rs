@@ -15,6 +15,7 @@ use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
 use crc::{crc32, Hasher32};
+use num::traits::Pow;
 use std::borrow::Cow;
 use std::{f64, i64};
 
@@ -122,9 +123,30 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn sqrt(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let f = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if f < 0f64 {
+            Ok(None)
+        } else {
+            Ok(Some(f.sqrt()))
+        }
+    }
+
+    #[inline]
     pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.tan()))
+    }
+
+    #[inline]
+    pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let x = try_opt!(self.children[0].eval_real(ctx, row));
+        let y = try_opt!(self.children[1].eval_real(ctx, row));
+        let pow = x.pow(y);
+        if pow.is_infinite() || pow.is_nan() {
+            return Err(Error::overflow("DOUBLE", &format!("{}.pow({})", x, y)));
+        }
+        Ok(Some(pow))
     }
 }
 
@@ -351,6 +373,26 @@ mod test {
     }
 
     #[test]
+    fn test_sqrt() {
+        let tests = vec![
+            (Datum::F64(64f64), Datum::F64(8f64)),
+            (Datum::F64(2f64), Datum::F64(f64::consts::SQRT_2)),
+            (Datum::F64(-16f64), Datum::Null),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let op = scalar_func_expr(ScalarFuncSig::Sqrt, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
     fn test_tan() {
         let tests = vec![
             (ScalarFuncSig::Tan, Datum::F64(0.0_f64), 0.0_f64),
@@ -389,6 +431,53 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert!(got.f64().is_nan());
+        }
+    }
+
+    #[test]
+    fn test_pow() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Pow,
+                Datum::F64(1.0),
+                Datum::F64(3.0),
+                Datum::F64(1.0),
+            ),
+            (
+                ScalarFuncSig::Pow,
+                Datum::F64(3.0),
+                Datum::F64(0.0),
+                Datum::F64(1.0),
+            ),
+            (
+                ScalarFuncSig::Pow,
+                Datum::F64(2.0),
+                Datum::F64(4.0),
+                Datum::F64(16.0),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1, exp) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let mut f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_pow_overflow() {
+        let tests = vec![(ScalarFuncSig::Pow, Datum::F64(2.0), Datum::F64(300000000.0))];
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let mut f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
     }
 }

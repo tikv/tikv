@@ -235,15 +235,18 @@ impl PdMocker for Service {
         Some(Ok(resp))
     }
 
-    fn ask_split(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
-        let mut resp = AskSplitResponse::new();
+    fn ask_batch_split(&self, _: &AskBatchSplitRequest) -> Option<Result<AskBatchSplitResponse>> {
+        let mut resp = AskBatchSplitResponse::new();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
-    fn report_split(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
-        let mut resp = ReportSplitResponse::new();
+    fn report_batch_split(
+        &self,
+        _: &ReportBatchSplitRequest,
+    ) -> Option<Result<ReportBatchSplitResponse>> {
+        let mut resp = ReportBatchSplitResponse::new();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
