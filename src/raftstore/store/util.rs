@@ -575,17 +575,16 @@ impl Lease {
         }
     }
 
-    /// Return a new `RemoteLease` lease if the term mismatchs
-    /// or there is no connected `RemoteLease`.
+    /// Return a new `RemoteLease` if there is none.
     pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
-        if self.remote.is_some() {
-            let remote = self.remote.as_ref().unwrap();
+        if let Some(ref remote) = self.remote {
             if remote.term() == term {
                 // At most one connected RemoteLease in the same term.
                 return None;
             } else {
-                // Term has changed, expire the old and create a new one.
-                remote.expire();
+                // Term has changed. It is unreachable in the current implementation,
+                // because we expire remote lease when leaders step down.
+                unreachable!("Must expire the old remote lease first!");
             }
         }
         let expired_time = match self.bound {
@@ -849,12 +848,6 @@ mod tests {
         // A new remote lease.
         let m1 = lease.maybe_new_remote_lease(1).unwrap();
         assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
-
-        // Term has changed, returns a new lease, and expires m1 automatically.
-        let m2 = lease.maybe_new_remote_lease(2).unwrap();
-        let now = monotonic_raw_now();
-        assert_eq!(m2.inspect(Some(now)), LeaseState::Valid);
-        assert_eq!(m1.inspect(Some(now)), LeaseState::Expired);
     }
 
     #[test]

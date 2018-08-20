@@ -494,6 +494,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
         let mut executor = ReadExecutor::new(
             self.kv_engine.clone(),
             false, /* dont check region epoch */
+            true,  /* we need snapshot time */
         );
 
         for task in tasks.drain(..) {

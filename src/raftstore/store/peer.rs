@@ -1179,13 +1179,12 @@ impl Peer {
             debug!("{} prevents renew lease while merging", self.tag);
             return;
         }
-        // Try to expire the old `RemoteLease` frist if the trem mismatchs.
+        self.leader_lease.renew(ts);
         let term = self.term();
         if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);
         }
-        self.leader_lease.renew(ts);
     }
 
     fn maybe_update_read_progress(&self, progress: ReadProgress) {
@@ -1764,8 +1763,11 @@ impl Peer {
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest, check_epoch: bool) -> ReadResponse {
-        let mut resp = ReadExecutor::new(self.engines.kv.clone(), check_epoch)
-            .execute(&req, self.region())
+        let mut resp = ReadExecutor::new(
+            self.engines.kv.clone(),
+            check_epoch,
+            false, /* we don't need snapshot time */
+        ).execute(&req, self.region())
             .unwrap_or_else(|e| {
                 match e {
                     Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
@@ -2013,15 +2015,17 @@ pub struct ReadExecutor {
     engine: Arc<DB>,
     snapshot: Option<SyncSnapshot>,
     snapshot_time: Option<Timespec>,
+    need_snapshot_time: bool,
 }
 
 impl ReadExecutor {
-    pub fn new(engine: Arc<DB>, check_epoch: bool) -> Self {
+    pub fn new(engine: Arc<DB>, check_epoch: bool, need_snapshot_time: bool) -> Self {
         ReadExecutor {
             check_epoch,
             engine,
             snapshot: None,
             snapshot_time: None,
+            need_snapshot_time,
         }
     }
 
@@ -2032,15 +2036,19 @@ impl ReadExecutor {
     }
 
     #[inline]
-    fn maybe_update_snapshot(&mut self) -> &mut Self {
+    fn maybe_update_snapshot(&mut self) {
         if self.snapshot.is_some() {
-            return self;
+            return;
         }
-        self.snapshot_time = Some(monotonic_raw_now());
-        // TODO: should we issue a fence?
+        // Reading current timespec before snapshot.
+        // The order does not matter in the current implementation,
+        // because remote lease is set to 0 when it is expired.
+        if self.need_snapshot_time {
+            self.snapshot_time = Some(monotonic_raw_now());
+        }
+        // We may need a fence when the order does matter.
         let engine = self.engine.clone();
         self.snapshot = Some(Snapshot::new(engine).into_sync());
-        self
     }
 
     fn do_get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
