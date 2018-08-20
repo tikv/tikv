@@ -279,11 +279,26 @@ where
         let ctx = match ctx {
             Ok(ctx) | Err(ctx) => ctx,
         };
-        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
+        let done = ctx.reconnect_count == 0
+            || (ctx.resp.is_some() && Self::should_not_retry(ctx.resp.as_ref().unwrap()));
         if done {
             Ok(Loop::Break(ctx))
         } else {
             Ok(Loop::Continue(ctx))
+        }
+    }
+
+    fn should_not_retry(resp: &Result<Resp>) -> bool {
+        match resp {
+            Ok(_) => true,
+            // these errors are returned by response header from pd, no need to retry
+            Err(Error::ClusterBootstrapped(_))
+            | Err(Error::ClusterNotBootstrapped(_))
+            | Err(Error::Incompatible) => true,
+            Err(err) => {
+                error!("request failed: {:?}, retry", err);
+                false
+            }
         }
     }
 
