@@ -24,8 +24,8 @@ extern crate test_storage;
 extern crate test_util;
 extern crate tikv;
 
-use criterion::{black_box, Bencher, Criterion};
 use clap::{App, Arg};
+use criterion::{black_box, Bencher, Criterion};
 
 use bench_util::*;
 use test_storage::SyncStorage;
@@ -175,9 +175,11 @@ fn bench_backward_scan(b: &mut Bencher, input: &ScanConfig) {
 
 fn main() {
     let matches = App::new("storage_scan_benchmark")
-        .arg(Arg::with_name("full")
-            .long("full")
-            .help("Run full benchmarks"))
+        .arg(
+            Arg::with_name("full")
+                .long("full")
+                .help("Run full benchmarks"),
+        )
         .get_matches();
 
     let mut criterion = Criterion::default().sample_size(10);
