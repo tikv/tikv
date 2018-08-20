@@ -196,8 +196,8 @@ fn main() {
     let value_len_coll;
 
     if matches.is_present("full") {
-        number_of_keys_coll = vec![100, 10000];
-        number_of_versions_coll = vec![1, 2, 5, 10, 20, 50];
+        number_of_keys_coll = vec![10000];
+        number_of_versions_coll = vec![1, 2, 5, 10, 50];
         key_len_coll = vec![32, 100, 200];
         value_len_coll = vec![5, 100, 200];
     } else {
