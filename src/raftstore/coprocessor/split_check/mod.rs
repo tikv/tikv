@@ -64,11 +64,14 @@ impl Host {
         false
     }
 
-    pub fn split_key(mut self) -> Option<Vec<u8>> {
-        self.checkers
-            .drain(..)
-            .flat_map(|mut c| c.split_key())
-            .next()
+    pub fn split_keys(self) -> Vec<Vec<u8>> {
+        for mut checker in self.checkers {
+            let keys = checker.split_keys();
+            if !keys.is_empty() {
+                return keys;
+            }
+        }
+        vec![]
     }
 
     pub fn approximate_split_key(
