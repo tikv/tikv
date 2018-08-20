@@ -35,8 +35,9 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let ipv6_addr = Ipv6Addr::from_str(&input).map(|t| Some(Cow::Owned(t.octets().to_vec())));
-        let ipv4_addr = Ipv4Addr::from_str(&input).map(|t| Some(Cow::Owned(t.octets().to_vec())));
-        ipv6_addr.or(ipv4_addr).or(Ok(None))
+        let ipv4_addr_eval =
+            |_t| Ipv4Addr::from_str(&input).map(|t| Some(Cow::Owned(t.octets().to_vec())));
+        ipv6_addr.or_else(ipv4_addr_eval).or(Ok(None))
     }
 }
 
