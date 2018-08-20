@@ -12,12 +12,10 @@
 // limitations under the License.
 
 use rocksdb::DBStatisticsTickerType;
+
+use test_raftstore::*;
 use tikv::storage::CF_LOCK;
 use tikv::util::config::*;
-
-use super::cluster::{Cluster, Simulator};
-use super::server::new_server_cluster;
-use super::util::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {

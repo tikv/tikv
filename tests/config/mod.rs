@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
 use slog::Level;
+use toml;
+
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -27,8 +29,6 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
-
-use toml;
 
 #[test]
 fn test_toml_serde() {
