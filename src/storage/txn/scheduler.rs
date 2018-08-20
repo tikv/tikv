@@ -32,7 +32,6 @@
 //! to the scheduler.
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
 use std::mem;
 use std::thread;
 use std::time::Duration;
@@ -42,10 +41,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use prometheus::local::LocalHistogramVec;
 use prometheus::HistogramTimer;
 
-use storage::engine::{
-    self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
-    Result as EngineResult,
-};
+use storage::engine::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
 use storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
@@ -83,8 +79,6 @@ pub enum ProcessResult {
     Failed { err: StorageError },
 }
 
-type SnapshotResult<T> = (Vec<u64>, CbContext, EngineResult<T>);
-
 /// Message types for the scheduler event loop.
 pub enum Msg<E: Engine> {
     Quit,
@@ -92,14 +86,10 @@ pub enum Msg<E: Engine> {
         cmd: Command,
         cb: StorageCb,
     },
-    RetryGetSnapshots(Vec<(Context, Vec<u64>)>),
     SnapshotFinished {
-        cids: Vec<u64>,
+        cid: u64,
         cb_ctx: CbContext,
         snapshot: EngineResult<E::Snap>,
-    },
-    BatchSnapshotFinished {
-        batch: Vec<SnapshotResult<E::Snap>>,
     },
     ReadFinished {
         cid: u64,
@@ -138,14 +128,7 @@ impl<E: Engine> Display for Msg<E> {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
-            Msg::RetryGetSnapshots(ref tasks) => write!(f, "RetryGetSnapshots {:?}", tasks),
-            Msg::SnapshotFinished { ref cids, .. } => {
-                write!(f, "SnapshotFinished [cids={:?}]", cids)
-            }
-            Msg::BatchSnapshotFinished { ref batch } => {
-                let ids: Vec<&Vec<_>> = batch.iter().map(|&(ref ids, _, _)| ids).collect();
-                write!(f, "BatchSnapshotFinished cids: {:?}", ids)
-            }
+            Msg::SnapshotFinished { cid, .. } => write!(f, "SnapshotFinished [cid={}]", cid),
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WritePrepareFinished {
                 cid, ref ctx, tag, ..
@@ -292,42 +275,12 @@ fn make_engine_cb<E: Engine>(
     })
 }
 
-#[derive(Clone)]
-struct HashableContext(Context);
-
-impl PartialEq for HashableContext {
-    fn eq(&self, other: &HashableContext) -> bool {
-        // k1 == k2 ⇒ hash(k1) == hash(k2)
-        self.0.get_region_id() == other.0.get_region_id()
-            && self.0.get_region_epoch().get_version() == other.0.get_region_epoch().get_version()
-            && self.0.get_peer().get_id() == other.0.get_peer().get_id()
-    }
-}
-
-impl Hash for HashableContext {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let key = {
-            let ctx = &self.0;
-            (
-                ctx.get_region_id(),
-                ctx.get_region_epoch().get_version(),
-                ctx.get_peer().get_id(),
-            )
-        };
-        Hash::hash(&key, state);
-    }
-}
-
-impl Eq for HashableContext {}
-
 /// Scheduler which schedules the execution of `storage::Command`s.
 pub struct Scheduler<E: Engine> {
     engine: E,
 
     // cid -> RunningCtx
     cmd_ctxs: HashMap<u64, RunningCtx>,
-    // Context -> cids
-    grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
 
     // actual scheduler to schedule the execution of commands
     scheduler: worker::Scheduler<Msg<E>>,
@@ -391,10 +344,6 @@ impl<E: Engine> Scheduler<E> {
         Scheduler {
             engine,
             cmd_ctxs: Default::default(),
-            grouped_cmds: Some(HashMap::with_capacity_and_hasher(
-                CMD_BATCH_SIZE,
-                Default::default(),
-            )),
             scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
@@ -910,7 +859,7 @@ impl<E: Engine> Scheduler<E> {
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
     /// acquired, the method initiates a get snapshot operation for furthur processing; otherwise,
     /// the method adds the command to the waiting queue(s). The command will be handled later in
-    /// `lock_and_register_get_snapshot` when its turn comes.
+    /// `lock_and_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
@@ -927,7 +876,7 @@ impl<E: Engine> Scheduler<E> {
         let lock = gen_command_lock(&self.latches, &cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
-        self.lock_and_register_get_snapshot(cid);
+        self.lock_and_get_snapshot(cid);
     }
 
     fn too_busy(&self) -> bool {
@@ -968,16 +917,13 @@ impl<E: Engine> Scheduler<E> {
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
-    fn get_snapshot(&mut self, ctx: &Context, cids: Vec<u64>) {
-        for cid in &cids {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
-                .inc();
-        }
-        let cids1 = cids.clone();
+    fn get_snapshot(&mut self, cid: u64) {
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "snapshot"])
+            .inc();
         let scheduler = self.scheduler.clone();
         let cb = box move |(cb_ctx, snapshot)| match scheduler.schedule(Msg::SnapshotFinished {
-            cids: cids1,
+            cid,
             cb_ctx,
             snapshot,
         }) {
@@ -986,100 +932,11 @@ impl<E: Engine> Scheduler<E> {
             Err(e) => panic!("schedule SnapshotFinish msg failed, err {:?}", e),
         };
 
-        if let Err(e) = self.engine.async_snapshot(ctx, cb) {
-            for cid in cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snapshot_err"])
-                    .inc();
-
-                let e = e.maybe_clone().unwrap_or_else(|| {
-                    error!("async snapshot failed for cid={}, error {:?}", cid, e);
-                    EngineError::Other(box_err!("{:?}", e))
-                });
-                self.finish_with_err(cid, Error::from(e));
-            }
-        }
-    }
-
-    /// Initiates an async operation to batch get snapshot from the storage engine, then posts a
-    /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
-    /// `RetryGetSnapshots` message if there are any `None` responses.
-    fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
-        let mut all_cids = Vec::with_capacity(batch.iter().map(|&(_, ref cids)| cids.len()).sum());
-        for &(_, ref cids) in &batch {
-            for cid in cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "batch_snapshot"])
-                    .inc();
-            }
-            all_cids.extend(cids);
-        }
-
-        let scheduler = self.scheduler.clone();
-        let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
-        let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
-            let mut ready = Vec::with_capacity(results.len());
-            let mut retry = Vec::new();
-            for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
-                match snapshot {
-                    Some((cb_ctx, snapshot)) => {
-                        ready.push((cids, cb_ctx, snapshot));
-                    }
-                    None => {
-                        retry.push((ctx, cids));
-                    }
-                }
-            }
-            if !ready.is_empty() {
-                match scheduler.schedule(Msg::BatchSnapshotFinished { batch: ready }) {
-                    Ok(_) => {}
-                    e @ Err(ScheduleError::Stopped(_)) => {
-                        info!("scheduler worker stopped, err {:?}", e);
-                    }
-                    Err(e) => {
-                        panic!("schedule BatchSnapshotFinish msg failed, err {:?}", e);
-                    }
-                }
-            }
-            if !retry.is_empty() {
-                BATCH_COMMANDS
-                    .with_label_values(&["retry"])
-                    .observe(retry.len() as f64);
-                match scheduler.schedule(Msg::RetryGetSnapshots(retry)) {
-                    Ok(_) => {}
-                    e @ Err(ScheduleError::Stopped(_)) => {
-                        info!("scheduler worker stopped, err {:?}", e);
-                    }
-                    Err(e) => {
-                        panic!("schedule RetryGetSnapshots msg failed, err {:?}", e);
-                    }
-                }
-            }
-        };
-
-        if let Err(e) = self.engine.async_batch_snapshot(batch1, on_finished) {
-            for cid in all_cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_batch_snapshot_err"])
-                    .inc();
-                let e = e.maybe_clone().unwrap_or_else(|| {
-                    error!("async snapshot failed for cid={}, error {:?}", cid, e);
-                    EngineError::Other(box_err!("{:?}", e))
-                });
-
-                self.finish_with_err(cid, Error::from(e));
-            }
-        }
-    }
-
-    fn on_retry_get_snapshots(&mut self, batch: Vec<(Context, Vec<u64>)>) {
-        for (ctx, cids) in batch {
-            for cid in &cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot_retry"])
-                    .inc();
-            }
-            self.get_snapshot(&ctx, cids);
+        if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[self.get_ctx_tag(cid), "async_snapshot_err"])
+                .inc();
+            self.finish_with_err(cid, Error::from(e));
         }
     }
 
@@ -1088,35 +945,30 @@ impl<E: Engine> Scheduler<E> {
     /// Delivers the command along with the snapshot to a worker thread to execute.
     fn on_snapshot_finished(
         &mut self,
-        cids: Vec<u64>,
+        cid: u64,
         cb_ctx: CbContext,
         snapshot: EngineResult<E::Snap>,
     ) {
         fail_point!("scheduler_async_snapshot_finish");
         debug!(
-            "receive snapshot finish msg for cids={:?}, cb_ctx={:?}",
-            cids, cb_ctx
+            "receive snapshot finish msg for cid={}, cb_ctx={:?}",
+            cid, cb_ctx
         );
 
         match snapshot {
-            Ok(snapshot) => for cid in cids {
+            Ok(snapshot) => {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
                     .inc();
-                self.process_by_worker(cid, cb_ctx.clone(), snapshot.clone());
-            },
-            Err(ref e) => {
-                error!("get snapshot failed for cids={:?}, error {:?}", cids, e);
-                for cid in cids {
-                    SCHED_STAGE_COUNTER_VEC
-                        .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
-                        .inc();
-                    let e = e
-                        .maybe_clone()
-                        .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
+                self.process_by_worker(cid, cb_ctx, snapshot);
+            }
+            Err(e) => {
+                error!("get snapshot failed for cid={}, error {:?}", cid, e);
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
+                    .inc();
 
-                    self.finish_with_err(cid, Error::from(e));
-                }
+                self.finish_with_err(cid, Error::from(e));
             }
         }
     }
@@ -1214,82 +1066,51 @@ impl<E: Engine> Scheduler<E> {
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.lock_and_register_get_snapshot(wcid);
+            self.lock_and_get_snapshot(wcid);
         }
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for furthur processing.
-    fn lock_and_register_get_snapshot(&mut self, cid: u64) {
+    fn lock_and_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
-            let ctx = self.extract_context(cid).clone();
-            let group = self
-                .grouped_cmds
-                .as_mut()
-                .unwrap()
-                .entry(HashableContext(ctx))
-                .or_insert_with(Vec::new);
-            group.push(cid);
+            self.get_snapshot(cid);
         }
     }
 }
 
 impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
-    fn run(&mut self, msg: Msg<E>) {
-        match msg {
-            Msg::Quit => {
-                self.shutdown();
-                return;
-            }
-            Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-            Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
-            Msg::SnapshotFinished {
-                cids,
-                cb_ctx,
-                snapshot,
-            } => self.on_snapshot_finished(cids, cb_ctx, snapshot),
-            Msg::BatchSnapshotFinished { batch } => for (cids, cb_ctx, snapshot) in batch {
-                self.on_snapshot_finished(cids, cb_ctx, snapshot)
-            },
-            Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-            Msg::WritePrepareFinished {
-                cid,
-                ctx,
-                tag,
-                pr,
-                to_be_write,
-                rows,
-            } => self.on_write_prepare_finished(cid, ctx, tag, pr, to_be_write, rows),
-            Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
-            Msg::WriteFinished {
-                cid, pr, result, ..
-            } => self.on_write_finished(cid, pr, result),
-        }
+    fn run(&mut self, _: Msg<E>) {
+        unimplemented!()
     }
 
     fn run_batch(&mut self, msgs: &mut Vec<Msg<E>>) {
         for msg in msgs.drain(..) {
-            self.run(msg);
-        }
-    }
-
-    fn on_tick(&mut self) {
-        if self.grouped_cmds.as_ref().unwrap().is_empty() {
-            return;
-        }
-
-        if let Some(cmds) = self.grouped_cmds.take() {
-            self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
-                CMD_BATCH_SIZE,
-                Default::default(),
-            ));
-            let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
-                BATCH_COMMANDS
-                    .with_label_values(&["all"])
-                    .observe(cids.len() as f64);
-                (hash_ctx.0, cids)
-            });
-            self.batch_get_snapshot(batch.collect());
+            match msg {
+                Msg::Quit => {
+                    self.shutdown();
+                    return;
+                }
+                Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
+                Msg::SnapshotFinished {
+                    cid,
+                    cb_ctx,
+                    snapshot,
+                } => self.on_snapshot_finished(cid, cb_ctx, snapshot),
+                Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
+                Msg::WritePrepareFinished {
+                    cid,
+                    ctx,
+                    tag,
+                    pr,
+                    to_be_write,
+                    rows,
+                } => self.on_write_prepare_finished(cid, ctx, tag, pr, to_be_write, rows),
+                Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
+                Msg::WriteFinished {
+                    cid, pr, result, ..
+                } => self.on_write_finished(cid, pr, result),
+            }
         }
     }
 
