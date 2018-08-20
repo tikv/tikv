@@ -18,7 +18,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
-use storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
+use storage::{Cursor, CursorBuilder, Key, Lock, ScanMode, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::util::CheckLockResult;
@@ -172,8 +172,10 @@ impl<S: Snapshot> BackwardScanner<S> {
         if !self.is_started {
             if self.upper_bound.is_some() {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
-                // TODO: write_cursor only needs "seek_for_prev" because the given key should never
-                // exist. However we don't have tests to cover now.
+                // TODO: We have no guarantee about whether or not the upper_bound has a
+                // timestamp suffix, so currently it is not save to change write_cursor's
+                // reverse_seek to seek_for_prev. However in future, once we have different types
+                // for them, this can be done safely.
                 self.write_cursor.reverse_seek(
                     self.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
@@ -239,16 +241,17 @@ impl<S: Snapshot> BackwardScanner<S> {
 
             if has_lock {
                 match self.isolation_level {
-                    IsolationLevel::SI => match super::util::load_and_check_lock_from_cursor(
-                        &mut self.lock_cursor,
-                        &current_user_key,
-                        self.ts,
-                        &mut self.statistics,
-                    )? {
-                        CheckLockResult::NotLocked => {}
-                        CheckLockResult::Locked(e) => result = Err(e),
-                        CheckLockResult::Ignored(ts) => get_ts = ts,
-                    },
+                    IsolationLevel::SI => {
+                        let lock = {
+                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                            Lock::parse(lock_value)?
+                        };
+                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                            CheckLockResult::NotLocked => {}
+                            CheckLockResult::Locked(e) => result = Err(e),
+                            CheckLockResult::Ignored(ts) => get_ts = ts,
+                        }
+                    }
                     IsolationLevel::RC => {}
                 }
                 self.lock_cursor.prev(&mut self.statistics.lock);

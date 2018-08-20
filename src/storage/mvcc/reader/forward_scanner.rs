@@ -18,7 +18,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
 use storage::mvcc::Result;
-use storage::{Cursor, CursorBuilder, Key, Snapshot, Statistics, Value};
+use storage::{Cursor, CursorBuilder, Key, Lock, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::util::CheckLockResult;
@@ -267,12 +267,11 @@ impl<S: Snapshot> ForwardScanner<S> {
                 match self.isolation_level {
                     IsolationLevel::SI => {
                         // Only needs to check lock in SI
-                        match super::util::load_and_check_lock_from_cursor(
-                            &mut self.lock_cursor,
-                            &current_user_key,
-                            self.ts,
-                            &mut self.statistics,
-                        )? {
+                        let lock = {
+                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                            Lock::parse(lock_value)?
+                        };
+                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,

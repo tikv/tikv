@@ -29,23 +29,6 @@ pub enum CheckLockResult {
     Ignored(u64),
 }
 
-/// Load the lock from current cursor and check lock.
-/// This function requires that the cursor is pointing at the lock of the user key.
-#[inline]
-pub fn load_and_check_lock_from_cursor<I>(
-    lock_cursor: &mut Cursor<I>,
-    user_key: &Key,
-    ts: u64,
-    statistics: &mut Statistics,
-) -> Result<CheckLockResult>
-where
-    I: Iterator,
-{
-    let lock_value = lock_cursor.value(&mut statistics.lock);
-    let lock = Lock::parse(lock_value)?;
-    check_lock(user_key, ts, &lock)
-}
-
 /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the latest
 /// committed version will be returned for primary key instead of leading to lock conflicts.
 #[inline]
