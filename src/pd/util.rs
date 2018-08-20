@@ -268,7 +268,7 @@ where
                     Ok(ctx)
                 }
                 Err(err) => {
-                    error!("request failed: {:?}", err);
+                    ctx.resp = Some(Err(err));
                     Err(ctx)
                 }
             })
@@ -304,7 +304,8 @@ where
 
     fn post_loop(ctx: Result<Self>) -> Result<Resp> {
         let ctx = ctx.expect("end loop with Ok(_)");
-        ctx.resp.unwrap_or_else(|| Err(box_err!("fail to request")))
+        ctx.resp
+            .unwrap_or_else(|| Err(box_err!("response is empty")))
     }
 
     /// Returns a Future, it is resolves once a future returned by the closure
