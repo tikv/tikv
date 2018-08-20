@@ -266,7 +266,7 @@ mod tests {
         must_split_at(
             &rx,
             &region,
-            vec![Key::from_raw(b"0080").append_ts(2).take_encoded()],
+            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
         );
         println!("end");
         drop(rx);
@@ -381,9 +381,9 @@ mod tests {
             &rx,
             &region,
             vec![
-                Key::from_raw(b"0080").append_ts(2).take_encoded(),
-                Key::from_raw(b"0160").append_ts(2).take_encoded(),
-                Key::from_raw(b"0240").append_ts(2).take_encoded(),
+                Key::from_raw(b"0080").append_ts(2).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2).into_encoded(),
             ],
         );
 
@@ -408,11 +408,11 @@ mod tests {
             &rx,
             &region,
             vec![
-                Key::from_raw(b"0080").append_ts(2).take_encoded(),
-                Key::from_raw(b"0160").append_ts(2).take_encoded(),
-                Key::from_raw(b"0240").append_ts(2).take_encoded(),
-                Key::from_raw(b"0320").append_ts(2).take_encoded(),
-                Key::from_raw(b"0400").append_ts(2).take_encoded(),
+                Key::from_raw(b"0080").append_ts(2).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2).into_encoded(),
+                Key::from_raw(b"0320").append_ts(2).into_encoded(),
+                Key::from_raw(b"0400").append_ts(2).into_encoded(),
             ],
         );
 
