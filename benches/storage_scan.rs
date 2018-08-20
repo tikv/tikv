@@ -173,6 +173,7 @@ fn bench_backward_scan(b: &mut Bencher, input: &ScanConfig) {
     });
 }
 
+#[cfg_attr(feature = "cargo-clippy", allow(useless_let_if_seq))]
 fn main() {
     let matches = App::new("storage_scan_benchmark")
         .arg(
@@ -192,7 +193,7 @@ fn main() {
     let value_len_coll;
 
     if matches.is_present("full") {
-        number_of_keys_coll = vec![100, 10000, 1000000];
+        number_of_keys_coll = vec![100, 10000];
         number_of_versions_coll = vec![1, 2, 5, 10, 20, 50];
         key_len_coll = vec![32, 100, 200];
         value_len_coll = vec![5, 100, 200];
