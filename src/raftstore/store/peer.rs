@@ -752,6 +752,11 @@ impl Peer {
     }
 
     pub fn check_stale_state(&mut self) -> StaleState {
+        if self.is_leader() {
+            // Leaders always have valid state.
+            self.leader_missing_time = None;
+            return StaleState::Valid;
+        }
         let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
         // Updates the `leader_missing_time` according to the current state.
         //
