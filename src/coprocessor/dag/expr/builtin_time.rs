@@ -13,6 +13,7 @@
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::error::Error;
+use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
 use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
@@ -24,9 +25,16 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let t = try_opt!(self.children[0].eval_time(ctx, row));
+        let t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => handle_invalid_time_error!(ctx, err),
+            Ok(None) => handle_invalid_time_error!(ctx, Error::incorrect_datetime_value("None")),
+            Ok(Some(res)) => res,
+        };
         if t.invalid_zero() {
-            return Err(box_err!("Incorrect datetime value: '{}'", t));
+            handle_invalid_time_error!(
+                ctx,
+                Error::incorrect_datetime_value(&format!("Incorrect datetime value: '{}'", t))
+            );
         }
         let format_mask = try_opt!(self.children[1].eval_string(ctx, row));
         let format_mask_str = String::from_utf8(format_mask.into_owned())?;
@@ -41,20 +49,12 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                )
-            }
+            Err(err) => handle_invalid_time_error!(ctx, err),
+            Ok(None) => handle_invalid_time_error!(ctx, Error::incorrect_datetime_value("None")),
             Ok(Some(res)) => res,
         };
         if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            );
+            handle_invalid_time_error!(ctx, Error::incorrect_datetime_value(&format!("{}", t)));
         }
         let mut res = t.to_mut().clone();
         res.set_tp(mysql::types::DATE).unwrap();

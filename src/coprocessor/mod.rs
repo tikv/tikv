@@ -12,6 +12,7 @@
 // limitations under the License.
 
 mod checksum;
+#[macro_use]
 pub mod codec;
 mod dag;
 mod endpoint;

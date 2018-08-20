@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use coprocessor::codec::mysql::Time;
-use coprocessor::dag::expr::EvalContext;
-use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
 use std::str::Utf8Error;
@@ -34,6 +31,21 @@ pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
 pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_DATA_TOO_LONG: i32 = 1406;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
+
+macro_rules! handle_invalid_time_error {
+    ($ctx:ident, $err:expr) => {{
+        if $err.code() == ERR_TRUNCATE_WRONG_VALUE {
+            return Err($err);
+        }
+        if $ctx.cfg.strict_sql_mode
+            && ($ctx.cfg.in_insert_stmt || $ctx.cfg.in_update_or_delete_stmt)
+        {
+            return Err($err);
+        }
+        $ctx.warnings.append_warning($err);
+        return Ok(None);
+    }};
+}
 
 quick_error! {
     #[derive(Debug)]
@@ -69,20 +81,6 @@ quick_error! {
 }
 
 impl Error {
-    pub fn handle_invalid_time_error<'a>(
-        ctx: &mut EvalContext,
-        err: Error,
-    ) -> Result<Option<Cow<'a, Time>>> {
-        if err.code() == ERR_TRUNCATE_WRONG_VALUE {
-            return Err(err);
-        }
-        if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
-            return Err(err);
-        }
-        ctx.warnings.append_warning(err);
-        Ok(None)
-    }
-
     pub fn overflow(data: &str, expr: &str) -> Error {
         let msg = format!("{} value is out of range in {:?}", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
