@@ -13,6 +13,7 @@
 
 use rocksdb::DB;
 
+use raftstore::store::keys;
 use util::config::ReadableSize;
 
 use super::super::error::Result;
@@ -50,12 +51,14 @@ impl SplitChecker for Checker {
         false
     }
 
-    fn split_key(&mut self) -> Option<Vec<u8>> {
+    fn split_keys(&mut self) -> Vec<Vec<u8>> {
         let mid = self.buckets.len() / 2;
         if mid == 0 {
-            None
+            vec![]
         } else {
-            Some(self.buckets.swap_remove(mid))
+            let data_key = self.buckets.swap_remove(mid);
+            let key = keys::origin_key(&data_key).to_vec();
+            vec![key]
         }
     }
 
@@ -167,12 +170,12 @@ mod tests {
             CheckPolicy::SCAN,
         ));
         let split_key = Key::from_raw(b"0005");
-        must_split_at(&rx, &region, split_key.encoded());
+        must_split_at(&rx, &region, vec![split_key.clone().take_encoded()]);
         runnable.run(SplitCheckTask::new(
             region.clone(),
             false,
             CheckPolicy::APPROXIMATE,
         ));
-        must_split_at(&rx, &region, split_key.encoded());
+        must_split_at(&rx, &region, vec![split_key.take_encoded()]);
     }
 }

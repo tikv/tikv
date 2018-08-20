@@ -157,6 +157,10 @@ impl Column {
 
     /// Return whether the datum for the row is null or not.
     pub fn is_null(&self, row_idx: usize) -> bool {
+        if self.null_cnt == 0 {
+            return false;
+        }
+
         if let Some(null_byte) = self.null_bitmap.get(row_idx >> 3) {
             null_byte & (1 << ((row_idx) & 7)) == 0
         } else {

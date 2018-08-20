@@ -13,12 +13,9 @@
 
 use rocksdb::{CompactOptions, Writable, DB};
 
+use test_raftstore::*;
 use tikv::raftstore::store::keys;
 use tikv::storage::{CF_DEFAULT, CF_LOCK};
-
-use super::cluster::{Cluster, Simulator};
-use super::server::new_server_cluster;
-use super::util::*;
 
 fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {
     let mut opts = CompactOptions::new();
