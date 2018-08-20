@@ -315,7 +315,7 @@ mod tests {
     }
 
     fn new_encoded_key(i: u8, ts: u64) -> Vec<u8> {
-        Key::from_raw(&[i]).append_ts(ts).take_encoded()
+        Key::from_raw(&[i]).append_ts(ts).into_encoded()
     }
 
     #[test]
@@ -391,7 +391,7 @@ mod tests {
         // Make sure that all kvs are right.
         for i in 0..n {
             let k = Key::from_raw(&[i]);
-            let v = point_getter.read_next(&k, commit_ts).unwrap().unwrap();
+            let v = point_getter.get(&k, commit_ts).unwrap().unwrap();
             assert_eq!(&v, &value);
         }
         // Make sure that no extra keys are added.

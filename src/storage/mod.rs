@@ -591,7 +591,7 @@ impl<E: Engine> Storage<E> {
                                 !(v.is_ok() && v.as_ref().unwrap().is_none())
                             )
                             .map(|(v, k)| match v {
-                                Ok(Some(x)) => Ok((k.raw().unwrap(), x)),
+                                Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
                                 Err(e) => Err(Error::from(e)),
                                 _ => unreachable!(),
                             })
@@ -650,26 +650,20 @@ impl<E: Engine> Storage<E> {
                         !ctx.get_not_fill_cache(),
                     );
 
-                    let scan_mode = if options.reverse_scan {
-                        ScanMode::Backward
-                    } else {
-                        ScanMode::Forward
-                    };
-
                     let mut scanner;
-                    if options.reverse_scan {
+                    if !options.reverse_scan {
                         scanner = snap_store.scanner(
-                            scan_mode,
+                            ScanMode::Forward,
                             options.key_only,
+                            Some(start_key),
                             None,
-                            Some(start_key.take_encoded()),
                         )?;
                     } else {
                         scanner = snap_store.scanner(
-                            scan_mode,
+                            ScanMode::Backward,
                             options.key_only,
-                            Some(start_key.take_encoded()),
                             None,
+                            Some(start_key),
                         )?;
                     };
                     let res = scanner.scan(limit);
@@ -953,7 +947,7 @@ impl<E: Engine> Storage<E> {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
                                 stats.data.flow_stats.read_bytes += k.encoded().len() + v.len();
-                                Ok((k.take_encoded(), v))
+                                Ok((k.into_encoded(), v))
                             }
                             Err(e) => Err(Error::from(e)),
                             _ => unreachable!(),
@@ -1119,7 +1113,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.take_encoded());
+            option.set_upper_bound(end.into_encoded());
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);

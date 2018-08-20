@@ -300,7 +300,7 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext};
     use std::ops::Add;
     use std::sync::Arc;
     use std::{i64, u64};
@@ -336,7 +336,7 @@ mod test {
     #[test]
     fn test_sum_as_f64() {
         let mut sum = Sum { res: None };
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::default_for_test();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let data = vec![
             Datum::Bytes(b"123.09xxx".to_vec()),
@@ -357,7 +357,7 @@ mod test {
         let mut aggr = AggBitAnd {
             c: 0xffffffffffffffff,
         };
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::default_for_test();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         assert_eq!(aggr.c, u64::MAX);
 
@@ -381,7 +381,7 @@ mod test {
     #[test]
     fn test_bit_or() {
         let mut aggr = AggBitOr { c: 0 };
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::default_for_test();
         let mut ctx = EvalContext::new(Arc::new(cfg));
         let data = vec![
             Datum::U64(1),
@@ -404,7 +404,7 @@ mod test {
     #[test]
     fn test_bit_xor() {
         let mut aggr = AggBitXor { c: 0 };
-        let cfg = EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap();
+        let cfg = EvalConfig::default_for_test();
         let mut ctx = EvalContext::new(Arc::new(cfg));
 
         let data = vec![

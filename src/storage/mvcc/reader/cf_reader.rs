@@ -92,16 +92,6 @@ impl<S: Snapshot> CfReader<S> {
         super::util::load_lock(&self.snapshot, key, &mut self.statistics)
     }
 
-    /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
-    /// see whether it conflicts with the given `ts`. If there is no conflict or no lock,
-    /// the safe `ts` will be returned.
-    ///
-    /// Internally, there is a db `get`.
-    #[inline]
-    pub fn load_and_check_lock(&mut self, key: &Key, ts: u64) -> Result<u64> {
-        super::util::load_and_check_lock(&self.snapshot, key, ts, &mut self.statistics)
-    }
-
     /// Iterate and get all user keys in the write CF within the given key space
     /// (specified by `start_key` and `limit`). `limit` must not be `0`.
     ///
@@ -218,8 +208,6 @@ impl<S: Snapshot> CfReader<S> {
     pub fn scan_writes(&mut self, user_key: &Key, max_ts: u64) -> Result<Vec<(u64, Write)>> {
         self.ensure_write_cursor()?;
         let write_cursor = self.write_cursor.as_mut().unwrap();
-
-        // TODO: We need to ensure that cursor is not prefix seek.
 
         let mut writes = vec![];
         write_cursor.seek(

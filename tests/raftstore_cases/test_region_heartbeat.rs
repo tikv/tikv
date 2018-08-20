@@ -1,17 +1,24 @@
+// Copyright 2016 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use test_raftstore::*;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util;
-use super::util::*;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
     let mut peers = cluster.get_down_peers();
@@ -50,16 +57,16 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     // max peer down duration is 500 millis, but we only report down time in seconds,
     // so sleep 1 second to make the old down second is always larger than new down second
     // by at lease 1 second.
-    util::sleep_ms(1000);
+    sleep_ms(1000);
 
     wait_down_peers(cluster, 1, Some(1));
     let down_secs = cluster.get_down_peers()[&1].get_down_seconds();
     let timer = Instant::now();
     let leader = cluster.leader_of_region(1).unwrap();
     let new_leader = if leader.get_id() == 2 {
-        util::new_peer(3, 3)
+        new_peer(3, 3)
     } else {
-        util::new_peer(2, 2)
+        new_peer(2, 2)
     };
 
     cluster.must_transfer_leader(1, new_leader);

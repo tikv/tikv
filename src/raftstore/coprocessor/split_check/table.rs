@@ -65,9 +65,11 @@ impl SplitChecker for Checker {
         self.split_key.is_some()
     }
 
-    fn split_key(&mut self) -> Option<Vec<u8>> {
-        let key = self.split_key.take()?;
-        Some(keys::data_key(&key))
+    fn split_keys(&mut self) -> Vec<Vec<u8>> {
+        match self.split_key.take() {
+            None => vec![],
+            Some(key) => vec![key],
+        }
     }
 }
 
@@ -183,7 +185,7 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
     if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).raw() {
         table_codec::extract_table_prefix(&raw_key)
-            .map(|k| Key::from_raw(k).take_encoded())
+            .map(|k| Key::from_raw(k).into_encoded())
             .ok()
     } else {
         None
@@ -265,12 +267,12 @@ mod test {
             for (start_id, end_id, want) in cases {
                 region.set_start_key(
                     start_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).into_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 region.set_end_key(
                     end_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).into_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
@@ -331,8 +333,8 @@ mod test {
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
-                        Ok(Msg::SplitRegion { split_key, .. }) => {
-                            assert_eq!(&split_key, key.encoded());
+                        Ok(Msg::SplitRegion { split_keys, .. }) => {
+                            assert_eq!(split_keys, vec![key.into_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),
                     }
@@ -347,7 +349,7 @@ mod test {
 
         let gen_encoded_table_prefix = |table_id| {
             let key = Key::from_raw(&gen_table_prefix(table_id));
-            key.take_encoded()
+            key.into_encoded()
         };
 
         // arbitrary padding.

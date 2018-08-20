@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
 use slog::Level;
+use toml;
+
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -27,8 +29,6 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
-
-use toml;
 
 #[test]
 fn test_toml_serde() {
@@ -408,6 +408,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
+        batch_split_limit: 1,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
         region_max_keys: 100000,

@@ -17,9 +17,11 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::engine::SEEK_BOUND;
 use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::{Lock, Result};
-use storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
+use storage::mvcc::Result;
+use storage::{Cursor, CursorBuilder, Key, Lock, ScanMode, Snapshot, Statistics, Value};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+
+use super::util::CheckLockResult;
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -27,7 +29,7 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 // need to turn back the direction to backward. As we have tested, turn around
 // iterator's direction from forward to backward is as expensive as seek in
 // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
-const REVERSE_SEEK_BOUND: u64 = 32;
+const REVERSE_SEEK_BOUND: u64 = 16;
 
 /// `BackwardScanner` factory.
 pub struct BackwardScannerBuilder<S: Snapshot> {
@@ -35,8 +37,8 @@ pub struct BackwardScannerBuilder<S: Snapshot> {
     fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
     ts: u64,
 }
 
@@ -89,7 +91,7 @@ impl<S: Snapshot> BackwardScannerBuilder<S> {
     ///
     /// Default is `(None, None)`.
     #[inline]
-    pub fn range(mut self, lower_bound: Option<Vec<u8>>, upper_bound: Option<Vec<u8>>) -> Self {
+    pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.lower_bound = lower_bound;
         self.upper_bound = upper_bound;
         self
@@ -98,13 +100,13 @@ impl<S: Snapshot> BackwardScannerBuilder<S> {
     /// Build `BackwardScanner` from the current configuration.
     pub fn build(self) -> Result<BackwardScanner<S>> {
         let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
 
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .bound(self.lower_bound.clone(), self.upper_bound.clone())
+            .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
@@ -139,10 +141,11 @@ pub struct BackwardScanner<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
 
-    /// `lower_bound` and `upper_bound` is only used to create `default_cursor`. It will be
-    /// consumed after `default_cursor` is being created.
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
+    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
+    /// created.
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
 
     ts: u64,
 
@@ -167,8 +170,24 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            self.write_cursor.seek_to_last(&mut self.statistics.write);
-            self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+            if self.upper_bound.is_some() {
+                // TODO: `seek_to_last` is better, however it has performance issues currently.
+                // TODO: We have no guarantee about whether or not the upper_bound has a
+                // timestamp suffix, so currently it is not safe to change write_cursor's
+                // reverse_seek to seek_for_prev. However in future, once we have different types
+                // for them, this can be done safely.
+                self.write_cursor.reverse_seek(
+                    self.upper_bound.as_ref().unwrap(),
+                    &mut self.statistics.write,
+                )?;
+                self.lock_cursor.reverse_seek(
+                    self.upper_bound.as_ref().unwrap(),
+                    &mut self.statistics.lock,
+                )?;
+            } else {
+                self.write_cursor.seek_to_last(&mut self.statistics.write);
+                self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+            }
             self.is_started = true;
         }
 
@@ -216,14 +235,35 @@ impl<S: Snapshot> BackwardScanner<S> {
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
-            let result = self.reverse_get(&current_user_key, has_write, has_lock);
+            let mut result = Ok(None);
+            let mut get_ts = self.ts;
+            let mut met_prev_user_key = false;
 
-            if has_write {
-                // Skip rest later versions and point to previous user key.
-                self.move_write_cursor_to_prev_user_key(&current_user_key)?;
-            }
             if has_lock {
+                match self.isolation_level {
+                    IsolationLevel::SI => {
+                        let lock = {
+                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                            Lock::parse(lock_value)?
+                        };
+                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                            CheckLockResult::NotLocked => {}
+                            CheckLockResult::Locked(e) => result = Err(e),
+                            CheckLockResult::Ignored(ts) => get_ts = ts,
+                        }
+                    }
+                    IsolationLevel::RC => {}
+                }
                 self.lock_cursor.prev(&mut self.statistics.lock);
+            }
+            if has_write {
+                if result.is_ok() {
+                    result = self.reverse_get(&current_user_key, get_ts, &mut met_prev_user_key);
+                }
+                if !met_prev_user_key {
+                    // Skip rest later versions and point to previous user key.
+                    self.move_write_cursor_to_prev_user_key(&current_user_key)?;
+                }
             }
 
             if let Some(v) = result? {
@@ -239,26 +279,9 @@ impl<S: Snapshot> BackwardScanner<S> {
     fn reverse_get(
         &mut self,
         user_key: &Key,
-        has_write: bool,
-        has_lock: bool,
+        ts: u64,
+        met_prev_user_key: &mut bool,
     ) -> Result<Option<Value>> {
-        let mut ts = self.ts;
-
-        if has_lock {
-            match self.isolation_level {
-                IsolationLevel::SI => {
-                    assert!(self.lock_cursor.valid());
-                    let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                    let lock = Lock::parse(lock_value)?;
-                    ts = super::util::check_lock(user_key, ts, &lock)?
-                }
-                IsolationLevel::RC => {}
-            }
-        }
-
-        if !has_write {
-            return Ok(None);
-        }
         assert!(self.write_cursor.valid());
 
         // At first, we try to use several `prev()` to get the desired version.
@@ -285,12 +308,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 last_checked_commit_ts = Key::decode_ts_from(current_key)?;
 
-                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice())
-                    || last_checked_commit_ts > ts
-                {
-                    // Meet another key or meet an unwanted version. We use `last_version` as the return.
-                    // TODO: If we meet another user key here, we don't need to compare the key
-                    // again when trying to move to prev user key in `read_next`.
+                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
+                    // Meet another key, use `last_version` as the return.
+                    *met_prev_user_key = true;
+                    is_done = true;
+                } else if last_checked_commit_ts > ts {
+                    // Meet an unwanted version, use `last_version` as the return as well.
                     is_done = true;
                 }
             }
@@ -329,20 +352,17 @@ impl<S: Snapshot> BackwardScanner<S> {
             // After seek, or after some `next()`, we may reach `last_checked_commit_ts` again. It
             // means we have checked all versions for this user key. We use `last_version` as
             // return.
-            let mut is_done = false;
-            {
+            let current_ts = {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 // We should never reach another user key.
                 assert!(Key::is_user_key_eq(
                     current_key,
                     user_key.encoded().as_slice()
                 ));
-                if Key::decode_ts_from(current_key)? <= last_checked_commit_ts {
-                    // We reach the last handled key,
-                    is_done = true;
-                }
-            }
-            if is_done {
+                Key::decode_ts_from(current_key)?
+            };
+            if current_ts <= last_checked_commit_ts {
+                // We reach the last handled key
                 return Ok(self.handle_last_version(last_version, user_key)?);
             }
 
@@ -436,7 +456,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         // We have not found another user key for now, so we directly `seek_for_prev()`.
         // After that, we must pointing to another key, or out of bound.
         self.write_cursor
-            .seek_for_prev(current_user_key, &mut self.statistics.write)?;
+            .internal_seek_for_prev(current_user_key, &mut self.statistics.write)?;
 
         Ok(())
     }
@@ -447,7 +467,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .bound(self.lower_bound.take(), self.upper_bound.take())
+            .range(self.lower_bound.take(), self.upper_bound.take())
             .fill_cache(self.fill_cache)
             .scan_mode(ScanMode::Backward)
             .build()?;
@@ -467,7 +487,7 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     #[test]
-    fn test_basic_1() {
+    fn test_basic() {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
@@ -538,13 +558,12 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-
         let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND)
-            .range(None, Some(vec![11 as u8]))
+            .range(None, Some(Key::from_raw(&[11 as u8])))
             .build()
             .unwrap();
 
-        // Initial position: 1 seek_to_last
+        // Initial position: 1 seek_for_prev
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                                                  ^cursor
         // When get key [10]: REVERSE_SEEK_BOUND / 2 prev
@@ -563,9 +582,9 @@ mod tests {
         );
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.prev, REVERSE_SEEK_BOUND as usize / 2);
-        assert_eq!(statistics.write.seek, 1); // 1 seek_to_last
+        assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
-        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.seek_for_prev, 1);
 
         // Before get key [9]:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
@@ -711,6 +730,479 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
     }
 
+    /// Check whether everything works as usual when `BackwardScanner::reverse_get()` goes
+    /// out of bound.
+    ///
+    /// Case 1. prev out of bound, next_version is None.
+    #[test]
+    fn test_reverse_get_out_of_bound_1() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate N/2 rollback for [b].
+        for ts in 0..REVERSE_SEEK_BOUND / 2 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        // Generate 1 put for [c].
+        must_prewrite_put(&engine, b"c", b"value", b"c", REVERSE_SEEK_BOUND * 2);
+        must_commit(
+            &engine,
+            b"c",
+            REVERSE_SEEK_BOUND * 2,
+            REVERSE_SEEK_BOUND * 2,
+        );
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // The following illustration comments assume that REVERSE_SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_last:
+        //   b_1 b_0 c_8
+        //           ^cursor
+        // Got ts == specified ts, advance the cursor.
+        //   b_1 b_0 c_8
+        //       ^cursor
+        // Now we get [c]. Trying to reach prev user key: no operation needed.
+        //   b_1 b_0 c_8
+        //       ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"c"), b"value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 1);
+
+        // Use N/2 prev and reach out of bound:
+        //   b_1 b_0 c_8
+        // ^cursor
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2) as usize);
+
+        // Cursor remains invalid, so nothing should happen.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 0);
+    }
+
+    /// Check whether everything works as usual when `BackwardScanner::reverse_get()` goes
+    /// out of bound.
+    ///
+    /// Case 2. prev out of bound, next_version is Some.
+    #[test]
+    fn test_reverse_get_out_of_bound_2() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put and N/2 rollback for [b].
+        must_prewrite_put(&engine, b"b", b"value_b", b"b", 0);
+        must_commit(&engine, b"b", 0, 0);
+        for ts in 1..REVERSE_SEEK_BOUND / 2 + 1 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        // Generate 1 put for [c].
+        must_prewrite_put(&engine, b"c", b"value_c", b"c", REVERSE_SEEK_BOUND * 2);
+        must_commit(
+            &engine,
+            b"c",
+            REVERSE_SEEK_BOUND * 2,
+            REVERSE_SEEK_BOUND * 2,
+        );
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // The following illustration comments assume that REVERSE_SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_last:
+        //   b_2 b_1 b_0 c_8
+        //               ^cursor
+        // Got ts == specified ts, advance the cursor.
+        //   b_2 b_1 b_0 c_8
+        //           ^cursor
+        // Now we get [c]. Trying to reach prev user key: no operation needed.
+        //   b_2 b_1 b_0 c_8
+        //           ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"c"), b"value_c".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 1);
+
+        // Use N/2+1 prev and reach out of bound:
+        //   b_2 b_1 b_0 c_8
+        // ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"b"), b"value_b".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2 + 1) as usize);
+
+        // Cursor remains invalid, so nothing should happen.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    ///
+    /// Case 1. prev() out of bound
+    #[test]
+    fn test_move_prev_user_key_out_of_bound_1() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put for [c].
+        must_prewrite_put(&engine, b"c", b"value", b"c", 1);
+        must_commit(&engine, b"c", 1, 1);
+
+        // Generate N/2 put for [b] .
+        for ts in 1..SEEK_BOUND / 2 + 1 {
+            must_prewrite_put(&engine, b"b", &[ts as u8], b"b", ts);
+            must_commit(&engine, b"b", ts, ts);
+        }
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = BackwardScannerBuilder::new(snapshot, 1)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_last:
+        //   b_2 b_1 c_1
+        //           ^cursor
+        // Got ts == specified ts, advance the cursor.
+        //   b_2 b_1 c_1
+        //       ^cursor
+        // Now we get [c]. Trying to reach prev user key: no operation needed.
+        //   b_2 b_1 c_1
+        //       ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"c"), b"value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 1);
+
+        // Before:
+        //   b_2 b_1 c_1
+        //       ^cursor
+        // We should be able to get wanted value without any operation.
+        // After get the value, use N/2 prev to reach prev key and stop:
+        //   b_2 b_1 c_1
+        // ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"b"), vec![1u8].to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, (SEEK_BOUND / 2) as usize);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    ///
+    /// Case 2. seek_for_prev() out of bound
+    #[test]
+    fn test_move_prev_user_key_out_of_bound_2() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put for [c].
+        must_prewrite_put(&engine, b"c", b"value", b"c", 1);
+        must_commit(&engine, b"c", 1, 1);
+
+        // Generate N+1 put for [b] .
+        for ts in 1..SEEK_BOUND + 2 {
+            must_prewrite_put(&engine, b"b", &[ts as u8], b"b", ts);
+            must_commit(&engine, b"b", ts, ts);
+        }
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = BackwardScannerBuilder::new(snapshot, 1)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_last:
+        //   b_5 b_4 b_3 b_2 b_1 c_1
+        //                       ^cursor
+        // Got ts == specified ts, advance the cursor.
+        //   b_5 b_4 b_3 b_2 b_1 c_1
+        //                   ^cursor
+        // Now we get [c]. Trying to reach prev user key: no operation needed.
+        //   b_5 b_4 b_3 b_2 b_1 c_1
+        //                   ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"c"), b"value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 1);
+
+        // Before:
+        //   b_5 b_4 b_3 b_2 b_1 c_1
+        //                   ^cursor
+        // Got ts == specified ts, advance the cursor.
+        //   b_5 b_4 b_3 b_2 b_1 c_1
+        //               ^cursor
+        // Now we get [b].
+        // After get the value, use N-1 prev: (TODO: Should be SEEK_BOUND)
+        //   b_5 b_4 b_3 b_2 b_1 c_1
+        //   ^cursor
+        // Then, use seek_for_prev:
+        //   b_5 b_4 b_3 b_2 b_1 c_1
+        // ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"b"), vec![1u8])),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 1);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, SEEK_BOUND as usize);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    ///
+    /// Case 3. a more complicated case
+    #[test]
+    fn test_move_prev_user_key_out_of_bound_3() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // N denotes for SEEK_BOUND, M denotes for REVERSE_SEEK_BOUND
+
+        // Generate 1 put for [c].
+        must_prewrite_put(&engine, b"c", b"value", b"c", 1);
+        must_commit(&engine, b"c", 1, 1);
+
+        // Generate N+M+1 put for [b] .
+        for ts in 1..SEEK_BOUND + REVERSE_SEEK_BOUND + 2 {
+            must_prewrite_put(&engine, b"b", &[ts as u8], b"b", ts);
+            must_commit(&engine, b"b", ts, ts);
+        }
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND + 1)
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4, REVERSE_SEEK_BOUND = 6.
+
+        // Initial position: 1 seek_to_last:
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        //                                                 ^cursor
+        // Got ts < specified ts, advance the cursor.
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        //                                             ^cursor
+        // Now we get [c]. Trying to reach prev user key: no operation needed.
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        //                                             ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"c"), b"value".to_vec())),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 1);
+
+        // Before:
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        //                                             ^cursor
+        // Use M-1 prev trying to get specified version:
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        //                         ^cursor
+        // Possible more version, so use seek:
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        //                     ^cursor
+        // Now we got wanted value.
+        // After get the value, use N-1 prev trying to reach prev user key:
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        //        ^cursor
+        // Then, use seek_for_prev:
+        //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
+        // ^cursor
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(b"b"), vec![(REVERSE_SEEK_BOUND + 1) as u8])),
+        );
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.seek_for_prev, 1);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(
+            statistics.write.prev,
+            (REVERSE_SEEK_BOUND - 1 + SEEK_BOUND - 1) as usize
+        );
+
+        // Next we should get nothing.
+        assert_eq!(scanner.read_next().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.seek_for_prev, 0);
+        assert_eq!(statistics.write.next, 0);
+        assert_eq!(statistics.write.prev, 0);
+    }
+
+    /// Range is left open right closed.
+    #[test]
+    fn test_range() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        // Generate 1 put for [1], [2] ... [6].
+        for i in 1..7 {
+            // ts = 1: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 1);
+            must_commit(&engine, &[i], 1, 1);
+
+            // ts = 7: value = [ts]
+            must_prewrite_put(&engine, &[i], &[i], &[i], 7);
+            must_commit(&engine, &[i], 7, 7);
+
+            // ts = 14: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 14);
+            must_commit(&engine, &[i], 14, 14);
+        }
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+
+        // Test both bound specified.
+        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[4u8]), vec![4u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[3u8]), vec![3u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
+
+        // Test left bound not specified.
+        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(None, Some(Key::from_raw(&[3u8])))
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[2u8]), vec![2u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[1u8]), vec![1u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
+
+        // Test right bound not specified.
+        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(Some(Key::from_raw(&[5u8])), None)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[6u8]), vec![6u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[5u8]), vec![5u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
+
+        // Test both bound not specified.
+        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+            .range(None, None)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[6u8]), vec![6u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[5u8]), vec![5u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[4u8]), vec![4u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[3u8]), vec![3u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[2u8]), vec![2u8]))
+        );
+        assert_eq!(
+            scanner.read_next().unwrap(),
+            Some((Key::from_raw(&[1u8]), vec![1u8]))
+        );
+        assert_eq!(scanner.read_next().unwrap(), None);
+    }
+
     #[test]
     fn test_many_tombstones() {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
@@ -744,12 +1236,12 @@ mod tests {
         // Call reverse scan
         let ts = 2;
         let mut scanner = BackwardScannerBuilder::new(snapshot, ts)
-            .range(None, Some(k.take_encoded()))
+            .range(None, Some(k))
             .build()
             .unwrap();
         assert_eq!(scanner.read_next().unwrap(), None);
         let statistics = scanner.take_statistics();
-        assert_eq!(statistics.lock.prev, 255);
+        assert_eq!(statistics.lock.prev, 256);
         assert_eq!(statistics.write.prev, 1);
     }
 

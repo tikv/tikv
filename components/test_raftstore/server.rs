@@ -15,7 +15,6 @@ use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
-use tikv::util::collections::{HashMap, HashSet};
 
 use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
@@ -38,18 +37,17 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage::{self, RaftKv};
+use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::security::SecurityManager;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
 
-use super::cluster::{Cluster, Simulator};
-use super::pd::TestPdClient;
-use super::transport_simulate::*;
-use super::util::create_test_engine;
+use super::*;
 
 type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 type SimulateServerTransport =
     SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
@@ -170,7 +168,6 @@ impl Simulator for ServerCluster {
             server = Some(Server::new(
                 &server_cfg,
                 &security_mgr,
-                cfg.coprocessor.region_split_size.0 as usize,
                 store.clone(),
                 cop_read_pool.clone(),
                 sim_router.clone(),

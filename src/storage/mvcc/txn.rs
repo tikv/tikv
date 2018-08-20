@@ -366,7 +366,6 @@ impl<S: Snapshot> MvccTxn<S> {
 
 #[cfg(test)]
 mod tests {
-
     use kvproto::kvrpcpb::Context;
     use tempdir::TempDir;
 
@@ -834,7 +833,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[2],
-            &"v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+            "v".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[2],
             3,
         );
@@ -843,7 +842,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[3],
-            &"a".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+            "a".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
             3,
         );
@@ -852,7 +851,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[3],
-            &"b".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+            "b".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
             5,
         );
@@ -861,7 +860,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[6],
-            &"x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+            "x".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[6],
             3,
         );
@@ -887,7 +886,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[3],
-            &"a".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+            "a".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
             4,
         );
@@ -896,7 +895,7 @@ mod tests {
         must_prewrite_put(
             &engine,
             &[5],
-            &"b".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes(),
+            "b".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[5],
             2,
         );
