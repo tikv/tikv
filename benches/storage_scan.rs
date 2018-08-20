@@ -176,6 +176,9 @@ fn bench_backward_scan(b: &mut Bencher, input: &ScanConfig) {
 #[cfg_attr(feature = "cargo-clippy", allow(useless_let_if_seq))]
 fn main() {
     let matches = App::new("storage_scan_benchmark")
+        .arg(Arg::with_name("bench")
+            .hidden(true)
+            .long("bench"))  // Ignored. May passed by cargo bench.
         .arg(
             Arg::with_name("full")
                 .long("full")
