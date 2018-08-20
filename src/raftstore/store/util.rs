@@ -575,6 +575,8 @@ impl Lease {
         }
     }
 
+    /// Return a new `RemoteLease` lease if the term mismatchs
+    /// or there is no connected `RemoteLease`.
     pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
         if self.remote.is_some() {
             let remote = self.remote.as_ref().unwrap();
@@ -836,6 +838,23 @@ mod tests {
         lease.expire();
         inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
+
+        // An expired remote lease can never renew.
+        lease.renew(monotonic_raw_now() + TimeDuration::minutes(1));
+        assert_eq!(
+            remote.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+
+        // A new remote lease.
+        let m1 = lease.maybe_new_remote_lease(1).unwrap();
+        assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+
+        // Term has changed, returns a new lease, and expires m1 automatically.
+        let m2 = lease.maybe_new_remote_lease(2).unwrap();
+        let now = monotonic_raw_now();
+        assert_eq!(m2.inspect(Some(now)), LeaseState::Valid);
+        assert_eq!(m1.inspect(Some(now)), LeaseState::Expired);
     }
 
     #[test]

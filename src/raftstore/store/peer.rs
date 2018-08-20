@@ -1179,12 +1179,13 @@ impl Peer {
             debug!("{} prevents renew lease while merging", self.tag);
             return;
         }
-        self.leader_lease.renew(ts);
+        // Try to expire the old `RemoteLease` frist if the trem mismatchs.
         let term = self.term();
         if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);
         }
+        self.leader_lease.renew(ts);
     }
 
     fn maybe_update_read_progress(&self, progress: ReadProgress) {
