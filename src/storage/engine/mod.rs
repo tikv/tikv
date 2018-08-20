@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::boxed::FnBox;
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -332,8 +333,10 @@ pub struct Cursor<I: Iterator> {
     max_key: Option<Vec<u8>>,
     valid: bool, // whether or not the cursor is hitting the `min_key` and `max_key` bound
 
-    cur_key_has_read: bool,
-    cur_value_has_read: bool,
+    // Use `Cell` to wrap these flags to provide interior mutability, so that `key()` and
+    // `value()` don't need to have `&mut self`.
+    cur_key_has_read: Cell<bool>,
+    cur_value_has_read: Cell<bool>,
 }
 
 impl<I: Iterator> Cursor<I> {
@@ -345,16 +348,28 @@ impl<I: Iterator> Cursor<I> {
             max_key: None,
             valid: true,
 
-            cur_key_has_read: false,
-            cur_value_has_read: false,
+            cur_key_has_read: Cell::new(false),
+            cur_value_has_read: Cell::new(false),
         }
     }
 
     /// Mark key and value as unread. It will be invoked once cursor is moved.
     #[inline]
-    fn mark_unread(&mut self) {
-        self.cur_key_has_read = false;
-        self.cur_value_has_read = false;
+    fn mark_unread(&self) {
+        self.cur_key_has_read.set(false);
+        self.cur_value_has_read.set(false);
+    }
+
+    /// Mark key as read. Returns whether key was marked as read before this call.
+    #[inline]
+    fn mark_key_read(&self) -> bool {
+        self.cur_key_has_read.replace(true)
+    }
+
+    /// Mark value as read. Returns whether value was marked as read before this call.
+    #[inline]
+    fn mark_value_read(&self) -> bool {
+        self.cur_value_has_read.replace(true)
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
@@ -505,10 +520,9 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn key(&mut self, statistics: &mut CFStatistics) -> &[u8] {
+    pub fn key(&self, statistics: &mut CFStatistics) -> &[u8] {
         let key = self.iter.key();
-        if !self.cur_key_has_read {
-            self.cur_key_has_read = true;
+        if !self.mark_key_read() {
             statistics.flow_stats.read_bytes += key.len();
             statistics.flow_stats.read_keys += 1;
         }
@@ -516,10 +530,9 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn value(&mut self, statistics: &mut CFStatistics) -> &[u8] {
+    pub fn value(&self, statistics: &mut CFStatistics) -> &[u8] {
         let value = self.iter.value();
-        if !self.cur_value_has_read {
-            self.cur_value_has_read = true;
+        if !self.mark_value_read() {
             statistics.flow_stats.read_bytes += value.len();
         }
         value

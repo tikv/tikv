@@ -446,12 +446,10 @@ impl<S: Snapshot> BackwardScanner<S> {
                 // Key space ended. We are done here.
                 return Ok(());
             }
-            {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
-                    // Found another user key. We are done here.
-                    return Ok(());
-                }
+            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
+                // Found another user key. We are done here.
+                return Ok(());
             }
         }
 
