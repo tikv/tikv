@@ -393,7 +393,7 @@ mod test {
             ),
         ];
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let expr = scalar_func_expr(sig, &[arg.clone()]);
