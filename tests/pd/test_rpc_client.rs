@@ -200,6 +200,35 @@ fn test_retry_sync() {
     test_retry(sync)
 }
 
+fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
+    let eps_count = 1;
+    // NotRetry mocker returns Ok() with error header first, and next returns Ok() without any error header.
+    let not_retry = Arc::new(NotRetry::new());
+    let server = MockServer::with_case(eps_count, not_retry);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+
+    func(&client);
+}
+
+#[test]
+fn test_not_retry_async() {
+    let async = |client: &RpcClient| {
+        let region = client.get_region_by_id(1);
+        region.wait().unwrap_err();
+    };
+    test_not_retry(async);
+}
+
+#[test]
+fn test_not_retry_sync() {
+    let sync = |client: &RpcClient| {
+        client.get_store(1).unwrap_err();
+    };
+    test_not_retry(sync);
+}
+
 fn restart_leader(mgr: SecurityManager) {
     let mgr = Arc::new(mgr);
     // Service has only one GetMembersResponse, so the leader never changes.
