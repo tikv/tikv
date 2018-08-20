@@ -249,8 +249,8 @@ mod test {
         assert!(!req.has_split(), "only split req should be handle.");
 
         req = new_split_request(b"test");
-        // Only batch split is supported.
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_err());
+        // For compatible issue, split should supported too.
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_okay());
 
         // Empty key should be skipped.
         let mut split_keys = vec![vec![]];
