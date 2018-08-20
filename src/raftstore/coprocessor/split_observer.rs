@@ -250,7 +250,7 @@ mod test {
 
         req = new_split_request(b"test");
         // For compatible issue, split should supported too.
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_okay());
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
 
         // Empty key should be skipped.
         let mut split_keys = vec![vec![]];
