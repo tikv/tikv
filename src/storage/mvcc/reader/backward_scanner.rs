@@ -173,7 +173,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             if self.upper_bound.is_some() {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
                 // TODO: We have no guarantee about whether or not the upper_bound has a
-                // timestamp suffix, so currently it is not save to change write_cursor's
+                // timestamp suffix, so currently it is not safe to change write_cursor's
                 // reverse_seek to seek_for_prev. However in future, once we have different types
                 // for them, this can be done safely.
                 self.write_cursor.reverse_seek(
