@@ -121,22 +121,6 @@ pub struct StoreScanner<S: Snapshot> {
     backward_scanner: Option<BackwardScanner<S>>,
 }
 
-#[inline]
-fn handle_mvcc_err(e: MvccError, result: &mut Vec<Result<KvPair>>) -> Result<Key> {
-    let key = if let MvccError::KeyIsLocked { key: ref k, .. } = e {
-        Some(Key::from_raw(k))
-    } else {
-        None
-    };
-    match key {
-        Some(k) => {
-            result.push(Err(e.into()));
-            Ok(k)
-        }
-        None => Err(e.into()),
-    }
-}
-
 impl<S: Snapshot> StoreScanner<S> {
     #[inline]
     pub fn next(&mut self) -> Result<Option<(Key, Value)>> {
@@ -155,8 +139,8 @@ impl<S: Snapshot> StoreScanner<S> {
                     results.push(Ok((k.raw()?, v)));
                 }
                 Ok(None) => break,
-                Err(Error::Mvcc(e)) => {
-                    handle_mvcc_err(e, &mut results)?;
+                Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
+                    results.push(Err(e));
                 }
                 Err(e) => return Err(e),
             }
