@@ -73,6 +73,17 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     peer
 }
 
+/// Check if key in region range (`start_key`, `end_key`).
+pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if start_key < key && (key < end_key || end_key.is_empty()) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
 /// Check if key in region range [`start_key`, `end_key`].
 pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
     let end_key = region.get_end_key();
@@ -210,7 +221,7 @@ pub fn check_region_epoch(
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
             | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
+            AdminCmdType::Split | AdminCmdType::BatchSplit => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
@@ -886,24 +897,27 @@ mod tests {
     #[test]
     fn test_check_key_in_region() {
         let test_cases = vec![
-            ("", "", "", true, true),
-            ("", "", "6", true, true),
-            ("", "3", "6", false, false),
-            ("4", "3", "6", true, true),
-            ("4", "3", "", true, true),
-            ("2", "3", "6", false, false),
-            ("", "3", "6", false, false),
-            ("", "3", "", false, false),
-            ("6", "3", "6", false, true),
+            ("", "", "", true, true, false),
+            ("", "", "6", true, true, false),
+            ("", "3", "6", false, false, false),
+            ("4", "3", "6", true, true, true),
+            ("4", "3", "", true, true, true),
+            ("3", "3", "", true, true, false),
+            ("2", "3", "6", false, false, false),
+            ("", "3", "6", false, false, false),
+            ("", "3", "", false, false, false),
+            ("6", "3", "6", false, true, false),
         ];
-        for (key, start_key, end_key, is_in_region, is_in_region_inclusive) in test_cases {
+        for (key, start_key, end_key, is_in_region, inclusive, exclusive) in test_cases {
             let mut region = metapb::Region::new();
             region.set_start_key(start_key.as_bytes().to_vec());
             region.set_end_key(end_key.as_bytes().to_vec());
             let mut result = check_key_in_region(key.as_bytes(), &region);
             assert_eq!(result.is_ok(), is_in_region);
             result = check_key_in_region_inclusive(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), is_in_region_inclusive)
+            assert_eq!(result.is_ok(), inclusive);
+            result = check_key_in_region_exclusive(key.as_bytes(), &region);
+            assert_eq!(result.is_ok(), exclusive);
         }
     }
 
@@ -1450,7 +1464,7 @@ mod tests {
             .unwrap();
 
         let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
-            .raw()
+            .take_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
     }

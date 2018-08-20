@@ -11,16 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use fail;
-use grpc::*;
-use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
-use kvproto::tikvpb_grpc::TikvClient;
-use raftstore::server::new_server_cluster;
-use raftstore::util::*;
 use std::sync::{mpsc::channel, Arc};
 use std::thread;
 use std::time::Duration;
-use storage::util::new_raft_engine;
+
+use fail;
+use grpcio::*;
+use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
+use kvproto::tikvpb_grpc::TikvClient;
+
+use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
+use test_storage::new_raft_engine;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;

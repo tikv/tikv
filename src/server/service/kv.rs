@@ -1004,7 +1004,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 } else {
                     match v {
                         Ok(Some((k, vv))) => {
-                            resp.set_key(k.raw().unwrap());
+                            resp.set_key(k.take_raw().unwrap());
                             resp.set_info(extract_mvcc_info(vv));
                         }
                         Ok(None) => {
@@ -1031,11 +1031,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
 
+        let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
         let req = StoreMessage::SplitRegion {
-            region_id: req.get_context().get_region_id(),
+            region_id,
             region_epoch: req.take_context().take_region_epoch(),
-            split_key: Key::from_raw(req.get_split_key()).take_encoded(),
+            split_keys: vec![Key::from_raw(req.get_split_key()).take_encoded()],
             callback: Callback::Write(cb),
         };
 
@@ -1046,15 +1047,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = future
             .map_err(Error::from)
-            .map(|mut v| {
+            .map(move |mut v| {
                 let mut resp = SplitRegionResponse::new();
                 if v.response.get_header().has_error() {
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
                     let admin_resp = v.response.mut_admin_response();
-                    let split_resp = admin_resp.mut_split();
-                    resp.set_left(split_resp.take_left());
-                    resp.set_right(split_resp.take_right());
+                    if admin_resp.get_splits().get_regions().len() != 2 {
+                        error!(
+                            "[region {}] invalid split response: {:?}",
+                            region_id, admin_resp
+                        );
+                        resp.mut_region_error().set_message(format!(
+                            "Internal Error: invalid response: {:?}",
+                            admin_resp
+                        ));
+                    } else {
+                        let mut regions = admin_resp.mut_splits().take_regions().into_vec();
+                        let mut d = regions.drain(..);
+                        resp.set_left(d.next().unwrap());
+                        resp.set_right(d.next().unwrap());
+                    }
                 }
                 resp
             })

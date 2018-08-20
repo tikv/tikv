@@ -12,6 +12,8 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
+#![feature(use_extern_macros)]
+#![feature(proc_macro_non_items)]
 
 extern crate chrono;
 extern crate clap;
@@ -87,11 +89,11 @@ fn check_system_config(config: &TiKvConfig) {
 
     // check rocksdb data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!("{:?}", e);
+        warn!("rockdsb check data dir: {:?}", e);
     }
     // check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!("{:?}", e);
+        warn!("raft check data dir: {:?}", e);
     }
 }
 
@@ -190,7 +192,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
-        cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
         cop_read_pool,
         raft_router,
