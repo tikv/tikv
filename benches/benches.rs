@@ -23,10 +23,12 @@ extern crate protobuf;
 extern crate raft;
 extern crate rand;
 extern crate rocksdb;
+extern crate slog;
 extern crate tempdir;
 extern crate test;
 extern crate tipb;
 
+extern crate bench_util;
 extern crate test_storage;
 extern crate test_util;
 extern crate tikv;
@@ -36,19 +38,9 @@ mod coprocessor;
 mod raftkv;
 mod serialization;
 mod storage;
-mod writebatch;
-
-use test::Bencher;
-
-use test_util::KvGenerator;
 
 #[bench]
-fn _bench_check_requirement(_: &mut test::Bencher) {
+fn _bench_setup(_: &mut test::Bencher) {
+    test_util::setup_for_ci();
     tikv::util::config::check_max_open_fds(4096).unwrap();
-}
-
-#[bench]
-fn bench_kv_iter(b: &mut Bencher) {
-    let mut g = KvGenerator::new(100, 1000);
-    b.iter(|| g.next());
 }

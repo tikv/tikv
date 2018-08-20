@@ -10,6 +10,7 @@ path = "lib.rs"
 tikv = { path = "../../" }
 test_raftstore = { path = "../test_raftstore" }
 futures = "0.1"
+tempdir = "0.3"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"

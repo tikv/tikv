@@ -23,13 +23,11 @@ use rand::random;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_storage::*;
-use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::engine::{RocksEngine, TEMP_DIR};
 use tikv::storage::gc_worker::GC_BATCH_SIZE;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::{self, Engine, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
-use tikv::util::worker::FutureWorker;
+use tikv::storage::{Engine, Key, Mutation, ALL_CFS, CF_DEFAULT, CF_LOCK};
 
 #[test]
 fn test_txn_store_get() {
@@ -1057,12 +1055,8 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 #[test]
 fn test_conflict_commands_on_fault_engine() {
     let engine = RocksEngine::new(TEMP_DIR, ALL_CFS, None).unwrap();
-    let pd_worker = FutureWorker::new("test-future–worker");
-    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(pd_worker.scheduler())
-    });
     let config = Default::default();
-    let mut store = SyncStorage::prepare(engine.clone(), &config, read_pool);
+    let mut store = SyncStorage::prepare(engine.clone(), &config);
     let async_storage = store.get_storage();
     let storage = AssertionStorage {
         store: store.clone(),

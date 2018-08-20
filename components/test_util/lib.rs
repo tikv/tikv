@@ -11,6 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg_attr(test, feature(test))]
+
+#[cfg(test)]
+extern crate test;
+
 extern crate rand;
 #[macro_use]
 extern crate slog;

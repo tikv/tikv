@@ -11,14 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{self, Rng, ThreadRng};
+use rand::prelude::*;
+use rand::IsaacRng;
 
 /// A random generator of kv.
-/// Every iter should be taken in µs. See also `benches::bench_kv_iter`.
+///
+/// Every iteration should be taken in µs.
 pub struct KvGenerator {
     key_len: usize,
     value_len: usize,
-    rng: ThreadRng,
+    rng: IsaacRng,
 }
 
 impl KvGenerator {
@@ -26,7 +28,15 @@ impl KvGenerator {
         KvGenerator {
             key_len,
             value_len,
-            rng: rand::thread_rng(),
+            rng: FromEntropy::from_entropy(),
+        }
+    }
+
+    pub fn new_by_seed(seed: u64, key_len: usize, value_len: usize) -> KvGenerator {
+        KvGenerator {
+            key_len,
+            value_len,
+            rng: IsaacRng::new_from_u64(seed),
         }
     }
 }
@@ -48,4 +58,16 @@ impl Iterator for KvGenerator {
 pub fn generate_random_kvs(n: usize, key_len: usize, value_len: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let kv_generator = KvGenerator::new(key_len, value_len);
     kv_generator.take(n).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test::Bencher;
+
+    #[bench]
+    fn bench_kv_generator(b: &mut Bencher) {
+        let mut g = KvGenerator::new(100, 1000);
+        b.iter(|| g.next());
+    }
 }

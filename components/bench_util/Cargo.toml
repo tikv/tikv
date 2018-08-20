@@ -1,0 +1,10 @@
+[package]
+name = "bench_util"
+version = "0.0.1"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies.kvproto]
+git = "https://github.com/pingcap/kvproto.git"

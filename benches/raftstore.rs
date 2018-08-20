@@ -20,8 +20,6 @@ extern crate test_raftstore;
 extern crate test_util;
 extern crate tikv;
 
-use std::fmt;
-
 use criterion::{Bencher, Criterion};
 use rocksdb::{Writable, WriteBatch, DB};
 
@@ -157,7 +155,7 @@ where
     c.bench_function_over_inputs("bench_delete", bench_delete, delete_inputs);
 }
 
-trait ClusterFactory<T: Simulator>: Clone + fmt::Debug + 'static {
+trait ClusterFactory<T: Simulator>: Clone + ::std::fmt::Debug + 'static {
     fn build(&self, nodes: usize) -> Cluster<T>;
 }
 
@@ -170,8 +168,8 @@ impl ClusterFactory<NodeCluster> for NodeClusterFactory {
     }
 }
 
-impl fmt::Debug for NodeClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl ::std::fmt::Debug for NodeClusterFactory {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(f, "Node")
     }
 }
@@ -185,8 +183,8 @@ impl ClusterFactory<ServerCluster> for ServerClusterFactory {
     }
 }
 
-impl fmt::Debug for ServerClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl ::std::fmt::Debug for ServerClusterFactory {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(f, "Server")
     }
 }

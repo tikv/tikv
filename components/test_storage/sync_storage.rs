@@ -15,24 +15,32 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use futures::Future;
+use tempdir::TempDir;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::server::readpool::ReadPool;
+use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
 use tikv::util::collections::HashMap;
+use tikv::util::worker::FutureWorker;
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
 pub struct SyncStorage<E: Engine> {
+    temp_dir: Option<Arc<TempDir>>,
     store: Storage<E>,
     cnt: Arc<AtomicUsize>,
 }
 
 impl SyncStorage<RocksEngine> {
-    pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
+    pub fn new(config: &storage::Config) -> Self {
+        let pd_worker = FutureWorker::new("test-pd–worker");
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
+        });
         let storage = Storage::new(config, read_pool).unwrap();
         let mut s = SyncStorage {
+            temp_dir: None,
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
         };
@@ -41,24 +49,36 @@ impl SyncStorage<RocksEngine> {
     }
 }
 
+impl Default for SyncStorage<RocksEngine> {
+    fn default() -> Self {
+        let temp_dir = TempDir::new("").unwrap();
+
+        let mut config = storage::Config::default();
+        config.data_dir = temp_dir.path().to_str().unwrap().to_owned();
+
+        // Add temp dir to the storage field so that temp directory will be deleted when
+        // storage is dropped.
+        let mut storage = Self::new(&config);
+        storage.temp_dir = Some(Arc::new(temp_dir));
+        storage
+    }
+}
+
 impl<E: Engine> SyncStorage<E> {
-    pub fn from_engine(
-        engine: E,
-        config: &Config,
-        read_pool: ReadPool<storage::ReadPoolContext>,
-    ) -> Self {
-        let mut s = SyncStorage::prepare(engine, config, read_pool);
+    pub fn from_engine(engine: E, config: &Config) -> Self {
+        let mut s = SyncStorage::prepare(engine, config);
         s.start(config);
         s
     }
 
-    pub fn prepare(
-        engine: E,
-        config: &Config,
-        read_pool: ReadPool<storage::ReadPoolContext>,
-    ) -> Self {
+    pub fn prepare(engine: E, config: &Config) -> Self {
+        let pd_worker = FutureWorker::new("test-pd–worker");
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
+        });
         let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         Self {
+            temp_dir: None,
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
         }
@@ -216,6 +236,7 @@ impl<E: Engine> Clone for SyncStorage<E> {
     fn clone(&self) -> Self {
         self.cnt.fetch_add(1, Ordering::SeqCst);
         Self {
+            temp_dir: self.temp_dir.clone(),
             store: self.store.clone(),
             cnt: Arc::clone(&self.cnt),
         }

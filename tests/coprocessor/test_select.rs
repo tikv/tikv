@@ -36,7 +36,7 @@ use tikv::coprocessor::*;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::{Config, OnResponse};
 use tikv::storage::engine::{self, Engine, RocksEngine, TEMP_DIR};
-use tikv::storage::{self, Key, Mutation, ALL_CFS};
+use tikv::storage::{Key, Mutation, ALL_CFS};
 use tikv::util::codec::number::*;
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 
@@ -370,12 +370,8 @@ pub struct Store<E: Engine> {
 
 impl<E: Engine> Store<E> {
     fn new(engine: E) -> Self {
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
         Self {
-            store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
+            store: SyncStorage::from_engine(engine, &Default::default()),
             current_ts: 1,
             handles: vec![],
         }

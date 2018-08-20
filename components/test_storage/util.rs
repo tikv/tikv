@@ -14,10 +14,7 @@
 use kvproto::kvrpcpb::Context;
 
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateEngine};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage;
 use tikv::storage::config::Config;
-use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
 use super::*;
@@ -44,14 +41,10 @@ pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
 ) -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
-    let pd_worker = FutureWorker::new("test-future–worker");
-    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(pd_worker.scheduler())
-    });
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,
-        SyncStorage::from_engine(engine, &Config::default(), read_pool),
+        SyncStorage::from_engine(engine, &Config::default()),
         ctx,
     )
 }
