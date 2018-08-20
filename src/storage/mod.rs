@@ -43,8 +43,9 @@ pub mod types;
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
-    new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
+    new_local_engine, CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
+    FlowStatistics, Iterator, Modify, RocksEngine, ScanMode, Snapshot, Statistics,
+    StatisticsSummary, TEMP_DIR,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
@@ -649,22 +650,27 @@ impl<E: Engine> Storage<E> {
                         !ctx.get_not_fill_cache(),
                     );
 
-                    let scan_mode = if options.reverse_scan {
-                        ScanMode::Backward
+                    let mut scanner;
+                    if !options.reverse_scan {
+                        scanner = snap_store.scanner(
+                            ScanMode::Forward,
+                            options.key_only,
+                            Some(start_key),
+                            None,
+                        )?;
                     } else {
-                        ScanMode::Forward
+                        scanner = snap_store.scanner(
+                            ScanMode::Backward,
+                            options.key_only,
+                            None,
+                            Some(start_key),
+                        )?;
                     };
+                    let res = scanner.scan(limit);
 
-                    let mut scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
-                    let res = if options.reverse_scan {
-                        scanner.reverse_scan(start_key, limit)
-                    } else {
-                        scanner.scan(start_key, limit)
-                    };
-
-                    let statistics = scanner.get_statistics();
-                    thread_ctx.collect_scan_count(CMD, statistics);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
+                    let statistics = scanner.take_statistics();
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     res.map_err(Error::from).map(|results| {
                         thread_ctx.collect_key_reads(CMD, results.len() as u64);

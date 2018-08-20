@@ -214,13 +214,17 @@ mod tests {
             unimplemented!()
         }
 
-        fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        fn ask_batch_split(
+            &self,
+            _: metapb::Region,
+            _: usize,
+        ) -> PdFuture<pdpb::AskBatchSplitResponse> {
             unimplemented!();
         }
         fn store_heartbeat(&self, _: pdpb::StoreStats) -> PdFuture<()> {
             unimplemented!();
         }
-        fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
+        fn report_batch_split(&self, _: Vec<metapb::Region>) -> PdFuture<()> {
             unimplemented!();
         }
     }
