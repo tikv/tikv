@@ -20,6 +20,8 @@ use coprocessor::dag::expr::EvalContext;
 // `UNSPECIFIED_LENGTH` is unspecified length from FieldType
 pub const UNSPECIFIED_LENGTH: i32 = -1;
 
+/// `truncate_binary` truncates a buffer to the specified length.
+#[inline]
 pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
     if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
         s.truncate(flen as usize);
@@ -52,7 +54,7 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
     Res::Ok(f)
 }
 
-// `overflow` returns an overflowed error.
+/// `overflow` returns an overflowed error.
 #[macro_export]
 macro_rules! overflow {
     ($val:ident, $bound:ident) => {{
@@ -60,7 +62,8 @@ macro_rules! overflow {
     }};
 }
 
-// `convert_uint_to_int` converts an uint value to an int value.
+/// `convert_uint_to_int` converts an uint value to an int value.
+#[inline]
 pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: u8) -> Result<i64> {
     if val > upper_bound as u64 {
         return overflow!(val, tp);
@@ -68,6 +71,8 @@ pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: u8) -> Result<i64> {
     Ok(val as i64)
 }
 
+/// `convert_float_to_int` converts an f64 value to an i64 value.
+///  Returns the overflow error if the value exceeds the boundary.
 pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u8) -> Result<i64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
@@ -81,6 +86,8 @@ pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u
     Ok(val as i64)
 }
 
+/// `convert_float_to_uint` converts a f64 value to a u64 value.
+/// Returns the overflow error if the value exceeds the boundary.
 pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
