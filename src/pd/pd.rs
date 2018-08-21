@@ -37,6 +37,7 @@ use raftstore::store::Callback;
 use raftstore::store::Msg;
 use storage::FlowStatistics;
 use util::collections::HashMap;
+use util::escape;
 use util::rocksdb::*;
 use util::time::time_now_sec;
 use util::transport::SendCh;
@@ -132,9 +133,11 @@ impl Display for Task {
                 ..
             } => write!(
                 f,
-                "ask split region {} with keys {:?}",
+                "ask split region {} with {} keys range from {:?} to {:?}",
                 region.get_id(),
-                split_keys
+                split_keys.len(),
+                split_keys.first().as_ref().map(|k| escape(k)),
+                split_keys.last().as_ref().map(|k| escape(k))
             ),
             Task::Heartbeat {
                 ref region,

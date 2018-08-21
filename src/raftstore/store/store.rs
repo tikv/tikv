@@ -3303,7 +3303,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => {
                 self.on_hash_computed(region_id, index, hash);
             }
-            // TODO: format keys
             Msg::SplitRegion {
                 region_id,
                 region_epoch,
@@ -3311,8 +3310,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 callback,
             } => {
                 info!(
-                    "[region {}] on split region at key {:?}.",
-                    region_id, split_keys
+                    "[region {}] on split region with {} keys range from {:?} to {:?}.",
+                    region_id,
+                    split_keys.len(),
+                    split_keys.first().as_ref().map(|k| escape(k)),
+                    split_keys.last().as_ref().map(|k| escape(k))
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_keys, callback);
             }

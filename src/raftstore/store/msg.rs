@@ -244,7 +244,14 @@ impl fmt::Debug for Msg {
                 ref region_id,
                 ref split_keys,
                 ..
-            } => write!(fmt, "Split region {} at key {:?}", region_id, split_keys),
+            } => write!(
+                fmt,
+                "Split region {} with {} keys range from {:?} to from {:?}",
+                region_id,
+                split_keys.len(),
+                split_keys.first().as_ref().map(|k| escape(k)),
+                split_keys.last().as_ref().map(|k| escape(k))
+            ),
             Msg::RegionApproximateSize { region_id, size } => write!(
                 fmt,
                 "Region's approximate size [region_id: {}, size: {:?}]",
