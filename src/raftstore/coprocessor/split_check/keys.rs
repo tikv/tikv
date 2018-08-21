@@ -261,14 +261,13 @@ mod tests {
             engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
             engine.flush_cf(default_cf, true).unwrap();
         }
-        println!("start");
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
             &region,
             vec![Key::from_raw(b"0080").append_ts(2).take_encoded()],
         );
-        println!("end");
+
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
