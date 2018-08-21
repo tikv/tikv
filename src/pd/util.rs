@@ -292,9 +292,7 @@ where
         match resp {
             Ok(_) => true,
             // these errors are returned by response header from pd, no need to retry
-            Err(Error::ClusterBootstrapped(_))
-            | Err(Error::ClusterNotBootstrapped(_))
-            | Err(Error::Incompatible) => true,
+            Err(Error::Incompatible) => true,
             Err(err) => {
                 error!("request failed: {:?}, retry", err);
                 false
