@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::IpAddr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use super::{EvalContext, Result, ScalarFunc};
@@ -20,7 +20,7 @@ use coprocessor::codec::Datum;
 impl ScalarFunc {
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        if is_given_string_ipv4(&input) {
+        if Ipv4Addr::from_str(&input).is_ok() {
             Ok(Some(1))
         } else {
             Ok(Some(0))
@@ -29,7 +29,7 @@ impl ScalarFunc {
 
     pub fn is_ipv6(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        if is_given_string_ipv6(&input) {
+        if Ipv6Addr::from_str(&input).is_ok() {
             Ok(Some(1))
         } else {
             Ok(Some(0))
@@ -37,25 +37,8 @@ impl ScalarFunc {
     }
 }
 
-fn is_given_string_ipv4(some_str: &str) -> bool {
-    let address = IpAddr::from_str(some_str);
-    if let Ok(add) = address {
-        return add.is_ipv4();
-    }
-    false
-}
-
-fn is_given_string_ipv6(some_str: &str) -> bool {
-    let address = IpAddr::from_str(some_str);
-    if let Ok(add) = address {
-        return add.is_ipv6();
-    }
-    false
-}
-
 #[cfg(test)]
 mod test {
-    use super::{is_given_string_ipv4, is_given_string_ipv6};
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
@@ -99,24 +82,6 @@ mod test {
             let exp = Datum::from(expected);
             assert_eq!(got, exp);
         }
-    }
-
-    #[test]
-    fn test_is_given_string_ipv4_success() {
-        let is_ipv4 = is_given_string_ipv4("127.0.0.1");
-        assert_eq!(is_ipv4, true);
-    }
-
-    #[test]
-    fn test_is_given_string_ipv4_fail() {
-        let is_ipv4 = is_given_string_ipv4("A.123.a.X");
-        assert_eq!(is_ipv4, false);
-    }
-
-    #[test]
-    fn test_is_given_string_ipv6_success() {
-        let is_ipv6 = is_given_string_ipv6("::1");
-        assert_eq!(is_ipv6, true);
     }
 
 }
