@@ -643,14 +643,16 @@ pub struct TestPdClient {
     cluster_id: u64,
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
+    is_incompatible: bool,
 }
 
 impl TestPdClient {
-    pub fn new(cluster_id: u64) -> TestPdClient {
+    pub fn new(cluster_id: u64, is_incompatible: bool) -> TestPdClient {
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            is_incompatible,
         }
     }
 
@@ -1005,11 +1007,42 @@ impl PdClient for TestPdClient {
         )
     }
 
+    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::new(err(e));
+        }
+
+        // Must ConfVer and Version be same?
+        let cur_region = self
+            .cluster
+            .rl()
+            .get_region_by_id(region.get_id())
+            .unwrap()
+            .unwrap();
+        if let Err(e) = check_stale_region(&cur_region, &region) {
+            return Box::new(err(e));
+        }
+
+        let mut resp = pdpb::AskSplitResponse::new();
+        resp.set_new_region_id(self.alloc_id().unwrap());
+        let mut peer_ids = vec![];
+        for _ in region.get_peers() {
+            peer_ids.push(self.alloc_id().unwrap());
+        }
+        resp.set_new_peer_ids(peer_ids);
+
+        Box::new(ok(resp))
+    }
+
     fn ask_batch_split(
         &self,
         region: metapb::Region,
         count: usize,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+        if self.is_incompatible {
+            return Box::new(err(Error::Incompatible));
+        }
+
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }

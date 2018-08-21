@@ -151,6 +151,9 @@ pub trait PdClient: Send + Sync {
     where
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static;
 
+    // Ask pd for split, pd will returns the new split region id.
+    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
+
     // Ask pd for batch split, pd will returns the new split region ids.
     fn ask_batch_split(
         &self,
