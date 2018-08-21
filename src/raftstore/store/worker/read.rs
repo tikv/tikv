@@ -152,11 +152,7 @@ impl Progress {
     }
 }
 
-pub struct Task {
-    action: Action,
-}
-
-enum Action {
+pub enum Task {
     Register(ReadDelegate),
     Update((u64, Progress)),
     Read(StoreMsg),
@@ -166,27 +162,19 @@ enum Action {
 impl Task {
     pub fn register(peer: &Peer) -> Task {
         let delegate = ReadDelegate::from_peer(peer);
-        Task {
-            action: Action::Register(delegate),
-        }
+        Task::Register(delegate)
     }
 
     pub fn update(region_id: u64, progress: Progress) -> Task {
-        Task {
-            action: Action::Update((region_id, progress)),
-        }
+        Task::Update((region_id, progress))
     }
 
     pub fn destroy(region_id: u64) -> Task {
-        Task {
-            action: Action::Destroy(region_id),
-        }
+        Task::Destroy(region_id)
     }
 
     pub fn read(msg: StoreMsg) -> Task {
-        Task {
-            action: Action::Read(msg),
-        }
+        Task::Read(msg)
     }
 
     /// Task accepts `Mag`s that contain Get/Snap requests and BatchRaftSnapCmds.
@@ -221,15 +209,11 @@ impl Task {
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self.action {
-            Action::Register(ref delegate) => {
-                write!(f, "localreader Task::Register {:?}", delegate)
-            }
-            Action::Read(ref msg) => write!(f, "localreader Task::Msg {:?}", msg),
-            Action::Update(ref progress) => write!(f, "localreader Task::Update {:?}", progress),
-            Action::Destroy(region_id) => {
-                write!(f, "localreader Task::Destroy region {}", region_id)
-            }
+        match *self {
+            Task::Register(ref delegate) => write!(f, "localreader Task::Register {:?}", delegate),
+            Task::Read(ref msg) => write!(f, "localreader Task::Msg {:?}", msg),
+            Task::Update(ref progress) => write!(f, "localreader Task::Update {:?}", progress),
+            Task::Destroy(region_id) => write!(f, "localreader Task::Destroy region {}", region_id),
         }
     }
 }
@@ -498,15 +482,15 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
         );
 
         for task in tasks.drain(..) {
-            match task.action {
-                Action::Register(delegate) => {
+            match task {
+                Task::Register(delegate) => {
                     debug!(
                         "{} register ReadDelegate for {:?}",
                         delegate.tag, delegate.peer_id
                     );
                     self.delegates.insert(delegate.region.get_id(), delegate);
                 }
-                Action::Read(StoreMsg::RaftCmd {
+                Task::Read(StoreMsg::RaftCmd {
                     send_time,
                     request,
                     callback,
@@ -516,7 +500,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                         sent = Some(send_time);
                     }
                 }
-                Action::Read(StoreMsg::BatchRaftSnapCmds {
+                Task::Read(StoreMsg::BatchRaftSnapCmds {
                     send_time,
                     batch,
                     on_finished,
@@ -526,10 +510,10 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                         sent = Some(send_time);
                     }
                 }
-                Action::Read(other) => {
+                Task::Read(other) => {
                     unimplemented!("unsupported Msg {:?}", other);
                 }
-                Action::Update((region_id, progress)) => {
+                Task::Update((region_id, progress)) => {
                     if let Some(delegate) = self.delegates.get_mut(&region_id) {
                         delegate.update(progress);
                     } else {
@@ -539,7 +523,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                         );
                     }
                 }
-                Action::Destroy(region_id) => {
+                Task::Destroy(region_id) => {
                     self.delegates.remove(&region_id);
                 }
             }
@@ -783,16 +767,14 @@ mod tests {
         lease.renew(monotonic_raw_now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
         // But the applied_index_term is stale.
-        let register_region1 = Task {
-            action: Action::Register(ReadDelegate {
-                tag: String::new(),
-                region: region1.clone(),
-                peer_id: leader2.get_id(),
-                term: term6,
-                applied_index_term: term6 - 1,
-                leader_lease: Some(remote),
-            }),
-        };
+        let register_region1 = Task::Register(ReadDelegate {
+            tag: String::new(),
+            region: region1.clone(),
+            peer_id: leader2.get_id(),
+            term: term6,
+            applied_index_term: term6 - 1,
+            leader_lease: Some(remote),
+        });
         reader.run_batch(&mut vec![register_region1]);
         assert!(reader.delegates.get(&1).is_some());
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
