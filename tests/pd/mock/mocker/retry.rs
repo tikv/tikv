@@ -91,10 +91,10 @@ impl PdMocker for NotRetry {
     fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         if !self.is_visited.swap(true, Ordering::Relaxed) {
             info!(
-                "[NotRetry] get_region_by_id returns Ok(_) with header has NotBootstrapped error"
+                "[NotRetry] get_region_by_id returns Ok(_) with header has INCOMPATIBLE_VERSION error"
             );
             let mut err = Error::new();
-            err.set_field_type(ErrorType::NOT_BOOTSTRAPPED);
+            err.set_field_type(ErrorType::INCOMPATIBLE_VERSION);
             let mut resp = GetRegionResponse::new();
             resp.mut_header().set_error(err);
             Some(Ok(resp))
@@ -107,10 +107,10 @@ impl PdMocker for NotRetry {
     fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
         if !self.is_visited.swap(true, Ordering::Relaxed) {
             info!(
-                "[NotRetry] get_region_by_id returns Ok(_) with header has NotBootstrapped error"
+                "[NotRetry] get_region_by_id returns Ok(_) with header has INCOMPATIBLE_VERSION error"
             );
             let mut err = Error::new();
-            err.set_field_type(ErrorType::NOT_BOOTSTRAPPED);
+            err.set_field_type(ErrorType::INCOMPATIBLE_VERSION);
             let mut resp = GetStoreResponse::new();
             resp.mut_header().set_error(err);
             Some(Ok(resp))
