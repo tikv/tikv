@@ -265,7 +265,7 @@ impl<T: PdClient> Runner<T> {
         &self,
         handle: &Handle,
         mut region: metapb::Region,
-        split_keys: Vec<Vec<u8>>,
+        mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
         callback: Callback,
