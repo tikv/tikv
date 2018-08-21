@@ -19,7 +19,7 @@ use tipb::analyze::{
     AnalyzeType,
 };
 
-use super::test_select::*;
+use test_coprocessor::*;
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 

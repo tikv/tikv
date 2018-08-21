@@ -23,7 +23,7 @@ use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, Check
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 
-use super::test_select::*;
+use test_coprocessor::*;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::new();
