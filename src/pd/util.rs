@@ -291,7 +291,7 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // these errors are returned by response header from pd, no need to retry
+            // Error::Incompatible is returned by response header from pd, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
                 error!("request failed: {:?}, retry", err);
