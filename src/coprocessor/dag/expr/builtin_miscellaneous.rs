@@ -39,6 +39,35 @@ impl ScalarFunc {
             |_t| Ipv4Addr::from_str(&input).map(|t| Some(Cow::Owned(t.octets().to_vec())));
         ipv6_addr.or_else(ipv4_addr_eval).or(Ok(None))
     }
+
+    pub fn inet6_ntoa<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        if s.len() == 16 {
+            let mut v = [0 as u16; 8];
+            for i in 0..8 {
+                v[i] = u16::from(s[i * 2]) << 8 | u16::from(s[i * 2 + 1]);
+            }
+            Ok(Some(Cow::Owned(
+                format!(
+                    "{}",
+                    Ipv6Addr::new(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
+                ).as_bytes()
+                    .to_vec(),
+            )))
+        } else if s.len() == 4 {
+            Ok(Some(Cow::Owned(
+                format!("{}", Ipv4Addr::new(s[0], s[1], s[2], s[3]))
+                    .as_bytes()
+                    .to_vec(),
+            )))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 fn is_given_string_ipv4(some_str: &str) -> bool {
@@ -143,6 +172,77 @@ mod test {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Inet6Aton, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_inet6_ntoa() {
+        let cases = vec![
+            (
+                Datum::Bytes(vec![0x00, 0x00, 0x00, 0x00]),
+                Datum::Bytes(b"0.0.0.0".to_vec()),
+            ),
+            (
+                Datum::Bytes(vec![0x0A, 0x00, 0x05, 0x09]),
+                Datum::Bytes(b"10.0.5.9".to_vec()),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+                    0x02, 0x03, 0x04,
+                ]),
+                Datum::Bytes(b"::1.2.3.4".to_vec()),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x01,
+                    0x02, 0x03, 0x04,
+                ]),
+                Datum::Bytes(b"::ffff:1.2.3.4".to_vec()),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFD, 0xFE, 0x5A, 0x55, 0xCA, 0xFF, 0xFE,
+                    0xFA, 0x90, 0x89,
+                ]),
+                Datum::Bytes(b"::fdfe:5a55:caff:fefa:9089".to_vec()),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0xFD, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A, 0x55, 0xCA, 0xFF, 0xFE,
+                    0xFA, 0x90, 0x89,
+                ]),
+                Datum::Bytes(b"fdfe::5a55:caff:fefa:9089".to_vec()),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x12, 0x34, 0x56, 0x78, 0x8a, 0x2e, 0x03,
+                    0x70, 0x73, 0x34,
+                ]),
+                Datum::Bytes(b"2001:db8:85a3:1234:5678:8a2e:370:7334".to_vec()),
+            ),
+            // missing bytes
+            (Datum::Bytes(b"".to_vec()), Datum::Null),
+            // missing a byte ipv4
+            (Datum::Bytes(vec![0x20, 0x01, 0x0d]), Datum::Null),
+            // missing a byte ipv6
+            (
+                Datum::Bytes(vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF,
+                    0xFF, 0xFF,
+                ]),
+                Datum::Null,
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::Inet6Ntoa, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);

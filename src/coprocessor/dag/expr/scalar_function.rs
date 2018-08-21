@@ -206,6 +206,7 @@ impl ScalarFunc {
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::Inet6Aton
+            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::UnHex => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -335,7 +336,6 @@ impl ScalarFunc {
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
@@ -864,6 +864,7 @@ dispatch_call! {
         UnHex => un_hex,
 
         Inet6Aton => inet6_aton,
+        Inet6Ntoa => inet6_ntoa,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1289,7 +1290,6 @@ mod test {
             ScalarFuncSig::HexIntArg,
             ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::Inet6Ntoa,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
