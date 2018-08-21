@@ -249,7 +249,7 @@ mod test {
         assert!(!req.has_split(), "only split req should be handle.");
 
         req = new_split_request(b"test");
-        // For compatible issue, split should supported too.
+        // For compatible reason, split should supported too.
         assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
 
         // Empty key should be skipped.
