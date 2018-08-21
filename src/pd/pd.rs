@@ -298,20 +298,23 @@ impl<T: PdClient> Runner<T> {
                     // In this situation, pd version check would refuse ask_batch_split.
                     // But if update time is long, it may cause large regions, so call ask_split instead.
                     Err(Error::Incompatible) => {
-                        let tag = format!("[region {}] {}", region.id, peer.id);
+                        let (region_id, peer_id) = (region.id, peer.id);
                         info!(
-                            "{} ask_batch_split is incompatible, use ask_split instead",
-                            tag
+                            "[region {}] ask_batch_split is incompatible, use ask_split instead",
+                            region_id
                         );
                         let task = Task::AskSplit {
                             region,
-                            split_key: split_keys[0].clone(),
+                            split_key: split_keys.pop().unwrap(),
                             peer,
                             right_derive,
                             callback,
                         };
                         if let Err(Stopped(t)) = scheduler.schedule(task) {
-                            error!("{} failed to notify pd to split: Stopped", tag);
+                            error!(
+                                "[region {}] {} failed to notify pd to split: Stopped",
+                                region_id, peer_id
+                            );
                             match t {
                                 Task::AskSplit { callback, .. } => {
                                     callback.invoke_with_response(new_error(box_err!(
