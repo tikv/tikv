@@ -354,6 +354,34 @@ impl PdClient for RpcClient {
         self.leader_client.handle_region_heartbeat_response(f)
     }
 
+    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::AskSplitRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client
+                .rl()
+                .client
+                .ask_split_async_opt(&req, option)
+                .unwrap();
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["ask_split"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(resp)
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
     fn ask_batch_split(
         &self,
         region: metapb::Region,

@@ -289,9 +289,23 @@ fn test_node_auto_split_region() {
 }
 
 #[test]
+fn test_incompatible_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
 fn test_server_auto_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_incompatible_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_server_cluster(0, count);
     test_auto_split_region(&mut cluster);
 }
 
