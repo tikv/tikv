@@ -104,11 +104,11 @@ mod tests {
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
-            let k1 = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).encoded());
+            let k1 = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &k1, b"v1").unwrap();
             db.delete_cf(write_cf, &k1).unwrap();
-            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(3).encoded());
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(3).as_encoded());
             db.put_cf(write_cf, &key, b"v2").unwrap();
             db.flush_cf(write_cf, true).unwrap();
         }
