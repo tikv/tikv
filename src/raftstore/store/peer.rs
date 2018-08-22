@@ -1629,12 +1629,7 @@ impl Peer {
         }
 
         match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::Split => {
-                return Err(box_err!(
-                    "Command type Split is deprecated, use BatchSplit instead."
-                ))
-            }
-            AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
             _ => {}
         }
 

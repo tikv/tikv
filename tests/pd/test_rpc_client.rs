@@ -229,6 +229,21 @@ fn test_not_retry_sync() {
     test_not_retry(sync);
 }
 
+#[test]
+fn test_incompatible_version() {
+    let incompatible = Arc::new(Incompatible);
+    let server = MockServer::with_case(1, incompatible);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+
+    let resp = client.ask_batch_split(metapb::Region::new(), 2);
+    assert_eq!(
+        resp.wait().unwrap_err().to_string(),
+        PdError::Incompatible.to_string()
+    );
+}
+
 fn restart_leader(mgr: SecurityManager) {
     let mgr = Arc::new(mgr);
     // Service has only one GetMembersResponse, so the leader never changes.

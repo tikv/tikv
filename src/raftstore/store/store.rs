@@ -566,6 +566,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Arc::clone(&self.pd_client),
             self.sendch.clone(),
             Arc::clone(&self.engines.kv),
+            self.pd_worker.scheduler(),
         );
         box_try!(self.pd_worker.start(pd_runner));
 
