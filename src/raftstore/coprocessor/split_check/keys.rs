@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -20,37 +22,54 @@ use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, S
 use super::Host;
 
 pub struct Checker {
-    max_keys: u64,
-    split_keys: u64,
-    current_keys: u64,
-    split_key: Option<Vec<u8>>,
+    max_keys_count: u64,
+    split_threshold: u64,
+    current_count: u64,
+    split_keys: Vec<Vec<u8>>,
+    batch_split_limit: u64,
 }
 
 impl Checker {
-    pub fn new(max_keys: u64, split_keys: u64) -> Checker {
+    pub fn new(max_keys_count: u64, split_threshold: u64, batch_split_limit: u64) -> Checker {
         Checker {
-            max_keys,
-            split_keys,
-            current_keys: 0,
-            split_key: None,
+            max_keys_count,
+            split_threshold,
+            current_count: 0,
+            split_keys: Vec::with_capacity(1),
+            batch_split_limit,
         }
     }
 }
 
 impl SplitChecker for Checker {
     fn on_kv(&mut self, _: &mut ObserverContext, key: &KeyEntry) -> bool {
-        if key.is_commit_version() {
-            self.current_keys += 1;
+        if !key.is_commit_version() {
+            return false;
         }
-        if self.current_keys > self.split_keys && self.split_key.is_none() {
-            self.split_key = Some(keys::origin_key(key.key()).to_vec());
+        self.current_count += 1;
+
+        let mut over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
+        if self.current_count > self.split_threshold && !over_limit {
+            self.split_keys.push(keys::origin_key(key.key()).to_vec());
+            // if for previous on_kv() self.current_count == self.split_threshold,
+            // the split key would be pushed this time, but the entry for this time should not be ignored.
+            self.current_count = 1;
+            over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         }
-        self.current_keys > self.max_keys
+
+        // For a large region, scan over the range maybe cost too much time,
+        // so limit the number of produced split_key for one batch.
+        // Also need to scan over self.max_keys_count for last part.
+        over_limit && self.current_count + self.split_threshold >= self.max_keys_count
     }
 
     fn split_keys(&mut self) -> Vec<Vec<u8>> {
-        if self.current_keys > self.max_keys {
-            self.split_key.take().map_or_else(Vec::new, |k| vec![k])
+        // make sure not to split when less than max_keys_count for last part
+        if self.current_count + self.split_threshold < self.max_keys_count {
+            self.split_keys.pop();
+        }
+        if !self.split_keys.is_empty() {
+            mem::replace(&mut self.split_keys, vec![])
         } else {
             vec![]
         }
@@ -60,6 +79,7 @@ impl SplitChecker for Checker {
 pub struct KeysCheckObserver<C> {
     region_max_keys: u64,
     split_keys: u64,
+    batch_split_limit: u64,
     ch: RetryableSendCh<Msg, C>,
 }
 
@@ -67,11 +87,13 @@ impl<C: Sender<Msg>> KeysCheckObserver<C> {
     pub fn new(
         region_max_keys: u64,
         split_keys: u64,
+        batch_split_limit: u64,
         ch: RetryableSendCh<Msg, C>,
     ) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             region_max_keys,
             split_keys,
+            batch_split_limit,
             ch,
         }
     }
@@ -94,6 +116,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 host.add_checker(Box::new(Checker::new(
                     self.region_max_keys,
                     self.split_keys,
+                    self.batch_split_limit,
                 )));
                 return;
             }
@@ -122,6 +145,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             host.add_checker(Box::new(Checker::new(
                 self.region_max_keys,
                 self.split_keys,
+                self.batch_split_limit,
             )));
         } else {
             // Does not need to check keys.
@@ -187,6 +211,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.region_max_keys = 100;
         cfg.region_split_keys = 80;
+        cfg.batch_split_limit = 1;
 
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
@@ -199,7 +224,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -224,7 +249,97 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
+            );
+
+            let write_value =
+                Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec())).to_bytes();
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+            engine.put_cf(write_cf, &key, &write_value).unwrap();
+            engine.flush_cf(write_cf, true).unwrap();
+            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
+            engine.flush_cf(default_cf, true).unwrap();
+        }
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        must_split_at(
+            &rx,
+            &region,
+            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
+        );
+
+        drop(rx);
+        // It should be safe even the result can't be sent back.
+        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
+    }
+
+    #[test]
+    fn test_batch_split_check() {
+        let path = TempDir::new("test-raftstore").unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+
+        let mut region = Region::new();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::new());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let ch = RetryableSendCh::new(tx, "test-batch-split");
+        let mut cfg = Config::default();
+        cfg.region_max_keys = 100;
+        cfg.region_split_keys = 80;
+        cfg.batch_split_limit = 5;
+
+        let mut runnable = SplitCheckRunner::new(
+            Arc::clone(&engine),
+            ch.clone(),
+            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+        );
+
+        // so split key will be z0080
+        for i in 0..90 {
+            let key = keys::data_key(
+                Key::from_raw(format!("{:04}", i).as_bytes())
+                    .append_ts(2)
+                    .as_encoded(),
+            );
+            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+            engine.put_cf(write_cf, &key, &write_value).unwrap();
+            engine.flush_cf(write_cf, true).unwrap();
+            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
+            engine.flush_cf(default_cf, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        // keys has not reached the max_keys 100 yet.
+        match rx.try_recv() {
+            Ok(Msg::RegionApproximateSize { region_id, .. })
+            | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
+                assert_eq!(region_id, region.get_id());
+            }
+            others => panic!("expect recv empty, but got {:?}", others),
+        }
+
+        for i in 90..160 {
+            let key = keys::data_key(
+                Key::from_raw(format!("{:04}", i).as_bytes())
+                    .append_ts(2)
+                    .as_encoded(),
             );
 
             let write_value =
@@ -241,7 +356,63 @@ mod tests {
         must_split_at(
             &rx,
             &region,
-            vec![Key::from_raw(b"0080").append_ts(2).take_encoded()],
+            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
+        );
+
+        for i in 160..300 {
+            let key = keys::data_key(
+                Key::from_raw(format!("{:04}", i).as_bytes())
+                    .append_ts(2)
+                    .as_encoded(),
+            );
+
+            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+            engine.put_cf(write_cf, &key, &write_value).unwrap();
+            engine.flush_cf(write_cf, true).unwrap();
+            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
+            engine.flush_cf(default_cf, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        must_split_at(
+            &rx,
+            &region,
+            vec![
+                Key::from_raw(b"0080").append_ts(2).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2).into_encoded(),
+            ],
+        );
+
+        for i in 300..500 {
+            let key = keys::data_key(
+                Key::from_raw(format!("{:04}", i).as_bytes())
+                    .append_ts(2)
+                    .as_encoded(),
+            );
+
+            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+            engine.put_cf(write_cf, &key, &write_value).unwrap();
+            engine.flush_cf(write_cf, true).unwrap();
+            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
+            engine.flush_cf(default_cf, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
+        must_split_at(
+            &rx,
+            &region,
+            vec![
+                Key::from_raw(b"0080").append_ts(2).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2).into_encoded(),
+                Key::from_raw(b"0320").append_ts(2).into_encoded(),
+                Key::from_raw(b"0400").append_ts(2).into_encoded(),
+            ],
         );
 
         drop(rx);
