@@ -96,7 +96,7 @@ fn test_analyze_column_with_lock() {
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
 
-        let resp = handle_request(&end_point, req);
+        let resp = handle_request(&end_point.scheduler(), req);
         match iso_level {
             IsolationLevel::SI => {
                 assert!(resp.get_data().is_empty(), "{:?}", resp);
@@ -127,7 +127,7 @@ fn test_analyze_column() {
     let (_, mut end_point) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_column_req(&product.table, 3, 3, 3, 4, 32);
-    let resp = handle_request(&end_point, req);
+    let resp = handle_request(&end_point.scheduler(), req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::new();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -166,7 +166,7 @@ fn test_analyze_index_with_lock() {
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
 
-        let resp = handle_request(&end_point, req);
+        let resp = handle_request(&end_point.scheduler(), req);
         match iso_level {
             IsolationLevel::SI => {
                 assert!(resp.get_data().is_empty(), "{:?}", resp);
@@ -196,7 +196,7 @@ fn test_analyze_index() {
     let (_, mut end_point) = init_data_with_commit(&product, &data, true);
 
     let req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
-    let resp = handle_request(&end_point, req);
+    let resp = handle_request(&end_point.scheduler(), req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeIndexResp::new();
     analyze_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -226,7 +226,7 @@ fn test_invalid_range() {
     key_range.set_start(b"xxx".to_vec());
     key_range.set_end(b"zzz".to_vec());
     req.set_ranges(RepeatedField::from_vec(vec![key_range]));
-    let resp = handle_request(&end_point, req);
+    let resp = handle_request(&end_point.scheduler(), req);
     assert!(!resp.get_other_error().is_empty());
     end_point.stop().unwrap().join().unwrap();
 }

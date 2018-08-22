@@ -21,12 +21,14 @@ extern crate test_storage;
 extern crate tikv;
 
 mod column;
+mod dag;
 mod fixture;
 mod store;
 mod table;
 mod util;
 
 pub use column::*;
+pub use dag::*;
 pub use fixture::*;
 pub use store::*;
 pub use table::*;

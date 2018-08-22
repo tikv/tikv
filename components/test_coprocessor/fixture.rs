@@ -24,6 +24,7 @@ use tikv::storage::{Engine, ALL_CFS, TEMP_DIR};
 use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
 
 /// An example table for test purpose.
+#[derive(Clone)]
 pub struct ProductTable {
     pub id: Column,
     pub name: Column,
@@ -68,7 +69,15 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store<E>, Worker<EndPointTask<E>>) {
-    init_data_with_details(ctx, engine, tbl, vals, commit, Config::default())
+    init_data_with_details(
+        ctx,
+        engine,
+        tbl,
+        vals,
+        commit,
+        &Config::default(),
+        &readpool::Config::default_for_test(),
+    )
 }
 
 pub fn init_data_with_details<E: Engine>(
@@ -77,7 +86,8 @@ pub fn init_data_with_details<E: Engine>(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-    cfg: Config,
+    cfg: &Config,
+    read_pool_cfg: &readpool::Config,
 ) -> (Store<E>, Worker<EndPointTask<E>>) {
     let mut store = Store::new(engine);
 
@@ -94,13 +104,13 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
     let pd_worker = FutureWorker::new("test-pd-worker");
-    let pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+    let pool = ReadPool::new("readpool", read_pool_cfg, || {
         || ReadPoolContext::new(pd_worker.scheduler())
     });
     let mut end_point = WorkerBuilder::new("test-select-worker")
         .batch_size(5)
         .create();
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), &cfg, pool);
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), cfg, pool);
     end_point.start(runner).unwrap();
 
     (store, end_point)
@@ -113,4 +123,12 @@ pub fn init_data_with_commit(
 ) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
+}
+
+// This function will create a Product table and initialize with the specified data.
+pub fn init_with_data(
+    tbl: &ProductTable,
+    vals: &[(i64, Option<&str>, i64)],
+) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
+    init_data_with_commit(tbl, vals, true)
 }

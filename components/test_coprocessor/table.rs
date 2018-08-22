@@ -23,6 +23,7 @@ use protobuf::RepeatedField;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::util::codec::number::NumberEncoder;
 
+#[derive(Clone)]
 pub struct Table {
     pub id: i64,
     pub handle_id: i64,
