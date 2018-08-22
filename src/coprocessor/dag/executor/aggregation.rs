@@ -31,6 +31,7 @@ use super::{Executor, ExprColumnRefVisitor, Row};
 struct AggFuncExpr {
     args: Vec<Expression>,
     tp: ExprType,
+    eval_buffer: Vec<Datum>,
 }
 
 impl AggFuncExpr {
@@ -43,15 +44,20 @@ impl AggFuncExpr {
     fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
         let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
         let tp = expr.get_tp();
-        Ok(AggFuncExpr { args, tp })
+        let eval_buffer = Vec::with_capacity(args.len());
+        Ok(AggFuncExpr {
+            args,
+            tp,
+            eval_buffer,
+        })
     }
 
-    fn eval_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
-        let mut res = Vec::with_capacity(self.args.len());
+    fn eval_args(&mut self, ctx: &mut EvalContext, row: &[Datum]) -> Result<()> {
+        self.eval_buffer.clear();
         for arg in &self.args {
-            res.push(arg.eval(ctx, row)?);
+            self.eval_buffer.push(arg.eval(ctx, row)?);
         }
-        Ok(res)
+        Ok(())
     }
 }
 
@@ -59,11 +65,11 @@ impl AggrFunc {
     fn update_with_expr(
         &mut self,
         ctx: &mut EvalContext,
-        expr: &AggFuncExpr,
+        expr: &mut AggFuncExpr,
         row: &[Datum],
     ) -> Result<()> {
-        let vals = expr.eval_args(ctx, row)?;
-        self.update(ctx, vals)?;
+        expr.eval_args(ctx, row)?;
+        self.update(ctx, &mut expr.eval_buffer)?;
         Ok(())
     }
 }
@@ -189,7 +195,7 @@ impl HashAggExecutor {
             match self.group_key_aggrs.entry(group_key) {
                 OrderMapEntry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.inner.aggr_func.len());
-                    for expr in &self.inner.aggr_func {
+                    for expr in &mut self.inner.aggr_func {
                         let mut aggr = aggregate::build_aggr_func(expr.tp)?;
                         aggr.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
                         aggrs.push(aggr);
@@ -198,7 +204,7 @@ impl HashAggExecutor {
                 }
                 OrderMapEntry::Occupied(e) => {
                     let aggrs = e.into_mut();
-                    for (expr, aggr) in self.inner.aggr_func.iter().zip(aggrs) {
+                    for (expr, aggr) in self.inner.aggr_func.iter_mut().zip(aggrs) {
                         aggr.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
                     }
                 }
@@ -269,7 +275,7 @@ impl Executor for StreamAggExecutor {
             } else {
                 None
             };
-            for (expr, func) in self.inner.aggr_func.iter().zip(&mut self.agg_funcs) {
+            for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
                 func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
             }
             if new_group {
