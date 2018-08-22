@@ -49,3 +49,5 @@ num-import-jobs = 24
 # region-split-size = "96MB"
 # stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
+# number of opening engines
+num-engines = 6

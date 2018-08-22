@@ -59,6 +59,13 @@ impl KVImporter {
             return Ok(());
         }
 
+        // Restrict opening engine num
+        if inner.engines.len() >= self.cfg.num_engines {
+            let errmsg = format!("Too much opening engines {}: {}", uuid, inner.engines.len());
+            error!("{}", errmsg);
+            return Err(Error::RocksDB(errmsg));
+        }
+
         match self.dir.open(uuid) {
             Ok(engine) => {
                 info!("open {:?}", engine);
