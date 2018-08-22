@@ -145,9 +145,10 @@ fn test_server_split_region_twice() {
     let c = Box::new(move |write_resp: WriteResponse| {
         let mut resp = write_resp.response;
         let admin_resp = resp.mut_admin_response();
-        let split_resp = admin_resp.mut_split();
-        let left = split_resp.take_left();
-        let right = split_resp.take_right();
+        let split_resp = admin_resp.mut_splits();
+        let mut regions = split_resp.take_regions().into_vec();
+        let mut d = regions.drain(..);
+        let (left, right) = (d.next().unwrap(), d.next().unwrap());
         assert_eq!(left.get_end_key(), key.as_slice());
         assert_eq!(region2.get_start_key(), left.get_start_key());
         assert_eq!(left.get_end_key(), right.get_start_key());
@@ -288,9 +289,23 @@ fn test_node_auto_split_region() {
 }
 
 #[test]
+fn test_incompatible_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
 fn test_server_auto_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_incompatible_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_server_cluster(0, count);
     test_auto_split_region(&mut cluster);
 }
 
