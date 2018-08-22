@@ -89,36 +89,36 @@ impl<S: Snapshot> MvccTxn<S> {
         short_value: Option<Value>,
     ) {
         let lock = Lock::new(lock_type, primary, self.start_ts, ttl, short_value).to_bytes();
-        self.write_size += CF_LOCK.len() + key.encoded().len() + lock.len();
+        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
 
     fn unlock_key(&mut self, key: Key) {
-        self.write_size += CF_LOCK.len() + key.encoded().len();
+        self.write_size += CF_LOCK.len() + key.as_encoded().len();
         self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
     fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
         let key = key.clone().append_ts(ts);
-        self.write_size += key.encoded().len() + value.len();
+        self.write_size += key.as_encoded().len() + value.len();
         self.writes.push(Modify::Put(CF_DEFAULT, key, value));
     }
 
     fn delete_value(&mut self, key: &Key, ts: u64) {
         let key = key.clone().append_ts(ts);
-        self.write_size += key.encoded().len();
+        self.write_size += key.as_encoded().len();
         self.writes.push(Modify::Delete(CF_DEFAULT, key));
     }
 
     fn put_write(&mut self, key: &Key, ts: u64, value: Value) {
         let key = key.clone().append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.encoded().len() + value.len();
+        self.write_size += CF_WRITE.len() + key.as_encoded().len() + value.len();
         self.writes.push(Modify::Put(CF_WRITE, key, value));
     }
 
     fn delete_write(&mut self, key: &Key, ts: u64) {
         let key = key.clone().append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.encoded().len();
+        self.write_size += CF_WRITE.len() + key.as_encoded().len();
         self.writes.push(Modify::Delete(CF_WRITE, key));
     }
 
@@ -145,7 +145,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         return Err(Error::WriteConflict {
                             start_ts: self.start_ts,
                             conflict_ts: commit,
-                            key: key.raw()?,
+                            key: key.to_raw()?,
                             primary: primary.to_vec(),
                         });
                     }
@@ -155,7 +155,7 @@ impl<S: Snapshot> MvccTxn<S> {
             if let Some(lock) = self.reader.load_lock(key)? {
                 if lock.ts != self.start_ts {
                     return Err(Error::KeyIsLocked {
-                        key: key.raw()?,
+                        key: key.to_raw()?,
                         primary: lock.primary,
                         ts: lock.ts,
                         ttl: lock.ttl,
@@ -212,7 +212,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
                             commit_ts,
-                            key: key.encoded().to_owned(),
+                            key: key.as_encoded().to_owned(),
                         })
                     }
                     // Committed by concurrent transaction.
