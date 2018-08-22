@@ -131,14 +131,26 @@ impl Display for Task {
                 ref region,
                 ref split_keys,
                 ..
-            } => write!(
-                f,
-                "ask split region {} with {} keys range from {:?} to {:?}",
-                region.get_id(),
-                split_keys.len(),
-                split_keys.first().as_ref().map(|k| escape(k)),
-                split_keys.last().as_ref().map(|k| escape(k))
-            ),
+            } => {
+                if split_keys.len() == 1 {
+                    write!(
+                        f,
+                        "ask split region {} with {} key {:?}",
+                        region.get_id(),
+                        split_keys.len(),
+                        split_keys.first().as_ref().map(|k| escape(k)),
+                    )
+                } else {
+                    write!(
+                        f,
+                        "ask split region {} with {} keys range from {:?} to {:?}",
+                        region.get_id(),
+                        split_keys.len(),
+                        split_keys.first().as_ref().map(|k| escape(k)),
+                        split_keys.last().as_ref().map(|k| escape(k))
+                    )
+                }
+            }
             Task::Heartbeat {
                 ref region,
                 ref peer,
