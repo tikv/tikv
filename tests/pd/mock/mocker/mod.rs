@@ -16,14 +16,16 @@ use std::result;
 use kvproto::pdpb::*;
 
 mod bootstrap;
+mod incompatible;
 mod leader_change;
 mod retry;
 mod service;
 mod split;
 
 pub use self::bootstrap::AlreadyBootstrapped;
+pub use self::incompatible::Incompatible;
 pub use self::leader_change::LeaderChange;
-pub use self::retry::Retry;
+pub use self::retry::{NotRetry, Retry};
 pub use self::service::Service;
 pub use self::split::Split;
 
@@ -80,6 +82,10 @@ pub trait PdMocker {
     }
 
     fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+        None
+    }
+
+    fn ask_split(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
         None
     }
 
