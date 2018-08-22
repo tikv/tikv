@@ -17,9 +17,9 @@ use std::thread;
 use std::time::Duration;
 
 use protobuf;
+use rand::Rng;
 use rocksdb::{CompactionJobInfo, DB};
 use tempdir::TempDir;
-use rand::Rng;
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};

@@ -24,7 +24,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::storage::{CF_WRITE};
+use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;

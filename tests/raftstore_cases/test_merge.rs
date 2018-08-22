@@ -455,17 +455,35 @@ fn test_merge_approximate_size_and_keys() {
     let right = pd_client.get_region(&max_key).unwrap();
 
     assert_ne!(left, right);
-    let size = pd_client.get_region_approximate_size(left.get_id()).unwrap() 
-    + pd_client.get_region_approximate_size(right.get_id()).unwrap();
+    let size = pd_client
+        .get_region_approximate_size(left.get_id())
+        .unwrap()
+        + pd_client
+            .get_region_approximate_size(right.get_id())
+            .unwrap();
     assert_ne!(size, 0);
-    let keys = pd_client.get_region_approximate_keys(left.get_id()).unwrap() 
-    + pd_client.get_region_approximate_keys(right.get_id()).unwrap();
+    let keys = pd_client
+        .get_region_approximate_keys(left.get_id())
+        .unwrap()
+        + pd_client
+            .get_region_approximate_keys(right.get_id())
+            .unwrap();
     assert_ne!(keys, 0);
 
     pd_client.must_merge(left.get_id(), right.get_id());
     thread::sleep(Duration::from_secs(1));
-    
+
     let region = pd_client.get_region(b"").unwrap();
-    assert_eq!(pd_client.get_region_approximate_size(region.get_id()).unwrap(), size);
-    assert_eq!(pd_client.get_region_approximate_keys(region.get_id()).unwrap(), keys);
+    assert_eq!(
+        pd_client
+            .get_region_approximate_size(region.get_id())
+            .unwrap(),
+        size
+    );
+    assert_eq!(
+        pd_client
+            .get_region_approximate_keys(region.get_id())
+            .unwrap(),
+        keys
+    );
 }
