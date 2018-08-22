@@ -184,7 +184,7 @@ impl<S: Snapshot> PointGetter<S> {
             // We may move forward / seek to another key. In this case, the scan ends.
             {
                 let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(cursor_key, user_key.encoded().as_slice()) {
+                if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
                     // Meet another key.
                     return Ok(None);
                 }

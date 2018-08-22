@@ -74,7 +74,7 @@ impl Engine {
             match m.get_op() {
                 Mutation_OP::Put => {
                     let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-                    wb.put(k.encoded(), m.get_value()).unwrap();
+                    wb.put(k.as_encoded(), m.get_value()).unwrap();
                 }
             }
         }
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(keys.len(), n as usize);
         for (i, expected) in keys.iter().enumerate() {
             let k = Key::from_raw(&[i as u8]);
-            assert_eq!(k.encoded(), expected.encoded());
+            assert_eq!(k.as_encoded(), expected.as_encoded());
         }
     }
 

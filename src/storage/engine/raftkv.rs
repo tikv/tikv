@@ -507,7 +507,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
-        let v = box_try!(self.get_value(key.encoded()));
+        let v = box_try!(self.get_value(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -515,7 +515,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -559,14 +559,14 @@ impl EngineIterator for RegionIterator {
         fail_point!("raftkv_iter_seek", |_| Err(box_err!(
             "injected error for iter_seek"
         )));
-        RegionIterator::seek(self, key.encoded()).map_err(From::from)
+        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
         fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
             "injected error for iter_seek_for_prev"
         )));
-        RegionIterator::seek_for_prev(self, key.encoded()).map_err(From::from)
+        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
     }
 
     fn seek_to_first(&mut self) -> bool {
@@ -582,7 +582,7 @@ impl EngineIterator for RegionIterator {
     }
 
     fn validate_key(&self, key: &Key) -> engine::Result<()> {
-        self.should_seekable(key.encoded()).map_err(From::from)
+        self.should_seekable(key.as_encoded()).map_err(From::from)
     }
 
     fn key(&self) -> &[u8] {

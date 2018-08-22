@@ -40,7 +40,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
         return Ok(CheckLockResult::NotLocked);
     }
 
-    let raw_key = key.raw()?;
+    let raw_key = key.to_raw()?;
 
     if ts == ::std::u64::MAX && raw_key == lock.primary {
         // When `ts == u64::MAX` (which means to get latest committed version for
@@ -71,7 +71,7 @@ where
     if let Some(ref lock_value) = lock_value {
         statistics.lock.get += 1;
         statistics.lock.flow_stats.read_keys += 1;
-        statistics.lock.flow_stats.read_bytes += key.encoded().len() + lock_value.len();
+        statistics.lock.flow_stats.read_bytes += key.as_encoded().len() + lock_value.len();
         statistics.lock.processed += 1;
         Ok(Some(Lock::parse(lock_value)?))
     } else {
@@ -144,7 +144,7 @@ where
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek(&seek_key, true, &mut statistics.data)?;
     assert!(default_cursor.valid());
-    assert!(default_cursor.key(&mut statistics.data) == seek_key.encoded().as_slice());
+    assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
@@ -164,7 +164,7 @@ where
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek_for_prev(&seek_key, true, &mut statistics.data)?;
     assert!(default_cursor.valid());
-    assert!(default_cursor.key(&mut statistics.data) == seek_key.encoded().as_slice());
+    assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }

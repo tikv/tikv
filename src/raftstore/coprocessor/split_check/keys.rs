@@ -224,7 +224,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -249,7 +249,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value =
@@ -261,14 +261,13 @@ mod tests {
             engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
             engine.flush_cf(default_cf, true).unwrap();
         }
-        println!("start");
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
             &region,
             vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
         );
-        println!("end");
+
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
@@ -315,7 +314,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -340,7 +339,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value =
@@ -364,7 +363,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
@@ -391,7 +390,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();

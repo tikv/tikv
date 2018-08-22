@@ -103,18 +103,18 @@ mod tests {
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
-                        let k = keys::data_key(k.encoded());
+                        let k = keys::data_key(k.as_encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.put_cf(handle, &k, &v).unwrap();
                     }
                     Modify::Delete(cf, k) => {
-                        let k = keys::data_key(k.encoded());
+                        let k = keys::data_key(k.as_encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
                     Modify::DeleteRange(cf, k1, k2) => {
-                        let k1 = keys::data_key(k1.encoded());
-                        let k2 = keys::data_key(k2.encoded());
+                        let k1 = keys::data_key(k1.as_encoded());
+                        let k2 = keys::data_key(k2.as_encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_range_cf(handle, &k1, &k2).unwrap();
                     }

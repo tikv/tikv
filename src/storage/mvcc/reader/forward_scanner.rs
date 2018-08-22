@@ -332,7 +332,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 }
             }
             let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
+            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
                 *met_next_user_key = true;
                 return Ok(None);
@@ -354,7 +354,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 return Ok(None);
             }
             let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
+            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
                 *met_next_user_key = true;
                 return Ok(None);
@@ -382,7 +382,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 return Ok(None);
             }
             let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
+            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
                 *met_next_user_key = true;
                 return Ok(None);
@@ -436,7 +436,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 return Ok(());
             }
             let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
+            if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
                 // Found another user key. We are done here.
                 return Ok(());
             }

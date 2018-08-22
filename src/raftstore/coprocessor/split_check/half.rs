@@ -159,7 +159,7 @@ mod tests {
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         for i in 0..11 {
             let k = format!("{:04}", i).into_bytes();
-            let k = keys::data_key(Key::from_raw(&k).encoded());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
             engine.put_cf(cf_handle, &k, &k).unwrap();
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();

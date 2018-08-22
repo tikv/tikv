@@ -129,7 +129,7 @@ impl<S: Snapshot> StoreScanner<S> {
         while results.len() < limit {
             match self.next() {
                 Ok(Some((k, v))) => {
-                    results.push(Ok((k.raw()?, v)));
+                    results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
                 Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {

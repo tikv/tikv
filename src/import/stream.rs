@@ -393,7 +393,7 @@ mod tests {
     fn new_encoded_range(start: u8, end: u8) -> Range {
         let k1 = Key::from_raw(&[start]).append_ts(0);
         let k2 = Key::from_raw(&[end]).append_ts(0);
-        new_range(k1.encoded(), k2.encoded())
+        new_range(k1.as_encoded(), k2.as_encoded())
     }
 
     #[test]
@@ -405,8 +405,8 @@ mod tests {
 
         for i in 0..16 {
             let k = Key::from_raw(&[i]).append_ts(0);
-            assert_eq!(k.encoded().len(), 17);
-            engine.put(k.encoded(), k.encoded()).unwrap();
+            assert_eq!(k.as_encoded().len(), 17);
+            engine.put(k.as_encoded(), k.as_encoded()).unwrap();
         }
 
         let mut cfg = Config::default();
@@ -422,7 +422,7 @@ mod tests {
         let mut last = vec![];
         for i in keys {
             let k = Key::from_raw(&[i]).append_ts(0);
-            client.add_region_range(&last, k.encoded());
+            client.add_region_range(&last, k.as_encoded());
             last = k.into_encoded();
         }
         // Add an unrelated range.

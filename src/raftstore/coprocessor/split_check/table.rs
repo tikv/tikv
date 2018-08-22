@@ -183,7 +183,7 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
 }
 
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
-    if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).raw() {
+    if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).to_raw() {
         table_codec::extract_table_prefix(&raw_key)
             .map(|k| Key::from_raw(k).into_encoded())
             .ok()
@@ -257,7 +257,7 @@ mod test {
         for i in 1..3 {
             let mut key = gen_table_prefix(i);
             key.extend_from_slice(padding);
-            let k = keys::data_key(Key::from_raw(&key).encoded());
+            let k = keys::data_key(Key::from_raw(&key).as_encoded());
             engine.put_cf(write_cf, &k, &k).unwrap();
             data_keys.push(k)
         }
@@ -365,7 +365,7 @@ mod test {
 
             let mut key = gen_table_prefix(i);
             key.extend_from_slice(padding);
-            let s = keys::data_key(Key::from_raw(&key).encoded());
+            let s = keys::data_key(Key::from_raw(&key).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
@@ -392,7 +392,7 @@ mod test {
         for i in 1..4 {
             let mut key = gen_table_prefix(3);
             key.extend_from_slice(format!("{:?}{}", padding, i).as_bytes());
-            let s = keys::data_key(Key::from_raw(&key).encoded());
+            let s = keys::data_key(Key::from_raw(&key).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
@@ -413,10 +413,10 @@ mod test {
         for i in 0..3 {
             // m is less than t and is the prefix of meta keys.
             let key = format!("m{:?}{}", padding, i);
-            let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+            let s = keys::data_key(Key::from_raw(key.as_bytes()).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
             let key = format!("u{:?}{}", padding, i);
-            let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+            let s = keys::data_key(Key::from_raw(key.as_bytes()).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 

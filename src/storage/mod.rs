@@ -341,24 +341,24 @@ impl Command {
             Command::Prewrite { ref mutations, .. } => for m in mutations {
                 match *m {
                     Mutation::Put((ref key, ref value)) => {
-                        bytes += key.encoded().len();
+                        bytes += key.as_encoded().len();
                         bytes += value.len();
                     }
                     Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
-                        bytes += key.encoded().len();
+                        bytes += key.as_encoded().len();
                     }
                 }
             },
             Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
                 for key in keys {
-                    bytes += key.encoded().len();
+                    bytes += key.as_encoded().len();
                 }
             }
             Command::ResolveLock { ref key_locks, .. } => for lock in key_locks {
-                bytes += lock.0.encoded().len();
+                bytes += lock.0.as_encoded().len();
             },
             Command::Cleanup { ref key, .. } => {
-                bytes += key.encoded().len();
+                bytes += key.as_encoded().len();
             }
             _ => {}
         }
@@ -707,7 +707,7 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
-            let size = m.key().encoded().len();
+            let size = m.key().as_encoded().len();
             if size > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
                 return Ok(());
@@ -946,7 +946,7 @@ impl<E: Engine> Storage<E> {
                         .map(|(k, v)| match v {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
-                                stats.data.flow_stats.read_bytes += k.encoded().len() + v.len();
+                                stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
                                 Ok((k.into_encoded(), v))
                             }
                             Err(e) => Err(Error::from(e)),
