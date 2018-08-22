@@ -280,7 +280,7 @@ where
             Ok(ctx) | Err(ctx) => ctx,
         };
         let done = ctx.reconnect_count == 0
-            || (ctx.resp.is_some() && !Self::should_retry(ctx.resp.as_ref().unwrap()));
+            || (ctx.resp.is_some() && Self::should_not_retry(ctx.resp.as_ref().unwrap()));
         if done {
             Ok(Loop::Break(ctx))
         } else {
@@ -288,16 +288,15 @@ where
         }
     }
 
-    fn should_retry(resp: &Result<Resp>) -> bool {
+    fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
-            Ok(_) => false,
-            // all grpc related errors are mapped to Error::Grpc
-            Err(Error::Grpc(err)) => {
+            Ok(_) => true,
+            // Error::Incompatible is returned by response header from pd, no need to retry
+            Err(Error::Incompatible) => true,
+            Err(err) => {
                 error!("request failed: {:?}, retry", err);
-                true
+                false
             }
-            // other err are returned by response header from pd, no need to retry
-            Err(_) => false,
         }
     }
 
@@ -481,6 +480,7 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
     match err.get_field_type() {
         ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
         ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
+        ErrorType::INCOMPATIBLE_VERSION => Err(Error::Incompatible),
         _ => Err(box_err!(err.get_message())),
     }
 }
