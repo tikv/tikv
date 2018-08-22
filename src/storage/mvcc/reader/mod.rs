@@ -212,7 +212,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(ts);
         }
 
-        if ts == u64::MAX && key.raw()? == lock.primary {
+        if ts == u64::MAX && key.to_raw()? == lock.primary {
             // when ts==u64::MAX(which means to get latest committed version for
             // primary key),and current key is the primary key, returns the latest
             // commit version's value
@@ -221,7 +221,7 @@ impl<S: Snapshot> MvccReader<S> {
 
         // There is a pending lock. Client should wait or clean it.
         Err(Error::KeyIsLocked {
-            key: key.raw()?,
+            key: key.to_raw()?,
             primary: lock.primary,
             ts: lock.ts,
             ttl: lock.ttl,
@@ -416,10 +416,10 @@ impl<S: Snapshot> MvccReader<S> {
             let cur_key = Key::from_encoded_slice(cursor.key(&mut self.statistics.data));
             let ts = cur_key.decode_ts()?;
             let cur_key_without_ts = cur_key.truncate_ts()?;
-            if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
+            if cur_key_without_ts.as_encoded().as_slice() == key.as_encoded().as_slice() {
                 v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
             }
-            if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
+            if cur_key_without_ts.as_encoded().as_slice() != key.as_encoded().as_slice() {
                 break;
             }
             ok = cursor.next(&mut self.statistics.data);
@@ -578,18 +578,18 @@ mod tests {
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
-                        let k = keys::data_key(k.encoded());
+                        let k = keys::data_key(k.as_encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.put_cf(handle, &k, &v).unwrap();
                     }
                     Modify::Delete(cf, k) => {
-                        let k = keys::data_key(k.encoded());
+                        let k = keys::data_key(k.as_encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
                     Modify::DeleteRange(cf, k1, k2) => {
-                        let k1 = keys::data_key(k1.encoded());
-                        let k2 = keys::data_key(k2.encoded());
+                        let k1 = keys::data_key(k1.as_encoded());
+                        let k2 = keys::data_key(k2.as_encoded());
                         let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
                         wb.delete_range_cf(handle, &k1, &k2).unwrap();
                     }

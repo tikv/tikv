@@ -490,7 +490,7 @@ fn test_split_region() {
         Key::from_encoded(resp.get_left().get_end_key().to_vec())
             .truncate_ts()
             .unwrap()
-            .encoded()
+            .as_encoded()
             .as_slice(),
         key
     );
