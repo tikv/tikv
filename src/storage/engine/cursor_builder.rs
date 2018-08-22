@@ -83,8 +83,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let mut iter_opt = IterOption::new(
-            self.lower_bound.map(|k| k.take_encoded()),
-            self.upper_bound.map(|k| k.take_encoded()),
+            self.lower_bound.map(|k| k.into_encoded()),
+            self.upper_bound.map(|k| k.into_encoded()),
             self.fill_cache,
         );
         if self.prefix_seek {
