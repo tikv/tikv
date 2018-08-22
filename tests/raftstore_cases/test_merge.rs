@@ -22,7 +22,8 @@ use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
-use tikv::storage::CF_RAFT;
+use tikv::storage::{CF_RAFT, CF_WRITE};
+use tikv::util::config::*;
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -430,4 +431,41 @@ fn test_node_merge_brain_split() {
     cluster.must_put(b"k12", b"v12");
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(3), b"k12", b"v12");
+}
+
+/// Test whether approximate size and keys are updated after merge
+#[test]
+fn test_merge_approximate_size_and_keys() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+
+    cluster.run();
+
+    let mut range = 1..;
+    let middle_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
+    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"").unwrap();
+
+    cluster.must_split(&region, &middle_key);
+    thread::sleep(Duration::from_secs(1));
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+
+    assert_ne!(left, right);
+    let size = pd_client.get_region_approximate_size(left.get_id()).unwrap() 
+    + pd_client.get_region_approximate_size(right.get_id()).unwrap();
+    assert_ne!(size, 0);
+    let keys = pd_client.get_region_approximate_keys(left.get_id()).unwrap() 
+    + pd_client.get_region_approximate_keys(right.get_id()).unwrap();
+    assert_ne!(keys, 0);
+
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_secs(1));
+    
+    let region = pd_client.get_region(b"").unwrap();
+    assert_eq!(pd_client.get_region_approximate_size(region.get_id()).unwrap(), size);
+    assert_eq!(pd_client.get_region_approximate_keys(region.get_id()).unwrap(), keys);
 }

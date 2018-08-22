@@ -19,6 +19,7 @@ use std::time::Duration;
 use protobuf;
 use rocksdb::{CompactionJobInfo, DB};
 use tempdir::TempDir;
+use rand::Rng;
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -519,4 +520,46 @@ pub fn configure_for_lease_read<T: Simulator>(
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
+}
+
+/// Keep putting random kvs until specified size limit is reached.
+pub fn put_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    limit: u64,
+    range: &mut Iterator<Item = u64>,
+) -> Vec<u8> {
+    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
+}
+
+pub fn put_cf_till_size<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    cf: &'static str,
+    limit: u64,
+    range: &mut Iterator<Item = u64>,
+) -> Vec<u8> {
+    assert!(limit > 0);
+    let mut len = 0;
+    let mut last_len = 0;
+    let mut rng = rand::thread_rng();
+    let mut key = vec![];
+    while len < limit {
+        let key_id = range.next().unwrap();
+        let key_str = format!("{:09}", key_id);
+        key = key_str.into_bytes();
+        let mut value = vec![0; 64];
+        rng.fill_bytes(&mut value);
+        cluster.must_put_cf(cf, &key, &value);
+        // plus 1 for the extra encoding prefix
+        len += key.len() as u64 + 1;
+        len += value.len() as u64;
+        // Flush memtable to SST periodically, to make approximate size more accurate.
+        if len - last_len >= 1000 {
+            cluster.must_flush_cf(cf, true);
+            last_len = len;
+        }
+    }
+    // Approximate size of memtable is inaccurate for small data,
+    // we flush it to SST so we can use the size properties instead.
+    cluster.must_flush_cf(cf, true);
+    key
 }
