@@ -136,7 +136,7 @@ impl<S: Snapshot> StoreScanner<S> {
         while results.len() < limit {
             match self.next() {
                 Ok(Some((k, v))) => {
-                    results.push(Ok((k.raw()?, v)));
+                    results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
                 Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
@@ -203,13 +203,7 @@ mod test {
             let pk = primary_key.as_bytes();
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    None,
-                    IsolationLevel::SI,
-                    true,
-                );
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -223,13 +217,7 @@ mod test {
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    None,
-                    IsolationLevel::SI,
-                    true,
-                );
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.commit(&Key::from_raw(key), COMMIT_TS).unwrap();
