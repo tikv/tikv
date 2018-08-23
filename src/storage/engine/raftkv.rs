@@ -322,7 +322,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             match m {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::new();
-                    delete.set_key(k.take_encoded());
+                    delete.set_key(k.into_encoded());
                     if cf != CF_DEFAULT {
                         delete.set_cf(cf.to_string());
                     }
@@ -331,7 +331,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 }
                 Modify::Put(cf, k, v) => {
                     let mut put = PutRequest::new();
-                    put.set_key(k.take_encoded());
+                    put.set_key(k.into_encoded());
                     put.set_value(v);
                     if cf != CF_DEFAULT {
                         put.set_cf(cf.to_string());
@@ -342,8 +342,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Modify::DeleteRange(cf, start_key, end_key) => {
                     let mut delete_range = DeleteRangeRequest::new();
                     delete_range.set_cf(cf.to_string());
-                    delete_range.set_start_key(start_key.take_encoded());
-                    delete_range.set_end_key(end_key.take_encoded());
+                    delete_range.set_start_key(start_key.into_encoded());
+                    delete_range.set_end_key(end_key.into_encoded());
                     req.set_cmd_type(CmdType::DeleteRange);
                     req.set_delete_range(delete_range);
                 }
@@ -510,7 +510,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
-        let v = box_try!(self.get_value(key.encoded()));
+        let v = box_try!(self.get_value(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -518,7 +518,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -562,14 +562,14 @@ impl EngineIterator for RegionIterator {
         fail_point!("raftkv_iter_seek", |_| Err(box_err!(
             "injected error for iter_seek"
         )));
-        RegionIterator::seek(self, key.encoded()).map_err(From::from)
+        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
         fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
             "injected error for iter_seek_for_prev"
         )));
-        RegionIterator::seek_for_prev(self, key.encoded()).map_err(From::from)
+        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
     }
 
     fn seek_to_first(&mut self) -> bool {
@@ -585,7 +585,7 @@ impl EngineIterator for RegionIterator {
     }
 
     fn validate_key(&self, key: &Key) -> engine::Result<()> {
-        self.should_seekable(key.encoded()).map_err(From::from)
+        self.should_seekable(key.as_encoded()).map_err(From::from)
     }
 
     fn key(&self) -> &[u8] {

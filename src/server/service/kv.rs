@@ -1004,7 +1004,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 } else {
                     match v {
                         Ok(Some((k, vv))) => {
-                            resp.set_key(k.take_raw().unwrap());
+                            resp.set_key(k.into_raw().unwrap());
                             resp.set_info(extract_mvcc_info(vv));
                         }
                         Ok(None) => {
@@ -1036,7 +1036,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let req = StoreMessage::SplitRegion {
             region_id,
             region_epoch: req.take_context().take_region_epoch(),
-            split_keys: vec![Key::from_raw(req.get_split_key()).take_encoded()],
+            split_keys: vec![Key::from_raw(req.get_split_key()).into_encoded()],
             callback: Callback::Write(cb),
         };
 

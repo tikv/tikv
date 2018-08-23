@@ -43,7 +43,7 @@ pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
 /// `AggrFunc` is used to execute aggregate operations.
 pub trait AggrFunc: Send {
     /// `update` is used for update aggregate context.
-    fn update(&mut self, ctx: &mut EvalContext, args: Vec<Datum>) -> Result<()>;
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()>;
     /// `calc` calculates the aggregated result and push it to collector.
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()>;
 }
@@ -53,7 +53,7 @@ struct AggBitAnd {
 }
 
 impl AggrFunc for AggBitAnd {
-    fn update(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!(
                 "bit_and only support one column, but got {}",
@@ -83,7 +83,7 @@ struct AggBitOr {
 }
 
 impl AggrFunc for AggBitOr {
-    fn update(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!(
                 "bit_or only support one column, but got {}",
@@ -113,7 +113,7 @@ struct AggBitXor {
 }
 
 impl AggrFunc for AggBitXor {
-    fn update(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!(
                 "bit_xor only support one column, but got {}",
@@ -143,9 +143,9 @@ struct Count {
 }
 
 impl AggrFunc for Count {
-    fn update(&mut self, _: &mut EvalContext, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, _: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         for arg in args {
-            if arg == Datum::Null {
+            if *arg == Datum::Null {
                 return Ok(());
             }
         }
@@ -164,7 +164,7 @@ struct First {
 }
 
 impl AggrFunc for First {
-    fn update(&mut self, _: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, _: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if self.e.is_some() {
             return Ok(());
         }
@@ -193,7 +193,7 @@ impl Sum {
     ///
     /// return false means the others is skipped.
     /// Keep compatible with TiDB's `calculateSum` function.
-    fn add_asssign(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<bool> {
+    fn add_asssign(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<bool> {
         if args.len() != 1 {
             return Err(box_err!(
                 "sum only support one column, but got {}",
@@ -224,7 +224,7 @@ impl Sum {
 }
 
 impl AggrFunc for Sum {
-    fn update(&mut self, ctx: &mut EvalContext, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         self.add_asssign(ctx, args)?;
         Ok(())
     }
@@ -248,7 +248,7 @@ struct Avg {
 }
 
 impl AggrFunc for Avg {
-    fn update(&mut self, ctx: &mut EvalContext, args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if self.sum.add_asssign(ctx, args)? {
             self.cnt += 1;
         }
@@ -273,7 +273,7 @@ impl Extremum {
 }
 
 impl AggrFunc for Extremum {
-    fn update(&mut self, ctx: &mut EvalContext, mut args: Vec<Datum>) -> Result<()> {
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
         if args.len() != 1 {
             return Err(box_err!(
                 "max/min only support one column, but got {}",
@@ -314,8 +314,8 @@ mod test {
         let v1 = Datum::I64(i64::MAX);
         let v2 = Datum::I64(12);
         let res = Decimal::from(i64::MAX).add(&Decimal::from(12)).unwrap();
-        sum.update(&mut ctx, vec![v1]).unwrap();
-        sum.update(&mut ctx, vec![v2]).unwrap();
+        sum.update(&mut ctx, &mut vec![v1]).unwrap();
+        sum.update(&mut ctx, &mut vec![v2]).unwrap();
         let v = sum.res.take().unwrap();
         assert_eq!(v, Datum::Dec(res));
     }
@@ -327,8 +327,8 @@ mod test {
         let v1 = Datum::U64(u64::MAX);
         let v2 = Datum::U64(12);
         let res = Decimal::from(u64::MAX).add(&Decimal::from(12)).unwrap();
-        sum.update(&mut ctx, vec![v1]).unwrap();
-        sum.update(&mut ctx, vec![v2]).unwrap();
+        sum.update(&mut ctx, &mut vec![v1]).unwrap();
+        sum.update(&mut ctx, &mut vec![v2]).unwrap();
         let v = sum.res.take().unwrap();
         assert_eq!(v, Datum::Dec(res));
     }
@@ -346,7 +346,7 @@ mod test {
         ];
         let res = 123.09 + 12.1;
         for v in data {
-            sum.update(&mut ctx, vec![v]).unwrap();
+            sum.update(&mut ctx, &mut vec![v]).unwrap();
         }
         let v = sum.res.take().unwrap();
         assert_eq!(v, Datum::F64(res));
@@ -373,7 +373,7 @@ mod test {
         ];
 
         for v in data {
-            aggr.update(&mut ctx, vec![v]).unwrap();
+            aggr.update(&mut ctx, &mut vec![v]).unwrap();
         }
         assert_eq!(aggr.c, 0);
     }
@@ -396,7 +396,7 @@ mod test {
         ];
 
         for v in data {
-            aggr.update(&mut ctx, vec![v]).unwrap();
+            aggr.update(&mut ctx, &mut vec![v]).unwrap();
         }
         assert_eq!(aggr.c, 31);
     }
@@ -419,7 +419,7 @@ mod test {
         ];
 
         for v in data {
-            aggr.update(&mut ctx, vec![v]).unwrap();
+            aggr.update(&mut ctx, &mut vec![v]).unwrap();
         }
         assert_eq!(aggr.c, 3);
     }
