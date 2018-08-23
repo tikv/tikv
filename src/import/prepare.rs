@@ -281,7 +281,7 @@ mod tests {
         if k.is_empty() {
             vec![]
         } else {
-            Key::from_raw(k).take_encoded()
+            Key::from_raw(k).into_encoded()
         }
     }
 
