@@ -41,6 +41,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::util::print_split_info;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
@@ -3309,22 +3310,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 split_keys,
                 callback,
             } => {
-                if split_keys.len() == 1 {
-                    info!(
-                        "on split region {} with {} key {:?}",
-                        region_id,
-                        split_keys.len(),
-                        split_keys.first().as_ref().map(|k| escape(k)),
-                    );
-                } else {
-                    info!(
-                        "on split region {} with {} keys range from {:?} to {:?}",
-                        region_id,
-                        split_keys.len(),
-                        split_keys.first().as_ref().map(|k| escape(k)),
-                        split_keys.last().as_ref().map(|k| escape(k))
-                    );
-                }
+                let mut s = String::new();
+                print_split_info(&mut s, region_id, &split_keys).unwrap();
+                info!("on split region {}", s);
                 self.on_prepare_split_region(region_id, region_epoch, split_keys, callback);
             }
             Msg::RegionApproximateSize { region_id, size } => {

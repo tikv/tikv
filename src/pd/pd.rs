@@ -30,6 +30,7 @@ use super::metrics::*;
 use pd::{PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raftstore::store::store::StoreInfo;
+use raftstore::store::util::print_split_info;
 use raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
@@ -37,7 +38,6 @@ use raftstore::store::Callback;
 use raftstore::store::Msg;
 use storage::FlowStatistics;
 use util::collections::HashMap;
-use util::escape;
 use util::rocksdb::*;
 use util::time::time_now_sec;
 use util::transport::SendCh;
@@ -132,24 +132,8 @@ impl Display for Task {
                 ref split_keys,
                 ..
             } => {
-                if split_keys.len() == 1 {
-                    write!(
-                        f,
-                        "ask split region {} with {} key {:?}",
-                        region.get_id(),
-                        split_keys.len(),
-                        split_keys.first().as_ref().map(|k| escape(k)),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "ask split region {} with {} keys range from {:?} to {:?}",
-                        region.get_id(),
-                        split_keys.len(),
-                        split_keys.first().as_ref().map(|k| escape(k)),
-                        split_keys.last().as_ref().map(|k| escape(k))
-                    )
-                }
+                write!(f, "ask split region ")?;
+                print_split_info(f, region.get_id(), split_keys)
             }
             Task::Heartbeat {
                 ref region,

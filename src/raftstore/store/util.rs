@@ -28,6 +28,7 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use util::escape;
 use util::properties::RangeProperties;
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
@@ -747,6 +748,30 @@ impl Engines {
             kv: kv_engine,
             raft: raft_engine,
         }
+    }
+}
+
+pub fn print_split_info(
+    fmt: &mut fmt::Write,
+    region_id: u64,
+    split_keys: &Vec<Vec<u8>>,
+) -> fmt::Result {
+    if split_keys.len() == 1 {
+        write!(
+            fmt,
+            "{} with key {:?}",
+            region_id,
+            split_keys.first().as_ref().map(|k| escape(k)),
+        )
+    } else {
+        write!(
+            fmt,
+            "{} with {} keys range from {:?} to {:?}",
+            region_id,
+            split_keys.len(),
+            split_keys.first().as_ref().map(|k| escape(k)),
+            split_keys.last().as_ref().map(|k| escape(k))
+        )
     }
 }
 
