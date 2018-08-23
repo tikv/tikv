@@ -2,7 +2,7 @@
 
 [![Build Status](https://circleci.com/gh/tikv/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/tikv/tikv) [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 
-TiKV ("Ti" stands for Titanium) is a distributed transactional key-value database, originally created to complement TiDB. It's built in Rust and powered by Raft. TiKV is inspired by the design of Google Spanner and HBase, but is much simpler without dependency on any distributed file system.
+TiKV ("Ti" stands for Titanium) is a distributed transactional key-value database, originally created to complement [TiDB] (https://github.com/pingcap/tidb). It's built in Rust and powered by Raft. TiKV is inspired by the design of Google Spanner and HBase, but is much simpler without dependency on any distributed file system.
 
 With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
