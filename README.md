@@ -2,9 +2,9 @@
 
 [![Build Status](https://circleci.com/gh/tikv/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/tikv/tikv) [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 
-TiKV ("Ti" stands for Titanium) is a distributed transactional key-value database, originally created to complement [TiDB] (https://github.com/pingcap/tidb). It's built in Rust and powered by Raft. TiKV is inspired by the design of Google Spanner and HBase, but is much simpler without dependency on any distributed file system.
+TiKV ("Ti" stands for Titanium) is a distributed transactional key-value database, originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol. TiKV is built in Rust and powered by Raft, and was inspired by the design of Google Spanner and HBase, but without dependency on any specific distributed file system.
 
-With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
+With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
 TiKV has the following key features:
 
@@ -49,9 +49,9 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ## Try TiKV
 
-TiKV is a component of the [TiDB project](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage the cluster. You can use TiKV together with TiDB. You can also use TiKV separately.
+TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use the Ansible deployment for the production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/TiKV-Documentation).
+We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/TiKV-Documentation).
 
 ### Testing deployment
 
