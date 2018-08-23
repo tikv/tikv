@@ -147,6 +147,12 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn cos(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(n.cos()))
+    }
+
+    #[inline]
     pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.tan()))
@@ -432,6 +438,27 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_cos() {
+        let tests = vec![
+            (ScalarFuncSig::Cos, Datum::F64(0f64), 1f64),
+            (ScalarFuncSig::Cos, Datum::F64(f64::consts::PI / 2f64), 0f64),
+            (ScalarFuncSig::Cos, Datum::F64(f64::consts::PI), -1f64),
+            (ScalarFuncSig::Cos, Datum::F64(-f64::consts::PI), -1f64),
+        ];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let expr = scalar_func_expr(sig, &[arg.clone()]);
+            let op = Expression::build(&mut ctx, expr).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            match got {
+                Datum::F64(result) => assert!((result - exp).abs() < f64::EPSILON),
+                _ => panic!("F64 result was expected"),
+            }
         }
     }
 
