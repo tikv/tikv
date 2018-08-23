@@ -417,25 +417,27 @@ impl<S: Snapshot> CfReader<S> {
         }
     }
 
-    /// Create the lock cursor if it doesn't exist.
+    /// Create the forward lock cursor if it doesn't exist.
     fn ensure_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_some() {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
             .fill_cache(self.fill_cache)
+            .scan_mode(ScanMode::Forward)
             .build()?;
         self.lock_cursor = Some(cursor);
         Ok(())
     }
 
-    /// Create the write cursor if it doesn't exist.
+    /// Create the forward write cursor if it doesn't exist.
     fn ensure_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_some() {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
+            .scan_mode(ScanMode::Forward)
             .build()?;
         self.write_cursor = Some(cursor);
         Ok(())
@@ -454,13 +456,14 @@ impl<S: Snapshot> CfReader<S> {
         Ok(())
     }
 
-    /// Create the default cursor if it doesn't exist.
+    /// Create the forward default cursor if it doesn't exist.
     fn ensure_default_cursor(&mut self) -> Result<()> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
         let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
             .fill_cache(self.fill_cache)
+            .scan_mode(ScanMode::Forward)
             .build()?;
         self.default_cursor = Some(cursor);
         Ok(())
