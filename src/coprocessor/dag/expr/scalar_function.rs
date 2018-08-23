@@ -188,7 +188,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CeilDecToDec
             | ScalarFuncSig::CeilDecToInt
             | ScalarFuncSig::FloorReal
-            | ScalarFuncSig::RouldReal
+            | ScalarFuncSig::RoundReal
             | ScalarFuncSig::FloorIntToInt
             | ScalarFuncSig::FloorIntToDec
             | ScalarFuncSig::FloorDecToDec
@@ -801,7 +801,7 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
-        RouldReal => round_real,
+        RoundReal => round_real,
         PI => pi,
 
         IfNullReal => if_null_real,
@@ -1102,7 +1102,7 @@ mod test {
                     ScalarFuncSig::CeilDecToDec,
                     ScalarFuncSig::CeilDecToInt,
                     ScalarFuncSig::FloorReal,
-                    ScalarFuncSig::RouldReal,
+                    ScalarFuncSig::RoundReal,
                     ScalarFuncSig::FloorIntToInt,
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
