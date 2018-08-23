@@ -28,7 +28,7 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use util::properties::RangeProperties;
+use util::properties::{RangeProperties, PROP_SIZE_INDEX_DISTANCE};
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
@@ -323,6 +323,15 @@ pub fn get_region_properties_cf(
         .map_err(|e| e.into())
 }
 
+/// Get the approximate size of the region.
+pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
+    let mut size = 0;
+    for cfname in LARGE_CFS {
+        size += get_region_approximate_size_cf(db, cfname, region)?
+    }
+    Ok(size)
+}
+
 pub fn get_region_approximate_size_cf(
     db: &DB,
     cfname: &str,
@@ -333,12 +342,33 @@ pub fn get_region_approximate_size_cf(
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
+
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
         size += props.get_approximate_size_in_range(&start, &end);
     }
     Ok(size)
+}
+
+/// Get the approximate number of keys in the region.
+pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
+    // try to get from RangeProperties first.
+    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
+        Ok(v) => if v > 0 {
+            return Ok(v);
+        },
+        Err(e) => debug!(
+            "old_version:get keys from RangeProperties failed with err:{:?}",
+            e
+        ),
+    }
+
+    let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
+    Ok(keys)
 }
 
 pub fn get_region_approximate_keys_cf(
@@ -351,12 +381,29 @@ pub fn get_region_approximate_keys_cf(
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
     let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
         keys += props.get_approximate_keys_in_range(&start, &end);
     }
     Ok(keys)
+}
+
+/// Get region approximate middle key based on default and write cf size.
+pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+
+    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+    let middle_by_cf = if default_cf_size >= write_cf_size {
+        CF_DEFAULT
+    } else {
+        CF_WRITE
+    };
+
+    get_region_approximate_middle_cf(db, middle_by_cf, &region)
 }
 
 /// Get the approxmiate middle key of the region. If we suppose the region
@@ -386,58 +433,101 @@ pub fn get_region_approximate_middle_cf(
                 .map(|(k, _)| k.to_owned()),
         );
     }
-    keys.sort();
     if keys.is_empty() {
         return Ok(None);
     }
+    keys.sort();
     // Calculate the position by (len-1)/2. So it's the left one
     // of two middle positions if the number of keys is even.
     let middle = (keys.len() - 1) / 2;
     Ok(Some(keys.swap_remove(middle)))
 }
 
-pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
-    let mut size = 0;
-    for cfname in LARGE_CFS {
-        size += get_region_approximate_size_cf(db, cfname, region)?
-    }
-    Ok(size)
-}
-
-/// Get the approximate number of keys in the region.
-pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
-    // try to get from RangeProperties first.
-    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
-        Ok(v) => if v > 0 {
-            return Ok(v);
-        },
-        Err(e) => debug!(
-            "old_version:get keys from RangeProperties failed with err:{:?}",
-            e
-        ),
-    }
-
-    let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
-    Ok(keys)
-}
-
-/// Get region approximate middle key based on default and write cf size.
-pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
+/// Get region approximate split keys based on default and write cf.
+pub fn get_region_approximate_split_keys(
+    db: &DB,
+    region: &metapb::Region,
+    split_size: u64,
+    max_size: u64,
+    batch_split_limit: u64,
+) -> Result<Vec<Vec<u8>>> {
     let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
 
-    let middle_by_cf = if default_cf_size >= write_cf_size {
-        CF_DEFAULT
+    // assume the size of keys is uniform distribution in both cfs.
+    let (cf, cf_split_size) = if default_cf_size >= write_cf_size {
+        (
+            CF_DEFAULT,
+            split_size * default_cf_size / (default_cf_size + write_cf_size),
+        )
     } else {
-        CF_WRITE
+        (
+            CF_WRITE,
+            split_size * write_cf_size / (default_cf_size + write_cf_size),
+        )
     };
 
-    get_region_approximate_middle_cf(db, middle_by_cf, &region)
+    get_region_approximate_split_keys_cf(
+        db,
+        cf,
+        &region,
+        cf_split_size,
+        max_size,
+        batch_split_limit,
+    )
+}
+
+pub fn get_region_approximate_split_keys_cf(
+    db: &DB,
+    cfname: &str,
+    region: &metapb::Region,
+    split_size: u64,
+    max_size: u64,
+    batch_split_limit: u64,
+) -> Result<Vec<Vec<u8>>> {
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+
+    let mut keys = Vec::new();
+    for (_, v) in &*collection {
+        let props = RangeProperties::decode(v.user_collected_properties())?;
+        keys.extend(
+            props
+                .offsets
+                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .map(|(k, _)| k.to_owned()),
+        );
+    }
+    if keys.is_empty() {
+        return Ok(vec![]);
+    }
+    keys.sort();
+
+    // assume that the size between two keys is PROP_SIZE_INDEX_DISTANCE,
+    // so we make it as split_key every split_size / PROP_SIZE_INDEX_DISTANCE keys.
+    let n = split_size / PROP_SIZE_INDEX_DISTANCE;
+    let len = keys.len() as u64;
+    let mut split_keys = keys
+        .into_iter()
+        .step_by(n as usize)
+        .skip(1)
+        .collect::<Vec<Vec<u8>>>();
+
+    if split_keys.len() as u64 > batch_split_limit {
+        split_keys.truncate(batch_split_limit as usize);
+    } else {
+        // make sure not to split when less than max_size for last part
+        let rest = len % n;
+        if rest * PROP_SIZE_INDEX_DISTANCE + split_size < max_size {
+            split_keys.pop();
+        }
+    }
+    Ok(split_keys)
 }
 
 /// Check if replicas of two regions are on the same stores.
