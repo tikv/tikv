@@ -161,6 +161,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp;
     use std::sync::{mpsc, Arc};
 
     use kvproto::metapb::{Peer, Region};
@@ -180,7 +181,7 @@ mod tests {
 
     use super::super::size::tests::must_split_at;
 
-    fn put_data(engine: &DB, idx: impl Iterator<Item = u64>, fill_short_value: bool) {
+    fn put_data(engine: &DB, mut start_idx: u64, end_idx: u64, fill_short_value: bool) {
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
         let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
         let write_value = if fill_short_value {
@@ -189,18 +190,21 @@ mod tests {
             Write::new(WriteType::Put, 0, None)
         }.to_bytes();
 
-        for (c, i) in idx.enumerate() {
-            let key = keys::data_key(
-                Key::from_raw(format!("{:04}", i).as_bytes())
-                    .append_ts(2)
-                    .as_encoded(),
-            );
-            engine.put_cf(write_cf, &key, &write_value).unwrap();
-            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
-            if (c + 1) % 20 == 0 {
-                engine.flush_cf(write_cf, true).unwrap();
-                engine.flush_cf(default_cf, true).unwrap();
+        while start_idx < end_idx {
+            let batch_idx = cmp::min(start_idx + 20, end_idx);
+            for i in start_idx..batch_idx {
+                let key = keys::data_key(
+                    Key::from_raw(format!("{:04}", i).as_bytes())
+                        .append_ts(2)
+                        .as_encoded(),
+                );
+                engine.put_cf(write_cf, &key, &write_value).unwrap();
+                engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
             }
+            // Flush to generate SST files, so that properties can be utilized.
+            engine.flush_cf(write_cf, true).unwrap();
+            engine.flush_cf(default_cf, true).unwrap();
+            start_idx = batch_idx;
         }
     }
 
@@ -241,7 +245,7 @@ mod tests {
         );
 
         // so split key will be z0080
-        put_data(&engine, 0..90, false);
+        put_data(&engine, 0, 90, false);
 
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
@@ -253,7 +257,7 @@ mod tests {
             others => panic!("expect recv empty, but got {:?}", others),
         }
 
-        put_data(&engine, 90..160, true);
+        put_data(&engine, 90, 160, true);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
@@ -303,7 +307,7 @@ mod tests {
         );
 
         // so split key will be z0080
-        put_data(&engine, 0..90, false);
+        put_data(&engine, 0, 90, false);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
@@ -314,7 +318,7 @@ mod tests {
             others => panic!("expect recv empty, but got {:?}", others),
         }
 
-        put_data(&engine, 90..160, true);
+        put_data(&engine, 90, 160, true);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
@@ -322,7 +326,7 @@ mod tests {
             vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
         );
 
-        put_data(&engine, 160..300, false);
+        put_data(&engine, 160, 300, false);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
@@ -334,7 +338,7 @@ mod tests {
             ],
         );
 
-        put_data(&engine, 300..500, false);
+        put_data(&engine, 300, 500, false);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
