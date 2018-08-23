@@ -93,7 +93,8 @@ impl<S: Snapshot> CfReader<S> {
     }
 
     /// Iterate and get all user keys in the write CF within the given key space
-    /// (specified by `start_key` and `limit`). `limit` must not be `0`.
+    /// (specified by `start_key` and `limit`). If `limit` is `0`, the key space
+    /// does not have right bound.
     ///
     /// Internally, there will be a `seek` operation for the first iteration and
     /// `near_seek` for other iterations.
@@ -101,10 +102,8 @@ impl<S: Snapshot> CfReader<S> {
     /// The return type is `(keys, next_start_key)`. `next_start_key` is the `start_key`
     /// that can be used to continue scanning keys. If `next_start_key` is `None`, it means
     /// that there is no more keys.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `limit` is `0`.
+    // TODO: This function is only used in GC. We should move it into gc and replace
+    // it with a more efficient implementation (i.e. no near_seek).
     pub fn scan_keys(
         &mut self,
         start_key: Option<&Key>,
@@ -114,7 +113,6 @@ impl<S: Snapshot> CfReader<S> {
         let write_cursor = self.write_cursor.as_mut().unwrap();
 
         // TODO: We need to ensure that cursor is not prefix seek.
-        assert!(limit > 0);
 
         match start_key {
             Some(ref x) => write_cursor.seek(x, &mut self.statistics.write)?,
@@ -140,7 +138,7 @@ impl<S: Snapshot> CfReader<S> {
                 next_start_key = None;
                 break;
             }
-            if keys.len() >= limit {
+            if limit > 0 && keys.len() >= limit {
                 // Reach limit
                 break;
             }
@@ -151,7 +149,7 @@ impl<S: Snapshot> CfReader<S> {
 
     /// Iterate and get all locks in the lock CF that `predicate` returns `true` within
     /// the given key space (specified by `start_key` and `limit`). If `limit` is `0`,
-    /// the key space only has left bound.
+    /// the key space does not have right bound.
     ///
     /// Internally, there will be a `seek` for the first iteration and `next` for
     /// other iterations.
