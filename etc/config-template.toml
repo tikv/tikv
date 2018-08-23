@@ -473,8 +473,8 @@
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
 # allow-concurrent-memtable-write = false
-# bytes-per-sync = "0MB"
-# wal-bytes-per-sync = "0KB"
+# bytes-per-sync = "1MB"
+# wal-bytes-per-sync = "512KB"
 
 # info-log-max-size = "1GB"
 # info-log-roll-time = "0"
