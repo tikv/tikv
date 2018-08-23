@@ -495,7 +495,7 @@ pub fn get_region_approximate_split_keys_cf(
 
     // cause first element of the iterator will always be returned by step_by(),
     // for convenience, we insert a useless key in front and then just drop it.
-    let mut keys = vec!["".as_bytes().to_vec()];
+    let mut keys = vec![b"".to_vec()];
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
         keys.extend(
@@ -1628,7 +1628,7 @@ mod tests {
             })
             .collect::<Vec<Vec<u8>>>();
 
-        assert_eq!(split_keys, vec!["key_002".as_bytes().to_vec()]);
+        assert_eq!(split_keys, vec![b"key_002".to_vec()]);
 
         for i in 5..10 {
             let k = format!("key_{:03}", i).into_bytes();
@@ -1652,10 +1652,7 @@ mod tests {
             })
             .collect::<Vec<Vec<u8>>>();
 
-        assert_eq!(
-            split_keys,
-            vec!["key_002".as_bytes().to_vec(), "key_005".as_bytes().to_vec()]
-        );
+        assert_eq!(split_keys, vec![b"key_002".to_vec(), b"key_005".to_vec()]);
 
         for i in 10..20 {
             let k = format!("key_{:03}", i).into_bytes();
@@ -1682,11 +1679,11 @@ mod tests {
         assert_eq!(
             split_keys,
             vec![
-                "key_002".as_bytes().to_vec(),
-                "key_005".as_bytes().to_vec(),
-                "key_008".as_bytes().to_vec(),
-                "key_011".as_bytes().to_vec(),
-                "key_014".as_bytes().to_vec(),
+                b"key_002".to_vec(),
+                b"key_005".to_vec(),
+                b"key_008".to_vec(),
+                b"key_011".to_vec(),
+                b"key_014".to_vec(),
             ]
         );
     }
