@@ -2045,7 +2045,7 @@ impl ReadExecutor {
         self.snapshot = Some(Snapshot::new(engine).into_sync());
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
-        atomic::compiler_fence(atomic::Ordering::Release);
+        atomic::fence(atomic::Ordering::Release);
         if self.need_snapshot_time {
             self.snapshot_time = Some(monotonic_raw_now());
         }
