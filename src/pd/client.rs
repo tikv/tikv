@@ -382,6 +382,39 @@ impl PdClient for RpcClient {
             .execute()
     }
 
+    fn ask_batch_split(
+        &self,
+        region: metapb::Region,
+        count: usize,
+    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::AskBatchSplitRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+        req.set_split_count(count as u32);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::AskBatchSplitRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client
+                .rl()
+                .client
+                .ask_batch_split_async_opt(&req, option)
+                .unwrap();
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["ask_batch_split"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(resp)
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
     fn store_heartbeat(&self, mut stats: pdpb::StoreStats) -> PdFuture<()> {
         let timer = Instant::now();
 
@@ -410,24 +443,23 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()> {
+    fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
         let timer = Instant::now();
 
-        let mut req = pdpb::ReportSplitRequest::new();
+        let mut req = pdpb::ReportBatchSplitRequest::new();
         req.set_header(self.header());
-        req.set_left(left);
-        req.set_right(right);
+        req.set_regions(RepeatedField::from_vec(regions));
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::ReportSplitRequest| {
+        let executor = move |client: &RwLock<Inner>, req: pdpb::ReportBatchSplitRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
                 .rl()
                 .client
-                .report_split_async_opt(&req, option)
+                .report_batch_split_async_opt(&req, option)
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
-                    .with_label_values(&["report_split"])
+                    .with_label_values(&["report_batch_split"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
                 Ok(())

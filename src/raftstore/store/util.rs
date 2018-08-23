@@ -73,6 +73,17 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     peer
 }
 
+/// Check if key in region range (`start_key`, `end_key`).
+pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if start_key < key && (key < end_key || end_key.is_empty()) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
 /// Check if key in region range [`start_key`, `end_key`].
 pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
     let end_key = region.get_end_key();
@@ -146,7 +157,7 @@ pub fn delete_all_in_range_cf(
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
         if cf == CF_WRITE {
             let start = Key::from_encoded_slice(start_key).append_ts(u64::MAX);
-            wb.delete_range_cf(handle, start.encoded(), end_key)?;
+            wb.delete_range_cf(handle, start.as_encoded(), end_key)?;
         } else {
             wb.delete_range_cf(handle, start_key, end_key)?;
         }
@@ -210,7 +221,7 @@ pub fn check_region_epoch(
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
             | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
+            AdminCmdType::Split | AdminCmdType::BatchSplit => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
@@ -911,24 +922,27 @@ mod tests {
     #[test]
     fn test_check_key_in_region() {
         let test_cases = vec![
-            ("", "", "", true, true),
-            ("", "", "6", true, true),
-            ("", "3", "6", false, false),
-            ("4", "3", "6", true, true),
-            ("4", "3", "", true, true),
-            ("2", "3", "6", false, false),
-            ("", "3", "6", false, false),
-            ("", "3", "", false, false),
-            ("6", "3", "6", false, true),
+            ("", "", "", true, true, false),
+            ("", "", "6", true, true, false),
+            ("", "3", "6", false, false, false),
+            ("4", "3", "6", true, true, true),
+            ("4", "3", "", true, true, true),
+            ("3", "3", "", true, true, false),
+            ("2", "3", "6", false, false, false),
+            ("", "3", "6", false, false, false),
+            ("", "3", "", false, false, false),
+            ("6", "3", "6", false, true, false),
         ];
-        for (key, start_key, end_key, is_in_region, is_in_region_inclusive) in test_cases {
+        for (key, start_key, end_key, is_in_region, inclusive, exclusive) in test_cases {
             let mut region = metapb::Region::new();
             region.set_start_key(start_key.as_bytes().to_vec());
             region.set_end_key(end_key.as_bytes().to_vec());
             let mut result = check_key_in_region(key.as_bytes(), &region);
             assert_eq!(result.is_ok(), is_in_region);
             result = check_key_in_region_inclusive(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), is_in_region_inclusive)
+            assert_eq!(result.is_ok(), inclusive);
+            result = check_key_in_region_exclusive(key.as_bytes(), &region);
+            assert_eq!(result.is_ok(), exclusive);
         }
     }
 
@@ -1058,7 +1072,7 @@ mod tests {
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
-            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).encoded());
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
             let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &key, &write_v).unwrap();
@@ -1147,7 +1161,7 @@ mod tests {
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
         for (_, key) in keys.iter().enumerate() {
-            kvs.push((key.encoded().as_slice(), b"value"));
+            kvs.push((key.as_encoded().as_slice(), b"value"));
         }
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for &(k, v) in kvs.as_slice() {
@@ -1164,8 +1178,8 @@ mod tests {
         let end = Key::from_raw(b"k4");
         delete_all_in_range(
             &db,
-            start.encoded().as_slice(),
-            end.encoded().as_slice(),
+            start.as_encoded().as_slice(),
+            end.as_encoded().as_slice(),
             use_delete_range,
         ).unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
@@ -1463,7 +1477,7 @@ mod tests {
         big_value.extend(iter::repeat(b'v').take(256));
         for i in 0..100 {
             let k = format!("key_{:03}", i).into_bytes();
-            let k = keys::data_key(Key::from_raw(&k).encoded());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
             engine.put_cf(cf_handle, &k, &big_value).unwrap();
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
@@ -1475,7 +1489,7 @@ mod tests {
             .unwrap();
 
         let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
-            .take_raw()
+            .into_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
     }
