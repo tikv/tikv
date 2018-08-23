@@ -42,6 +42,7 @@ use util::worker::{Runnable, Scheduler};
 use super::checksum::ChecksumContext;
 use super::codec::table;
 use super::dag::executor::ExecutorMetrics;
+use super::dag::executor::build_flat_agg_from_dag;
 use super::dag::DAGContext;
 use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
@@ -150,6 +151,20 @@ impl<E: Engine> Host<E> {
 
         match cop_req {
             CopRequest::DAG(dag) => {
+                let flag_agg = build_flat_agg_from_dag(&dag, &ranges, snap.clone());
+                if let Some(mut flag_agg) = flag_agg {
+                    let do_request = move |_| {
+                        let resp = flag_agg.exec().unwrap_or_else(|e| {
+                            let mut metrics = BasicLocalMetrics::default();
+                            err_resp(e, &mut metrics)
+                        });
+                        on_resp.respond(resp);
+                        future::ok::<_, ()>(())
+                    };
+                    pool.spawn(do_request).forget();
+                    return;
+                }
+
                 let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit) {
                     Ok(ctx) => ctx,
                     Err(e) => {

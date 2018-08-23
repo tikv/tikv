@@ -31,6 +31,7 @@ use coprocessor::*;
 
 mod aggregate;
 mod aggregation;
+mod flat_agg;
 mod index_scan;
 mod limit;
 mod scanner;
@@ -42,6 +43,7 @@ mod topn_heap;
 mod metrics;
 
 pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
+pub use self::flat_agg::{build_flat_agg_from_dag, FlatAggExecutor};
 pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
