@@ -224,7 +224,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -249,7 +249,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value =
@@ -261,14 +261,13 @@ mod tests {
             engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
             engine.flush_cf(default_cf, true).unwrap();
         }
-        println!("start");
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
             &region,
-            vec![Key::from_raw(b"0080").append_ts(2).take_encoded()],
+            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
         );
-        println!("end");
+
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
@@ -315,7 +314,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -340,7 +339,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value =
@@ -357,14 +356,14 @@ mod tests {
         must_split_at(
             &rx,
             &region,
-            vec![Key::from_raw(b"0080").append_ts(2).take_encoded()],
+            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
         );
 
         for i in 160..300 {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
@@ -381,9 +380,9 @@ mod tests {
             &rx,
             &region,
             vec![
-                Key::from_raw(b"0080").append_ts(2).take_encoded(),
-                Key::from_raw(b"0160").append_ts(2).take_encoded(),
-                Key::from_raw(b"0240").append_ts(2).take_encoded(),
+                Key::from_raw(b"0080").append_ts(2).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2).into_encoded(),
             ],
         );
 
@@ -391,7 +390,7 @@ mod tests {
             let key = keys::data_key(
                 Key::from_raw(format!("{:04}", i).as_bytes())
                     .append_ts(2)
-                    .encoded(),
+                    .as_encoded(),
             );
 
             let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
@@ -408,11 +407,11 @@ mod tests {
             &rx,
             &region,
             vec![
-                Key::from_raw(b"0080").append_ts(2).take_encoded(),
-                Key::from_raw(b"0160").append_ts(2).take_encoded(),
-                Key::from_raw(b"0240").append_ts(2).take_encoded(),
-                Key::from_raw(b"0320").append_ts(2).take_encoded(),
-                Key::from_raw(b"0400").append_ts(2).take_encoded(),
+                Key::from_raw(b"0080").append_ts(2).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2).into_encoded(),
+                Key::from_raw(b"0320").append_ts(2).into_encoded(),
+                Key::from_raw(b"0400").append_ts(2).into_encoded(),
             ],
         );
 
