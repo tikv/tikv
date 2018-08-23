@@ -308,7 +308,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 last_checked_commit_ts = Key::decode_ts_from(current_key)?;
 
-                if !Key::is_user_key_eq(current_key, user_key.encoded().as_slice()) {
+                if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                     // Meet another key, use `last_version` as the return.
                     *met_prev_user_key = true;
                     is_done = true;
@@ -357,7 +357,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 // We should never reach another user key.
                 assert!(Key::is_user_key_eq(
                     current_key,
-                    user_key.encoded().as_slice()
+                    user_key.as_encoded().as_slice()
                 ));
                 Key::decode_ts_from(current_key)?
             };
@@ -448,7 +448,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             }
             {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, current_user_key.encoded().as_slice()) {
+                if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
                     // Found another user key. We are done here.
                     return Ok(());
                 }
