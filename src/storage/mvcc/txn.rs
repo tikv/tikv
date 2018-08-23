@@ -33,6 +33,7 @@ pub struct GcInfo {
 
 pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
+    gc_reader: MvccReader<S>,
     start_ts: u64,
     writes: Vec<Modify>,
     write_size: usize,
@@ -47,21 +48,35 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 }
 
 impl<S: Snapshot> MvccTxn<S> {
-    pub fn new(
-        snapshot: S,
-        start_ts: u64,
-        mode: Option<ScanMode>,
-        isolation_level: IsolationLevel,
-        fill_cache: bool,
-    ) -> Self {
-        Self {
+    pub fn new(snapshot: S, start_ts: u64, fill_cache: bool) -> Result<Self> {
+        Ok(Self {
             // Todo: use session variable to indicate fill cache or not
-            reader: MvccReader::new(snapshot, mode, fill_cache, None, None, isolation_level),
+            // ScanMode is `None`, since in prewrite and other operations, keys are not given in
+            // order and we use prefix seek for each key. An exception is GC, which uses forward
+            // scan only.
+            // IsolationLevel is `SI`, actually the method we use in MvccTxn does not rely on
+            // isolation level, so it can be any value.
+            reader: MvccReader::new(
+                snapshot.clone(),
+                None,
+                fill_cache,
+                None,
+                None,
+                IsolationLevel::SI,
+            ),
+            gc_reader: MvccReader::new(
+                snapshot,
+                Some(ScanMode::Forward),
+                fill_cache,
+                None,
+                None,
+                IsolationLevel::SI,
+            ),
             start_ts,
             writes: vec![],
             write_size: 0,
             collapse_rollback: true,
-        }
+        })
     }
 
     pub fn collapse_rollback(&mut self, collapse: bool) {
@@ -72,8 +87,10 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes
     }
 
-    pub fn get_statistics(&self) -> &Statistics {
-        self.reader.get_statistics()
+    pub fn take_statistics(&mut self) -> Statistics {
+        let mut statistics = Statistics::default();
+        self.reader.collect_statistics_into(&mut statistics);
+        statistics
     }
 
     pub fn write_size(&self) -> usize {
@@ -120,10 +137,6 @@ impl<S: Snapshot> MvccTxn<S> {
         let key = key.clone().append_ts(ts);
         self.write_size += CF_WRITE.len() + key.as_encoded().len();
         self.writes.push(Modify::Delete(CF_WRITE, key));
-    }
-
-    pub fn get(&mut self, key: &Key) -> Result<Option<Value>> {
-        self.reader.get(key, self.start_ts)
     }
 
     pub fn prewrite(
@@ -301,7 +314,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut deleted_versions = 0;
         let mut latest_delete = None;
         let mut is_completed = true;
-        while let Some((commit, write)) = self.reader.seek_write(key, ts)? {
+        while let Some((commit, write)) = self.gc_reader.seek_write(key, ts)? {
             ts = commit - 1;
             found_versions += 1;
 
@@ -727,11 +740,8 @@ mod tests {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 10, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, 10, true).unwrap();
         let key = Key::from_raw(k);
-        assert_eq!(txn.write_size, 0);
-
-        assert!(txn.get(&key).unwrap().is_none());
         assert_eq!(txn.write_size, 0);
 
         txn.prewrite(
@@ -743,7 +753,7 @@ mod tests {
         engine.write(&ctx, txn.into_modifies()).unwrap();
 
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 10, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, 10, true).unwrap();
         txn.commit(&key, 15).unwrap();
         assert!(txn.write_size() > 0);
         engine.write(&ctx, txn.into_modifies()).unwrap();
@@ -767,7 +777,7 @@ mod tests {
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         assert!(
             txn.prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
@@ -778,7 +788,7 @@ mod tests {
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 5, None, IsolationLevel::SI, true);
+        let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         let mut opt = Options::default();
         opt.skip_constraint_check = true;
         assert!(
