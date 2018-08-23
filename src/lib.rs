@@ -44,6 +44,7 @@ extern crate crossbeam_channel;
 extern crate fail;
 extern crate fnv;
 extern crate fs2;
+#[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
 extern crate fxhash;
