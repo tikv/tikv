@@ -88,7 +88,7 @@ If the pending peer count of one store is larger than the value of `max-pending-
 
 ## Customization
 
-The default schedulers includes `balance-leader`, `balance-region` and `hot-region`. In addition, you can also customize the schedulers. For each scheduler, the configuration has three variables: `type`, `args` and `disable`.
+The default schedulers include `balance-leader`, `balance-region` and `hot-region`. In addition, you can also customize the schedulers. For each scheduler, the configuration has three variables: `type`, `args` and `disable`.
 
 Here is an example to enable the `evict-leader` scheduler in the `config.toml` file:
 
