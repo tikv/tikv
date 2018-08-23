@@ -22,6 +22,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use mio;
 use prometheus::local::LocalHistogram;
 use rocksdb::DB;
+use time::Timespec;
 
 use raftstore::errors::RAFTSTORE_IS_BUSY;
 use raftstore::store::msg::Callback;
@@ -47,6 +48,7 @@ pub struct ReadDelegate {
     term: u64,
     applied_index_term: u64,
     leader_lease: Option<RemoteLease>,
+    last_valid_ts: RefCell<Timespec>,
 
     tag: String,
 }
@@ -62,6 +64,7 @@ impl ReadDelegate {
             term: peer.term(),
             applied_index_term: peer.get_store().applied_index_term(),
             leader_lease: None,
+            last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
         }
     }
@@ -93,7 +96,13 @@ impl ReadDelegate {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
-                if lease.inspect(executor.snapshot_time()) == LeaseState::Valid {
+                let snapshot_time = executor.snapshot_time().unwrap();
+                let mut last_valid_ts = self.last_valid_ts.borrow_mut();
+                if *last_valid_ts == snapshot_time /* quick path for lease checking. */
+                    || lease.inspect(Some(snapshot_time)) == LeaseState::Valid
+                {
+                    // Cache snapshot_time for remaining requests in the same batch.
+                    *last_valid_ts = snapshot_time;
                     if let Ok(mut resp) = executor.execute(req, &self.region) {
                         // Leader can read local if and only if it is in lease.
                         cmd_resp::bind_term(&mut resp.response, term);
@@ -774,6 +783,7 @@ mod tests {
             term: term6,
             applied_index_term: term6 - 1,
             leader_lease: Some(remote),
+            last_valid_ts: RefCell::new(Timespec::new(0, 0)),
         });
         reader.run_batch(&mut vec![register_region1]);
         assert!(reader.delegates.get(&1).is_some());

@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice};
 
@@ -2040,15 +2040,14 @@ impl ReadExecutor {
         if self.snapshot.is_some() {
             return;
         }
-        // Reading current timespec before snapshot.
-        // The order does not matter in the current implementation,
-        // because remote lease is set to 0 when it is expired.
+        let engine = self.engine.clone();
+        self.snapshot = Some(Snapshot::new(engine).into_sync());
+        // Reading current timespec after snapshot, in case we does not
+        // expire lease in time.
+        atomic::compiler_fence(atomic::Ordering::Release);
         if self.need_snapshot_time {
             self.snapshot_time = Some(monotonic_raw_now());
         }
-        // We may need a fence when the order does matter.
-        let engine = self.engine.clone();
-        self.snapshot = Some(Snapshot::new(engine).into_sync());
     }
 
     fn do_get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
