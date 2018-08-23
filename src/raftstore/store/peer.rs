@@ -57,7 +57,6 @@ use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, Lease, LeaseState};
 
-const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -1460,7 +1459,7 @@ impl Peer {
         }
 
         let last_index = self.get_store().last_index();
-        last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
+        last_index <= status.progress[&peer_id].matched + self.cfg.leader_transfer_max_log_lag
     }
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
