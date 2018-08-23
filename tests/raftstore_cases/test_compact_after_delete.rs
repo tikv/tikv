@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocksdb::Range;
+
+use test_raftstore::*;
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
 use tikv::storage::mvcc::{Write, WriteType};
 use tikv::storage::types::Key as MvccKey;
@@ -18,23 +21,17 @@ use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
 use tikv::util::rocksdb::get_cf_handle;
 
-use rocksdb::Range;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::util::*;
-
 fn gen_mvcc_put_kv(k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) -> (Vec<u8>, Vec<u8>) {
     let k = MvccKey::from_encoded(data_key(k));
     let k = k.append_ts(commit_ts);
     let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
-    (k.encoded().clone(), w.to_bytes())
+    (k.as_encoded().clone(), w.to_bytes())
 }
 
 fn gen_delete_k(k: &[u8], commit_ts: u64) -> Vec<u8> {
     let k = MvccKey::from_encoded(data_key(k));
     let k = k.append_ts(commit_ts);
-    k.encoded().clone()
+    k.as_encoded().clone()
 }
 
 fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {

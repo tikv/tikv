@@ -154,11 +154,18 @@ pub trait PdClient: Send + Sync {
     // Ask pd for split, pd will returns the new split region id.
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
 
+    // Ask pd for batch split, pd will returns the new split region ids.
+    fn ask_batch_split(
+        &self,
+        region: metapb::Region,
+        count: usize,
+    ) -> PdFuture<pdpb::AskBatchSplitResponse>;
+
     // Send store statistics regularly.
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()>;
 
     // Report pd the split region.
-    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()>;
+    fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()>;
 
     // Scatter the region across the cluster.
     fn scatter_region(&self, _: RegionInfo) -> Result<()> {

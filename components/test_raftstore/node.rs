@@ -14,19 +14,15 @@
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
-use tikv::util::collections::{HashMap, HashSet};
 
 use tempdir::TempDir;
 
-use super::cluster::{Cluster, Simulator};
-use super::pd::TestPdClient;
-use super::transport_simulate::*;
-use super::util::create_test_engine;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
+
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -34,9 +30,12 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
+use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
 use tikv::util::HandyRwLock;
+
+use super::*;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -310,7 +309,13 @@ impl Simulator for NodeCluster {
 }
 
 pub fn new_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id));
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client)
+}
+
+pub fn new_incompatible_node_cluster(id: u64, count: usize) -> Cluster<NodeCluster> {
+    let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client)
 }
