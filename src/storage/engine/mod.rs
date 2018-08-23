@@ -332,6 +332,9 @@ pub struct Cursor<I: Iterator> {
     // the data cursor can be seen will be
     min_key: Option<Vec<u8>>,
     max_key: Option<Vec<u8>>,
+    /// Will be set to `false` when a cursor move hits `min_key` or `max_key`.
+    /// Notice that when iterator itself is invalid, this field is not meant to be `false`.
+    in_bound: bool,
 
     // Use `Cell` to wrap these flags to provide interior mutability, so that `key()` and
     // `value()` don't need to have `&mut self`.
@@ -346,6 +349,7 @@ impl<I: Iterator> Cursor<I> {
             scan_mode: mode,
             min_key: None,
             max_key: None,
+            in_bound: true,
 
             cur_key_has_read: Cell::new(false),
             cur_value_has_read: Cell::new(false),
@@ -372,6 +376,8 @@ impl<I: Iterator> Cursor<I> {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.in_bound = true;
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self
             .max_key
@@ -379,6 +385,7 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k <= key.as_encoded())
         {
             self.iter.validate_key(key)?;
+            self.in_bound = false;
             return Ok(false);
         }
 
@@ -401,6 +408,8 @@ impl<I: Iterator> Cursor<I> {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
     pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.in_bound = true;
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if !self.iter.valid() {
             return self.seek(key, statistics);
@@ -417,6 +426,7 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k <= key.as_encoded())
         {
             self.iter.validate_key(key)?;
+            self.in_bound = false;
             return Ok(false);
         }
         if ord == Ordering::Greater {
@@ -467,6 +477,7 @@ impl<I: Iterator> Cursor<I> {
     }
 
     pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.in_bound = true;
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self
             .min_key
@@ -474,6 +485,7 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k >= key.as_encoded())
         {
             self.iter.validate_key(key)?;
+            self.in_bound = false;
             return Ok(false);
         }
 
@@ -493,6 +505,8 @@ impl<I: Iterator> Cursor<I> {
 
     /// Find the largest key that is not greater than the specific key.
     pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.in_bound = true;
+
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
@@ -509,6 +523,7 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k >= key.as_encoded())
         {
             self.iter.validate_key(key)?;
+            self.in_bound = false;
             return Ok(false);
         }
 
@@ -592,6 +607,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
+        self.in_bound = true;
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_first()
@@ -599,6 +615,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
+        self.in_bound = true;
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_last()
@@ -606,6 +623,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+        self.in_bound = true;
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek(key)
@@ -624,6 +642,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
+        assert!(self.in_bound);
         statistics.next += 1;
         self.mark_unread();
         self.iter.next()
@@ -631,6 +650,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
+        assert!(self.in_bound);
         statistics.prev += 1;
         self.mark_unread();
         self.iter.prev()
@@ -638,7 +658,7 @@ impl<I: Iterator> Cursor<I> {
 
     #[inline]
     pub fn valid(&self) -> bool {
-        self.iter.valid()
+        self.in_bound && self.iter.valid()
     }
 }
 
@@ -1165,50 +1185,348 @@ pub mod tests {
         must_delete(&engine, b"foo5");
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot
+        let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
         let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
-        iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
+        cursor
+            .seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
-        assert_eq!(iter.value(&mut statistics), b"bar4");
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(cursor.value(&mut statistics), b"bar4");
         assert_eq!(statistics.seek, 1);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
         let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
-        iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
+        cursor
+            .near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo6"));
-        assert_eq!(iter.value(&mut statistics), b"bar6");
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"foo6"));
+        assert_eq!(cursor.value(&mut statistics), b"bar6");
         assert_eq!(statistics.seek, 0);
         assert_eq!(statistics.next, 1);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
-        iter.prev(&mut statistics);
+        cursor.prev(&mut statistics);
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
-        assert_eq!(iter.value(&mut statistics), b"bar4");
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(cursor.value(&mut statistics), b"bar4");
         assert_eq!(statistics.prev, 1);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        iter.prev(&mut statistics);
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo2"));
-        assert_eq!(iter.value(&mut statistics), b"bar2");
+        cursor.prev(&mut statistics);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"foo2"));
+        assert_eq!(cursor.value(&mut statistics), b"bar2");
         assert_eq!(statistics.prev, 2);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
 
-        iter.prev(&mut statistics);
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
-        assert_eq!(iter.value(&mut statistics), b"bar1");
+        cursor.prev(&mut statistics);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
+        assert_eq!(cursor.value(&mut statistics), b"bar1");
         assert_eq!(statistics.prev, 3);
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+    }
+
+    #[test]
+    fn test_bound_valid() {
+        let dir = TempDir::new("rocksdb_valid_test").unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+
+        must_put(&engine, b"3", b"foo3");
+        must_put(&engine, b"5", b"foo5");
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut cursor = snapshot
+            .iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
+
+        let mut statistics = CFStatistics::default();
+
+        // Initially, invalid
+        assert_eq!(cursor.valid(), false);
+
+        // From invalid, seek a valid
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"0"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // From valid, seek over upper bound (first time)
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"7"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a upper bound, seek over upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"7"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a upper bound, seek a valid
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"4"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"5"));
+        assert_eq!(cursor.value(&mut statistics), b"foo5");
+
+        // When there is a upper bound, previously valid, seek over upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"7"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Again
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"7"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a upper bound, seek a valid (again)
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"4"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"5"));
+        assert_eq!(cursor.value(&mut statistics), b"foo5");
+
+        // When there is a upper bound, previously valid, prev_seek a valid
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"4"), &mut statistics)
+                .unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // When there is a upper bound, previously prev_seek valid, seek over upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"7"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a upper bound, previously invalid, prev_seek a valid
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"4"), &mut statistics)
+                .unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // When there is a upper bound, previously valid, prev_seek over lower bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a lower bound, previously invalid, prev_seek over lower bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a lower bound, previously invalid, seek a valid
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"4"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"5"));
+        assert_eq!(cursor.value(&mut statistics), b"foo5");
+
+        // When there is a lower bound, previously valid, prev_seek over lower bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"1"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Again
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"1"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a lower bound & upper bound, previously prev seek invalid,
+        // seek over upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"7"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a lower bound & upper bound, previously seek invalid,
+        // seek over lower bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"1"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // When there is a lower bound & upper bound, previously prev seek invalid,
+        // seek over upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"7"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Seek for prev upper bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"7"), &mut statistics)
+                .unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"5"));
+        assert_eq!(cursor.value(&mut statistics), b"foo5");
+
+        // Seek lower bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"2"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // Narrow lower bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Seek in bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"0"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // Seek over narrowed lower bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"2"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Seek in bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"0"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // Seek over narrowed lower bound
+        assert_eq!(
+            cursor
+                .seek_for_prev(&Key::from_raw(b"0"), &mut statistics)
+                .unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Seek in bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"0"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // Narrow upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"6"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Seek in bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"0"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // Seek over narrowed upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"6"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Seek in bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"0"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
+
+        // Seek over narrowed upper bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"8"), &mut statistics).unwrap(),
+            false
+        );
+        assert_eq!(cursor.valid(), false);
+
+        // Seek in bound
+        assert_eq!(
+            cursor.seek(&Key::from_raw(b"0"), &mut statistics).unwrap(),
+            true
+        );
+        assert_eq!(cursor.valid(), true);
+        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(b"3"));
+        assert_eq!(cursor.value(&mut statistics), b"foo3");
     }
 }
