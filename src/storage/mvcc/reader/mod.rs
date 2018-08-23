@@ -536,7 +536,7 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -544,7 +544,7 @@ mod tests {
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.commit(&k, commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
@@ -552,7 +552,7 @@ mod tests {
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
             let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts, None, IsolationLevel::SI, true);
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.collapse_rollback(false);
             txn.rollback(&k).unwrap();
             self.write(txn.into_modifies());
@@ -562,7 +562,7 @@ mod tests {
             let k = Key::from_raw(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn = MvccTxn::new(snap, safe_point, None, IsolationLevel::SI, true);
+                let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
                 txn.gc(&k, safe_point).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
