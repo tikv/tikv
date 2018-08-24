@@ -13,6 +13,7 @@
 
 use std::mem;
 
+use kvproto::pdpb::CheckPolicy;
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -27,16 +28,23 @@ pub struct Checker {
     current_count: u64,
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
+    policy: CheckPolicy,
 }
 
 impl Checker {
-    pub fn new(max_keys_count: u64, split_threshold: u64, batch_split_limit: u64) -> Checker {
+    pub fn new(
+        max_keys_count: u64,
+        split_threshold: u64,
+        batch_split_limit: u64,
+        policy: CheckPolicy,
+    ) -> Checker {
         Checker {
             max_keys_count,
             split_threshold,
             current_count: 0,
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
+            policy,
         }
     }
 }
@@ -74,6 +82,10 @@ impl SplitChecker for Checker {
             vec![]
         }
     }
+    
+    fn policy(&self) -> CheckPolicy {
+        self.policy
+    }
 }
 
 pub struct KeysCheckObserver<C> {
@@ -102,7 +114,13 @@ impl<C: Sender<Msg>> KeysCheckObserver<C> {
 impl<C> Coprocessor for KeysCheckObserver<C> {}
 
 impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
-    fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
+    fn add_checker(
+        &self,
+        ctx: &mut ObserverContext,
+        host: &mut Host,
+        engine: &DB,
+        policy: CheckPolicy,
+    ) {
         let region = ctx.region();
         let region_id = region.get_id();
         let region_keys = match util::get_region_approximate_keys(engine, region) {
@@ -117,6 +135,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
                     self.region_max_keys,
                     self.split_keys,
                     self.batch_split_limit,
+                    policy,
                 )));
                 return;
             }
@@ -146,6 +165,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 self.region_max_keys,
                 self.split_keys,
                 self.batch_split_limit,
+                policy,
             )));
         } else {
             // Does not need to check keys.

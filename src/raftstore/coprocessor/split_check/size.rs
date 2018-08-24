@@ -13,6 +13,7 @@
 
 use std::mem;
 
+use kvproto::pdpb::CheckPolicy;
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -21,22 +22,31 @@ use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
+const LARGE_REGION_SIZE: u64 = 1 * 1024 * 1024 * 1024; // 1GB
+
 pub struct Checker {
     max_size: u64,
     split_size: u64,
     current_size: u64,
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
+    policy: CheckPolicy,
 }
 
 impl Checker {
-    pub fn new(max_size: u64, split_size: u64, batch_split_limit: u64) -> Checker {
+    pub fn new(
+        max_size: u64,
+        split_size: u64,
+        batch_split_limit: u64,
+        policy: CheckPolicy,
+    ) -> Checker {
         Checker {
             max_size,
             split_size,
             current_size: 0,
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
+            policy,
         }
     }
 }
@@ -76,6 +86,10 @@ impl SplitChecker for Checker {
             vec![]
         }
     }
+
+    fn policy(&self) -> CheckPolicy {
+        self.policy
+    }
 }
 
 pub struct SizeCheckObserver<C> {
@@ -104,7 +118,13 @@ impl<C: Sender<Msg>> SizeCheckObserver<C> {
 impl<C> Coprocessor for SizeCheckObserver<C> {}
 
 impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
-    fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
+    fn add_checker(
+        &self,
+        ctx: &mut ObserverContext,
+        host: &mut Host,
+        engine: &DB,
+        mut policy: CheckPolicy,
+    ) {
         let region = ctx.region();
         let region_id = region.get_id();
         let region_size = match util::get_region_approximate_size(engine, region) {
@@ -119,6 +139,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                     self.region_max_size,
                     self.split_size,
                     self.split_limit,
+                    policy,
                 )));
                 return;
             }
@@ -143,11 +164,15 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 region_size,
                 self.region_max_size
             );
+            if region_size >= LARGE_REGION_SIZE {
+                policy = CheckPolicy::APPROXIMATE
+            }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 self.region_max_size,
                 self.split_size,
                 self.split_limit,
+                policy,
             )));
         } else {
             // Does not need to check size.

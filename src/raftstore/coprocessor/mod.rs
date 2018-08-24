@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
 use raft::StateRole;
@@ -110,11 +111,19 @@ pub trait SplitChecker {
     fn approximate_split_key(&self, _: &Region, _: &DB) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }
+
+    fn policy(&self) -> CheckPolicy;
 }
 
 pub trait SplitCheckObserver: Coprocessor {
     /// Add a checker for a split scan.
-    fn add_checker(&self, _: &mut ObserverContext, &mut SplitCheckerHost, _: &DB);
+    fn add_checker(
+        &self,
+        _: &mut ObserverContext,
+        &mut SplitCheckerHost,
+        _: &DB,
+        policy: CheckPolicy,
+    );
 }
 
 pub trait RoleObserver: Coprocessor {

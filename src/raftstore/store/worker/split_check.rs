@@ -187,15 +187,18 @@ impl<C: Sender<Msg>> Runner<C> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut host =
-            self.coprocessor
-                .new_split_checker_host(region, &self.engine, task.auto_split);
+        let mut host = self.coprocessor.new_split_checker_host(
+            region,
+            &self.engine,
+            task.auto_split,
+            task.policy,
+        );
         if host.skip() {
             debug!("[region {}] skip split check", region.get_id());
             return;
         }
 
-        let split_keys = match task.policy {
+        let split_keys = match host.policy() {
             CheckPolicy::SCAN => {
                 let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
                 let res = MergedIterator::new(
