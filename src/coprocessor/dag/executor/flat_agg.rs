@@ -122,27 +122,15 @@ pub fn build_flat_agg_from_dag<S: Snapshot + 'static>(
         return None;
     }
 
-    let mut unique = false;
-    let mut cols = vec![];
-    match executors[0].get_tp() {
-        ExecType::TypeTableScan => {
-            cols = executors[0].get_tbl_scan().get_columns().to_owned();
-            unique = true;
-        }
-        ExecType::TypeIndexScan => {
-            cols = executors[0].get_idx_scan().get_columns().to_owned();
-            unique = executors[0].get_idx_scan().get_unique();
-        }
+    let cols = match executors[0].get_tp() {
+        ExecType::TypeTableScan => executors[0].get_tbl_scan().get_columns().to_owned(),
+        ExecType::TypeIndexScan => executors[0].get_idx_scan().get_columns().to_owned(),
         _ => panic!("unknown first executor type {:?}", executors[0].get_tp()),
-    }
+    };
 
     if cols.len() != 1 {
         return None;
     }
-
-    //    if !cols[0].get_pk_handle() {
-    //        return None;
-    //    }
 
     if !executors[1].has_aggregation() {
         return None;
@@ -166,10 +154,6 @@ pub fn build_flat_agg_from_dag<S: Snapshot + 'static>(
     if children.len() != 1 {
         return None;
     }
-
-    //    if children[0].get_tp() != ExprType::Int64 {
-    //        return None;
-    //    }
 
     Some(FlatAggExecutor::<S>::new(
         &ranges[0],

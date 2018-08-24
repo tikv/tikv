@@ -151,10 +151,10 @@ impl<E: Engine> Host<E> {
 
         match cop_req {
             CopRequest::DAG(dag) => {
-                let flag_agg = build_flat_agg_from_dag(&dag, &ranges, snap.clone());
-                if let Some(mut flag_agg) = flag_agg {
+                let flat_agg = build_flat_agg_from_dag(&dag, &ranges, snap.clone());
+                if let Some(mut flat_agg) = flat_agg {
                     let do_request = move |_| {
-                        let resp = flag_agg.exec().unwrap_or_else(|e| {
+                        let resp = flat_agg.exec().unwrap_or_else(|e| {
                             let mut metrics = BasicLocalMetrics::default();
                             err_resp(e, &mut metrics)
                         });
