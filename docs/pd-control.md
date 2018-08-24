@@ -197,19 +197,19 @@ Usage:
     >> config set leader-schedule-limit 4         // 4 tasks of leader scheduling at the same time at most
     ```
 
-- `region-schedule-limit` controls the number of tasks scheduling the Region at the same time. This value affects the speed of Region balance. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the Region scheduling has a large load, so do not set a too large value.
+- `region-schedule-limit` controls the number of tasks scheduling the Region at the same time. This value affects the speed of Region balance. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the Region scheduling has a large load, so do not set it to a too large value.
 
     ```bash
     >> config set region-schedule-limit 2         // 2 tasks of Region scheduling at the same time at most
     ```
 
-- `replica-schedule-limit` controls the number of tasks scheduling the replica at the same time. This value affects the scheduling speed when the node is down or removed. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the replica scheduling has a large load, so do not set a too large value.
+- `replica-schedule-limit` controls the number of tasks scheduling the replica at the same time. This value affects the scheduling speed when the node is down or removed. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the replica scheduling has a large load, so do not set it to a too large value.
 
     ```bash
     >> config set replica-schedule-limit 4        // 4 tasks of replica scheduling at the same time at most
     ```
 
-- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set a too large value.
+- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set it to a too large value.
 
     ```bash
     >> config set merge-schedule-limit 16       // 16 tasks of Merge scheduling at the same time at most

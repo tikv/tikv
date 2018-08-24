@@ -44,7 +44,7 @@ You can use `pd-ctl` to configure the namespace based on the table schema. All r
     }
     ```
 
-Then two namespaces, `ns1` and `ns2`, are created. But they do not work because they are not bound with any TiKV nodes or tables..
+Then two namespaces, `ns1` and `ns2`, are created. But they do not work because they are not bound with any TiKV nodes or tables.
 
 2. Divide some TiKV nodes to the 2 namespaces:
 
