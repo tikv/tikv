@@ -154,6 +154,22 @@ impl ScalarFunc {
         }
         Ok(Some(pow))
     }
+
+    #[inline]
+    pub fn truncate_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let x = try_opt!(self.children[0].eval_int(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        Ok(Some((truncate(x as f64, d)) as i64))
+    }
+}
+
+fn truncate(f: f64, d: i64) -> f64 {
+    let shift = 10_f64.powi(d as i32);
+    let tmp = f * shift;
+    if tmp.is_infinite() {
+        return f;
+    }
+    tmp.trunc() / shift
 }
 
 #[cfg(test)]
@@ -505,6 +521,45 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_truncate() {
+        let tests = vec![
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(0),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(5),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(-2),
+                Datum::I64(1000),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(309),
+                Datum::I64(1028),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, x, d, exp) in tests {
+            let x = datum_expr(x);
+            let d = datum_expr(d);
+            let mut f = scalar_func_expr(sig, &[x, d]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
