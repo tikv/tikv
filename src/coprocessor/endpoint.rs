@@ -41,8 +41,8 @@ use util::worker::{Runnable, Scheduler};
 
 use super::checksum::ChecksumContext;
 use super::codec::table;
-use super::dag::executor::ExecutorMetrics;
 use super::dag::executor::build_flat_agg_from_dag;
+use super::dag::executor::ExecutorMetrics;
 use super::dag::DAGContext;
 use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
