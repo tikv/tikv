@@ -23,18 +23,17 @@ This is a rough outline of what a contributor's workflow looks like:
 Define a local working directory:
 
 ```sh
-# Define a local working directory:
-$ working_dir=/.../src/github.com/pingcap
+$ WORKING_DIR=/.../src/github.com/pingcap
 $ user={your github profile name}
 ```
 
 Create your clone:
 
 ```sh
-$ mkdir -p $working_dir
-$ cd $working_dir
+$ mkdir -p $WORKING_DIR
+$ cd $WORKING_DIR
 $ git clone https://github.com/$user/tikv.git
-$ cd $working_dir/tikv
+$ cd $WORKING_DIR/tikv
 ```
 
 View the remote info:
@@ -43,7 +42,11 @@ View the remote info:
 $ git remote -v
 origin	https://github.com/$user/tikv.git (fetch)
 origin	https://github.com/$user/tikv.git (push)
+```
 
+Add remote upstream and set `set-url` info:
+
+```sh
 $ git remote add upstream https://github.com/pingcap/tikv.git
 $ git remote -v
 origin	https://github.com/$user/tikv.git (fetch)
@@ -65,7 +68,7 @@ upstream	no_push (push)
 Get your local master up to date:
 
 ```sh
-cd $working_dir/tikv
+cd $WORKING_DIR/tikv
 git fetch upstream
 git checkout master
 git rebase upstream/master
@@ -96,9 +99,10 @@ $ make dev
 
 ### Step 5: Keep your branch in sync
 
+While on your `myfeature` branch:
+
 ```sh
-# While on your myfeature branch.
-cd $working_dir/tikv
+cd $WORKING_DIR/tikv
 git fetch upstream
 git rebase upstream/master
 ```
@@ -131,6 +135,8 @@ Once your pull request has been opened, it will be assigned to at least two revi
 Commit changes made in response to review comments to the same branch on your fork.
 
 Very small PRs are easy to review. Very large PRs are very difficult to review.
+
+If you notice your feature is fixing multiple things, or the feature can be broken now, please try to split it into multiple PRs
 
 Thanks for your contributions!
 
