@@ -69,7 +69,7 @@ impl Key {
 
     /// Gets and moves the raw representation of this key.
     #[inline]
-    pub fn take_raw(self) -> Result<Vec<u8>, codec::Error> {
+    pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
         let mut k = self.0;
         bytes::decode_bytes_in_place(&mut k, false)?;
         Ok(k)
@@ -77,7 +77,7 @@ impl Key {
 
     /// Gets the raw representation of this key.
     #[inline]
-    pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
+    pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
         bytes::decode_bytes(&mut self.0.as_slice(), false)
     }
 
@@ -97,13 +97,13 @@ impl Key {
 
     /// Gets the encoded representation of this key.
     #[inline]
-    pub fn encoded(&self) -> &Vec<u8> {
+    pub fn as_encoded(&self) -> &Vec<u8> {
         &self.0
     }
 
     /// Gets and moves the encoded representation of this key.
     #[inline]
-    pub fn take_encoded(self) -> Vec<u8> {
+    pub fn into_encoded(self) -> Vec<u8> {
         self.0
     }
 
@@ -225,7 +225,7 @@ impl Clone for Key {
 /// Hash for `Key`.
 impl Hash for Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.encoded().hash(state)
+        self.as_encoded().hash(state)
     }
 }
 
@@ -259,7 +259,7 @@ mod tests {
         let ts = 123;
         assert!(Key::split_on_ts_for(k).is_err());
         let enc = Key::from_encoded_slice(k).append_ts(ts);
-        let res = Key::split_on_ts_for(enc.encoded()).unwrap();
+        let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
     }
 

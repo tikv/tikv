@@ -316,7 +316,13 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id));
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client)
+}
+
+pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
+    let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client)
 }
