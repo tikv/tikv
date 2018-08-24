@@ -112,6 +112,7 @@ pub trait SplitChecker {
         Ok(None)
     }
 
+    /// Get split policy.
     fn policy(&self) -> CheckPolicy;
 }
 

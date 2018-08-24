@@ -145,6 +145,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
             }
         };
 
+        // send it to rafastore to update region approximate size
         let res = Msg::RegionApproximateSize {
             region_id,
             size: region_size,
@@ -164,6 +165,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 region_size,
                 self.region_max_size
             );
+            // when meet large region use approximate way to produce split keys
             if region_size >= LARGE_REGION_SIZE {
                 policy = CheckPolicy::APPROXIMATE
             }
