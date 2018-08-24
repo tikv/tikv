@@ -119,7 +119,10 @@ impl SplitCheckObserver for TableCheckObserver {
         {
             // For now, let us scan region if encoded_start_key or encoded_end_key
             // is less than TABLE_PREFIX_KEY_LEN.
-            host.add_checker(Box::new(Checker{policy, ..Default::default() }));
+            host.add_checker(Box::new(Checker {
+                policy,
+                ..Default::default()
+            }));
             return;
         }
 

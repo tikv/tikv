@@ -82,7 +82,7 @@ impl SplitChecker for Checker {
             vec![]
         }
     }
-    
+
     fn policy(&self) -> CheckPolicy {
         self.policy
     }
