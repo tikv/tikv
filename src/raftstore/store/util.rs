@@ -751,21 +751,15 @@ impl Engines {
     }
 }
 
-pub fn print_split_info(
-    fmt: &mut fmt::Write,
-    region_id: u64,
-    split_keys: &Vec<Vec<u8>>,
-) -> fmt::Result {
+pub fn format_split_info(region_id: u64, split_keys: &[Vec<u8>]) -> String {
     if split_keys.len() == 1 {
-        write!(
-            fmt,
+        format!(
             "{} with key {:?}",
             region_id,
             split_keys.first().as_ref().map(|k| escape(k)),
         )
     } else {
-        write!(
-            fmt,
+        format!(
             "{} with {} keys range from {:?} to {:?}",
             region_id,
             split_keys.len(),

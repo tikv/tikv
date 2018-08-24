@@ -23,7 +23,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
-use raftstore::store::util::print_split_info;
+use raftstore::store::util::format_split_info;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
@@ -245,10 +245,11 @@ impl fmt::Debug for Msg {
                 region_id,
                 ref split_keys,
                 ..
-            } => {
-                write!(fmt, "Split region ")?;
-                print_split_info(fmt, region_id, split_keys)
-            }
+            } => write!(
+                fmt,
+                "Split region {}",
+                format_split_info(region_id, split_keys)
+            ),
             Msg::RegionApproximateSize { region_id, size } => write!(
                 fmt,
                 "Region's approximate size [region_id: {}, size: {:?}]",

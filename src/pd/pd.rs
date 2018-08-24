@@ -31,7 +31,7 @@ use pd::{Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raftstore::store::cmd_resp::new_error;
 use raftstore::store::store::StoreInfo;
-use raftstore::store::util::print_split_info;
+use raftstore::store::util::format_split_info;
 use raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
@@ -151,10 +151,11 @@ impl Display for Task {
                 ref region,
                 ref split_keys,
                 ..
-            } => {
-                write!(f, "ask split region ")?;
-                print_split_info(f, region.get_id(), split_keys)
-            }
+            } => write!(
+                f,
+                "ask split region {}",
+                format_split_info(region.get_id(), split_keys)
+            ),
             Task::Heartbeat {
                 ref region,
                 ref peer,
