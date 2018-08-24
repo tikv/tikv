@@ -536,51 +536,52 @@ impl PeerStorage {
         Ok(())
     }
 
+    #[inline(never)]
     pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
         self.check_range(low, high)?;
         let mut ents = Vec::with_capacity((high - low) as usize);
         if low == high {
             return Ok(ents);
         }
-        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
+        //        let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
         let region_id = self.get_region_id();
-        if high <= cache_low {
-            // not overlap
-            self.stats.borrow_mut().miss += 1;
-            fetch_entries_to(
-                &self.engines.raft,
-                region_id,
-                low,
-                high,
-                max_size,
-                &mut ents,
-            )?;
-            return Ok(ents);
-        }
-        let mut fetched_size = 0;
-        let begin_idx = if low < cache_low {
-            self.stats.borrow_mut().miss += 1;
-            fetched_size = fetch_entries_to(
-                &self.engines.raft,
-                region_id,
-                low,
-                cache_low,
-                max_size,
-                &mut ents,
-            )?;
-            if fetched_size > max_size {
-                // max_size exceed.
-                return Ok(ents);
-            }
-            cache_low
-        } else {
-            low
-        };
-
-        self.stats.borrow_mut().hit += 1;
-        self.cache
-            .fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
+        //        if high <= cache_low {
+        // not overlap
+        self.stats.borrow_mut().miss += 1;
+        fetch_entries_to(
+            &self.engines.raft,
+            region_id,
+            low,
+            high,
+            max_size,
+            &mut ents,
+        )?;
         Ok(ents)
+        //        }
+        //        let mut fetched_size = 0;
+        //        let begin_idx = if low < cache_low {
+        //            self.stats.borrow_mut().miss += 1;
+        //            fetched_size = fetch_entries_to(
+        //                &self.engines.raft,
+        //                region_id,
+        //                low,
+        //                cache_low,
+        //                max_size,
+        //                &mut ents,
+        //            )?;
+        //            if fetched_size > max_size {
+        //                // max_size exceed.
+        //                return Ok(ents);
+        //            }
+        //            cache_low
+        //        } else {
+        //            low
+        //        };
+        //
+        //        self.stats.borrow_mut().hit += 1;
+        //        self.cache
+        //            .fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
+        //        Ok(ents)
     }
 
     pub fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -811,30 +812,30 @@ impl PeerStorage {
         invoke_ctx.last_term = last_term;
 
         // TODO: if the writebatch is failed to commit, the cache will be wrong.
-        self.cache.append(&self.tag, entries);
+        //        self.cache.append(&self.tag, entries);
         Ok(last_index)
     }
 
-    pub fn compact_to(&mut self, idx: u64) {
-        self.cache.compact_to(idx);
+    pub fn compact_to(&mut self, _idx: u64) {
+        //        self.cache.compact_to(idx);
     }
 
-    pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
-        if replicated_idx == apply_idx {
-            // The region is inactive, clear the cache immediately.
-            self.cache.compact_to(apply_idx + 1);
-        } else {
-            let cache_first_idx = match self.cache.first_index() {
-                None => return,
-                Some(idx) => idx,
-            };
-            if cache_first_idx > replicated_idx + 1 {
-                // Catching up log requires accessing fs already, let's optimize for
-                // the common case.
-                // Maybe gc to second least replicated_idx is better.
-                self.cache.compact_to(apply_idx + 1);
-            }
-        }
+    pub fn maybe_gc_cache(&mut self, _replicated_idx: u64, _apply_idx: u64) {
+        //        if replicated_idx == apply_idx {
+        //            // The region is inactive, clear the cache immediately.
+        //            self.cache.compact_to(apply_idx + 1);
+        //        } else {
+        //            let cache_first_idx = match self.cache.first_index() {
+        //                None => return,
+        //                Some(idx) => idx,
+        //            };
+        //            if cache_first_idx > replicated_idx + 1 {
+        //                // Catching up log requires accessing fs already, let's optimize for
+        //                // the common case.
+        //                // Maybe gc to second least replicated_idx is better.
+        //                self.cache.compact_to(apply_idx + 1);
+        //            }
+        //        }
     }
 
     // Apply the peer with given snapshot.
@@ -1510,14 +1511,14 @@ mod test {
     }
 
     fn validate_cache(store: &PeerStorage, exp_ents: &[Entry]) {
-        assert_eq!(store.cache.cache, exp_ents);
-        for e in exp_ents {
-            let key = keys::raft_log_key(store.get_region_id(), e.get_index());
-            let bytes = store.engines.raft.get(&key).unwrap().unwrap();
-            let mut entry = Entry::new();
-            entry.merge_from_bytes(&bytes).unwrap();
-            assert_eq!(entry, *e);
-        }
+        //        assert_eq!(store.cache.cache, exp_ents);
+        //        for e in exp_ents {
+        //            let key = keys::raft_log_key(store.get_region_id(), e.get_index());
+        //            let bytes = store.engines.raft.get(&key).unwrap().unwrap();
+        //            let mut entry = Entry::new();
+        //            entry.merge_from_bytes(&bytes).unwrap();
+        //            assert_eq!(entry, *e);
+        //        }
     }
 
     fn new_entry(index: u64, term: u64) -> Entry {
@@ -1876,134 +1877,134 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_storage_cache_fetch() {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let td = TempDir::new("tikv-store-test").unwrap();
-        let worker = Worker::new("snap-manager");
-        let sched = worker.scheduler();
-        let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.cache.clear();
-        // empty cache should fetch data from rocksdb directly.
-        let mut res = store.entries(4, 6, u64::max_value()).unwrap();
-        assert_eq!(*res, ents[1..]);
-
-        let entries = vec![new_entry(6, 5), new_entry(7, 5)];
-        append_ents(&mut store, &entries);
-        validate_cache(&store, &entries);
-
-        // direct cache access
-        res = store.entries(6, 8, u64::max_value()).unwrap();
-        assert_eq!(res, entries);
-
-        // size limit should be supported correctly.
-        res = store.entries(4, 8, 0).unwrap();
-        assert_eq!(res, vec![new_entry(4, 4)]);
-        let mut size = ents[1..].iter().map(|e| u64::from(e.compute_size())).sum();
-        res = store.entries(4, 8, size).unwrap();
-        let mut exp_res = ents[1..].to_vec();
-        assert_eq!(res, exp_res);
-        for e in &entries {
-            size += u64::from(e.compute_size());
-            exp_res.push(e.clone());
-            res = store.entries(4, 8, size).unwrap();
-            assert_eq!(res, exp_res);
-        }
-
-        // range limit should be supported correctly.
-        for low in 4..9 {
-            for high in low..9 {
-                let res = store.entries(low, high, u64::max_value()).unwrap();
-                assert_eq!(*res, exp_res[low as usize - 4..high as usize - 4]);
-            }
-        }
-    }
-
-    #[test]
-    fn test_storage_cache_update() {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let td = TempDir::new("tikv-store-test").unwrap();
-        let worker = Worker::new("snap-manager");
-        let sched = worker.scheduler();
-        let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.cache.clear();
-
-        // initial cache
-        let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
-        append_ents(&mut store, &entries);
-        validate_cache(&store, &entries);
-
-        // rewrite
-        entries = vec![new_entry(6, 6), new_entry(7, 6)];
-        append_ents(&mut store, &entries);
-        validate_cache(&store, &entries);
-
-        // rewrite old entry
-        entries = vec![new_entry(5, 6), new_entry(6, 6)];
-        append_ents(&mut store, &entries);
-        validate_cache(&store, &entries);
-
-        // partial rewrite
-        entries = vec![new_entry(6, 7), new_entry(7, 7)];
-        append_ents(&mut store, &entries);
-        let mut exp_res = vec![new_entry(5, 6), new_entry(6, 7), new_entry(7, 7)];
-        validate_cache(&store, &exp_res);
-
-        // direct append
-        entries = vec![new_entry(8, 7), new_entry(9, 7)];
-        append_ents(&mut store, &entries);
-        exp_res.extend_from_slice(&entries);
-        validate_cache(&store, &exp_res);
-
-        // rewrite middle
-        entries = vec![new_entry(7, 8)];
-        append_ents(&mut store, &entries);
-        exp_res.truncate(2);
-        exp_res.push(new_entry(7, 8));
-        validate_cache(&store, &exp_res);
-
-        let cap = MAX_CACHE_CAPACITY as u64;
-
-        // result overflow
-        entries = (3..cap + 1).map(|i| new_entry(i + 5, 8)).collect();
-        append_ents(&mut store, &entries);
-        exp_res.remove(0);
-        exp_res.extend_from_slice(&entries);
-        validate_cache(&store, &exp_res);
-
-        // input overflow
-        entries = (0..cap + 1).map(|i| new_entry(i + cap + 6, 8)).collect();
-        append_ents(&mut store, &entries);
-        exp_res = entries[entries.len() - cap as usize..].to_vec();
-        validate_cache(&store, &exp_res);
-
-        // compact
-        store.compact_to(cap + 10);
-        exp_res = (cap + 10..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
-        validate_cache(&store, &exp_res);
-
-        // compact shrink
-        assert!(store.cache.cache.capacity() >= cap as usize);
-        store.compact_to(cap * 2);
-        exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
-        validate_cache(&store, &exp_res);
-        assert!(store.cache.cache.capacity() < cap as usize);
-
-        // append shrink
-        entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
-        append_ents(&mut store, &entries);
-        assert!(store.cache.cache.capacity() >= cap as usize);
-        append_ents(&mut store, &[new_entry(6, 8)]);
-        exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
-        validate_cache(&store, &exp_res);
-        assert!(store.cache.cache.capacity() < cap as usize);
-
-        // compact all
-        store.compact_to(cap + 2);
-        validate_cache(&store, &[]);
-        // invalid compaction should be ignored.
-        store.compact_to(cap);
-    }
+    //    #[test]
+    //    fn test_storage_cache_fetch() {
+    //        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+    //        let td = TempDir::new("tikv-store-test").unwrap();
+    //        let worker = Worker::new("snap-manager");
+    //        let sched = worker.scheduler();
+    //        let mut store = new_storage_from_ents(sched, &td, &ents);
+    //        store.cache.cache.clear();
+    //        // empty cache should fetch data from rocksdb directly.
+    //        let mut res = store.entries(4, 6, u64::max_value()).unwrap();
+    //        assert_eq!(*res, ents[1..]);
+    //
+    //        let entries = vec![new_entry(6, 5), new_entry(7, 5)];
+    //        append_ents(&mut store, &entries);
+    //        validate_cache(&store, &entries);
+    //
+    //        // direct cache access
+    //        res = store.entries(6, 8, u64::max_value()).unwrap();
+    //        assert_eq!(res, entries);
+    //
+    //        // size limit should be supported correctly.
+    //        res = store.entries(4, 8, 0).unwrap();
+    //        assert_eq!(res, vec![new_entry(4, 4)]);
+    //        let mut size = ents[1..].iter().map(|e| u64::from(e.compute_size())).sum();
+    //        res = store.entries(4, 8, size).unwrap();
+    //        let mut exp_res = ents[1..].to_vec();
+    //        assert_eq!(res, exp_res);
+    //        for e in &entries {
+    //            size += u64::from(e.compute_size());
+    //            exp_res.push(e.clone());
+    //            res = store.entries(4, 8, size).unwrap();
+    //            assert_eq!(res, exp_res);
+    //        }
+    //
+    //        // range limit should be supported correctly.
+    //        for low in 4..9 {
+    //            for high in low..9 {
+    //                let res = store.entries(low, high, u64::max_value()).unwrap();
+    //                assert_eq!(*res, exp_res[low as usize - 4..high as usize - 4]);
+    //            }
+    //        }
+    //    }
+    //
+    //    #[test]
+    //    fn test_storage_cache_update() {
+    //        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+    //        let td = TempDir::new("tikv-store-test").unwrap();
+    //        let worker = Worker::new("snap-manager");
+    //        let sched = worker.scheduler();
+    //        let mut store = new_storage_from_ents(sched, &td, &ents);
+    //        store.cache.cache.clear();
+    //
+    //        // initial cache
+    //        let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
+    //        append_ents(&mut store, &entries);
+    //        validate_cache(&store, &entries);
+    //
+    //        // rewrite
+    //        entries = vec![new_entry(6, 6), new_entry(7, 6)];
+    //        append_ents(&mut store, &entries);
+    //        validate_cache(&store, &entries);
+    //
+    //        // rewrite old entry
+    //        entries = vec![new_entry(5, 6), new_entry(6, 6)];
+    //        append_ents(&mut store, &entries);
+    //        validate_cache(&store, &entries);
+    //
+    //        // partial rewrite
+    //        entries = vec![new_entry(6, 7), new_entry(7, 7)];
+    //        append_ents(&mut store, &entries);
+    //        let mut exp_res = vec![new_entry(5, 6), new_entry(6, 7), new_entry(7, 7)];
+    //        validate_cache(&store, &exp_res);
+    //
+    //        // direct append
+    //        entries = vec![new_entry(8, 7), new_entry(9, 7)];
+    //        append_ents(&mut store, &entries);
+    //        exp_res.extend_from_slice(&entries);
+    //        validate_cache(&store, &exp_res);
+    //
+    //        // rewrite middle
+    //        entries = vec![new_entry(7, 8)];
+    //        append_ents(&mut store, &entries);
+    //        exp_res.truncate(2);
+    //        exp_res.push(new_entry(7, 8));
+    //        validate_cache(&store, &exp_res);
+    //
+    //        let cap = MAX_CACHE_CAPACITY as u64;
+    //
+    //        // result overflow
+    //        entries = (3..cap + 1).map(|i| new_entry(i + 5, 8)).collect();
+    //        append_ents(&mut store, &entries);
+    //        exp_res.remove(0);
+    //        exp_res.extend_from_slice(&entries);
+    //        validate_cache(&store, &exp_res);
+    //
+    //        // input overflow
+    //        entries = (0..cap + 1).map(|i| new_entry(i + cap + 6, 8)).collect();
+    //        append_ents(&mut store, &entries);
+    //        exp_res = entries[entries.len() - cap as usize..].to_vec();
+    //        validate_cache(&store, &exp_res);
+    //
+    //        // compact
+    //        store.compact_to(cap + 10);
+    //        exp_res = (cap + 10..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
+    //        validate_cache(&store, &exp_res);
+    //
+    //        // compact shrink
+    //        assert!(store.cache.cache.capacity() >= cap as usize);
+    //        store.compact_to(cap * 2);
+    //        exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
+    //        validate_cache(&store, &exp_res);
+    //        assert!(store.cache.cache.capacity() < cap as usize);
+    //
+    //        // append shrink
+    //        entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
+    //        append_ents(&mut store, &entries);
+    //        assert!(store.cache.cache.capacity() >= cap as usize);
+    //        append_ents(&mut store, &[new_entry(6, 8)]);
+    //        exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
+    //        validate_cache(&store, &exp_res);
+    //        assert!(store.cache.cache.capacity() < cap as usize);
+    //
+    //        // compact all
+    //        store.compact_to(cap + 2);
+    //        validate_cache(&store, &[]);
+    //        // invalid compaction should be ignored.
+    //        store.compact_to(cap);
+    //    }
 
     #[test]
     fn test_storage_apply_snapshot() {
