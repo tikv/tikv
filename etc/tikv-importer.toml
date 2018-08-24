@@ -50,4 +50,4 @@ num-import-jobs = 24
 # stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
 # number of opening engines
-num-engines = 6
+max-storage-engines = 6

@@ -28,7 +28,7 @@ pub struct Config {
     pub max_prepare_duration: ReadableDuration,
     pub region_split_size: ReadableSize,
     pub stream_channel_window: usize,
-    pub num_engines: usize,
+    pub max_storage_engines: usize,
 }
 
 impl Default for Config {
@@ -41,7 +41,7 @@ impl Default for Config {
             max_prepare_duration: ReadableDuration::minutes(5),
             region_split_size: ReadableSize::mb(SPLIT_SIZE_MB),
             stream_channel_window: 128,
-            num_engines: 6,
+            max_storage_engines: 6,
         }
     }
 }
@@ -63,7 +63,7 @@ impl Config {
         if self.stream_channel_window == 0 {
             return Err("import.stream_channel_window can not be 0".into());
         }
-        if self.num_engines == 0 {
+        if self.max_storage_engines == 0 {
             return Err("import.num_engines can not be 0".into());
         }
         Ok(())
