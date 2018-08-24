@@ -25,7 +25,7 @@ Before you start, make sure you have:
     - CentOS 7.3 (64 bit) or later with Python 2.7 installed, x86_64 architecture (AMD64)
     - Network between machines
     
-    > **Note:** When you deploy TiKV using Ansible, use SSD disks for the data directory of TiKV and PD nodes. Otherwise, it cannot pass the check. For more details, see [Software and Hardware Requirements](https://github.com/pingcap/docs/blob/master/op-guide/recommendation.md).
+    > **Note:** When you deploy TiKV using Ansible, use SSD disks for the data directory of TiKV and PD nodes. Otherwise, the system will not perform well. For more details, see [Software and Hardware Requirements](https://github.com/pingcap/docs/blob/master/op-guide/recommendation.md).
 
 2. A Control Machine that meets the following requirements:
 

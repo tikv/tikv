@@ -10,7 +10,7 @@ To apply to different scenarios, TiKV provides [two types of APIs](../overview.m
 
 ## Try the Raw Key-Value API
 
-To use the Raw Key-Value API in applications developed by golang, take the following steps:
+To use the Raw Key-Value API in applications developed in the Go language, take the following steps:
 
 1. Install the necessary packages.
 
@@ -37,7 +37,7 @@ To use the Raw Key-Value API in applications developed by golang, take the follo
     Description of two parameters in the above command:
 
     - `string`: a list of PD servers’ addresses
-    - `config.Security`: used for establishing TLS connections, usually left empty when you do not need TLS
+    - `config.Security`: used to establish TLS connections, usually left empty when you do not need TLS
 
 4. Call the Raw Key-Value client methods to access the data on TiKV. The Raw Key-Value API contains the following methods, and you can also find them at [GoDoc](https://godoc.org/github.com/pingcap/tidb/store/tikv#RawKVClient).
 
@@ -134,7 +134,7 @@ The Transactional Key-Value API is more complicated than the Raw Key-Value API. 
 
 - Transaction
 
-    Like the Transaction in SQL, a Transaction symbolizes a series of read and write operations performed within the Storage. Internally, a Transaction consists of a Snapshot for reads, and a MemBuffer for all writes. The default isolation level of a Transaction is Snapshot Isolation.
+    Like the transactions in SQL, a Transaction symbolizes a series of read and write operations performed within the Storage. Internally, a Transaction consists of a Snapshot for reads, and a MemBuffer for all writes. The default isolation level of a Transaction is Snapshot Isolation.
 
 To use the Transactional Key-Value API in applications developed by golang, take the following steps:
 
