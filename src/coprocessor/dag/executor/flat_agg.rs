@@ -93,7 +93,7 @@ fn extract_col_location(mut data: &[u8], col_id: i64) -> Result<Option<ColLocati
     }
 
     let length = data.len();
-    while data.is_empty() {
+    while !data.is_empty() {
         let id = datum::decode_datum(&mut data)?.i64();
         let offset = length - data.len();
         let (val, rem) = datum::split_datum(data, false)?;
@@ -106,7 +106,8 @@ fn extract_col_location(mut data: &[u8], col_id: i64) -> Result<Option<ColLocati
     Ok(None)
 }
 
-/// Only support `select count(*)/count(k) from ...` now.
+/// Support `select count(*)/count(k) from ...` now.
+/// TODO: support sum/avg
 pub fn build_flat_agg_from_dag<S: Snapshot + 'static>(
     req: &DAGRequest,
     ranges: &[KeyRange],
