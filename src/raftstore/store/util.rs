@@ -495,9 +495,27 @@ pub fn get_region_approximate_split_keys_cf(
 
     // cause first element of the iterator will always be returned by step_by(),
     // for convenience, we insert a useless key in front and then just drop it.
+    //
+    // For example, the split size is `3 * PROP_SIZE_INDEX_DISTANCE`. And the
+    // numbers stand for the key in `RangeProperties`, `^` stands for produced
+    // split key.
+    //
+    // insert:
+    // start___1___2___3___4___5___6___7....
+    //   ^(drop)       ^           ^
+    //
+    // not insert:
+    // start___1___2___3___4___5___6___7....
+    //         ^(drop)     ^           ^
+    //
+    // note the start key of region is not included, so if we don't insert a
+    // useless key as start key, then the first splited region's size will be
+    // `4 *PROP_SIZE_INDEX_DISTANCE` but not `3 * PROP_SIZE_INDEX_DISTANCE`
     let mut keys = vec![b"".to_vec()];
+    let mut size = 0;
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
+        size += props.get_approximate_keys_in_range(&start, &end);
         keys.extend(
             props
                 .offsets
@@ -512,9 +530,10 @@ pub fn get_region_approximate_split_keys_cf(
 
     // assume that the size between two keys is PROP_SIZE_INDEX_DISTANCE,
     // so we make it as split_key every split_size / PROP_SIZE_INDEX_DISTANCE keys.
+    let len = (keys.len() - 1) as u64;
+    let dist = size as f64 / len as f64;
     assert!(split_size != 0);
-    let n = (split_size as f64 / PROP_SIZE_INDEX_DISTANCE as f64).ceil() as u64;
-    let len = keys.len() as u64;
+    let n = (split_size as f64 / dist).ceil() as u64;
     let mut split_keys = keys
         .into_iter()
         .step_by(n as usize)
@@ -525,7 +544,7 @@ pub fn get_region_approximate_split_keys_cf(
         split_keys.truncate(batch_split_limit as usize);
     } else {
         // make sure not to split when less than max_size for last part
-        let rest = (len - 1) % n;
+        let rest = len % n;
         if rest * PROP_SIZE_INDEX_DISTANCE + split_size < max_size {
             split_keys.pop();
         }
