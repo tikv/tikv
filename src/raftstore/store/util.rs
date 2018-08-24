@@ -509,6 +509,8 @@ pub enum LeaseState {
     Valid,
     /// The lease is expired.
     Expired,
+    /// Postponed lease check.
+    Postponed,
 }
 
 impl Lease {
@@ -521,6 +523,12 @@ impl Lease {
             last_update: Timespec::new(0, 0),
             remote: None,
         }
+    }
+
+    /// Returns the current `Timespec`.
+    #[inline]
+    pub fn now() -> Timespec {
+        monotonic_raw_now()
     }
 
     /// The valid leader lease should be `lease = max_lease - (commit_ts - send_ts)`
@@ -819,46 +827,46 @@ mod tests {
             }
         };
 
-        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, Some(Lease::now()), LeaseState::Expired);
 
-        let now = monotonic_raw_now();
+        let now = Lease::now();
         let next_expired_time = lease.next_expired_time(now);
         assert_eq!(now + duration, next_expired_time);
 
         // Transit to the Valid state.
         lease.renew(now);
-        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Valid);
+        inspect_test(&lease, Some(Lease::now()), LeaseState::Valid);
         inspect_test(&lease, None, LeaseState::Valid);
 
         // After lease expired time.
         sleep_test(duration, &lease, LeaseState::Expired);
-        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, Some(Lease::now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
 
         // Transit to the Suspect state.
-        lease.suspect(monotonic_raw_now());
-        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
+        lease.suspect(Lease::now());
+        inspect_test(&lease, Some(Lease::now()), LeaseState::Suspect);
         inspect_test(&lease, None, LeaseState::Suspect);
 
         // After lease expired time, still suspect.
         sleep_test(duration, &lease, LeaseState::Suspect);
-        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Suspect);
+        inspect_test(&lease, Some(Lease::now()), LeaseState::Suspect);
 
         // Clear lease.
         lease.expire();
-        inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
+        inspect_test(&lease, Some(Lease::now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
 
         // An expired remote lease can never renew.
-        lease.renew(monotonic_raw_now() + TimeDuration::minutes(1));
+        lease.renew(Lease::now() + TimeDuration::minutes(1));
         assert_eq!(
-            remote.inspect(Some(monotonic_raw_now())),
+            remote.inspect(Some(Lease::now())),
             LeaseState::Expired
         );
 
         // A new remote lease.
         let m1 = lease.maybe_new_remote_lease(1).unwrap();
-        assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
+        assert_eq!(m1.inspect(Some(Lease::now())), LeaseState::Valid);
     }
 
     #[test]

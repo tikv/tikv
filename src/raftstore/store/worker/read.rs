@@ -463,7 +463,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
         // TODO: disable localreader if we did not enable raft's check_quorum.
         if self.delegate.leader_lease.is_some() {
             // We skip lease check, because it is postponed until `handle_read`.
-            LeaseState::Valid
+            LeaseState::Postponed
         } else {
             debug!("{} leader lease is None", self.delegate.tag,);
             self.metrics.rejected_by_no_lease += 1;
@@ -664,7 +664,6 @@ mod tests {
     use raftstore::store::Callback;
     use storage::ALL_CFS;
     use util::rocksdb;
-    use util::time::monotonic_raw_now;
 
     use super::*;
 
@@ -773,7 +772,7 @@ mod tests {
         assert_eq!(reader.metrics.borrow().rejected_by_no_region, 1);
 
         // Register region 1
-        lease.renew(monotonic_raw_now());
+        lease.renew(Lease::now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
         // But the applied_index_term is stale.
         let register_region1 = Task::Register(ReadDelegate {
@@ -816,7 +815,7 @@ mod tests {
         must_redirect(&mut reader, &rx, cmd.clone());
 
         // Renew lease.
-        lease.renew(monotonic_raw_now());
+        lease.renew(Lease::now());
 
         // Batch snapshot.
         let region = region1.clone();
@@ -898,7 +897,7 @@ mod tests {
         // Expire lease manually, and it can not be renewed.
         let previous_lease_rejection = reader.metrics.borrow().rejected_by_lease_expire;
         lease.expire();
-        lease.renew(monotonic_raw_now());
+        lease.renew(Lease::now());
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(
             reader.metrics.borrow().rejected_by_lease_expire,

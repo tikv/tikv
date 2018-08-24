@@ -44,7 +44,7 @@ use raftstore::store::worker::{
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
-use util::time::{duration_to_sec, monotonic_raw_now};
+use util::time::{duration_to_sec};
 use util::worker::{FutureWorker, Scheduler};
 use util::{escape, MustConsumeVec};
 
@@ -619,7 +619,7 @@ impl Peer {
                     // network partition from the new leader.
                     // For lease safety during leader transfer, transit `leader_lease`
                     // to suspect.
-                    self.leader_lease.suspect(monotonic_raw_now());
+                    self.leader_lease.suspect(Lease::now());
 
                     metrics.timeout_now += 1;
                 }
@@ -796,7 +796,7 @@ impl Peer {
                     // it has no impact on the correctness.
                     let progress = ReadProgress::term(self.term());
                     self.maybe_update_read_progress(progress);
-                    self.maybe_renew_leader_lease(monotonic_raw_now());
+                    self.maybe_renew_leader_lease(Lease::now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
                         self.tag, self.leader_lease
@@ -1045,7 +1045,7 @@ impl Peer {
                         // when the target region merges majority of this region, also
                         // it can not know when the target region writes new values.
                         // To prevent unsafe local read, we suspect its leader lease.
-                        self.leader_lease.suspect(monotonic_raw_now());
+                        self.leader_lease.suspect(Lease::now());
                         merge_to_be_update = false;
                     }
                 }
@@ -1317,7 +1317,7 @@ impl Peer {
 
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(monotonic_raw_now());
+        meta.renew_lease_time = Some(Lease::now());
         let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
         self.apply_proposals.push(p);
 
@@ -1504,7 +1504,7 @@ impl Peer {
 
         metrics.read_index += 1;
 
-        let renew_lease_time = monotonic_raw_now();
+        let renew_lease_time = Lease::now();
         if let Some(read) = self.pending_reads.reads.back_mut() {
             if read.renew_lease_time + self.cfg.raft_store_max_leader_lease() > renew_lease_time {
                 read.cmds.push((req, cb));
@@ -1978,7 +1978,7 @@ pub trait RequestInspector {
         // Local read should be performed, if and only if leader is in lease.
         // None for now.
         match self.inspect_lease() {
-            LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
+            LeaseState::Valid | LeaseState::Postponed => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.
                 Ok(RequestPolicy::ReadIndex)
@@ -2047,7 +2047,7 @@ impl ReadExecutor {
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);
         if self.need_snapshot_time {
-            self.snapshot_time = Some(monotonic_raw_now());
+            self.snapshot_time = Some(Lease::now());
         }
     }
 
