@@ -2,7 +2,7 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
-## [2.1.0-rc1]
+## [2.1.0-rc.1]
 ### Features
 * Support `batch split` to avoid too large Regions caused by the Write operation on hot Regions
 * Support splitting Regions based on the number of rows to improve the index scan efficiency
