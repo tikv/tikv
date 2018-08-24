@@ -22,7 +22,7 @@ use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
-const LARGE_REGION_SIZE: u64 = 1 * 1024 * 1024 * 1024; // 1GB
+const LARGE_REGION_SIZE: u64 = 1024 * 1024 * 1024; // 1GB
 
 pub struct Checker {
     max_size: u64,
