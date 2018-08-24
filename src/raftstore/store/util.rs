@@ -586,10 +586,17 @@ impl Lease {
         }
     }
 
-    pub fn maybe_new_remote_lease(&mut self) -> Option<RemoteLease> {
-        if self.remote.is_some() {
-            // At most one connected RemoteLease.
-            return None;
+    /// Return a new `RemoteLease` if there is none.
+    pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
+        if let Some(ref remote) = self.remote {
+            if remote.term() == term {
+                // At most one connected RemoteLease in the same term.
+                return None;
+            } else {
+                // Term has changed. It is unreachable in the current implementation,
+                // because we expire remote lease when leaders step down.
+                unreachable!("Must expire the old remote lease first!");
+            }
         }
         let expired_time = match self.bound {
             Some(Either::Right(ts)) => timespec_to_u64(ts),
@@ -597,10 +604,12 @@ impl Lease {
         };
         let remote = RemoteLease {
             expired_time: Arc::new(AtomicU64::new(expired_time)),
+            term,
         };
         // Clone the remote.
         let remote_clone = RemoteLease {
             expired_time: Arc::clone(&remote.expired_time),
+            term,
         };
         self.remote = Some(remote);
         Some(remote_clone)
@@ -624,6 +633,7 @@ impl fmt::Debug for Lease {
 #[derive(Debug)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
+    term: u64,
 }
 
 impl RemoteLease {
@@ -643,6 +653,10 @@ impl RemoteLease {
 
     fn expire(&self) {
         self.expired_time.store(0, AtomicOrdering::Release);
+    }
+
+    pub fn term(&self) -> u64 {
+        self.term
     }
 }
 
@@ -797,7 +811,7 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        let remote = lease.maybe_new_remote_lease().unwrap();
+        let remote = lease.maybe_new_remote_lease(1).unwrap();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);
             if state == LeaseState::Expired || state == LeaseState::Suspect {
@@ -834,6 +848,17 @@ mod tests {
         lease.expire();
         inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
+
+        // An expired remote lease can never renew.
+        lease.renew(monotonic_raw_now() + TimeDuration::minutes(1));
+        assert_eq!(
+            remote.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+
+        // A new remote lease.
+        let m1 = lease.maybe_new_remote_lease(1).unwrap();
+        assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
     }
 
     #[test]
