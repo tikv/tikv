@@ -419,7 +419,7 @@ pub mod tests {
 
     #[test]
     fn test_checker_with_same_max_and_split_size() {
-        let mut checker = Checker::new(24, 24, 1);
+        let mut checker = Checker::new(24, 24, 1, CheckPolicy::SCAN);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
@@ -434,7 +434,7 @@ pub mod tests {
 
     #[test]
     fn test_checker_with_max_twice_bigger_than_split_size() {
-        let mut checker = Checker::new(20, 10, 1);
+        let mut checker = Checker::new(20, 10, 1, CheckPolicy::SCAN);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {
