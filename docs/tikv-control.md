@@ -243,7 +243,7 @@ success!
 
 Use the `recover-mvcc` command in circumstances where TiKV cannot run normally caused by MVCC data corruption. It cross-checks 3 CFs ("default", "write", "lock") to recover from various kinds of inconsistency.
 
-Use the `--regions` option to specify involved Regions by `region_id`. Use the `--pd`option to specify PD endpoints.
+Use the `--regions` option to specify involved Regions by `region_id`. Use the `--pd` option to specify PD endpoints.
 
 ```bash
 $ tikv-ctl --db /path/to/tikv/db recover-mvcc --regions 1001,1002 --pd 127.0.0.1:2379
