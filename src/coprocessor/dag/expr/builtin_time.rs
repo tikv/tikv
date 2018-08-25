@@ -143,6 +143,17 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
         }
+
+        // test NULL case
+        let arg1 = datum_expr(Datum::Null);
+        let arg2 = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "null should be wrong"),
+            Err(_) => assert!(true),
+        }
     }
 
     #[test]
