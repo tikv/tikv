@@ -373,20 +373,24 @@ impl<I: Iterator> Cursor<I> {
 
     pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
+        if self
+            .max_key
+            .as_ref()
+            .map_or(false, |k| k <= key.as_encoded())
+        {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
 
         if self.scan_mode == ScanMode::Forward
             && self.valid()
-            && self.key(statistics) >= key.encoded().as_slice()
+            && self.key(statistics) >= key.as_encoded().as_slice()
         {
             return Ok(true);
         }
 
         if !self.internal_seek(key, statistics)? {
-            self.max_key = Some(key.encoded().to_owned());
+            self.max_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
         Ok(true)
@@ -401,24 +405,28 @@ impl<I: Iterator> Cursor<I> {
         if !self.iter.valid() {
             return self.seek(key, statistics);
         }
-        let ord = self.key(statistics).cmp(key.encoded());
+        let ord = self.key(statistics).cmp(key.as_encoded());
         if ord == Ordering::Equal
             || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
             return Ok(true);
         }
-        if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
+        if self
+            .max_key
+            .as_ref()
+            .map_or(false, |k| k <= key.as_encoded())
+        {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
         if ord == Ordering::Greater {
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.encoded().as_slice(),
+                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
             if self.iter.valid() {
-                if self.key(statistics) < key.encoded().as_slice() {
+                if self.key(statistics) < key.as_encoded().as_slice() {
                     self.next(statistics);
                 }
             } else {
@@ -428,13 +436,13 @@ impl<I: Iterator> Cursor<I> {
         } else {
             // ord == Less
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
+                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
                 self.seek(key, statistics),
                 statistics
             );
         }
         if !self.iter.valid() {
-            self.max_key = Some(key.encoded().to_owned());
+            self.max_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
         Ok(true)
@@ -446,12 +454,13 @@ impl<I: Iterator> Cursor<I> {
     /// around `key`, otherwise you should `seek` first.
     pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
         if self.scan_mode != ScanMode::Backward {
-            if self.near_seek(key, statistics)? && self.key(statistics) == &**key.encoded() {
+            if self.near_seek(key, statistics)? && self.key(statistics) == &**key.as_encoded() {
                 return Ok(Some(self.value(statistics)));
             }
             return Ok(None);
         }
-        if self.near_seek_for_prev(key, statistics)? && self.key(statistics) == &**key.encoded() {
+        if self.near_seek_for_prev(key, statistics)? && self.key(statistics) == &**key.as_encoded()
+        {
             return Ok(Some(self.value(statistics)));
         }
         Ok(None)
@@ -459,20 +468,24 @@ impl<I: Iterator> Cursor<I> {
 
     pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
+        if self
+            .min_key
+            .as_ref()
+            .map_or(false, |k| k >= key.as_encoded())
+        {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
 
         if self.scan_mode == ScanMode::Backward
             && self.valid()
-            && self.key(statistics) <= key.encoded().as_slice()
+            && self.key(statistics) <= key.as_encoded().as_slice()
         {
             return Ok(true);
         }
 
         if !self.internal_seek_for_prev(key, statistics)? {
-            self.min_key = Some(key.encoded().to_owned());
+            self.min_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
         Ok(true)
@@ -484,25 +497,29 @@ impl<I: Iterator> Cursor<I> {
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
         }
-        let ord = self.key(statistics).cmp(key.encoded());
+        let ord = self.key(statistics).cmp(key.as_encoded());
         if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
         }
 
-        if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
+        if self
+            .min_key
+            .as_ref()
+            .map_or(false, |k| k >= key.as_encoded())
+        {
             self.iter.validate_key(key)?;
             return Ok(false);
         }
 
         if ord == Ordering::Less {
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.encoded().as_slice(),
+                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
             if self.iter.valid() {
-                if self.key(statistics) > key.encoded().as_slice() {
+                if self.key(statistics) > key.as_encoded().as_slice() {
                     self.prev(statistics);
                 }
             } else {
@@ -511,14 +528,14 @@ impl<I: Iterator> Cursor<I> {
             }
         } else {
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.encoded().as_slice(),
+                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
                 self.seek_for_prev(key, statistics),
                 statistics
             );
         }
 
         if !self.iter.valid() {
-            self.min_key = Some(key.encoded().to_owned());
+            self.min_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
         Ok(true)
@@ -529,7 +546,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(false);
         }
 
-        if self.key(statistics) == &**key.encoded() {
+        if self.key(statistics) == &**key.as_encoded() {
             // should not update min_key here. otherwise reverse_seek_le may not
             // work as expected.
             return Ok(self.prev(statistics));
@@ -547,7 +564,7 @@ impl<I: Iterator> Cursor<I> {
             return Ok(false);
         }
 
-        if self.key(statistics) == &**key.encoded() {
+        if self.key(statistics) == &**key.as_encoded() {
             return Ok(self.prev(statistics));
         }
 
