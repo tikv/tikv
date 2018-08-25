@@ -145,6 +145,19 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn atan_1_arg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let f = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(f.atan()))
+    }
+
+    #[inline]
+    pub fn atan_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let y = try_opt!(self.children[0].eval_real(ctx, row));
+        let x = try_opt!(self.children[1].eval_real(ctx, row));
+        Ok(Some(y.atan2(x)))
+    }
+
+    #[inline]
     pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let y = try_opt!(self.children[1].eval_real(ctx, row));
@@ -458,6 +471,71 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert!(got.f64().is_nan());
+        }
+    }
+
+    #[test]
+    fn test_atan_1_arg() {
+        let tests = vec![
+            (Datum::Null, Datum::Null),
+            (Datum::F64(1.0_f64), Datum::F64(f64::consts::PI / 4.0_f64)),
+            (Datum::F64(-1.0_f64), Datum::F64(-f64::consts::PI / 4.0_f64)),
+            (Datum::F64(f64::MAX), Datum::F64(f64::consts::PI / 2.0_f64)),
+            (Datum::F64(f64::MIN), Datum::F64(-f64::consts::PI / 2.0_f64)),
+            (Datum::F64(0.0_f64), Datum::F64(0.0_f64)),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let op = scalar_func_expr(ScalarFuncSig::Atan1Arg, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_atan_2_args() {
+        let tests = vec![
+            (Datum::Null, Datum::Null, Datum::Null),
+            (
+                Datum::F64(0.0_f64),
+                Datum::F64(0.0_f64),
+                Datum::F64(0.0_f64),
+            ),
+            (
+                Datum::F64(0.0_f64),
+                Datum::F64(-1.0_f64),
+                Datum::F64(f64::consts::PI),
+            ),
+            (
+                Datum::F64(1.0_f64),
+                Datum::F64(-1.0_f64),
+                Datum::F64(3.0_f64 * f64::consts::PI / 4.0_f64),
+            ),
+            (
+                Datum::F64(-1.0_f64),
+                Datum::F64(1.0_f64),
+                Datum::F64(-f64::consts::PI / 4.0_f64),
+            ),
+            (
+                Datum::F64(1.0_f64),
+                Datum::F64(0.0_f64),
+                Datum::F64(f64::consts::PI / 2.0_f64),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (arg0, arg1, exp) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let op = scalar_func_expr(ScalarFuncSig::Atan2Args, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 
