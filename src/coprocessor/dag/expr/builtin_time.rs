@@ -24,20 +24,19 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => {
-                return Error::handle_invalid_time_error(ctx, err)
+        let t = match self.children[0]
+            .eval_time(ctx, row)
+            .and_then(|some_time| match some_time {
+                None => Err(Error::incorrect_datetime_value("None")),
+                Some(res) => Ok(res),
+            })
+            .map_err(|e| {
+                Error::handle_invalid_time_error(ctx, e)
                     .or_else(Err)
                     .and_then(|()| Ok(None))
-            }
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                ).or_else(Err)
-                    .and_then(|()| Ok(None))
-            }
-            Ok(Some(res)) => res,
+            }) {
+            Err(err) => return err,
+            Ok(x) => x,
         };
         if t.invalid_zero() {
             return Error::handle_invalid_time_error(
@@ -58,20 +57,19 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => {
-                return Error::handle_invalid_time_error(ctx, err)
+        let mut t = match self.children[0]
+            .eval_time(ctx, row)
+            .and_then(|some_time| match some_time {
+                None => Err(Error::incorrect_datetime_value("None")),
+                Some(res) => Ok(res),
+            })
+            .map_err(|e| {
+                Error::handle_invalid_time_error(ctx, e)
                     .or_else(Err)
                     .and_then(|()| Ok(None))
-            }
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                ).or_else(Err)
-                    .and_then(|()| Ok(None))
-            }
-            Ok(Some(res)) => res,
+            }) {
+            Err(err) => return err,
+            Ok(x) => x,
         };
         if t.is_zero() {
             return Error::handle_invalid_time_error(
