@@ -154,6 +154,22 @@ mod test {
             Ok(_) => assert!(false, "null should be wrong"),
             Err(_) => assert!(true),
         }
+
+        // test zero case
+        let cfg = EvalConfig::new()
+            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg1 = datum_expr(Datum::Null);
+        let arg2 = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "null should be wrong"),
+            Err(_) => assert!(true),
+        }
     }
 
     #[test]
