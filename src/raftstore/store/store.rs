@@ -41,6 +41,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::util::KeysInfoFormatter;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
@@ -566,6 +567,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Arc::clone(&self.pd_client),
             self.sendch.clone(),
             Arc::clone(&self.engines.kv),
+            self.pd_worker.scheduler(),
         );
         box_try!(self.pd_worker.start(pd_runner));
 
@@ -758,6 +760,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let message = msg.get_message();
         let msg_type = message.get_msg_type();
         if msg_type != MessageType::MsgRequestVote
+            && msg_type != MessageType::MsgRequestPreVote
             && (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX)
         {
             debug!(
@@ -1549,105 +1552,106 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_split_region(
         &mut self,
         region_id: u64,
-        left: metapb::Region,
-        right: metapb::Region,
-        right_derive: bool,
+        derived: metapb::Region,
+        regions: Vec<metapb::Region>,
     ) {
-        let (origin_region, new_region) = if right_derive {
-            (right.clone(), left.clone())
-        } else {
-            (left.clone(), right.clone())
+        let (peer_stat, is_leader) = match self.region_peers.get_mut(&region_id) {
+            None => panic!("[region {}] region is missing", region_id),
+            Some(peer) => {
+                peer.set_region(derived.clone());
+                peer.post_split();
+                if peer.is_leader() {
+                    peer.heartbeat_pd(&self.pd_worker);
+                }
+                (peer.peer_stat.clone(), peer.is_leader())
+            }
         };
-
-        {
-            let peer = self.region_peers.get_mut(&region_id).unwrap();
-            peer.set_region(origin_region);
-            peer.post_split();
-        }
-        let new_region_id = new_region.get_id();
-        if let Some(peer) = self.region_peers.get(&new_region_id) {
-            // If the store received a raft msg with the new region raft group
-            // before splitting, it will creates a uninitialized peer.
-            // We can remove this uninitialized peer directly.
-            if peer.get_store().is_initialized() {
-                panic!("duplicated region {} for split region", new_region_id);
+        if is_leader {
+            // Notify pd immediately to let it update the region meta.
+            if let Err(e) = report_split_pd(&regions, &self.pd_worker) {
+                error!("{} failed to notify pd: {}", self.tag, e);
             }
         }
-
-        let mut campaigned = false;
-        let peer;
-        match Peer::create(self, &new_region) {
-            Err(e) => {
-                // peer information is already written into db, can't recover.
-                // there is probably a bug.
-                panic!("create new split region {:?} err {:?}", new_region, e);
+        let last_key = enc_end_key(regions.last().unwrap());
+        self.region_ranges
+            .remove(&last_key)
+            .expect("original region should exists");
+        let last_region_id = regions.last().unwrap().get_id();
+        for new_region in regions {
+            let new_region_id = new_region.get_id();
+            let not_exist = self
+                .region_ranges
+                .insert(enc_end_key(&new_region), new_region_id)
+                .is_none();
+            assert!(
+                not_exist,
+                "[region {}] should not exists",
+                new_region.get_id()
+            );
+            if new_region_id == region_id {
+                continue;
             }
-            Ok(mut new_peer) => {
-                for peer in new_region.get_peers() {
-                    // Add this peer to cache.
-                    new_peer.insert_peer_cache(peer.clone());
+            // Insert new regions and validation
+            info!(
+                "[region {}] insert new region {:?}",
+                new_region.get_id(),
+                new_region
+            );
+            if let Some(peer) = self.region_peers.get(&new_region_id) {
+                // If the store received a raft msg with the new region raft group
+                // before splitting, it will creates a uninitialized peer.
+                // We can remove this uninitialized peer directly.
+                if peer.get_store().is_initialized() {
+                    panic!(
+                        "[region {}] duplicated region for split region",
+                        new_region_id
+                    );
                 }
-                peer = new_peer.peer.clone();
-                if let Some(origin_peer) = self.region_peers.get_mut(&region_id) {
-                    // New peer derive write flow from parent region,
-                    // this will be used by balance write flow.
-                    new_peer.peer_stat = origin_peer.peer_stat.clone();
+            }
 
-                    campaigned =
-                        new_peer.maybe_campaign(origin_peer, &mut self.pending_raft_groups);
-
-                    if origin_peer.is_leader() {
-                        // Notify pd immediately to let it update the region meta.
-                        if let Err(e) = if right_derive {
-                            report_split_pd(&mut new_peer, origin_peer, &self.pd_worker)
-                        } else {
-                            report_split_pd(origin_peer, &mut new_peer, &self.pd_worker)
-                        } {
-                            error!("{} failed to notify pd: {}", self.tag, e);
-                        }
-                    }
+            let mut new_peer = match Peer::create(self, &new_region) {
+                Ok(new_peer) => new_peer,
+                Err(e) => {
+                    // peer information is already written into db, can't recover.
+                    // there is probably a bug.
+                    panic!("create new split region {:?} err {:?}", new_region, e);
                 }
+            };
+            for peer in new_region.get_peers() {
+                // Add this peer to cache.
+                new_peer.insert_peer_cache(peer.clone());
+            }
+            let peer = new_peer.peer.clone();
+            // New peer derive write flow from parent region,
+            // this will be used by balance write flow.
+            new_peer.peer_stat = peer_stat.clone();
+            let campaigned = new_peer.maybe_campaign(is_leader, &mut self.pending_raft_groups);
 
-                // Insert new regions and validation
-                info!("insert new regions left: {:?}, right:{:?}", left, right);
-                if self
-                    .region_ranges
-                    .insert(enc_end_key(&left), left.get_id())
-                    .is_some()
+            if is_leader {
+                // The new peer is likely to become leader, send a heartbeat immediately to reduce
+                // client query miss.
+                new_peer.heartbeat_pd(&self.pd_worker);
+            }
+
+            new_peer.register_delegates();
+            self.region_peers.insert(new_region_id, new_peer);
+
+            if !campaigned {
+                if let Some(msg) = self
+                    .pending_votes
+                    .swap_remove_front(|m| m.get_to_peer() == &peer)
                 {
-                    panic!("region should not exist, {:?}", left);
+                    let _ = self.on_raft_message(msg);
                 }
-                if self
-                    .region_ranges
-                    .insert(enc_end_key(&right), right.get_id())
-                    .is_none()
-                {
-                    panic!("region should exist, {:?}", right);
-                }
-
-                // To prevent from big region, the right region need run split
-                // check again after split.
-                if right_derive {
-                    self.region_peers
-                        .get_mut(&region_id)
-                        .unwrap()
-                        .size_diff_hint = self.cfg.region_split_check_diff.0;
-                } else {
-                    new_peer.size_diff_hint = self.cfg.region_split_check_diff.0;
-                }
-                new_peer.register_delegates();
-                self.region_peers.insert(new_region_id, new_peer);
             }
         }
 
-        if !campaigned {
-            if let Some(msg) = self
-                .pending_votes
-                .swap_remove_front(|m| m.get_to_peer() == &peer)
-            {
-                let _ = self.on_raft_message(msg);
-            }
-        }
+        // To prevent from big region, the right region needs run split
+        // check again after split.
+        self.region_peers
+            .get_mut(&last_region_id)
+            .unwrap()
+            .size_diff_hint = self.cfg.region_split_check_diff.0;
     }
 
     fn register_merge_check_tick(&self, event_loop: &mut EventLoop<Self>) {
@@ -1850,6 +1854,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         peer.set_region(region);
         if peer.is_leader() {
+            // make approximate size and keys updated in time.
+            peer.size_diff_hint = self.cfg.region_split_check_diff.0;
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
         }
@@ -1951,11 +1957,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CompactLog { first_index, state } => if !merged {
                     self.on_ready_compact_log(region_id, first_index, state)
                 },
-                ExecResult::SplitRegion {
-                    left,
-                    right,
-                    right_derive,
-                } => self.on_ready_split_region(region_id, left, right, right_derive),
+                ExecResult::SplitRegion { derived, regions } => {
+                    self.on_ready_split_region(region_id, derived, regions)
+                }
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state, merged);
                 }
@@ -2430,18 +2434,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &mut self,
         region_id: u64,
         region_epoch: metapb::RegionEpoch,
-        split_key: Vec<u8>, // `split_key` is a encoded key.
+        split_keys: Vec<Vec<u8>>,
         cb: Callback,
     ) {
-        if let Err(e) = self.validate_split_region(region_id, &region_epoch, &split_key) {
+        if let Err(e) = self.validate_split_region(region_id, &region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
             return;
         }
         let peer = &self.region_peers[&region_id];
         let region = peer.region();
-        let task = PdTask::AskSplit {
+        let task = PdTask::AskBatchSplit {
             region: region.clone(),
-            split_key,
+            split_keys,
             peer: peer.peer.clone(),
             right_derive: self.cfg.right_derive_when_split,
             callback: cb,
@@ -2449,7 +2453,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Err(Stopped(t)) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd to split: Stopped", peer.tag);
             match t {
-                PdTask::AskSplit { callback, .. } => {
+                PdTask::AskBatchSplit { callback, .. } => {
                     callback.invoke_with_response(new_error(box_err!("failed to split: Stopped")));
                 }
                 _ => unreachable!(),
@@ -2461,14 +2465,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &mut self,
         region_id: u64,
         epoch: &metapb::RegionEpoch,
-        split_key: &[u8], // `split_key` is a encoded key.
+        split_keys: &[Vec<u8>],
     ) -> Result<()> {
-        if split_key.is_empty() {
-            error!("[region {}] split key should not be empty!!!", region_id);
+        if split_keys.is_empty() {
+            error!("[region {} no split key is specified.", region_id);
             return Err(box_err!(
-                "[region {}] split key should not be empty",
+                "[region {}] no split key is specified.",
                 region_id
             ));
+        }
+        for key in split_keys {
+            if key.is_empty() {
+                error!("[region {}] split key should not be empty!!!", region_id);
+                return Err(box_err!(
+                    "[region {}] split key should not be empty",
+                    region_id
+                ));
+            }
         }
         let peer = match self.region_peers.get(&region_id) {
             None => {
@@ -2863,23 +2876,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 }
 
 fn report_split_pd(
-    left: &mut Peer,
-    right: &mut Peer,
+    regions: &[metapb::Region],
     pd_worker: &FutureWorker<PdTask>,
 ) -> ::std::result::Result<(), Stopped<PdTask>> {
-    info!(
-        "notify pd with split left {:?}, right {:?}",
-        left.region(),
-        right.region()
-    );
-    right.heartbeat_pd(pd_worker);
-    left.heartbeat_pd(pd_worker);
+    info!("notify pd with split count {}", regions.len());
 
-    // Now pd only uses ReportSplit for history operation show,
+    // Now pd only uses ReportBatchSplit for history operation show,
     // so we send it independently here.
-    let task = PdTask::ReportSplit {
-        left: left.region().clone(),
-        right: right.region().clone(),
+    let task = PdTask::ReportBatchSplit {
+        regions: regions.to_vec(),
     };
 
     pd_worker.schedule(task)
@@ -3305,15 +3310,15 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SplitRegion {
                 region_id,
                 region_epoch,
-                split_key,
+                split_keys,
                 callback,
             } => {
                 info!(
-                    "[region {}] on split region at key {}.",
+                    "on split region {} with {}",
                     region_id,
-                    escape(&split_key)
+                    KeysInfoFormatter(&split_keys)
                 );
-                self.on_prepare_split_region(region_id, region_epoch, split_key, callback);
+                self.on_prepare_split_region(region_id, region_epoch, split_keys, callback);
             }
             Msg::RegionApproximateSize { region_id, size } => {
                 self.on_approximate_region_size(region_id, size)

@@ -16,8 +16,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, thread};
 
-use rand::{self, Rng};
-
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
 
@@ -26,7 +24,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::storage::{CF_DEFAULT, CF_WRITE};
+use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
@@ -145,9 +143,10 @@ fn test_server_split_region_twice() {
     let c = Box::new(move |write_resp: WriteResponse| {
         let mut resp = write_resp.response;
         let admin_resp = resp.mut_admin_response();
-        let split_resp = admin_resp.mut_split();
-        let left = split_resp.take_left();
-        let right = split_resp.take_right();
+        let split_resp = admin_resp.mut_splits();
+        let mut regions = split_resp.take_regions().into_vec();
+        let mut d = regions.drain(..);
+        let (left, right) = (d.next().unwrap(), d.next().unwrap());
         assert_eq!(left.get_end_key(), key.as_slice());
         assert_eq!(region2.get_start_key(), left.get_start_key());
         assert_eq!(left.get_end_key(), right.get_start_key());
@@ -168,48 +167,6 @@ fn test_server_split_region_twice() {
     });
     cluster.split_region(&region3, split_key, Callback::Write(c));
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
-}
-
-/// Keep putting random kvs until specified size limit is reached.
-fn put_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    limit: u64,
-    range: &mut Iterator<Item = u64>,
-) -> Vec<u8> {
-    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
-}
-
-fn put_cf_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    cf: &'static str,
-    limit: u64,
-    range: &mut Iterator<Item = u64>,
-) -> Vec<u8> {
-    assert!(limit > 0);
-    let mut len = 0;
-    let mut last_len = 0;
-    let mut rng = rand::thread_rng();
-    let mut key = vec![];
-    while len < limit {
-        let key_id = range.next().unwrap();
-        let key_str = format!("{:09}", key_id);
-        key = key_str.into_bytes();
-        let mut value = vec![0; 64];
-        rng.fill_bytes(&mut value);
-        cluster.must_put_cf(cf, &key, &value);
-        // plus 1 for the extra encoding prefix
-        len += key.len() as u64 + 1;
-        len += value.len() as u64;
-        // Flush memtable to SST periodically, to make approximate size more accurate.
-        if len - last_len >= 1000 {
-            cluster.must_flush_cf(cf, true);
-            last_len = len;
-        }
-    }
-    // Approximate size of memtable is inaccurate for small data,
-    // we flush it to SST so we can use the size properties instead.
-    cluster.must_flush_cf(cf, true);
-    key
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -288,9 +245,23 @@ fn test_node_auto_split_region() {
 }
 
 #[test]
+fn test_incompatible_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
 fn test_server_auto_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_incompatible_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_server_cluster(0, count);
     test_auto_split_region(&mut cluster);
 }
 

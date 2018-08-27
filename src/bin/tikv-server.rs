@@ -192,7 +192,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
-        cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
         cop_read_pool,
         raft_router,

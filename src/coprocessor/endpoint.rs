@@ -32,7 +32,6 @@ use tipb::select::DAGRequest;
 
 use server::readpool::{self, ReadPool};
 use server::{Config, OnResponse};
-use storage::engine::Error as EngineError;
 use storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
 use storage::{self, engine, Engine};
 use util::collections::HashMap;
@@ -242,8 +241,6 @@ impl<E: Engine> Host<E> {
 pub enum Task<E: Engine> {
     Request(RequestTask),
     SnapRes(u64, engine::Result<E::Snap>),
-    BatchSnapRes(Vec<(u64, engine::Result<E::Snap>)>),
-    RetryRequests(Vec<u64>),
 }
 
 impl<E: Engine> Display for Task<E> {
@@ -251,8 +248,6 @@ impl<E: Engine> Display for Task<E> {
         match *self {
             Task::Request(ref req) => write!(f, "{}", req),
             Task::SnapRes(req_id, _) => write!(f, "snapres [{}]", req_id),
-            Task::BatchSnapRes(_) => write!(f, "batch snapres"),
-            Task::RetryRequests(ref retry) => write!(f, "retry on task ids: {:?}", retry),
         }
     }
 }
@@ -632,80 +627,32 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
                 Task::SnapRes(q_id, snap_res) => {
                     self.handle_snapshot_result(q_id, snap_res);
                 }
-                Task::BatchSnapRes(batch) => for (q_id, snap_res) in batch {
-                    self.handle_snapshot_result(q_id, snap_res);
-                },
-                Task::RetryRequests(retry) => for id in retry {
-                    if let Err(e) = {
-                        let ctx = self.reqs[&id][0].req.get_context();
-                        let sched = self.sched.clone();
-                        self.engine.async_snapshot(ctx, box move |(_, res)| {
-                            sched.schedule(Task::SnapRes(id, res)).unwrap()
-                        })
-                    } {
-                        self.notify_batch_failed(e, id);
-                    }
-                },
             }
         }
 
-        if grouped_reqs.is_empty() {
-            return;
-        }
-
-        let mut batch = Vec::with_capacity(grouped_reqs.len());
-        let start_id = self.last_req_id + 1;
         for (_, mut reqs) in grouped_reqs {
             let max_running_task_count = self.max_running_task_count;
             if self.running_task_count() >= max_running_task_count {
                 self.notify_failed(Error::Full(max_running_task_count), reqs);
                 continue;
             }
-
             for req in &mut reqs {
                 let task_count = Arc::clone(&self.running_task_count);
                 req.tracker.task_count(task_count);
             }
+
             self.last_req_id += 1;
-            batch.push(reqs[0].req.get_context().clone());
-            self.reqs.insert(self.last_req_id, reqs);
-        }
-        let end_id = self.last_req_id;
-
-        let sched = self.sched.clone();
-        let on_finished: engine::BatchCallback<E::Snap> = box move |results: Vec<_>| {
-            let mut ready = Vec::with_capacity(results.len());
-            let mut retry = Vec::new();
-            for (id, res) in (start_id..end_id + 1).zip(results) {
-                match res {
-                    Some((_, res)) => ready.push((id, res)),
-                    None => retry.push(id),
-                }
+            let id = self.last_req_id;
+            let sched = self.sched.clone();
+            if let Err(e) = self
+                .engine
+                .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
+                    sched.schedule(Task::SnapRes(id, res)).unwrap()
+                }) {
+                self.notify_failed(e, reqs);
+                continue;
             }
-
-            if !ready.is_empty() {
-                sched.schedule(Task::BatchSnapRes(ready)).unwrap();
-            }
-            if !retry.is_empty() {
-                BATCH_REQUEST_TASKS
-                    .with_label_values(&["retry"])
-                    .observe(retry.len() as f64);
-                sched.schedule(Task::RetryRequests(retry)).unwrap();
-            }
-        };
-
-        BATCH_REQUEST_TASKS
-            .with_label_values(&["all"])
-            .observe(batch.len() as f64);
-
-        if let Err(e) = self.engine.async_batch_snapshot(batch, on_finished) {
-            for id in start_id..end_id + 1 {
-                let err = e.maybe_clone().unwrap_or_else(|| {
-                    error!("async snapshot batch failed error {:?}", e);
-                    EngineError::Other(box_err!("{:?}", e))
-                });
-                self.notify_batch_failed(err, id);
-            }
+            self.reqs.insert(id, reqs);
         }
 
         self.basic_local_metrics.flush();

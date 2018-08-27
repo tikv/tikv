@@ -317,6 +317,10 @@ impl Cluster {
         self.region_approximate_size.get(&region_id).cloned()
     }
 
+    fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
+        self.region_approximate_keys.get(&region_id).cloned()
+    }
+
     fn get_stores(&self) -> Vec<metapb::Store> {
         self.stores.values().map(|s| s.store.clone()).collect()
     }
@@ -643,14 +647,16 @@ pub struct TestPdClient {
     cluster_id: u64,
     cluster: Arc<RwLock<Cluster>>,
     timer: Handle,
+    is_incompatible: bool,
 }
 
 impl TestPdClient {
-    pub fn new(cluster_id: u64) -> TestPdClient {
+    pub fn new(cluster_id: u64, is_incompatible: bool) -> TestPdClient {
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            is_incompatible,
         }
     }
 
@@ -887,6 +893,10 @@ impl TestPdClient {
     pub fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_approximate_size(region_id)
     }
+
+    pub fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_approximate_keys(region_id)
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1032,6 +1042,43 @@ impl PdClient for TestPdClient {
         Box::new(ok(resp))
     }
 
+    fn ask_batch_split(
+        &self,
+        region: metapb::Region,
+        count: usize,
+    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+        if self.is_incompatible {
+            return Box::new(err(Error::Incompatible));
+        }
+
+        if let Err(e) = self.check_bootstrap() {
+            return Box::new(err(e));
+        }
+
+        // Must ConfVer and Version be same?
+        let cur_region = self
+            .cluster
+            .rl()
+            .get_region_by_id(region.get_id())
+            .unwrap()
+            .unwrap();
+        if let Err(e) = check_stale_region(&cur_region, &region) {
+            return Box::new(err(e));
+        }
+
+        let mut resp = pdpb::AskBatchSplitResponse::new();
+        for _ in 0..count {
+            let mut id = pdpb::SplitID::new();
+            id.set_new_region_id(self.alloc_id().unwrap());
+            for _ in region.get_peers() {
+                id.mut_new_peer_ids().push(self.alloc_id().unwrap());
+            }
+            resp.mut_ids().push(id);
+        }
+
+        Box::new(ok(resp))
+    }
+
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
@@ -1044,12 +1091,12 @@ impl PdClient for TestPdClient {
         Box::new(ok(()))
     }
 
-    fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
+    fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {
         // pd just uses this for history show, so here we just count it.
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
-        self.cluster.wl().split_count += 1;
+        self.cluster.wl().split_count += regions.len() - 1;
         Box::new(ok(()))
     }
 }
