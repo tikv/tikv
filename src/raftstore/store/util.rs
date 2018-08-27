@@ -28,6 +28,7 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use util::escape;
 use util::properties::RangeProperties;
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
@@ -760,6 +761,24 @@ impl Engines {
         Engines {
             kv: kv_engine,
             raft: raft_engine,
+        }
+    }
+}
+
+pub struct KeysInfoFormatter<'a>(pub &'a [Vec<u8>]);
+
+impl<'a> fmt::Display for KeysInfoFormatter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0.len() {
+            0 => write!(f, "no key"),
+            1 => write!(f, "key \"{}\"", escape(self.0.first().unwrap())),
+            _ => write!(
+                f,
+                "{} keys range from \"{}\" to \"{}\"",
+                self.0.len(),
+                escape(self.0.first().unwrap()),
+                escape(self.0.last().unwrap())
+            ),
         }
     }
 }
