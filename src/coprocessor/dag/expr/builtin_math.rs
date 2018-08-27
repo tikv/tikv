@@ -290,29 +290,28 @@ mod test {
     fn test_round() {
         let tests = vec![
             (
-                ScalarFuncSig::RoundReal, 
+                ScalarFuncSig::RouldReal, 
                 Datum::F64(3.45), 
                 Datum::F64(3f64)
             ),
             (
-                ScalarFuncSig::RoundReal,
+                ScalarFuncSig::RouldReal,
                 Datum::F64(-3.45),
                 Datum::F64(-3f64),
             ),
             (
-                ScalarFuncSig::RoundReal,
+                ScalarFuncSig::RouldReal,
                 Datum::F64(f64::MAX),
                 Datum::F64(f64::MAX),
             ),
             (
-                ScalarFuncSig::RoundReal,
+                ScalarFuncSig::RouldReal,
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MIN),
             ),
         ];
 
-        
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op = Expression::build(&mut ctx, scalar_func_expr(sig, &[arg.clone()])).unwrap();

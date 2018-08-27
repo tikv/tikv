@@ -188,7 +188,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CeilDecToDec
             | ScalarFuncSig::CeilDecToInt
             | ScalarFuncSig::FloorReal
-            | ScalarFuncSig::RoundReal
+            | ScalarFuncSig::RouldReal
             | ScalarFuncSig::FloorIntToInt
             | ScalarFuncSig::FloorIntToDec
             | ScalarFuncSig::FloorDecToDec
@@ -801,7 +801,7 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
-        RoundReal => round_real,
+        RouldReal => round_real,
         PI => pi,
 
         IfNullReal => if_null_real,
@@ -1101,8 +1101,8 @@ mod test {
                     ScalarFuncSig::CeilIntToDec,
                     ScalarFuncSig::CeilDecToDec,
                     ScalarFuncSig::CeilDecToInt,
+                    ScalarFuncSig::RouldReal,
                     ScalarFuncSig::FloorReal,
-                    ScalarFuncSig::RoundReal,
                     ScalarFuncSig::FloorIntToInt,
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
@@ -1292,7 +1292,6 @@ mod test {
             ScalarFuncSig::HexIntArg,
             ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::Inet6Aton,
             ScalarFuncSig::Inet6Ntoa,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
@@ -1356,9 +1355,7 @@ mod test {
             ScalarFuncSig::Reverse,
             ScalarFuncSig::ReverseBinary,
             ScalarFuncSig::Right,
-            ScalarFuncSig::RightBinary,
-            ScalarFuncSig::RouldReal,
-            ScalarFuncSig::RightShift,
+            ScalarFuncSig::RightBinary,           
             ScalarFuncSig::RoundDec,
             ScalarFuncSig::RoundInt,
             ScalarFuncSig::RoundWithFracDec,
