@@ -2195,6 +2195,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        // As leader, we believe a peer is down if we haven't receive it's heartbeat response in the
+        // last few seconds.
+        let last_heartbeat_limit =
+            Instant::now() - self.cfg.raft_heartbeat_interval() + Duration::from_secs(10);
+
         let mut total_gc_logs = 0;
 
         for (&region_id, peer) in &mut self.region_peers {
@@ -2216,16 +2221,26 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  ^                                       ^
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
-            // `healthy_replicated_index` is the smallest `replicated_index` of healthy nodes.
+            // `healthy_replicated_index` is the smallest `replicated_index` of healthy up nodes.
             let truncated_idx = peer.get_store().truncated_index();
             let last_idx = peer.get_store().last_index();
             let (mut replicated_idx, mut healthy_replicated_idx) = (last_idx, last_idx);
-            for (_, p) in peer.raft_group.raft.prs().iter() {
+            for (peer_id, p) in peer.raft_group.raft.prs().iter() {
                 if replicated_idx > p.matched {
                     replicated_idx = p.matched;
                 }
-                if healthy_replicated_idx > p.matched && p.matched >= truncated_idx {
-                    healthy_replicated_idx = p.matched;
+                if let Some(last_heartbeat) = peer.peer_heartbeats.get(peer_id) {
+                    if healthy_replicated_idx > p.matched
+                        && p.matched >= truncated_idx
+                        && *last_heartbeat > last_heartbeat_limit
+                    {
+                        healthy_replicated_idx = p.matched;
+                    }
+                } else {
+                    warn!(
+                        "[region {}] checking last heartbeat time of peer {} for cache gc failed",
+                        region_id, peer_id
+                    );
                 }
             }
             // When an election happened or a new peer is added, replicated_idx can be 0.
