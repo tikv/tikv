@@ -107,7 +107,7 @@ impl ReadIndexQueue {
 }
 
 /// The returned states of the peer after checking whether it is stale
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum StaleState {
     Valid,
     ToValidate,

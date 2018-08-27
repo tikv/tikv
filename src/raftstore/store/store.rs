@@ -2828,7 +2828,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // In this case, peer B would notice that the leader is missing for a long time,
             // and it would check with pd to confirm whether it's still a member of the cluster.
             // If not, it destroys itself as a stale peer which is removed out already.
-            match peer.check_stale_state() {
+            let state = peer.check_stale_state();
+            fail_point!("peer_check_stale_state", state != StaleState::Valid, |_| {});
+            match state {
                 StaleState::Valid => (),
                 StaleState::LeaderMissing => {
                     warn!(
