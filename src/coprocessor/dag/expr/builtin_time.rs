@@ -24,26 +24,20 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let t = match self.children[0]
-            .eval_time(ctx, row)
-            .and_then(|some_time| match some_time {
-                None => Err(Error::incorrect_datetime_value("None")),
-                Some(res) => Ok(res),
-            })
-            .map_err(|e| {
-                Error::handle_invalid_time_error(ctx, e)
-                    .or_else(Err)
-                    .and_then(|()| Ok(None))
-            }) {
-            Err(err) => return err,
-            Ok(x) => x,
-        };
+        let t = direct_try!(
+            self.children[0]
+                .eval_time(ctx, row)
+                .and_then(|some_time| match some_time {
+                    None => Err(Error::incorrect_datetime_value("None")),
+                    Some(res) => Ok(res),
+                })
+                .map_err(|e| Error::handle_invalid_time_error(ctx, e).and_then(|()| Ok(None)))
+        );
         if t.invalid_zero() {
             return Error::handle_invalid_time_error(
                 ctx,
                 Error::incorrect_datetime_value(&format!("Incorrect datetime value: '{}'", t)),
-            ).or_else(Err)
-                .and_then(|()| Ok(None));
+            ).and_then(|()| Ok(None));
         }
         let format_mask = try_opt!(self.children[1].eval_string(ctx, row));
         let format_mask_str = String::from_utf8(format_mask.into_owned())?;
@@ -57,26 +51,20 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0]
-            .eval_time(ctx, row)
-            .and_then(|some_time| match some_time {
-                None => Err(Error::incorrect_datetime_value("None")),
-                Some(res) => Ok(res),
-            })
-            .map_err(|e| {
-                Error::handle_invalid_time_error(ctx, e)
-                    .or_else(Err)
-                    .and_then(|()| Ok(None))
-            }) {
-            Err(err) => return err,
-            Ok(x) => x,
-        };
+        let mut t = direct_try!(
+            self.children[0]
+                .eval_time(ctx, row)
+                .and_then(|some_time| match some_time {
+                    None => Err(Error::incorrect_datetime_value("None")),
+                    Some(res) => Ok(res),
+                })
+                .map_err(|e| Error::handle_invalid_time_error(ctx, e).and_then(|()| Ok(None)))
+        );
         if t.is_zero() {
             return Error::handle_invalid_time_error(
                 ctx,
                 Error::incorrect_datetime_value(&format!("{}", t)),
-            ).or_else(Err)
-                .and_then(|()| Ok(None));
+            ).and_then(|()| Ok(None));
         }
         let mut res = t.to_mut().clone();
         res.set_tp(mysql::types::DATE).unwrap();

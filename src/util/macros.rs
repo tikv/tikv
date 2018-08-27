@@ -88,6 +88,17 @@ macro_rules! box_try {
     }};
 }
 
+/// direct_try will directly return error first, and then do the same thing as try!.
+#[macro_export]
+macro_rules! direct_try {
+    ($expr:expr) => {{
+        match $expr {
+            Ok(r) => r,
+            Err(e) => return e,
+        }
+    }};
+}
+
 /// A shortcut to box an error.
 #[macro_export]
 macro_rules! box_err {
