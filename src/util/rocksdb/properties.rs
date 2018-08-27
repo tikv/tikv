@@ -39,8 +39,8 @@ const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_RANGE_INDEX: &str = "tikv.range_index";
-pub const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
-pub const PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
+const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
+const PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {

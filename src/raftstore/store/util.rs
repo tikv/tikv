@@ -124,7 +124,7 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
     }
 }
 
-const MAX_WRITE_BATCH_ENTRY_SIZE: usize = 4 * 1024 * 1024;
+const MAX_WRITE_BATCH_SIZE: usize = 4 * 1024 * 1024;
 
 pub fn delete_all_in_range(
     db: &DB,
@@ -167,7 +167,7 @@ pub fn delete_all_in_range_cf(
         it.seek(start_key.into());
         while it.valid() {
             wb.delete_cf(handle, it.key())?;
-            if wb.data_size() >= MAX_WRITE_BATCH_ENTRY_SIZE {
+            if wb.data_size() >= MAX_WRITE_BATCH_SIZE {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
                 db.write(wb)?;
@@ -512,17 +512,17 @@ pub fn get_region_approximate_split_keys_cf(
 
     // use total size of this range and the number of keys in this range to
     // calculate the average distance between two keys, and we produce a
-    // split_key every `split_size / dist` keys.
+    // split_key every `split_size / distance` keys.
     let len = keys.len();
-    let dist = total_size as f64 / len as f64;
+    let distance = total_size as f64 / len as f64;
     assert!(split_size != 0);
-    let n = (split_size as f64 / dist).ceil() as usize;
+    let n = (split_size as f64 / distance).ceil() as usize;
 
     // cause first element of the iterator will always be returned by step_by(),
     // so the first key returned may not the desired split key. Note that, the
     // start key of region is not included, so we we drop first n - 1 keys.
     //
-    // For example, the split size is `3 * dist`. And the numbers stand for the
+    // For example, the split size is `3 * distance`. And the numbers stand for the
     // key in `RangeProperties`, `^` stands for produced split key.
     //
     // skip:
@@ -543,7 +543,7 @@ pub fn get_region_approximate_split_keys_cf(
     } else {
         // make sure not to split when less than max_size for last part
         let rest = (len % n) as u64;
-        if rest * dist as u64 + split_size < max_size {
+        if rest * distance as u64 + split_size < max_size {
             split_keys.pop();
         }
     }
