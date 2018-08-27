@@ -859,10 +859,7 @@ mod tests {
 
         // An expired remote lease can never renew.
         lease.renew(Lease::now() + TimeDuration::minutes(1));
-        assert_eq!(
-            remote.inspect(Some(Lease::now())),
-            LeaseState::Expired
-        );
+        assert_eq!(remote.inspect(Some(Lease::now())), LeaseState::Expired);
 
         // A new remote lease.
         let m1 = lease.maybe_new_remote_lease(1).unwrap();

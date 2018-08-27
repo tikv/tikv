@@ -44,7 +44,7 @@ use raftstore::store::worker::{
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
-use util::time::{duration_to_sec};
+use util::time::duration_to_sec;
 use util::worker::{FutureWorker, Scheduler};
 use util::{escape, MustConsumeVec};
 
