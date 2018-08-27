@@ -41,7 +41,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::util::format_split_info;
+use raftstore::store::util::KeysInfoFormatter;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
@@ -3314,8 +3314,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 callback,
             } => {
                 info!(
-                    "on split region {}",
-                    format_split_info(region_id, &split_keys)
+                    "on split region {} with {}",
+                    region_id,
+                    KeysInfoFormatter(&split_keys)
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_keys, callback);
             }

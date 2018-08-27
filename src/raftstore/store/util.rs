@@ -765,21 +765,21 @@ impl Engines {
     }
 }
 
-pub fn format_split_info(region_id: u64, split_keys: &[Vec<u8>]) -> String {
-    if split_keys.len() == 1 {
-        format!(
-            "{} with key {:?}",
-            region_id,
-            split_keys.first().as_ref().map(|k| escape(k)),
-        )
-    } else {
-        format!(
-            "{} with {} keys range from {:?} to {:?}",
-            region_id,
-            split_keys.len(),
-            split_keys.first().as_ref().map(|k| escape(k)),
-            split_keys.last().as_ref().map(|k| escape(k))
-        )
+pub struct KeysInfoFormatter<'a>(pub &'a [Vec<u8>]);
+
+impl<'a> fmt::Display for KeysInfoFormatter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0.len() {
+            0 => write!(f, "no key"),
+            1 => write!(f, "key \"{}\"", escape(self.0.first().unwrap())),
+            _ => write!(
+                f,
+                "{} keys range from \"{}\" to \"{}\"",
+                self.0.len(),
+                escape(self.0.first().unwrap()),
+                escape(self.0.last().unwrap())
+            ),
+        }
     }
 }
 
