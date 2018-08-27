@@ -25,6 +25,7 @@ impl ScalarFunc {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.abs()))
     }
+    
 
     #[inline]
     pub fn abs_decimal<'a, 'b: 'a>(
