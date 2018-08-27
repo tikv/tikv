@@ -1769,16 +1769,16 @@ impl Peer {
             check_epoch,
             false, /* we don't need snapshot time */
         ).execute(&req, self.region())
-            .unwrap_or_else(|e| {
-                match e {
-                    Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
-                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
-                }
-                ReadResponse {
-                    response: cmd_resp::new_error(e),
-                    snapshot: None,
-                }
-            });
+        .unwrap_or_else(|e| {
+            match e {
+                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
+                _ => error!("{} execute raft command err: {:?}", self.tag, e),
+            }
+            ReadResponse {
+                response: cmd_resp::new_error(e),
+                snapshot: None,
+            }
+        });
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp

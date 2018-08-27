@@ -120,8 +120,7 @@ impl<E: Engine> SyncStorage<E> {
                 limit,
                 start_ts,
                 Options::new(0, false, key_only).reverse_scan(),
-            )
-            .wait()
+            ).wait()
     }
 
     pub fn prewrite(
@@ -168,8 +167,7 @@ impl<E: Engine> SyncStorage<E> {
     ) -> Result<Vec<LockInfo>> {
         wait_op!(|cb| self
             .store
-            .async_scan_locks(ctx, max_ts, start_key, limit, cb))
-            .unwrap()
+            .async_scan_locks(ctx, max_ts, start_key, limit, cb)).unwrap()
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {

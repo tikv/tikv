@@ -245,10 +245,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                             Some(Ok(resp)) => Ok(Some((resp, WriteFlags::default()))),
                             Some(Err(e)) => Err(box_err!("{:?}", e)),
                         }
-                    })
-                    .filter_map(|o| o),
-            )
-            .map(|_| ())
+                    }).filter_map(|o| o),
+            ).map(|_| ())
             .map_err(|e| error!("failed to handle heartbeat: {:?}", e));
         ctx.spawn(f)
     }

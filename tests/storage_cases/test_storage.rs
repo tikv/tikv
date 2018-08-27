@@ -884,8 +884,7 @@ fn inc<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, key: &[u8]) -> Result
                 ))],
                 key.to_vec(),
                 start_ts,
-            )
-            .is_err()
+            ).is_err()
         {
             backoff(i);
             continue;
@@ -897,8 +896,7 @@ fn inc<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, key: &[u8]) -> Result
                 vec![key_address.clone()],
                 start_ts,
                 commit_ts,
-            )
-            .is_err()
+            ).is_err()
         {
             backoff(i);
             continue;
@@ -1084,8 +1082,7 @@ fn test_conflict_commands_on_fault_engine() {
             box move |res| {
                 tx.send(res).unwrap();
             },
-        )
-        .unwrap();
+        ).unwrap();
     async_storage
         .async_commit(
             storage.ctx.clone(),
@@ -1093,8 +1090,7 @@ fn test_conflict_commands_on_fault_engine() {
             start_ts,
             commit_ts,
             box |_| {},
-        )
-        .unwrap();
+        ).unwrap();
     async_storage
         .async_cleanup(storage.ctx.clone(), Key::from_raw(&k), start_ts, box |_| {})
         .unwrap();
@@ -1104,8 +1100,7 @@ fn test_conflict_commands_on_fault_engine() {
             vec![Key::from_raw(&k)],
             start_ts,
             box |_| {},
-        )
-        .unwrap();
+        ).unwrap();
 
     // Stop the engine,
     engine.stop();

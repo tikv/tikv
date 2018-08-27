@@ -612,7 +612,8 @@ fn do_div_mod(
                 .saturating_mul(2)
                 .saturating_add(frac_incr)
                 .saturating_add(1)
-        ) as usize + 1,
+        ) as usize
+            + 1,
     );
     let mut buf = vec![0; l_len];
     (&mut buf[0..i]).copy_from_slice(&lhs.word_buf[l_idx..l_idx + i]);

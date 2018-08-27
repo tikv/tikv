@@ -1004,8 +1004,7 @@ impl PdClient for TestPdClient {
                         let mut cluster = cluster1.wl();
                         cluster.poll_heartbeat_responses_for(store_id)
                     }),
-                )
-                .map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e))
+                ).map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e))
                 .for_each(move |resps| {
                     for resp in resps {
                         f(resp);

@@ -698,8 +698,7 @@ mod tests {
                 pr.set_store_id(store_id);
                 pr.set_id(id);
                 pr
-            })
-            .collect()
+            }).collect()
     }
 
     fn must_extract_cmds(msg: StoreMsg) -> Vec<RaftCmdRequest> {

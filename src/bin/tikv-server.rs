@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(use_extern_macros)]
 #![feature(proc_macro_non_items)]
 
 extern crate chrono;
@@ -269,23 +268,20 @@ fn main() {
                 .value_name("FILE")
                 .help("Sets config file")
                 .takes_value(true),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("addr")
                 .short("A")
                 .long("addr")
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Sets listening address"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("advertise-addr")
                 .long("advertise-addr")
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Sets advertise listening address for client communication"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("log-level")
                 .short("L")
                 .long("log-level")
@@ -294,10 +290,8 @@ fn main() {
                 .value_name("LEVEL")
                 .possible_values(&[
                     "trace", "debug", "info", "warn", "warning", "error", "critical",
-                ])
-                .help("Sets log level"),
-        )
-        .arg(
+                ]).help("Sets log level"),
+        ).arg(
             Arg::with_name("log-file")
                 .short("f")
                 .long("log-file")
@@ -305,8 +299,7 @@ fn main() {
                 .value_name("FILE")
                 .help("Sets log file")
                 .long_help("Sets log file. If not set, output log to stderr"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("data-dir")
                 .long("data-dir")
                 .short("s")
@@ -314,16 +307,14 @@ fn main() {
                 .takes_value(true)
                 .value_name("PATH")
                 .help("Sets the path to store directory"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("capacity")
                 .long("capacity")
                 .takes_value(true)
                 .value_name("CAPACITY")
                 .help("Sets the store capacity")
                 .long_help("Sets the store capacity. If not set, use entire partition"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("pd-endpoints")
                 .long("pd-endpoints")
                 .aliases(&["pd", "pd-endpoint"])
@@ -335,8 +326,7 @@ fn main() {
                 .value_delimiter(",")
                 .help("Sets PD endpoints")
                 .long_help("Sets PD endpoints. Uses `,` to separate multiple PDs"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("labels")
                 .long("labels")
                 .alias("label")
@@ -351,13 +341,11 @@ fn main() {
                     "Sets server labels. Uses `,` to separate kv pairs, like \
                      `zone=cn,disk=ssd`",
                 ),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("print-sample-config")
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
-        )
-        .get_matches();
+        ).get_matches();
 
     if matches.is_present("print-sample-config") {
         let config = TiKvConfig::default();

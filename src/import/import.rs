@@ -94,8 +94,7 @@ impl<Client: ImportClient> ImportJob<Client> {
             .spawn(move || {
                 let job = SubImportJob::new(id, cfg, range, client, engine, counter);
                 job.run()
-            })
-            .unwrap()
+            }).unwrap()
     }
 
     fn run_import_threads(&self, ranges: Vec<RangeInfo>) -> Vec<JoinHandle<Result<()>>> {
@@ -233,8 +232,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
                     }
                     finished_ranges.lock().unwrap().push(range);
                 }
-            })
-            .unwrap()
+            }).unwrap()
     }
 }
 

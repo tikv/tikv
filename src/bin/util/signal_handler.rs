@@ -21,7 +21,7 @@ mod imp {
     use tikv::util::{metrics, rocksdb_stats};
 
     pub fn handle_signal(engines: Option<Engines>) {
-        use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
+        use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
         use signal::trap::Trap;
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {

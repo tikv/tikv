@@ -279,16 +279,14 @@ impl<E: Engine> AssertionStorage<E> {
                 vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
                 key.to_vec(),
                 start_ts,
-            )
-            .unwrap();
+            ).unwrap();
         self.store
             .commit(
                 self.ctx.clone(),
                 vec![Key::from_raw(key)],
                 start_ts,
                 commit_ts,
-            )
-            .unwrap();
+            ).unwrap();
     }
 
     pub fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -298,16 +296,14 @@ impl<E: Engine> AssertionStorage<E> {
                 vec![Mutation::Delete(Key::from_raw(key))],
                 key.to_vec(),
                 start_ts,
-            )
-            .unwrap();
+            ).unwrap();
         self.store
             .commit(
                 self.ctx.clone(),
                 vec![Key::from_raw(key)],
                 start_ts,
                 commit_ts,
-            )
-            .unwrap();
+            ).unwrap();
     }
 
     pub fn scan_ok(
@@ -407,8 +403,7 @@ impl<E: Engine> AssertionStorage<E> {
                 } else {
                     None
                 }
-            })
-            .collect();
+            }).collect();
         assert_eq!(expect_locks, locks);
     }
 
@@ -427,8 +422,7 @@ impl<E: Engine> AssertionStorage<E> {
                 mutations,
                 cur_primary.to_vec(),
                 cur_start_ts,
-            )
-            .unwrap_err();
+            ).unwrap_err();
 
         match err {
             storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
@@ -525,8 +519,7 @@ impl<E: Engine> AssertionStorage<E> {
             .resolve_lock_batch(
                 self.ctx.clone(),
                 vec![(start_ts_1, commit_ts_1), (start_ts_2, commit_ts_2)],
-            )
-            .unwrap();
+            ).unwrap();
     }
 
     pub fn resolve_lock_with_illegal_tso(&self, start_ts: u64, commit_ts: Option<u64>) {

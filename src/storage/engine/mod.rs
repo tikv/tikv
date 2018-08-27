@@ -857,8 +857,7 @@ pub mod tests {
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                     Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
                 ],
-            )
-            .unwrap();
+            ).unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
@@ -869,8 +868,7 @@ pub mod tests {
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                     Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
                 ],
-            )
-            .unwrap();
+            ).unwrap();
         assert_none(engine, b"y");
         assert_none(engine, b"y");
     }

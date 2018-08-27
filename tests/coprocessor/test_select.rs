@@ -1538,7 +1538,6 @@ where
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     stream_rx
         .wait()
-        .into_iter()
         .map(|resp| {
             let resp = resp.unwrap();
             check_range(&resp);
@@ -1546,8 +1545,7 @@ where
             let mut stream_resp = StreamResponse::new();
             stream_resp.merge_from_bytes(resp.get_data()).unwrap();
             stream_resp
-        })
-        .collect()
+        }).collect()
 }
 
 #[test]

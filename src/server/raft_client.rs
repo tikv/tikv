@@ -82,8 +82,7 @@ impl Conn {
                         .then(move |r| {
                             alive.store(false, Ordering::SeqCst);
                             r
-                        })
-                        .map(|_| ())
+                        }).map(|_| ())
                         .map_err(move |e| {
                             let store = store_id.to_string();
                             REPORT_FAILURE_MSG_COUNTER
@@ -91,8 +90,7 @@ impl Conn {
                                 .inc();
                             warn!("send raftmessage to {} failed: {:?}", addr, e);
                         }),
-                )
-                .map(|_| ())
+                ).map(|_| ())
                 .map_err(|_| ()),
         );
         Conn {

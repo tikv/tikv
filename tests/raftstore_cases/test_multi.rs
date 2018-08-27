@@ -466,8 +466,7 @@ fn test_node_leader_change_with_log_overlap() {
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
             }),
-        )
-        .unwrap();
+        ).unwrap();
 
     // Now let peer(1, 1) steps down. Can't use transfer leader here, because
     // it still has pending proposed entries.
@@ -716,8 +715,7 @@ fn test_node_dropped_proposal() {
             Callback::Write(box move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             }),
-        )
-        .unwrap();
+        ).unwrap();
 
     // Although proposal is dropped, callback should be cleaned up in time.
     rx.recv_timeout(Duration::from_secs(5))

@@ -54,8 +54,7 @@ pub fn run_prometheus(
             }
 
             thread::sleep(interval);
-        })
-        .unwrap();
+        }).unwrap();
 
     Some(handler)
 }

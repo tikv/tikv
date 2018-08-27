@@ -75,8 +75,7 @@ impl ImportKv for ImportKVService {
                             Err(e)
                         }
                     }
-                })
-                .map(|_| SwitchModeResponse::new())
+                }).map(|_| SwitchModeResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
@@ -96,8 +95,7 @@ impl ImportKv for ImportKVService {
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.open_engine(uuid)
-                })
-                .map(|_| OpenEngineResponse::new())
+                }).map(|_| OpenEngineResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
@@ -129,8 +127,7 @@ impl ImportKv for ImportKVService {
                         let uuid = Uuid::from_bytes(head.get_uuid())?;
                         let engine = import.bind_engine(uuid)?;
                         Ok((engine, stream))
-                    })
-                    .and_then(move |(engine, stream)| {
+                    }).and_then(move |(engine, stream)| {
                         stream.map_err(Error::from).for_each(move |mut chunk| {
                             let start = Instant::now_coarse();
                             if !chunk.has_batch() {
@@ -142,8 +139,7 @@ impl ImportKv for ImportKVService {
                             IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
                             Ok(())
                         })
-                    })
-                    .then(move |res| match res {
+                    }).then(move |res| match res {
                         Ok(_) => Ok(WriteEngineResponse::new()),
                         Err(Error::EngineNotFound(v)) => {
                             let mut resp = WriteEngineResponse::new();
@@ -153,8 +149,7 @@ impl ImportKv for ImportKVService {
                             Ok(resp)
                         }
                         Err(e) => Err(e),
-                    })
-                    .then(move |res| send_rpc_response!(res, sink, label, timer)),
+                    }).then(move |res| send_rpc_response!(res, sink, label, timer)),
             ),
         )
     }
@@ -174,8 +169,7 @@ impl ImportKv for ImportKVService {
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.close_engine(uuid)
-                })
-                .then(move |res| match res {
+                }).then(move |res| match res {
                     Ok(_) => Ok(CloseEngineResponse::new()),
                     Err(Error::EngineNotFound(v)) => {
                         let mut resp = CloseEngineResponse::new();
@@ -185,8 +179,7 @@ impl ImportKv for ImportKVService {
                         Ok(resp)
                     }
                     Err(e) => Err(e),
-                })
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+                }).then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
 
@@ -205,8 +198,7 @@ impl ImportKv for ImportKVService {
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.import_engine(uuid, req.get_pd_addr())
-                })
-                .map(|_| ImportEngineResponse::new())
+                }).map(|_| ImportEngineResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
@@ -226,8 +218,7 @@ impl ImportKv for ImportKVService {
                 .spawn_fn(move || {
                     let uuid = Uuid::from_bytes(req.get_uuid())?;
                     import.cleanup_engine(uuid)
-                })
-                .map(|_| CleanupEngineResponse::new())
+                }).map(|_| CleanupEngineResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
@@ -268,8 +259,7 @@ impl ImportKv for ImportKVService {
                             Err(e)
                         }
                     }
-                })
-                .map(|_| CompactClusterResponse::new())
+                }).map(|_| CompactClusterResponse::new())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }

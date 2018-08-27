@@ -688,7 +688,8 @@ impl Debugger {
             ("mvcc.num_puts", mvcc_properties.num_puts),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ].iter()
+        ]
+            .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         res.push((
@@ -1851,8 +1852,8 @@ mod tests {
         db.write(wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
-            let data =
-                db.get_cf(
+            let data = db
+                .get_cf(
                     get_cf_handle(&db, cf).unwrap(),
                     &keys::data_key(k.as_encoded()),
                 ).unwrap();

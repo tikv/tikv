@@ -610,7 +610,9 @@ impl ScalarFunc {
         if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
             return Ok(val);
         }
-        let res = val.into_owned().convert_to(ctx, flen as u8, decimal as u8)?;
+        let res = val
+            .into_owned()
+            .convert_to(ctx, flen as u8, decimal as u8)?;
         Ok(Cow::Owned(res))
     }
 

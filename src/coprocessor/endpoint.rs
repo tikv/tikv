@@ -801,8 +801,7 @@ mod tests {
                 let task = RequestTask::new(String::from("127.0.0.1"), req, on_resp, 1000).unwrap();
                 worker.schedule(Task::Request(task)).unwrap();
                 rx
-            })
-            .collect();
+            }).collect();
         let results = future::join_all(result_futures).wait().unwrap();
         assert_eq!(results.len(), 30 * 4);
         for resp in results {

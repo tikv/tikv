@@ -242,7 +242,8 @@ fn unflatten(ctx: &mut EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Da
                     types::STRING,
                     types::NEW_DECIMAL,
                     types::JSON
-                ].contains(&t),
+                ]
+                    .contains(&t),
                 "unknown type {} {:?}",
                 t,
                 datum
@@ -361,7 +362,6 @@ impl RowColsDict {
         let end_offsets = self
             .cols
             .values()
-            .into_iter()
             .map(|meta| meta.offset + meta.length - start)
             .collect();
         (&self.value[start..start + length], end_offsets)
@@ -505,8 +505,7 @@ mod test {
             .map(|(k, v)| {
                 let f = super::flatten(v.clone()).unwrap();
                 (*k, datum::encode_value(&[f]).unwrap())
-            })
-            .collect();
+            }).collect();
         let mut col_id_set: HashSet<_> = col_ids.iter().cloned().collect();
 
         let bs = encode_row(col_values, &col_ids).unwrap();
@@ -572,8 +571,7 @@ mod test {
                 let unflattened = super::unflatten(&mut ctx, v.clone(), t).unwrap();
                 let encoded = datum::encode_key(&[unflattened]).unwrap();
                 (*id, encoded)
-            })
-            .collect();
+            }).collect();
 
         let key = datum::encode_key(&col_values).unwrap();
         let bs = encode_index_seek_key(1, 1, &key);

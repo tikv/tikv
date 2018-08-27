@@ -947,9 +947,9 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = parts[1]
-        .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr)))?;
+    let port: u16 = parts[1].parse().map_err(|_| {
+        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+    })?;
     // Port = 0 is invalid.
     if port == 0 {
         return Err(ConfigError::Address(format!(

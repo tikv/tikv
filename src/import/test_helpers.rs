@@ -136,8 +136,7 @@ impl ImportClient for MockClient {
             .find(|r| {
                 split_key >= r.get_start_key()
                     && (split_key < r.get_end_key() || r.get_end_key().is_empty())
-            })
-            .unwrap()
+            }).unwrap()
             .clone();
 
         regions.remove(&region.get_id());

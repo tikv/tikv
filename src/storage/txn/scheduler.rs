@@ -1420,8 +1420,7 @@ mod tests {
                 let mut lock = gen_command_lock(&latches, &cmd);
                 assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
                 lock
-            })
-            .collect();
+            }).collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {
             let mut lock = gen_command_lock(&latches, cmd);

@@ -191,16 +191,14 @@ impl<T: Context + 'static> FuturePool<T> {
                 // by invoking `context_factory` in a non-concurrent way.
                 let thread_id = thread::current().id();
                 tx.send(thread_id).unwrap();
-            })
-            .create();
+            }).create();
         let contexts = (0..pool_size)
             .map(|_| {
                 let thread_id = rx.recv().unwrap();
                 let context = context_factory.build();
                 let context_delegator = ContextDelegator::new(context, tick_interval);
                 (thread_id, context_delegator)
-            })
-            .collect();
+            }).collect();
         FuturePool {
             pool,
             context_delegators: ContextDelegators::new(contexts),
@@ -307,7 +305,7 @@ mod tests {
             assert_eq!(ctx.ctx_thread_id, main_thread_id);
             future::ok::<(), ()>(())
         }).wait()
-            .unwrap();
+        .unwrap();
     }
 
     #[test]

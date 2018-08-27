@@ -1115,8 +1115,7 @@ impl TiKvConfig {
                 f.read_to_string(&mut s)?;
                 let c = toml::from_str(&s)?;
                 Ok(c)
-            })
-            .unwrap_or_else(|e| {
+            }).unwrap_or_else(|e| {
                 panic!(
                     "invalid auto generated configuration file {:?}, err {}",
                     path, e

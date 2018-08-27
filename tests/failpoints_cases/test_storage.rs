@@ -51,8 +51,7 @@ fn test_storage_gcworker_busy() {
             .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
                 assert!(res.is_ok());
                 tx1.send(1).unwrap();
-            })
-            .unwrap();
+            }).unwrap();
     }
     // Sleep to make sure the failpoint is triggered.
     thread::sleep(Duration::from_millis(2000));
@@ -62,8 +61,7 @@ fn test_storage_gcworker_busy() {
         .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
             assert!(res.is_ok());
             tx1.send(1).unwrap();
-        })
-        .unwrap();
+        }).unwrap();
 
     // Old GC commands are blocked, the new one will get GCWorkerTooBusy error.
     let (tx2, rx2) = channel();
@@ -74,8 +72,7 @@ fn test_storage_gcworker_busy() {
                 res => panic!("expect too busy, got {:?}", res),
             }
             tx2.send(1).unwrap();
-        })
-        .unwrap();
+        }).unwrap();
 
     rx2.recv().unwrap();
     fail::remove(snapshot_fp);
@@ -119,8 +116,7 @@ fn test_scheduler_leader_change_twice() {
             box move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();
             },
-        )
-        .unwrap();
+        ).unwrap();
     // Sleep to make sure the failpoint is triggered.
     thread::sleep(Duration::from_millis(2000));
     // Transfer leader twice, then unblock snapshot.

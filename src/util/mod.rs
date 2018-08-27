@@ -72,8 +72,7 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
                 size += u64::from(Message::compute_size(e));
                 size <= max
             }
-        })
-        .count();
+        }).count();
 
     entries.truncate(limit);
 }
