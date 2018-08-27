@@ -59,7 +59,7 @@ impl KVImporter {
             return Ok(());
         }
 
-        // Restrict opening engine num
+        // Restrict max open engines
         if inner.engines.len() >= self.cfg.max_open_engines {
             let errmsg = format!("Too many open engines {}: {}", uuid, inner.engines.len());
             error!("{}", errmsg);
