@@ -109,8 +109,8 @@ quick_error! {
         PrepareRangeJobFailed(tag: String) {
             display("{}", tag)
         }
-        ResourceTemporarilyUnavailable(tag: String) {
-            display("{}", tag)
+        ResourceTemporarilyUnavailable(msg: String) {
+            display("{}", msg)
         }
     }
 }

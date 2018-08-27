@@ -60,8 +60,8 @@ impl KVImporter {
         }
 
         // Restrict opening engine num
-        if inner.engines.len() >= self.cfg.max_storage_engines {
-            let errmsg = format!("Too much opening engines {}: {}", uuid, inner.engines.len());
+        if inner.engines.len() >= self.cfg.max_open_engines {
+            let errmsg = format!("Too many open engines {}: {}", uuid, inner.engines.len());
             error!("{}", errmsg);
             return Err(Error::ResourceTemporarilyUnavailable(errmsg));
         }
