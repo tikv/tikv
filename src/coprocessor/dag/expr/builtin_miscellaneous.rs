@@ -14,8 +14,7 @@
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 impl ScalarFunc {
