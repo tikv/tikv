@@ -31,7 +31,7 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
 
 - Local mode: use the `--db` option to specify the local TiKV data directory path
 
-Unless otherwise noted, all commands supports both the remote mode and the local mode.
+Unless otherwise noted, all commands support both the remote mode and the local mode.
 
 Additionally, `tikv-ctl` has two simple commands `--to-hex` and `--to-escaped`, which are used to make simple changes to the form of the key.
 
@@ -254,4 +254,4 @@ success!
 > 
 > - This command only supports the local mode. It prints `success!` when successfully run.
 > - The argument of the `--pd/-p` option specifies the PD endpoints without the `http` prefix. Specifying the PD endpoints is to query whether the specified `region_id` is validated or not.
-> - You need to run this command for all stores where specified Regions' peers locate.
+> - You need to run this command for all stores where specified Regions' peers are located.
