@@ -109,7 +109,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
         if ReadTask::acceptable(&msg) {
             self.local_reader_ch
-                .schedule(ReadTask::Read(msg))
+                .schedule(ReadTask::read(msg))
                 .map_err(|e| box_err!(e))
         } else {
             self.ch.try_send(msg).map_err(RaftStoreError::Transport)
@@ -119,7 +119,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
         if ReadTask::acceptable(&msg) {
             self.local_reader_ch
-                .schedule(ReadTask::Read(msg))
+                .schedule(ReadTask::read(msg))
                 .map_err(|e| box_err!(e))
         } else {
             self.ch.send(msg).map_err(RaftStoreError::Transport)
