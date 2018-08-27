@@ -28,7 +28,7 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use util::properties::{RangeProperties, PROP_SIZE_INDEX_DISTANCE};
+use util::properties::RangeProperties;
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
 use util::{rocksdb as rocksdb_util, Either};
@@ -124,7 +124,7 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
     }
 }
 
-const MAX_WRITE_BATCH_SIZE: usize = 4 * 1024 * 1024;
+const MAX_WRITE_BATCH_ENTRY_SIZE: usize = 4 * 1024 * 1024;
 
 pub fn delete_all_in_range(
     db: &DB,
@@ -167,7 +167,7 @@ pub fn delete_all_in_range_cf(
         it.seek(start_key.into());
         while it.valid() {
             wb.delete_cf(handle, it.key())?;
-            if wb.data_size() >= MAX_WRITE_BATCH_SIZE {
+            if wb.data_size() >= MAX_WRITE_BATCH_ENTRY_SIZE {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
                 db.write(wb)?;
@@ -493,29 +493,11 @@ pub fn get_region_approximate_split_keys_cf(
     let range = Range::new(&start, &end);
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
 
-    // cause first element of the iterator will always be returned by step_by(),
-    // for convenience, we insert a useless key in front and then just drop it.
-    //
-    // For example, the split size is `3 * PROP_SIZE_INDEX_DISTANCE`. And the
-    // numbers stand for the key in `RangeProperties`, `^` stands for produced
-    // split key.
-    //
-    // insert:
-    // start___1___2___3___4___5___6___7....
-    //   ^(drop)       ^           ^
-    //
-    // not insert:
-    // start___1___2___3___4___5___6___7....
-    //         ^(drop)     ^           ^
-    //
-    // note the start key of region is not included, so if we don't insert a
-    // useless key as start key, then the first splited region's size will be
-    // `4 *PROP_SIZE_INDEX_DISTANCE` but not `3 * PROP_SIZE_INDEX_DISTANCE`
-    let mut keys = vec![b"".to_vec()];
-    let mut size = 0;
+    let mut keys = vec![];
+    let mut total_size = 0;
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
-        size += props.get_approximate_keys_in_range(&start, &end);
+        total_size += props.get_approximate_size_in_range(&start, &end);
         keys.extend(
             props
                 .offsets
@@ -528,24 +510,40 @@ pub fn get_region_approximate_split_keys_cf(
     }
     keys.sort();
 
-    // assume that the size between two keys is PROP_SIZE_INDEX_DISTANCE,
-    // so we make it as split_key every split_size / PROP_SIZE_INDEX_DISTANCE keys.
-    let len = (keys.len() - 1) as u64;
-    let dist = size as f64 / len as f64;
+    // use total size of this range and the number of keys in this range to
+    // calculate the average distance between two keys, and we produce a
+    // split_key every `split_size / dist` keys.
+    let len = keys.len();
+    let dist = total_size as f64 / len as f64;
     assert!(split_size != 0);
-    let n = (split_size as f64 / dist).ceil() as u64;
+    let n = (split_size as f64 / dist).ceil() as usize;
+
+    // cause first element of the iterator will always be returned by step_by(),
+    // so the first key returned may not the desired split key. Note that, the
+    // start key of region is not included, so we we drop first n - 1 keys.
+    //
+    // For example, the split size is `3 * dist`. And the numbers stand for the
+    // key in `RangeProperties`, `^` stands for produced split key.
+    //
+    // skip:
+    // start___1___2___3___4___5___6___7....
+    //                 ^           ^
+    //
+    // not skip:
+    // start___1___2___3___4___5___6___7....
+    //         ^           ^           ^
     let mut split_keys = keys
         .into_iter()
-        .step_by(n as usize)
-        .skip(1)
+        .skip(n - 1)
+        .step_by(n)
         .collect::<Vec<Vec<u8>>>();
 
     if split_keys.len() as u64 > batch_split_limit {
         split_keys.truncate(batch_split_limit as usize);
     } else {
         // make sure not to split when less than max_size for last part
-        let rest = len % n;
-        if rest * PROP_SIZE_INDEX_DISTANCE + split_size < max_size {
+        let rest = (len % n) as u64;
+        if rest * dist as u64 + split_size < max_size {
             split_keys.pop();
         }
     }
@@ -1600,6 +1598,10 @@ mod tests {
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);
         big_value.extend(iter::repeat(b'v').take(256));
+
+        // total size for one key and value
+        const ENTRY_SIZE: u64 = 256 + 9;
+
         for i in 0..4 {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
@@ -1608,20 +1610,16 @@ mod tests {
             engine.flush_cf(cf_handle, true).unwrap();
         }
         let region = make_region(1, vec![], vec![]);
-        let split_keys = get_region_approximate_split_keys(
-            &engine,
-            &region,
-            3 * PROP_SIZE_INDEX_DISTANCE,
-            5 * PROP_SIZE_INDEX_DISTANCE,
-            1,
-        ).unwrap()
-            .into_iter()
-            .map(|k| {
-                Key::from_encoded_slice(keys::origin_key(&k))
-                    .into_raw()
-                    .unwrap()
-            })
-            .collect::<Vec<Vec<u8>>>();
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 1)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
 
         assert_eq!(split_keys.is_empty(), true);
 
@@ -1632,20 +1630,16 @@ mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
-        let split_keys = get_region_approximate_split_keys(
-            &engine,
-            &region,
-            3 * PROP_SIZE_INDEX_DISTANCE,
-            5 * PROP_SIZE_INDEX_DISTANCE,
-            5,
-        ).unwrap()
-            .into_iter()
-            .map(|k| {
-                Key::from_encoded_slice(keys::origin_key(&k))
-                    .into_raw()
-                    .unwrap()
-            })
-            .collect::<Vec<Vec<u8>>>();
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
 
         assert_eq!(split_keys, vec![b"key_002".to_vec()]);
 
@@ -1656,20 +1650,16 @@ mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
-        let split_keys = get_region_approximate_split_keys(
-            &engine,
-            &region,
-            3 * PROP_SIZE_INDEX_DISTANCE,
-            5 * PROP_SIZE_INDEX_DISTANCE,
-            5,
-        ).unwrap()
-            .into_iter()
-            .map(|k| {
-                Key::from_encoded_slice(keys::origin_key(&k))
-                    .into_raw()
-                    .unwrap()
-            })
-            .collect::<Vec<Vec<u8>>>();
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
 
         assert_eq!(split_keys, vec![b"key_002".to_vec(), b"key_005".to_vec()]);
 
@@ -1680,20 +1670,16 @@ mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
-        let split_keys = get_region_approximate_split_keys(
-            &engine,
-            &region,
-            3 * PROP_SIZE_INDEX_DISTANCE,
-            5 * PROP_SIZE_INDEX_DISTANCE,
-            5,
-        ).unwrap()
-            .into_iter()
-            .map(|k| {
-                Key::from_encoded_slice(keys::origin_key(&k))
-                    .into_raw()
-                    .unwrap()
-            })
-            .collect::<Vec<Vec<u8>>>();
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
 
         assert_eq!(
             split_keys,
