@@ -11,6 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Generally peers are state machines that represent a replica of a region,
+//! and store is also a special state machine that handles all requests across
+//! stores. They are mixed for now, will be separated in the future.
+
 mod peer;
 mod store;
 
