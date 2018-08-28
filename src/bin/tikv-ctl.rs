@@ -1519,6 +1519,11 @@ fn main() {
         );
 
     let matches = app.clone().get_matches();
+    if matches.args.is_empty() {
+        let _ = app.print_help();
+        println!();
+        return;
+    }
 
     // Deal with arguments about key utils.
     if let Some(hex) = matches.value_of("hex-to-escaped") {
