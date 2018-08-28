@@ -6,7 +6,7 @@ category: operations
 
 # gRPC Configuration
 
-TiKV uses gRPC, a remote procedure call (RPC) framework, to build a distributed transactional key-value database. gRPC is designed to be high-performance, but ill-configured gRPC leads to performance regression of TiKV.
+TiKV uses gRPC, a remote procedure call (RPC) framework, to build a distributed transactional key-value database. gRPC is designed to be high-performance, but ill-configured gRPC leads to performance regression of TiKV. This document describes how to configure gRPC.
 
 ## grpc-compression-type
 
