@@ -542,8 +542,7 @@ impl<E: Engine> Storage<E> {
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
-                })
-                .then(move |r| {
+                }).then(move |r| {
                     _timer.observe_duration();
                     r
                 })
@@ -610,8 +609,7 @@ impl<E: Engine> Storage<E> {
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     result
-                })
-                .then(move |r| {
+                }).then(move |r| {
                     _timer.observe_duration();
                     r
                 })
@@ -683,8 +681,7 @@ impl<E: Engine> Storage<E> {
                             .map(|x| x.map_err(Error::from))
                             .collect()
                     })
-                })
-                .then(move |r| {
+                }).then(move |r| {
                     _timer.observe_duration();
                     r
                 })
@@ -902,8 +899,7 @@ impl<E: Engine> Storage<E> {
                             }
                             r
                         })
-                })
-                .then(move |r| {
+                }).then(move |r| {
                     _timer.observe_duration();
                     r
                 })
@@ -945,8 +941,7 @@ impl<E: Engine> Storage<E> {
                         .map(|k| {
                             let v = snapshot.get_cf(cf, &k);
                             (k, v)
-                        })
-                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        }).filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| match v {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
@@ -955,13 +950,11 @@ impl<E: Engine> Storage<E> {
                             }
                             Err(e) => Err(Error::from(e)),
                             _ => unreachable!(),
-                        })
-                        .collect();
+                        }).collect();
                     thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
                     Ok(result)
-                })
-                .then(move |r| {
+                }).then(move |r| {
                     _timer.observe_duration();
                     r
                 })
@@ -1179,8 +1172,7 @@ impl<E: Engine> Storage<E> {
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     result
-                })
-                .then(move |r| {
+                }).then(move |r| {
                     _timer.observe_duration();
                     r
                 })
@@ -1277,8 +1269,7 @@ impl<E: Engine> Storage<E> {
                     thread_ctx.collect_scan_count(CMD, &statistics);
 
                     Ok(result)
-                })
-                .then(move |r| {
+                }).then(move |r| {
                     _timer.observe_duration();
                     r
                 })
@@ -1527,8 +1518,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_error(
             |e| match e {
@@ -1546,8 +1536,7 @@ mod tests {
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 3),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_none(
             storage
@@ -1589,8 +1578,7 @@ mod tests {
                     }
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_error(
             |e| match e {
@@ -1613,8 +1601,7 @@ mod tests {
                     1000,
                     1,
                     Options::default(),
-                )
-                .wait(),
+                ).wait(),
         );
         expect_multi_values(
             vec![None, None],
@@ -1623,8 +1610,7 @@ mod tests {
                     Context::new(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     1,
-                )
-                .wait(),
+                ).wait(),
         );
         storage.stop().unwrap();
     }
@@ -1648,8 +1634,7 @@ mod tests {
                 1,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_multi_values(
             vec![None, None, None],
@@ -1660,8 +1645,7 @@ mod tests {
                     1000,
                     5,
                     Options::default(),
-                )
-                .wait(),
+                ).wait(),
         );
         storage
             .async_commit(
@@ -1674,8 +1658,7 @@ mod tests {
                 1,
                 2,
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_multi_values(
             vec![
@@ -1690,8 +1673,7 @@ mod tests {
                     1000,
                     5,
                     Options::default(),
-                )
-                .wait(),
+                ).wait(),
         );
         storage.stop().unwrap();
     }
@@ -1715,8 +1697,7 @@ mod tests {
                 1,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_multi_values(
             vec![None],
@@ -1725,8 +1706,7 @@ mod tests {
                     Context::new(),
                     vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                     2,
-                )
-                .wait(),
+                ).wait(),
         );
         storage
             .async_commit(
@@ -1739,8 +1719,7 @@ mod tests {
                 1,
                 2,
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_multi_values(
             vec![
@@ -1758,8 +1737,7 @@ mod tests {
                         Key::from_raw(b"b"),
                     ],
                     5,
-                )
-                .wait(),
+                ).wait(),
         );
         storage.stop().unwrap();
     }
@@ -1779,8 +1757,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         storage
             .async_prewrite(
                 Context::new(),
@@ -1789,8 +1766,7 @@ mod tests {
                 101,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage
@@ -1800,8 +1776,7 @@ mod tests {
                 100,
                 110,
                 expect_ok_callback(tx.clone(), 2),
-            )
-            .unwrap();
+            ).unwrap();
         storage
             .async_commit(
                 Context::new(),
@@ -1809,8 +1784,7 @@ mod tests {
                 101,
                 111,
                 expect_ok_callback(tx.clone(), 3),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         expect_value(
@@ -1836,8 +1810,7 @@ mod tests {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
     }
@@ -1863,8 +1836,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         storage
             .async_prewrite(
                 Context::new(),
@@ -1873,8 +1845,7 @@ mod tests {
                 101,
                 Options::default(),
                 expect_too_busy_callback(tx.clone(), 2),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage
@@ -1885,8 +1856,7 @@ mod tests {
                 102,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 3),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
     }
@@ -1906,8 +1876,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_cleanup(
@@ -1915,8 +1884,7 @@ mod tests {
                 Key::from_raw(b"x"),
                 100,
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_none(
             storage
@@ -1946,8 +1914,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -1958,8 +1925,7 @@ mod tests {
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 2),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -1994,8 +1960,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_commit(
@@ -2004,8 +1969,7 @@ mod tests {
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 2),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         storage
@@ -2043,8 +2007,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_commit(
@@ -2057,8 +2020,7 @@ mod tests {
                 100,
                 101,
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
@@ -2086,8 +2048,7 @@ mod tests {
                 Key::from_raw(b"x"),
                 Key::from_raw(b"z"),
                 expect_ok_callback(tx.clone(), 5),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_none(
             storage
@@ -2113,8 +2074,7 @@ mod tests {
                 Key::from_raw(b""),
                 Key::from_raw(b""),
                 expect_ok_callback(tx.clone(), 9),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         expect_none(
             storage
@@ -2149,8 +2109,7 @@ mod tests {
                     kv.0.to_vec(),
                     kv.1.to_vec(),
                     expect_ok_callback(tx.clone(), 0),
-                )
-                .unwrap();
+                ).unwrap();
         }
 
         expect_value(
@@ -2168,8 +2127,7 @@ mod tests {
                 b"d".to_vec(),
                 b"e".to_vec(),
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Assert key "d" has gone
@@ -2199,8 +2157,7 @@ mod tests {
                 b"aa".to_vec(),
                 b"ab".to_vec(),
                 expect_ok_callback(tx.clone(), 2),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Assert nothing happened
@@ -2225,8 +2182,7 @@ mod tests {
                 b"a".to_vec(),
                 b"z".to_vec(),
                 expect_ok_callback(tx, 3),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Assert now no key remains
@@ -2264,8 +2220,7 @@ mod tests {
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Verify pairs one by one
@@ -2304,8 +2259,7 @@ mod tests {
                     key.clone(),
                     value.clone(),
                     expect_ok_callback(tx.clone(), 0),
-                )
-                .unwrap();
+                ).unwrap();
         }
         rx.recv().unwrap();
 
@@ -2343,8 +2297,7 @@ mod tests {
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Verify pairs exist
@@ -2367,8 +2320,7 @@ mod tests {
                 "".to_string(),
                 vec![b"b".to_vec(), b"d".to_vec()],
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Assert "b" and "d" are gone
@@ -2408,8 +2360,7 @@ mod tests {
                 "".to_string(),
                 vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
                 expect_ok_callback(tx.clone(), 2),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Assert no key remains
@@ -2460,8 +2411,7 @@ mod tests {
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Scan pairs with key only
@@ -2537,8 +2487,7 @@ mod tests {
                 "".to_string(),
                 test_data.clone(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         // Verify pairs exist
@@ -2572,8 +2521,7 @@ mod tests {
                 let mut range = KeyRange::new();
                 range.set_start_key(k);
                 range
-            })
-            .collect();
+            }).collect();
         expect_multi_values(
             results,
             storage
@@ -2655,13 +2603,12 @@ mod tests {
             (b"b".to_vec(), b"b3".to_vec()),
             (b"c".to_vec(), b"c3".to_vec()),
         ].into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::new();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
+        .map(|(s, e)| {
+            let mut range = KeyRange::new();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        }).collect();
         expect_multi_values(
             results,
             storage
@@ -2707,8 +2654,7 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_prewrite(
@@ -2722,8 +2668,7 @@ mod tests {
                 101,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
             {
@@ -2776,8 +2721,7 @@ mod tests {
                 vec![],
                 10,
                 expect_value_callback(tx.clone(), 0, vec![]),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_scan_locks(
@@ -2790,8 +2734,7 @@ mod tests {
                     0,
                     vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
                 ),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_scan_locks(
@@ -2804,8 +2747,7 @@ mod tests {
                     0,
                     vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
                 ),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_scan_locks(
@@ -2814,8 +2756,7 @@ mod tests {
                 b"y".to_vec(),
                 10,
                 expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_scan_locks(
@@ -2835,8 +2776,7 @@ mod tests {
                         lock_z.clone(),
                     ],
                 ),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_scan_locks(
@@ -2854,8 +2794,7 @@ mod tests {
                         lock_x.clone(),
                     ],
                 ),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_scan_locks(
@@ -2873,8 +2812,7 @@ mod tests {
                         lock_y.clone(),
                     ],
                 ),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
         storage
             .async_scan_locks(
@@ -2893,8 +2831,7 @@ mod tests {
                         lock_z.clone(),
                     ],
                 ),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
     }
 
@@ -2921,8 +2858,7 @@ mod tests {
                 99,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+            ).unwrap();
         rx.recv().unwrap();
 
         let (lock_a, lock_b, lock_c) = (
@@ -2985,8 +2921,7 @@ mod tests {
                         ts,
                         Options::default(),
                         expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
+                    ).unwrap();
                 rx.recv().unwrap();
 
                 let mut txn_status = HashMap::default();
@@ -3003,8 +2938,7 @@ mod tests {
                         Context::new(),
                         txn_status,
                         expect_ok_callback(tx.clone(), 0),
-                    )
-                    .unwrap();
+                    ).unwrap();
                 rx.recv().unwrap();
 
                 // All locks should be resolved except for a, b and c.
@@ -3019,8 +2953,7 @@ mod tests {
                             0,
                             vec![lock_a.clone(), lock_b.clone(), lock_c.clone()],
                         ),
-                    )
-                    .unwrap();
+                    ).unwrap();
                 rx.recv().unwrap();
 
                 ts += 10;

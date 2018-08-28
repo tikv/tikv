@@ -229,8 +229,7 @@ mod test {
             .start(StepRunner {
                 timer: GLOBAL_TIMER_HANDLE.clone(),
                 ch: tx,
-            })
-            .unwrap();
+            }).unwrap();
         assert!(!worker.is_busy());
         // The default tick size of tokio_timer is 100ms.
         let start = Instant::now();

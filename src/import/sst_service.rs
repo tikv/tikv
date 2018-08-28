@@ -124,8 +124,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                         };
                         let file = import.create(meta)?;
                         Ok((file, stream))
-                    })
-                    .and_then(move |(file, stream)| {
+                    }).and_then(move |(file, stream)| {
                         stream
                             .map_err(Error::from)
                             .fold(file, |mut file, chunk| {
@@ -140,10 +139,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                                 IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
                                 IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
                                 future::ok(file)
-                            })
-                            .and_then(|mut file| file.finish())
-                    })
-                    .map(|_| UploadResponse::new())
+                            }).and_then(|mut file| file.finish())
+                    }).map(|_| UploadResponse::new())
                     .then(move |res| send_rpc_response!(res, sink, label, timer)),
             ),
         )
@@ -189,8 +186,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                         future::ok(resp)
                     }
                     Err(e) => future::err(e),
-                })
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+                }).then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
 

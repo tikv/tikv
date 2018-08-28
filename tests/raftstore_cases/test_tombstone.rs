@@ -66,8 +66,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
             .scan_cf(cf, b"", &[0xFF], false, |k, v| {
                 existing_kvs.push((k.to_vec(), v.to_vec()));
                 Ok(true)
-            })
-            .unwrap();
+            }).unwrap();
     }
     // only tombstone key and store ident key exist.
     assert_eq!(existing_kvs.len(), 2);

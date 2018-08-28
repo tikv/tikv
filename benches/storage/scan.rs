@@ -42,16 +42,14 @@ fn bench_tombstone_scan(b: &mut Bencher) {
                 vec![Mutation::Put((Key::from_raw(&k), v))],
                 k.clone(),
                 ts,
-            )
-            .expect("");
+            ).expect("");
         store
             .commit(
                 Context::new(),
                 vec![Key::from_raw(&k)],
                 ts,
                 ts_generator.next().unwrap(),
-            )
-            .expect("");
+            ).expect("");
 
         ts = ts_generator.next().unwrap();
         store
@@ -60,16 +58,14 @@ fn bench_tombstone_scan(b: &mut Bencher) {
                 vec![Mutation::Delete(Key::from_raw(&k))],
                 k.clone(),
                 ts,
-            )
-            .expect("");
+            ).expect("");
         store
             .commit(
                 Context::new(),
                 vec![Key::from_raw(&k)],
                 ts,
                 ts_generator.next().unwrap(),
-            )
-            .expect("");
+            ).expect("");
     }
 
     kvs = KvGenerator::new(100, 1000);
@@ -83,8 +79,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
                     1,
                     false,
                     ts_generator.next().unwrap()
-                )
-                .unwrap()
+                ).unwrap()
                 .is_empty()
         )
     })

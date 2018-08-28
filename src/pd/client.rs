@@ -314,8 +314,7 @@ impl PdClient for RpcClient {
                     .send_all(rx.then(|r| match r {
                         Ok(r) => Ok((r, WriteFlags::default())),
                         Err(()) => Err(Error::Other(box_err!("failed to recv heartbeat"))),
-                    }))
-                    .then(|result| match result {
+                    })).then(|result| match result {
                         Ok((mut sender, _)) => {
                             info!("cancel region heartbeat sender");
                             sender.get_mut().cancel();

@@ -342,8 +342,7 @@ mod test {
                 false,
                 Some(lower_bound.clone()),
                 Some(upper_bound.clone()),
-            )
-            .unwrap();
+            ).unwrap();
 
         // Collect all scanned keys
         let mut result = Vec::new();
@@ -358,8 +357,7 @@ mod test {
                 false,
                 Some(lower_bound),
                 Some(upper_bound),
-            )
-            .unwrap();
+            ).unwrap();
 
         // Collect all scanned keys
         let mut result = Vec::new();

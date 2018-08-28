@@ -49,9 +49,9 @@ macro_rules! fatal {
 }
 
 pub fn init_log(config: &TiKvConfig) {
-    let log_rotation_timespan = chrono::Duration::from_std(
-        config.log_rotation_timespan.clone().into(),
-    ).expect("config.log_rotation_timespan is an invalid duration.");
+    let log_rotation_timespan =
+        chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
+            .expect("config.log_rotation_timespan is an invalid duration.");
     if config.log_file.is_empty() {
         let decorator = TermDecorator::new().build();
         let drain = logger::TikvFormat::new(decorator).fuse();
@@ -142,8 +142,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
                     fatal!("invalid label: {:?}", s);
                 }
                 labels.insert(key, value);
-            })
-            .count();
+            }).count();
         config.server.labels = labels;
     }
 

@@ -1225,8 +1225,7 @@ mod tests {
                 let mut cf_opts = ColumnFamilyOptions::new();
                 cf_opts.set_level_zero_file_num_compaction_trigger(1);
                 CFOptions::new(cf, cf_opts)
-            })
-            .collect();
+            }).collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
         let keys = vec![b"k1", b"k2", b"k3", b"k4"];
@@ -1268,8 +1267,7 @@ mod tests {
             .set_prefix_extractor(
                 "FixedSuffixSliceTransform",
                 Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)),
-            )
-            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+            ).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
         let cf = "default";

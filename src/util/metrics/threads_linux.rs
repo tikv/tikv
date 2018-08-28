@@ -361,8 +361,7 @@ mod tests {
             .spawn(move || {
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
-            })
-            .unwrap();
+            }).unwrap();
         rx1.recv().unwrap();
 
         let pid = unsafe { libc::getpid() };
@@ -374,8 +373,7 @@ mod tests {
                 Stat::collect(pid, **t)
                     .map(|stat| stat.name == name)
                     .unwrap_or(false)
-            })
-            .unwrap();
+            }).unwrap();
 
         tx.send(()).unwrap();
         h.join().unwrap();

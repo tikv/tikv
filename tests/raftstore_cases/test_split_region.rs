@@ -221,8 +221,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
             size += k.len() as u64;
             size += v.len() as u64;
             Ok(true)
-        })
-        .expect("");
+        }).expect("");
     assert!(size <= REGION_SPLIT_SIZE);
     // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
     // be small.

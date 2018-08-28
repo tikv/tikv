@@ -515,8 +515,7 @@ mod tests {
             .scan(b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
-            })
-            .unwrap();
+            }).unwrap();
         assert_eq!(
             data,
             vec![
@@ -530,8 +529,7 @@ mod tests {
             .scan_cf(cf, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
-            })
-            .unwrap();
+            }).unwrap();
         assert_eq!(
             data,
             vec![
@@ -554,8 +552,7 @@ mod tests {
                 data.push((key.to_vec(), value.to_vec()));
                 index += 1;
                 Ok(index != 1)
-            })
-            .unwrap();
+            }).unwrap();
 
         assert_eq!(data.len(), 1);
 

@@ -296,8 +296,7 @@ pub mod test {
                     OriginCols::new(i64::from(handle), row_data, Arc::new(Vec::default())),
                     ob_values,
                     Arc::clone(&order_cols),
-                )
-                .unwrap();
+                ).unwrap();
         }
         let result = topn_heap.into_sorted_vec().unwrap();
         assert_eq!(result.len(), exp.len());
@@ -324,8 +323,7 @@ pub mod test {
                 OriginCols::new(0 as i64, row_data, Arc::new(Vec::default())),
                 ob_values1,
                 Arc::clone(&order_cols),
-            )
-            .unwrap();
+            ).unwrap();
 
         let ob_values2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
         let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
@@ -334,8 +332,7 @@ pub mod test {
                 OriginCols::new(0 as i64, row_data2, Default::default()),
                 ob_values2,
                 Arc::clone(&order_cols),
-            )
-            .unwrap();
+            ).unwrap();
 
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
@@ -346,8 +343,7 @@ pub mod test {
                     OriginCols::new(0 as i64, row_data3, Arc::default()),
                     bad_key1,
                     Arc::clone(&order_cols)
-                )
-                .is_err()
+                ).is_err()
         );
         assert!(topn_heap.into_sorted_vec().is_err());
     }

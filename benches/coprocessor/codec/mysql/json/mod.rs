@@ -122,8 +122,7 @@ fn bench_decode_binary(b: &mut Bencher) {
             let mut buf = Vec::new();
             buf.encode_json(&j).unwrap();
             buf
-        })
-        .collect::<Vec<Vec<u8>>>();
+        }).collect::<Vec<Vec<u8>>>();
     b.iter(|| {
         for binary in &binaries {
             Json::decode(&mut binary.as_slice()).unwrap();

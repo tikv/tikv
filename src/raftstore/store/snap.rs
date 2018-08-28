@@ -1202,8 +1202,7 @@ impl SnapManager {
                     return None;
                 }
                 Some((snap_key, is_sending))
-            })
-            .collect();
+            }).collect();
         v.sort();
         v.dedup();
         Ok(v)

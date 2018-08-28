@@ -71,13 +71,11 @@ impl Display for Task {
                         ranges.first().as_ref().map(|k| escape(k)),
                         ranges.last().as_ref().map(|k| escape(k)),
                     ),
-                )
-                .field("tombstones_num_threshold", &tombstones_num_threshold)
+                ).field("tombstones_num_threshold", &tombstones_num_threshold)
                 .field(
                     "tombstones_percent_threshold",
                     &tombstones_percent_threshold,
-                )
-                .finish(),
+                ).finish(),
         }
     }
 }

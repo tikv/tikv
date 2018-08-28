@@ -323,8 +323,7 @@ pub mod test {
             .map(|&(ref cid, ref value)| {
                 expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
                 value.clone()
-            })
-            .collect();
+            }).collect();
         if !unique {
             v.push(Datum::I64(handle));
         }

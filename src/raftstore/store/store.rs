@@ -1441,11 +1441,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             );
         }
 
-        if is_initialized
-            && self
-                .region_ranges
-                .remove(&enc_end_key(p.region()))
-                .is_none()
+        if is_initialized && self
+            .region_ranges
+            .remove(&enc_end_key(p.region()))
+            .is_none()
         {
             panic!(
                 "[region {}] remove peer {:?} in store {}",

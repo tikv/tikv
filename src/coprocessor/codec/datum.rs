@@ -942,8 +942,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                 Datum::Json(ref d) => d.binary_len(),
                 Datum::Null | Datum::Min | Datum::Max => 0,
             }
-        })
-        .sum()
+        }).sum()
 }
 
 /// `encode` encodes a datum slice into a buffer.

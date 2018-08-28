@@ -135,8 +135,7 @@ mod tests {
                 let f = Box::new(SizePropertiesCollectorFactory::default());
                 cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
                 CFOptions::new(cf, cf_opts)
-            })
-            .collect();
+            }).collect();
         let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
 
         let mut region = Region::new();

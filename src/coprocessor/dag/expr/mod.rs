@@ -243,8 +243,7 @@ impl Expression {
                     let fsp = tp.get_decimal() as i8;
                     let t = tp.get_tp() as u8;
                     Time::from_packed_u64(i, t, fsp, ctx.cfg.tz)
-                })
-                .map(|t| Expression::new_const(Datum::Time(t), tp)),
+                }).map(|t| Expression::new_const(Datum::Time(t), tp)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
                 .map_err(Error::from)
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))

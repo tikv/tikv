@@ -247,8 +247,7 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
                 Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
             ],
-        )
-        .unwrap();
+        ).unwrap();
     assert_has(ctx, engine, b"x", b"1");
     assert_has(ctx, engine, b"y", b"2");
 
@@ -259,8 +258,7 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
                 Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
             ],
-        )
-        .unwrap();
+        ).unwrap();
     assert_none(ctx, engine, b"y");
     assert_none(ctx, engine, b"y");
 }

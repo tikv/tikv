@@ -124,8 +124,7 @@ impl Monitor {
                         on_jumped()
                     }
                 }
-            })
-            .unwrap();
+            }).unwrap();
 
         Monitor {
             tx,

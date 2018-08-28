@@ -37,8 +37,7 @@ fn test_raft_storage() {
             vec![Mutation::Put((key.clone(), b"value".to_vec()))],
             b"key".to_vec(),
             10,
-        )
-        .unwrap();
+        ).unwrap();
     storage
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();
@@ -130,8 +129,7 @@ fn test_raft_storage_store_not_match() {
             vec![Mutation::Put((key.clone(), b"value".to_vec()))],
             b"key".to_vec(),
             10,
-        )
-        .unwrap();
+        ).unwrap();
     storage
         .commit(ctx.clone(), vec![key.clone()], 10, 15)
         .unwrap();

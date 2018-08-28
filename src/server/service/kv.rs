@@ -110,8 +110,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 req.take_context(),
                 Key::from_raw(req.get_key()),
                 req.get_version(),
-            )
-            .then(|v| {
+            ).then(|v| {
                 let mut resp = GetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
@@ -123,8 +122,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     }
                 }
                 Ok(resp)
-            })
-            .and_then(|res| sink.success(res).map_err(Error::from))
+            }).and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_get", e);
@@ -149,8 +147,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 req.get_limit() as usize,
                 req.get_version(),
                 options,
-            )
-            .then(|v| {
+            ).then(|v| {
                 let mut resp = ScanResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
@@ -158,8 +155,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
                 Ok(resp)
-            })
-            .and_then(|res| sink.success(res).map_err(Error::from))
+            }).and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_scan", e);
@@ -185,8 +181,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
                 Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
                 _ => panic!("mismatch Op in prewrite mutations"),
-            })
-            .collect();
+            }).collect();
         let mut options = Options::default();
         options.lock_ttl = req.get_lock_ttl();
         options.skip_constraint_check = req.get_skip_constraint_check();
@@ -210,8 +205,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_prewrite", e);
                 GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc();
@@ -243,8 +237,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(extract_key_error(&e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_commit", e);
                 GRPC_MSG_FAIL_COUNTER.kv_commit.inc();
@@ -286,8 +279,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     }
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_cleanup", e);
                 GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc();
@@ -321,8 +313,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
                 Ok(resp)
-            })
-            .and_then(|res| sink.success(res).map_err(Error::from))
+            }).and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_batch_get", e);
@@ -362,8 +353,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(extract_key_error(&e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_batch_rollback", e);
                 GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc();
@@ -401,8 +391,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     }
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_scan_lock", e);
                 GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc();
@@ -446,8 +435,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(extract_key_error(&e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_resolve_lock", e);
                 GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc();
@@ -473,8 +461,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(extract_key_error(&e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_gc", e);
                 GRPC_MSG_FAIL_COUNTER.kv_gc.inc();
@@ -509,8 +496,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(format!("{}", e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "kv_delete_range", e);
                 GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc();
@@ -537,8 +523,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     }
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_get", e);
                 GRPC_MSG_FAIL_COUNTER.raw_get.inc();
@@ -567,8 +552,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_batch_get", e);
                 GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc();
@@ -588,8 +572,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 req.take_start_key(),
                 req.get_limit() as usize,
                 req.get_key_only(),
-            )
-            .then(|v| {
+            ).then(|v| {
                 let mut resp = RawScanResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
@@ -597,8 +580,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_scan", e);
                 GRPC_MSG_FAIL_COUNTER.raw_scan.inc();
@@ -623,8 +605,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 req.take_ranges().into_vec(),
                 req.get_each_limit() as usize,
                 req.get_key_only(),
-            )
-            .then(|v| {
+            ).then(|v| {
                 let mut resp = RawBatchScanResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
@@ -632,8 +613,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_batch_scan", e);
                 GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc();
@@ -663,8 +643,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(format!("{}", e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_put", e);
                 GRPC_MSG_FAIL_COUNTER.raw_put.inc();
@@ -700,8 +679,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(format!("{}", e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_batch_put", e);
                 GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc();
@@ -732,8 +710,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(format!("{}", e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_delete", e);
                 GRPC_MSG_FAIL_COUNTER.raw_delete.inc();
@@ -765,8 +742,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(format!("{}", e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_batch_delete", e);
                 GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc();
@@ -801,8 +777,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     resp.set_error(format!("{}", e));
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "raw_delete_range", e);
                 GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc();
@@ -919,8 +894,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 .for_each(move |msg| {
                     RAFT_MESSAGE_RECV_COUNTER.inc();
                     future::result(ch.send_raft_msg(msg)).map_err(Error::from)
-                })
-                .map_err(|e| error!("send raft msg to raft store fail: {}", e))
+                }).map_err(|e| error!("send raft msg to raft store fail: {}", e))
                 .then(|_| future::ok::<_, ()>(())),
         );
     }
@@ -970,8 +944,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     };
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "mvcc_get_by_key", e);
                 GRPC_MSG_FAIL_COUNTER.mvcc_get_by_key.inc();
@@ -1014,8 +987,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     }
                 }
                 sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
+            }).map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "mvcc_get_by_start_ts", e);
                 GRPC_MSG_FAIL_COUNTER.mvcc_get_by_start_ts.inc();
@@ -1070,8 +1042,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     }
                 }
                 resp
-            })
-            .and_then(|res| sink.success(res).map_err(Error::from))
+            }).and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "split_region", e);
@@ -1177,8 +1148,7 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
                     pair.set_error(extract_key_error(&e));
                     pair
                 }
-            })
-            .collect(),
+            }).collect(),
         Err(e) => {
             let mut pair = KvPair::new();
             pair.set_error(extract_key_error(&e));
@@ -1216,8 +1186,7 @@ fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
             value_info.set_start_ts(start_ts);
             value_info.set_value(value);
             value_info
-        })
-        .collect()
+        }).collect()
 }
 
 fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
@@ -1235,8 +1204,7 @@ fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
             write_info.set_commit_ts(commit_ts);
             write_info.set_short_value(write.short_value.unwrap_or_default());
             write_info
-        })
-        .collect()
+        }).collect()
 }
 
 fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {
@@ -1246,8 +1214,7 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
             .filter_map(|x| match x {
                 Err(e) => Some(extract_key_error(&e)),
                 Ok(_) => None,
-            })
-            .collect(),
+            }).collect(),
         Err(e) => vec![extract_key_error(&e)],
     }
 }

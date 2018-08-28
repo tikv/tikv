@@ -240,8 +240,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
                     let (cb_ctx, res) = on_read_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 }),
-            )
-            .map_err(From::from)
+            ).map_err(From::from)
     }
 
     fn exec_write_requests(
@@ -266,8 +265,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
                 }),
-            )
-            .map_err(From::from)
+            ).map_err(From::from)
     }
 
     fn batch_exec_snap_requests(

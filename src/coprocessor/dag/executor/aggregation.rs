@@ -461,8 +461,7 @@ mod test {
             .map(|&(ref cid, ref value)| {
                 expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
                 value.clone()
-            })
-            .collect();
+            }).collect();
         v.push(Datum::I64(handle));
         let encoded = datum::encode_key(&v).unwrap();
         let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);

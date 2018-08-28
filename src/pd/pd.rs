@@ -600,8 +600,7 @@ impl<T: PdClient> Runner<T> {
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
-            })
-            .map_err(|e| panic!("unexpected error: {:?}", e))
+            }).map_err(|e| panic!("unexpected error: {:?}", e))
             .map(move |_| {
                 info!(
                     "[store {}] region heartbeat response handler exit.",

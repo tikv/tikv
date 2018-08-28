@@ -98,8 +98,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.get(db, &cf, key.as_slice())),
-            )
-            .map(|value| {
+            ).map(|value| {
                 let mut resp = GetResponse::new();
                 resp.set_value(value);
                 resp
@@ -119,8 +118,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.raft_log(region_id, log_index)),
-            )
-            .map(|entry| {
+            ).map(|entry| {
                 let mut resp = RaftLogResponse::new();
                 resp.set_entry(entry);
                 resp
@@ -144,8 +142,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.region_info(region_id)),
-            )
-            .map(|region_info| {
+            ).map(|region_info| {
                 let mut resp = RegionInfoResponse::new();
                 if let Some(raft_local_state) = region_info.raft_local_state {
                     resp.set_raft_local_state(raft_local_state);
@@ -178,8 +175,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .spawn(
                 future::ok(self.debugger.clone())
                     .and_then(move |debugger| debugger.region_size(region_id, cfs)),
-            )
-            .map(|entries| {
+            ).map(|entries| {
                 let mut resp = RegionSizeResponse::new();
                 resp.set_entries(
                     entries
@@ -189,8 +185,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                             entry.set_cf(cf);
                             entry.set_size(size as u64);
                             entry
-                        })
-                        .collect(),
+                        }).collect(),
                 );
                 resp
             });
@@ -218,11 +213,9 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                         resp.set_key(key);
                         resp.set_info(mvcc_info);
                         (resp, WriteFlags::default())
-                    })
-                    .forward(sink)
+                    }).forward(sink)
                     .map(|_| ())
-            })
-            .map_err(|e| on_grpc_error("scan_mvcc", &e));
+            }).map_err(|e| on_grpc_error("scan_mvcc", &e));
         self.pool.spawn(future).forget();
     }
 
@@ -237,8 +230,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                     req.get_to_key(),
                     req.get_threads(),
                     req.get_bottommost_level_compaction().into(),
-                )
-                .map(|_| CompactResponse::default())
+                ).map(|_| CompactResponse::default())
         });
         self.handle_response(ctx, sink, f, "debug_compact");
     }
@@ -371,8 +363,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
             .pool
             .spawn(future::ok(self.debugger.clone()).and_then(move |debugger| {
                 debugger.modify_tikv_config(module, &config_name, &config_value)
-            }))
-            .map(|_| ModifyTikvConfigResponse::new());
+            })).map(|_| ModifyTikvConfigResponse::new());
 
         self.handle_response(ctx, sink, f, TAG);
     }

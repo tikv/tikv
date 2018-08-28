@@ -165,8 +165,7 @@ impl EntryCache {
                 } else {
                     false
                 }
-            })
-            .count();
+            }).count();
         // Cache either is empty or contains latest log. Hence we don't need to fetch log
         // from rocksdb anymore.
         assert!(end_idx == limit_idx || fetched_size > max_size);
@@ -1566,8 +1565,7 @@ mod test {
             .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
-            })
-            .unwrap();
+            }).unwrap();
 
         let (raft_start, raft_end) = (
             keys::region_raft_prefix(region_id),
@@ -1579,8 +1577,7 @@ mod test {
             .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
-            })
-            .unwrap();
+            }).unwrap();
 
         store
             .engines
@@ -1588,8 +1585,7 @@ mod test {
             .scan(&raft_start, &raft_end, false, |_, _| {
                 count += 1;
                 Ok(true)
-            })
-            .unwrap();
+            }).unwrap();
 
         count
     }

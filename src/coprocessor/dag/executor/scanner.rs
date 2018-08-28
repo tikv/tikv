@@ -254,8 +254,7 @@ pub mod test {
                     let value = datum::encode_value(&[f]).unwrap();
                     expect_row.insert(*cid, value);
                     v.clone()
-                })
-                .collect();
+                }).collect();
 
             let value = table::encode_row(col_values, &col_ids).unwrap();
             let key = table::encode_row_key(table_id, handle as i64);

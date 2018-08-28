@@ -605,8 +605,7 @@ impl ApplyDelegate {
                     &keys::apply_state_key(self.region.get_id()),
                     &self.apply_state,
                 )
-            })
-            .unwrap_or_else(|e| {
+            }).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save apply state to write batch, error: {:?}",
                     self.tag, e
@@ -1145,10 +1144,9 @@ impl ApplyDelegate {
             if split_key.is_empty() {
                 return Err(box_err!("missing split key"));
             }
-            if split_key
-                <= keys
-                    .back()
-                    .map_or_else(|| derived.get_start_key(), Vec::as_slice)
+            if split_key <= keys
+                .back()
+                .map_or_else(|| derived.get_start_key(), Vec::as_slice)
             {
                 return Err(box_err!("invalid split request: {:?}", split_reqs));
             }
@@ -1201,13 +1199,12 @@ impl ApplyDelegate {
                 None,
             ).and_then(|_| {
                 write_initial_apply_state(&self.engines.kv, ctx.wb_mut(), new_region.get_id())
-            })
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} fails to save split region {:?}: {:?}",
-                        self.tag, new_region, e
-                    )
-                });
+            }).unwrap_or_else(|e| {
+                panic!(
+                    "{} fails to save split region {:?}: {:?}",
+                    self.tag, new_region, e
+                )
+            });
             regions.push(new_region);
         }
         if right_derive {
@@ -1440,8 +1437,7 @@ impl ApplyDelegate {
                     PeerState::Tombstone,
                     Some(merging_state),
                 )
-            })
-            .unwrap_or_else(|e| {
+            }).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to save merge region {:?}: {:?}",
                     self.tag, region, e
@@ -2988,8 +2984,7 @@ mod tests {
                     let mut new_peer = metapb::Peer::clone(p);
                     new_peer.set_id(*new_id);
                     new_peer
-                })
-                .collect();
+                }).collect();
             assert_eq!(state.get_region().get_peers(), expect_peers.as_slice());
             assert!(!state.has_merge_state(), "{:?}", state);
             let epoch = self.epoch.borrow();

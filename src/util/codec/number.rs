@@ -458,8 +458,7 @@ mod test {
                     let mut buf = vec![];
                     buf.$enc(*e).unwrap();
                     buf
-                })
-                .collect();
+                }).collect();
             encoded.sort();
             let decoded: Vec<_> = encoded
                 .iter()

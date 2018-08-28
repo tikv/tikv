@@ -102,8 +102,7 @@ fn start_global_timer() -> Handle {
             loop {
                 timer.turn(None).unwrap();
             }
-        })
-        .unwrap();
+        }).unwrap();
     rx.recv().unwrap()
 }
 

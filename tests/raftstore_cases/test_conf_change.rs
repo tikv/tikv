@@ -312,8 +312,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
                 .get_peers()
                 .iter()
                 .all(|p| s.get_id() != p.get_store_id())
-        })
-        .unwrap();
+        }).unwrap();
 
     let peer = new_conf_change_peer(&stores[i], &pd_client);
     let engine = cluster.get_engine(peer.get_store_id());
@@ -738,8 +737,7 @@ fn test_learner_with_slow_snapshot() {
                     // the first for metadata and subsequences for data.
                     m.get_message().get_msg_type() == MessageType::MsgSnapshot
                         && m.get_message().get_snapshot().has_metadata()
-                })
-                .count();
+                }).count();
             self.count.fetch_add(count, Ordering::SeqCst);
 
             if self.filter.load(Ordering::SeqCst) {

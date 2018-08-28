@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(use_extern_macros)]
 #![feature(proc_macro_non_items)]
 
 extern crate chrono;
@@ -66,38 +65,33 @@ fn main() {
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Sets listening address"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("config")
                 .short("C")
                 .long("config")
                 .value_name("FILE")
                 .help("Sets configuration file")
                 .takes_value(true),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("log-file")
                 .long("log-file")
                 .takes_value(true)
                 .value_name("FILE")
                 .help("Sets log file"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("log-level")
                 .long("log-level")
                 .takes_value(true)
                 .value_name("LEVEL")
                 .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
                 .help("Sets log level"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("import-dir")
                 .long("import-dir")
                 .takes_value(true)
                 .value_name("PATH")
                 .help("Sets the directory to store importing kv data"),
-        )
-        .get_matches();
+        ).get_matches();
 
     let config = setup_config(&matches);
     init_log(&config);
