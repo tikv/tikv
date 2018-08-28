@@ -237,7 +237,7 @@ success!
 > **Note:**
 > 
 > - This command only supports the local mode. It prints `success!` when successfully run.
-> - You must run this command for all stores where specified Regions' peers locate. If `--regions` is not set, all Regions are involved, and you need to run this command for all stores.
+> - You must run this command for all stores where specified Regions' peers are located. If `--regions` is not set, all Regions are involved, and you need to run this command for all stores.
 
 ### Recover from MVCC data corruption
 
