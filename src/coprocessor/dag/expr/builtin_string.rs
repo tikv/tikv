@@ -49,9 +49,12 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let pos = val.iter().position(|&x| x != SPACE);
         if let Some(i) = pos {
-            Ok(Some(Cow::Owned(val[i..].to_vec())))
+            match val {
+                Cow::Borrowed(val) => Ok(Some(Cow::Borrowed(&val[i..]))),
+                Cow::Owned(val) => Ok(Some(Cow::Owned(val[i..].to_owned()))),
+            }
         } else {
-            Ok(Some(val))
+            Ok(Some(Cow::Owned(b"".to_vec())))
         }
     }
 
@@ -63,7 +66,10 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
         let pos = val.iter().rev().position(|&x| x != SPACE);
         if let Some(i) = pos {
-            Ok(Some(Cow::Owned(val[..val.len() - i].to_vec())))
+            match val {
+                Cow::Borrowed(val) => Ok(Some(Cow::Borrowed(&val[..val.len() - i]))),
+                Cow::Owned(val) => Ok(Some(Cow::Owned(val[..val.len() - i].to_owned()))),
+            }
         } else {
             Ok(Some(Cow::Owned(b"".to_vec())))
         }
@@ -190,6 +196,7 @@ mod test {
             ("   bar   ", "bar   "),
             ("   b   ar   ", "b   ar   "),
             ("bar", "bar"),
+            ("    ", ""),
             ("\t  bar", "\t  bar"),
             ("\r  bar", "\r  bar"),
             ("\n  bar", "\n  bar"),
@@ -232,6 +239,7 @@ mod test {
             ("   bar   ", "   bar"),
             ("bar", "bar"),
             ("ba  r", "ba  r"),
+            ("    ", ""),
             ("  bar\t  ", "  bar\t"),
             (" bar   \t", " bar   \t"),
             ("bar   \r", "bar   \r"),
