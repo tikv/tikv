@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice};
 
@@ -37,10 +37,9 @@ use raft::{
     NO_LIMIT,
 };
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::engine::{Peekable, Snapshot};
-use raftstore::store::worker::apply::ApplyMetrics;
+use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::worker::{
-    apply, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
+    apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
 };
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
@@ -831,7 +830,7 @@ impl Peer {
 
         // There may be some values that are not applied by this leader yet but the old leader,
         // if applied_index_term isn't equal to current term.
-        self.get_store().applied_index_term == self.term()
+        self.get_store().applied_index_term() == self.term()
             // There may be stale read if the old leader splits really slow,
             // the new region may already elected a new leader while
             // the old leader still think it owns the splitted range.
@@ -1122,9 +1121,11 @@ impl Peer {
             self.raft_group
                 .advance_apply(apply_state.get_applied_index());
         }
-        self.mut_store().apply_state = apply_state;
-        let progress_to_be_updated = self.mut_store().applied_index_term != applied_index_term;
-        self.mut_store().applied_index_term = applied_index_term;
+
+        let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
+        self.mut_store().set_applied_state(apply_state);
+        self.mut_store().set_applied_term(applied_index_term);
+
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
         self.delete_keys_hint += apply_metrics.delete_keys_hint;
@@ -1179,7 +1180,8 @@ impl Peer {
             return;
         }
         self.leader_lease.renew(ts);
-        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease() {
+        let term = self.term();
+        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
             self.maybe_update_read_progress(progress);
         }
@@ -1195,7 +1197,7 @@ impl Peer {
 
     pub fn maybe_campaign(
         &mut self,
-        last_peer: &Peer,
+        parent_is_leader: bool,
         pending_raft_groups: &mut HashSet<u64>,
     ) -> bool {
         if self.region().get_peers().len() <= 1 {
@@ -1203,7 +1205,7 @@ impl Peer {
             return false;
         }
 
-        if !last_peer.is_leader() {
+        if !parent_is_leader {
             return false;
         }
 
@@ -1626,8 +1628,9 @@ impl Peer {
             return Ok(ctx);
         }
 
-        if req.get_admin_request().has_split() {
-            ctx.insert(ProposalContext::SPLIT);
+        match req.get_admin_request().get_cmd_type() {
+            AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            _ => {}
         }
 
         if req.get_admin_request().has_prepare_merge() {
@@ -1761,8 +1764,11 @@ impl Peer {
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest, check_epoch: bool) -> ReadResponse {
-        let mut resp = ReadExecutor::new(self.region(), &self.engines.kv, &self.tag)
-            .execute(&req, check_epoch)
+        let mut resp = ReadExecutor::new(
+            self.engines.kv.clone(),
+            check_epoch,
+            false, /* we don't need snapshot time */
+        ).execute(&req, self.region())
             .unwrap_or_else(|e| {
                 match e {
                     Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
@@ -1983,7 +1989,7 @@ pub trait RequestInspector {
 
 impl RequestInspector for Peer {
     fn has_applied_to_current_term(&mut self) -> bool {
-        self.get_store().applied_index_term == self.term()
+        self.get_store().applied_index_term() == self.term()
     }
 
     fn inspect_lease(&mut self) -> LeaseState {
@@ -2005,44 +2011,79 @@ impl RequestInspector for Peer {
 }
 
 #[derive(Debug)]
-pub struct ReadExecutor<'r, 'e, 't> {
-    region: &'r metapb::Region,
-    engine: &'e Arc<DB>,
-    tag: &'t str,
+pub struct ReadExecutor {
+    check_epoch: bool,
+    engine: Arc<DB>,
+    snapshot: Option<SyncSnapshot>,
+    snapshot_time: Option<Timespec>,
+    need_snapshot_time: bool,
 }
 
-impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
-    pub fn new(region: &'r metapb::Region, engine: &'e Arc<DB>, tag: &'t str) -> Self {
+impl ReadExecutor {
+    pub fn new(engine: Arc<DB>, check_epoch: bool, need_snapshot_time: bool) -> Self {
         ReadExecutor {
-            region,
+            check_epoch,
             engine,
-            tag,
+            snapshot: None,
+            snapshot_time: None,
+            need_snapshot_time,
         }
     }
 
-    fn do_get(&self, req: &Request, snap: &Snapshot) -> Result<Response> {
+    #[inline]
+    pub fn snapshot_time(&mut self) -> Option<Timespec> {
+        self.maybe_update_snapshot();
+        self.snapshot_time
+    }
+
+    #[inline]
+    fn maybe_update_snapshot(&mut self) {
+        if self.snapshot.is_some() {
+            return;
+        }
+        let engine = self.engine.clone();
+        self.snapshot = Some(Snapshot::new(engine).into_sync());
+        // Reading current timespec after snapshot, in case we do not
+        // expire lease in time.
+        atomic::fence(atomic::Ordering::Release);
+        if self.need_snapshot_time {
+            self.snapshot_time = Some(monotonic_raw_now());
+        }
+    }
+
+    fn do_get(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         // TODO: the get_get looks weird, maybe we should figure out a better name later.
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, self.region)?;
+        util::check_key_in_region(key, region)?;
 
         let mut resp = Response::new();
+        let snapshot = self.snapshot.as_ref().unwrap();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
-            snap.get_value_cf(cf, &keys::data_key(key))
+            snapshot
+                .get_value_cf(cf, &keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
-                        "{} failed to get {} with cf {}: {:?}",
-                        self.tag,
+                        "[region {}] failed to get {} with cf {}: {:?}",
+                        region.get_id(),
                         escape(key),
                         cf,
                         e
                     )
                 })
         } else {
-            snap.get_value(&keys::data_key(key))
-                .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", self.tag, escape(key), e))
+            snapshot
+                .get_value(&keys::data_key(key))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[region {}] failed to get {}: {:?}",
+                        region.get_id(),
+                        escape(key),
+                        e
+                    )
+                })
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
@@ -2051,19 +2092,22 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
         Ok(resp)
     }
 
-    pub fn execute(&self, msg: &RaftCmdRequest, check_epoch: bool) -> Result<ReadResponse> {
-        if check_epoch {
-            check_region_epoch(msg, self.region, true)?;
+    pub fn execute(
+        &mut self,
+        msg: &RaftCmdRequest,
+        region: &metapb::Region,
+    ) -> Result<ReadResponse> {
+        if self.check_epoch {
+            check_region_epoch(msg, region, true)?;
         }
+        self.maybe_update_snapshot();
         let mut need_snapshot = false;
-        let snapshot = Snapshot::new(Arc::clone(self.engine));
         let requests = msg.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
-
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => self.do_get(req, &snapshot)?,
+                CmdType::Get => self.do_get(req, region)?,
                 CmdType::Snap => {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
@@ -2083,8 +2127,8 @@ impl<'r, 'e, 't> ReadExecutor<'r, 'e, 't> {
         response.set_responses(protobuf::RepeatedField::from_vec(responses));
         let snapshot = if need_snapshot {
             Some(RegionSnapshot::from_snapshot(
-                snapshot.into_sync(),
-                self.region.to_owned(),
+                self.snapshot.clone().unwrap(),
+                region.to_owned(),
             ))
         } else {
             None
@@ -2111,6 +2155,7 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
         return match req.get_cmd_type() {
             AdminCmdType::ChangePeer
             | AdminCmdType::Split
+            | AdminCmdType::BatchSplit
             | AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
             | AdminCmdType::RollbackMerge => true,

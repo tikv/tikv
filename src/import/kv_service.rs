@@ -247,11 +247,11 @@ impl ImportKv for ImportKVService {
             let start = Key::from_raw(compact.get_range().get_start());
             compact
                 .mut_range()
-                .set_start(keys::data_key(start.encoded()));
+                .set_start(keys::data_key(start.as_encoded()));
             let end = Key::from_raw(compact.get_range().get_end());
             compact
                 .mut_range()
-                .set_end(keys::data_end_key(end.encoded()));
+                .set_end(keys::data_end_key(end.as_encoded()));
         }
 
         ctx.spawn(

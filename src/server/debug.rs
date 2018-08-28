@@ -918,7 +918,7 @@ impl MvccChecker {
         match ts {
             Some(ts) => {
                 let key = Key::from_encoded_slice(key).append_ts(ts);
-                box_try!(wb.delete_cf(handle, &keys::data_key(key.encoded())));
+                box_try!(wb.delete_cf(handle, &keys::data_key(key.as_encoded())));
             }
             None => box_try!(wb.delete_cf(handle, &keys::data_key(key))),
         };
@@ -1438,7 +1438,7 @@ mod tests {
         let cf_default_data = vec![(b"k1", b"v", 5), (b"k2", b"x", 10), (b"k3", b"y", 15)];
         for &(prefix, value, ts) in &cf_default_data {
             let encoded_key = Key::from_raw(prefix).append_ts(ts);
-            let key = keys::data_key(encoded_key.encoded().as_slice());
+            let key = keys::data_key(encoded_key.as_encoded().as_slice());
             engine.put(key.as_slice(), value).unwrap();
         }
 
@@ -1450,7 +1450,7 @@ mod tests {
         ];
         for &(prefix, tp, value, version) in &cf_lock_data {
             let encoded_key = Key::from_raw(prefix);
-            let key = keys::data_key(encoded_key.encoded().as_slice());
+            let key = keys::data_key(encoded_key.as_encoded().as_slice());
             let lock = Lock::new(tp, value.to_vec(), version, 0, None);
             let value = lock.to_bytes();
             engine
@@ -1467,7 +1467,7 @@ mod tests {
         ];
         for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
             let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
-            let key = keys::data_key(encoded_key.encoded().as_slice());
+            let key = keys::data_key(encoded_key.as_encoded().as_slice());
             let write = Write::new(tp, start_ts, None);
             let value = write.to_bytes();
             engine
@@ -1839,7 +1839,7 @@ mod tests {
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(
                 get_cf_handle(&db, cf).unwrap(),
-                &keys::data_key(k.encoded()),
+                &keys::data_key(k.as_encoded()),
                 v,
             ).unwrap();
         }
@@ -1854,7 +1854,7 @@ mod tests {
             let data =
                 db.get_cf(
                     get_cf_handle(&db, cf).unwrap(),
-                    &keys::data_key(k.encoded()),
+                    &keys::data_key(k.as_encoded()),
                 ).unwrap();
             match expect {
                 Expect::Keep => assert!(data.is_some()),
