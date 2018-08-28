@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use hex::FromHex;
 use std::{i64, str};
 
 use super::{EvalContext, Result, ScalarFunc};
@@ -108,6 +109,25 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(
             str::from_utf8(&s)?.to_lowercase().into_bytes(),
         )))
+    }
+
+    #[inline]
+    pub fn un_hex<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let hex_string = if s.len() % 2 == 1 {
+            // Add a '0' to the front, if the length is not the multiple of 2
+            let mut vec = vec![b'0'];
+            vec.extend_from_slice(&s);
+            vec
+        } else {
+            s.to_vec()
+        };
+        let result = Vec::from_hex(hex_string);
+        result.map(|t| Some(Cow::Owned(t))).or(Ok(None))
     }
 }
 
@@ -457,7 +477,6 @@ mod test {
                 Datum::Bytes(b"hello".to_vec()),
                 Datum::Bytes(b"hello".to_vec()),
             ),
-            (Datum::Bytes(b"123".to_vec()), Datum::Bytes(b"123".to_vec())),
             (
                 Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                 Datum::Bytes("CAFÉ".as_bytes().to_vec()),
@@ -556,7 +575,6 @@ mod test {
             ),
             (Datum::Null, Datum::Null),
         ];
-
         let mut ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = string_datum_expr_with_tp(
@@ -568,6 +586,37 @@ mod test {
                 COLLATION_BIN_ID,
             );
             let op = scalar_func_expr(ScalarFuncSig::CharLength, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_un_hex() {
+        let cases = vec![
+            (
+                Datum::Bytes(b"4D7953514C".to_vec()),
+                Datum::Bytes(b"MySQL".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"1267".to_vec()),
+                Datum::Bytes(vec![0x12, 0x67]),
+            ),
+            (
+                Datum::Bytes(b"126".to_vec()),
+                Datum::Bytes(vec![0x01, 0x26]),
+            ),
+            (Datum::Bytes(b"".to_vec()), Datum::Bytes(b"".to_vec())),
+            (Datum::Bytes(b"string".to_vec()), Datum::Null),
+            (Datum::Bytes("你好".as_bytes().to_vec()), Datum::Null),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::UnHex, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);

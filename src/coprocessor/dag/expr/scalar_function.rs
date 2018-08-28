@@ -108,6 +108,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
+            | ScalarFuncSig::Pow
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -159,6 +160,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CastJsonAsTime
             | ScalarFuncSig::CastJsonAsDuration
             | ScalarFuncSig::CastJsonAsJson
+            | ScalarFuncSig::Date
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -192,6 +194,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::Sqrt
+            | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
@@ -203,7 +206,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Bin
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
-            | ScalarFuncSig::IsIPv4 => (1, 1),
+            | ScalarFuncSig::IsIPv4
+            | ScalarFuncSig::Inet6Aton
+            | ScalarFuncSig::UnHex => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -284,14 +289,12 @@ impl ScalarFunc {
             | ScalarFuncSig::Conv
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
-            | ScalarFuncSig::Cos
             | ScalarFuncSig::Cot
             | ScalarFuncSig::CurrentDate
             | ScalarFuncSig::CurrentTime0Arg
             | ScalarFuncSig::CurrentTime1Arg
             | ScalarFuncSig::CurrentUser
             | ScalarFuncSig::Database
-            | ScalarFuncSig::Date
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::DateLiteral
             | ScalarFuncSig::DayName
@@ -332,7 +335,6 @@ impl ScalarFunc {
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -383,7 +385,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
-            | ScalarFuncSig::Pow
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::Radians
@@ -475,7 +476,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
-            | ScalarFuncSig::UnHex
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -809,7 +809,9 @@ dispatch_call! {
         CaseWhenReal => case_when_real,
 
         Sqrt => sqrt,
+        Cos => cos,
         Tan => tan,
+        Pow => pow,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -861,6 +863,9 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        UnHex => un_hex,
+
+        Inet6Aton => inet6_aton,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -871,6 +876,7 @@ dispatch_call! {
         CastDurationAsTime => cast_duration_as_time,
         CastJsonAsTime => cast_json_as_time,
 
+        Date => date,
         IfNullTime => if_null_time,
         IfTime => if_time,
 
@@ -1012,6 +1018,7 @@ mod test {
                     ScalarFuncSig::DateFormatSig,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
+                    ScalarFuncSig::Pow,
                 ],
                 2,
                 2,
@@ -1067,6 +1074,7 @@ mod test {
                     ScalarFuncSig::CastJsonAsTime,
                     ScalarFuncSig::CastJsonAsDuration,
                     ScalarFuncSig::CastJsonAsJson,
+                    ScalarFuncSig::Date,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1100,6 +1108,7 @@ mod test {
                     ScalarFuncSig::FloorDecToInt,
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::Sqrt,
+                    ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
@@ -1236,14 +1245,12 @@ mod test {
             ScalarFuncSig::Conv,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
-            ScalarFuncSig::Cos,
             ScalarFuncSig::Cot,
             ScalarFuncSig::CurrentDate,
             ScalarFuncSig::CurrentTime0Arg,
             ScalarFuncSig::CurrentTime1Arg,
             ScalarFuncSig::CurrentUser,
             ScalarFuncSig::Database,
-            ScalarFuncSig::Date,
             ScalarFuncSig::DateDiff,
             ScalarFuncSig::DateLiteral,
             ScalarFuncSig::DayName,
@@ -1284,7 +1291,6 @@ mod test {
             ScalarFuncSig::HexIntArg,
             ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::Inet6Aton,
             ScalarFuncSig::Inet6Ntoa,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
@@ -1335,7 +1341,6 @@ mod test {
             ScalarFuncSig::Password,
             ScalarFuncSig::PeriodAdd,
             ScalarFuncSig::PeriodDiff,
-            ScalarFuncSig::Pow,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::Radians,
@@ -1427,7 +1432,6 @@ mod test {
             ScalarFuncSig::TruncateReal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
-            ScalarFuncSig::UnHex,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,

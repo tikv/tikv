@@ -27,9 +27,11 @@ use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
 
 use super::metrics::*;
-use pd::{PdClient, RegionStat};
+use pd::{Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
+use raftstore::store::cmd_resp::new_error;
 use raftstore::store::store::StoreInfo;
+use raftstore::store::util::KeysInfoFormatter;
 use raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
@@ -37,13 +39,22 @@ use raftstore::store::Callback;
 use raftstore::store::Msg;
 use storage::FlowStatistics;
 use util::collections::HashMap;
+use util::escape;
 use util::rocksdb::*;
 use util::time::time_now_sec;
 use util::transport::SendCh;
-use util::worker::FutureRunnable as Runnable;
+use util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 // Use an asynchronous thread to tell pd something.
 pub enum Task {
+    AskSplit {
+        region: metapb::Region,
+        split_key: Vec<u8>,
+        peer: metapb::Peer,
+        // If true, right region derive origin region_id.
+        right_derive: bool,
+        callback: Callback,
+    },
     AskBatchSplit {
         region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
@@ -126,15 +137,25 @@ pub struct PeerStat {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
+            Task::AskSplit {
+                ref region,
+                ref split_key,
+                ..
+            } => write!(
+                f,
+                "ask split region {} with key {}",
+                region.get_id(),
+                escape(split_key)
+            ),
             Task::AskBatchSplit {
                 ref region,
                 ref split_keys,
                 ..
             } => write!(
                 f,
-                "ask split region {} with keys {:?}",
+                "ask split region {} with {}",
                 region.get_id(),
-                split_keys
+                KeysInfoFormatter(&split_keys)
             ),
             Task::Heartbeat {
                 ref region,
@@ -175,10 +196,21 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
+
+    // use for Runner inner handle function to send Task to itself
+    // actually it is the sender connected to Runner's Worker which
+    // calls Runner's run() on Task recevied.
+    scheduler: Scheduler<Task>,
 }
 
 impl<T: PdClient> Runner<T> {
-    pub fn new(store_id: u64, pd_client: Arc<T>, ch: SendCh<Msg>, db: Arc<DB>) -> Runner<T> {
+    pub fn new(
+        store_id: u64,
+        pd_client: Arc<T>,
+        ch: SendCh<Msg>,
+        db: Arc<DB>,
+        scheduler: Scheduler<Task>,
+    ) -> Runner<T> {
         Runner {
             store_id,
             pd_client,
@@ -187,19 +219,60 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
+            scheduler,
         }
+    }
+
+    fn handle_ask_split(
+        &self,
+        handle: &Handle,
+        mut region: metapb::Region,
+        split_key: Vec<u8>,
+        peer: metapb::Peer,
+        right_derive: bool,
+        callback: Callback,
+    ) {
+        let ch = self.ch.clone();
+        let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
+            match resp {
+                Ok(mut resp) => {
+                    info!(
+                        "[region {}] try to split with new region id {} for region {:?}",
+                        region.get_id(),
+                        resp.get_new_region_id(),
+                        region
+                    );
+
+                    let req = new_split_region_request(
+                        split_key,
+                        resp.get_new_region_id(),
+                        resp.take_new_peer_ids(),
+                        right_derive,
+                    );
+                    let region_id = region.get_id();
+                    let epoch = region.take_region_epoch();
+                    send_admin_request(&ch, region_id, epoch, peer, req, callback)
+                }
+                Err(e) => {
+                    debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
+                }
+            }
+            Ok(())
+        });
+        handle.spawn(f)
     }
 
     fn handle_ask_batch_split(
         &self,
         handle: &Handle,
         mut region: metapb::Region,
-        split_keys: Vec<Vec<u8>>,
+        mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
         callback: Callback,
     ) {
         let ch = self.ch.clone();
+        let scheduler = self.scheduler.clone();
         let f = self
             .pd_client
             .ask_batch_split(region.clone(), split_keys.len())
@@ -207,7 +280,7 @@ impl<T: PdClient> Runner<T> {
                 match resp {
                     Ok(mut resp) => {
                         info!(
-                            "[region {}] try to split region {:?} with {:?}",
+                            "[region {}] try to batch split region {:?} with {:?}",
                             region.get_id(),
                             region,
                             resp.get_ids()
@@ -222,8 +295,43 @@ impl<T: PdClient> Runner<T> {
                         let epoch = region.take_region_epoch();
                         send_admin_request(&ch, region_id, epoch, peer, req, callback)
                     }
+                    // When rolling update, there might be some old version tikvs that doesn't support batch split in cluster.
+                    // In this situation, pd version check would refuse ask_batch_split.
+                    // But if update time is long, it may cause large regions, so call ask_split instead.
+                    Err(Error::Incompatible) => {
+                        let (region_id, peer_id) = (region.id, peer.id);
+                        info!(
+                            "[region {}] ask_batch_split is incompatible, use ask_split instead",
+                            region_id
+                        );
+                        let task = Task::AskSplit {
+                            region,
+                            split_key: split_keys.pop().unwrap(),
+                            peer,
+                            right_derive,
+                            callback,
+                        };
+                        if let Err(Stopped(t)) = scheduler.schedule(task) {
+                            error!(
+                                "[region {}] {} failed to notify pd to split: Stopped",
+                                region_id, peer_id
+                            );
+                            match t {
+                                Task::AskSplit { callback, .. } => {
+                                    callback.invoke_with_response(new_error(box_err!(
+                                        "failed to split: Stopped"
+                                    )));
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
                     Err(e) => {
-                        debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
+                        debug!(
+                            "[region {}] failed to ask batch split: {:?}",
+                            region.get_id(),
+                            e
+                        );
                     }
                 }
                 Ok(())
@@ -534,6 +642,13 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         }
 
         match task {
+            Task::AskSplit {
+                region,
+                split_key,
+                peer,
+                right_derive,
+                callback,
+            } => self.handle_ask_split(handle, region, split_key, peer, right_derive, callback),
             Task::AskBatchSplit {
                 region,
                 split_keys,
@@ -630,6 +745,21 @@ fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> A
     req.set_cmd_type(AdminCmdType::ChangePeer);
     req.mut_change_peer().set_change_type(change_type);
     req.mut_change_peer().set_peer(peer);
+    req
+}
+
+fn new_split_region_request(
+    split_key: Vec<u8>,
+    new_region_id: u64,
+    peer_ids: Vec<u64>,
+    right_derive: bool,
+) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::Split);
+    req.mut_split().set_split_key(split_key);
+    req.mut_split().set_new_region_id(new_region_id);
+    req.mut_split().set_new_peer_ids(peer_ids);
+    req.mut_split().set_right_derive(right_derive);
     req
 }
 

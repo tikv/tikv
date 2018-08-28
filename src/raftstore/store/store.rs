@@ -41,6 +41,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::util::KeysInfoFormatter;
 use raftstore::{Error, Result};
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
@@ -566,6 +567,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Arc::clone(&self.pd_client),
             self.sendch.clone(),
             Arc::clone(&self.engines.kv),
+            self.pd_worker.scheduler(),
         );
         box_try!(self.pd_worker.start(pd_runner));
 
@@ -1852,6 +1854,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         peer.set_region(region);
         if peer.is_leader() {
+            // make approximate size and keys updated in time.
+            peer.size_diff_hint = self.cfg.region_split_check_diff.0;
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
         }
@@ -3303,7 +3307,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => {
                 self.on_hash_computed(region_id, index, hash);
             }
-            // TODO: format keys
             Msg::SplitRegion {
                 region_id,
                 region_epoch,
@@ -3311,8 +3314,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 callback,
             } => {
                 info!(
-                    "[region {}] on split region at key {:?}.",
-                    region_id, split_keys
+                    "on split region {} with {}",
+                    region_id,
+                    KeysInfoFormatter(&split_keys)
                 );
                 self.on_prepare_split_region(region_id, region_epoch, split_keys, callback);
             }

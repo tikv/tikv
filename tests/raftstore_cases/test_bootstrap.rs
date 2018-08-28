@@ -47,7 +47,7 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
 #[test]
 fn test_node_bootstrap_with_prepared_data() {
     // create a node
-    let pd_client = Arc::new(TestPdClient::new(0));
+    let pd_client = Arc::new(TestPdClient::new(0, false));
     let cfg = new_tikv_config(0);
 
     let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();

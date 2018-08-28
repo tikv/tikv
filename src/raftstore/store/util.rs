@@ -28,6 +28,7 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use util::escape;
 use util::properties::RangeProperties;
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
@@ -157,7 +158,7 @@ pub fn delete_all_in_range_cf(
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
         if cf == CF_WRITE {
             let start = Key::from_encoded_slice(start_key).append_ts(u64::MAX);
-            wb.delete_range_cf(handle, start.encoded(), end_key)?;
+            wb.delete_range_cf(handle, start.as_encoded(), end_key)?;
         } else {
             wb.delete_range_cf(handle, start_key, end_key)?;
         }
@@ -586,10 +587,17 @@ impl Lease {
         }
     }
 
-    pub fn maybe_new_remote_lease(&mut self) -> Option<RemoteLease> {
-        if self.remote.is_some() {
-            // At most one connected RemoteLease.
-            return None;
+    /// Return a new `RemoteLease` if there is none.
+    pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
+        if let Some(ref remote) = self.remote {
+            if remote.term() == term {
+                // At most one connected RemoteLease in the same term.
+                return None;
+            } else {
+                // Term has changed. It is unreachable in the current implementation,
+                // because we expire remote lease when leaders step down.
+                unreachable!("Must expire the old remote lease first!");
+            }
         }
         let expired_time = match self.bound {
             Some(Either::Right(ts)) => timespec_to_u64(ts),
@@ -597,10 +605,12 @@ impl Lease {
         };
         let remote = RemoteLease {
             expired_time: Arc::new(AtomicU64::new(expired_time)),
+            term,
         };
         // Clone the remote.
         let remote_clone = RemoteLease {
             expired_time: Arc::clone(&remote.expired_time),
+            term,
         };
         self.remote = Some(remote);
         Some(remote_clone)
@@ -624,6 +634,7 @@ impl fmt::Debug for Lease {
 #[derive(Debug)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
+    term: u64,
 }
 
 impl RemoteLease {
@@ -643,6 +654,10 @@ impl RemoteLease {
 
     fn expire(&self) {
         self.expired_time.store(0, AtomicOrdering::Release);
+    }
+
+    pub fn term(&self) -> u64 {
+        self.term
     }
 }
 
@@ -750,6 +765,24 @@ impl Engines {
     }
 }
 
+pub struct KeysInfoFormatter<'a>(pub &'a [Vec<u8>]);
+
+impl<'a> fmt::Display for KeysInfoFormatter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0.len() {
+            0 => write!(f, "no key"),
+            1 => write!(f, "key \"{}\"", escape(self.0.first().unwrap())),
+            _ => write!(
+                f,
+                "{} keys range from \"{}\" to \"{}\"",
+                self.0.len(),
+                escape(self.0.first().unwrap()),
+                escape(self.0.last().unwrap())
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{iter, process, thread};
@@ -797,7 +830,7 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        let remote = lease.maybe_new_remote_lease().unwrap();
+        let remote = lease.maybe_new_remote_lease(1).unwrap();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);
             if state == LeaseState::Expired || state == LeaseState::Suspect {
@@ -834,6 +867,17 @@ mod tests {
         lease.expire();
         inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
+
+        // An expired remote lease can never renew.
+        lease.renew(monotonic_raw_now() + TimeDuration::minutes(1));
+        assert_eq!(
+            remote.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+
+        // A new remote lease.
+        let m1 = lease.maybe_new_remote_lease(1).unwrap();
+        assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
     }
 
     #[test]
@@ -1047,7 +1091,7 @@ mod tests {
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
-            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).encoded());
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
             let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &key, &write_v).unwrap();
@@ -1136,7 +1180,7 @@ mod tests {
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
         for (_, key) in keys.iter().enumerate() {
-            kvs.push((key.encoded().as_slice(), b"value"));
+            kvs.push((key.as_encoded().as_slice(), b"value"));
         }
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for &(k, v) in kvs.as_slice() {
@@ -1153,8 +1197,8 @@ mod tests {
         let end = Key::from_raw(b"k4");
         delete_all_in_range(
             &db,
-            start.encoded().as_slice(),
-            end.encoded().as_slice(),
+            start.as_encoded().as_slice(),
+            end.as_encoded().as_slice(),
             use_delete_range,
         ).unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
@@ -1452,7 +1496,7 @@ mod tests {
         big_value.extend(iter::repeat(b'v').take(256));
         for i in 0..100 {
             let k = format!("key_{:03}", i).into_bytes();
-            let k = keys::data_key(Key::from_raw(&k).encoded());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
             engine.put_cf(cf_handle, &k, &big_value).unwrap();
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
@@ -1464,7 +1508,7 @@ mod tests {
             .unwrap();
 
         let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
-            .take_raw()
+            .into_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
     }
