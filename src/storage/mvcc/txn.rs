@@ -191,7 +191,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
         if value.is_some() && is_short_value(value.as_ref().unwrap()) {
             self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
-        } else if value.is_some() {
+        } else {
             self.lock_key(
                 key.clone(),
                 lock_type,
@@ -199,10 +199,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 options.lock_ttl,
                 None,
             );
-            let ts = self.start_ts;
-            self.put_value(key, ts, value.unwrap());
-        } else {
-            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, None);
+            if value.is_some() {
+                let ts = self.start_ts;
+                self.put_value(key, ts, value.unwrap());
+            }
         }
         Ok(())
     }
@@ -284,7 +284,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
                         let write = Write::new(WriteType::Rollback, ts, None);
-                        self.put_write(key.clone(), ts, write.to_bytes());
+                        self.put_write(key, ts, write.to_bytes());
                         Ok(())
                     }
                 };
@@ -293,13 +293,10 @@ impl<S: Snapshot> MvccTxn<S> {
         let write = Write::new(WriteType::Rollback, self.start_ts, None);
         let ts = self.start_ts;
         self.put_write(key.clone(), ts, write.to_bytes());
-
         if self.collapse_rollback {
-            self.unlock_key(key.clone());
-            self.collapse_prev_rollback(key)?;
-        } else {
-            self.unlock_key(key);
+            self.collapse_prev_rollback(key.clone())?;
         }
+        self.unlock_key(key);
         Ok(())
     }
 
