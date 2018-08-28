@@ -41,7 +41,7 @@ impl Default for Config {
             max_prepare_duration: ReadableDuration::minutes(5),
             region_split_size: ReadableSize::mb(SPLIT_SIZE_MB),
             stream_channel_window: 128,
-            max_open_engines: 6,
+            max_open_engines: 8,
         }
     }
 }
