@@ -6,7 +6,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ### Features
 * Support `batch split` to avoid too large Regions caused by the Write operation on hot Regions
 * Support splitting Regions based on the number of rows to improve the index scan efficiency
-* Performance
+### Performance
 * Use `LocalReader` to separate the Read operation from the raftstore thread to lower the Read latency
 * Refactor the MVCC framework, optimize the memory usage and improve the scan Read performance
 * Support splitting Regions based on statistics estimation to reduce the I/O usage
