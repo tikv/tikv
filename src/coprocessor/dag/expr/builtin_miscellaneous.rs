@@ -14,6 +14,7 @@
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
+use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str;
 use std::str::FromStr;
@@ -47,22 +48,14 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
         if s.len() == 16 {
-            let mut v = [0 as u16; 8];
-            for i in 0..8 {
-                v[i] = u16::from(s[i * 2]) << 8 | u16::from(s[i * 2 + 1]);
-            }
+            let v: &[u8; 16] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
-                format!(
-                    "{}",
-                    Ipv6Addr::new(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
-                ).as_bytes()
-                    .to_vec(),
+                format!("{}", Ipv6Addr::from(*v)).into_bytes().to_vec(),
             )))
         } else if s.len() == 4 {
+            let v: &[u8; 4] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
-                format!("{}", Ipv4Addr::new(s[0], s[1], s[2], s[3]))
-                    .as_bytes()
-                    .to_vec(),
+                format!("{}", Ipv4Addr::from(*v)).into_bytes().to_vec(),
             )))
         } else {
             Ok(None)
