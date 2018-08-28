@@ -1414,7 +1414,7 @@ dependencies = [
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "protobuf 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "test_storage 0.0.1",
- "tikv 2.1.0-beta",
+ "tikv 2.1.0-rc.1",
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
 ]
 
