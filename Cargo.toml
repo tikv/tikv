@@ -1,3 +1,5 @@
+cargo-features = ["rename-dependency"]
+
 [package]
 name = "tikv"
 version = "2.1.0-rc.1"
@@ -31,8 +33,10 @@ harness = false
 name = "benches"
 
 [dependencies]
-log = "0.3.9"
-slog = "2.2"
+log = { version = "0.3.9", features = ["release_max_level_info"] }
+log_new = { version = "0.4", package = "log" }
+# TODO: We won't need two log versions once slog-stdlog depends on log:0.4.
+slog = "2.3"
 slog-async = "2.3"
 slog-scope = "4.0"
 slog-stdlog = "3.0"
