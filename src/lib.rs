@@ -57,7 +57,6 @@ extern crate lazy_static;
 extern crate libc;
 #[macro_use]
 extern crate log;
-extern crate log_new;
 extern crate mio;
 extern crate murmur3;
 extern crate num;

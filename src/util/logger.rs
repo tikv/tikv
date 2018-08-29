@@ -18,9 +18,8 @@ use std::path::Path;
 
 use chrono;
 use grpc;
+use log;
 use log::SetLoggerError;
-use log_new;
-use log_new::Level as LogLevel;
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_scope;
 use slog_stdlog;
@@ -51,10 +50,7 @@ where
 
     slog_scope::set_global_logger(logger).cancel_reset();
     slog_stdlog::init().map(|_| {
-        // Here is the trick. Although slog_stdlog uses log 0.3.x, log 0.3.x internally
-        // delegates all calls to log 0.4.x. So here we directly call interface of log
-        // 0.4.x, which will be the same instance of what slog_stdlog actually using.
-        log_new::set_max_level(convert_slog_level_to_log_level(level).to_level_filter());
+        log::set_max_level(convert_slog_level_to_log_level(level).to_log_level_filter());
     })
 }
 
@@ -97,13 +93,13 @@ pub fn get_string_by_level(lv: Level) -> &'static str {
     }
 }
 
-pub fn convert_slog_level_to_log_level(lv: Level) -> LogLevel {
+pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
     match lv {
-        Level::Critical | Level::Error => LogLevel::Error,
-        Level::Warning => LogLevel::Warn,
-        Level::Debug => LogLevel::Debug,
-        Level::Trace => LogLevel::Trace,
-        Level::Info => LogLevel::Info,
+        Level::Critical | Level::Error => log::LogLevel::Error,
+        Level::Warning => log::LogLevel::Warn,
+        Level::Debug => log::LogLevel::Debug,
+        Level::Trace => log::LogLevel::Trace,
+        Level::Info => log::LogLevel::Info,
     }
 }
 
