@@ -30,13 +30,13 @@ use super::metrics::*;
 use pd::{Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raftstore::store::cmd_resp::new_error;
-use raftstore::store::store::StoreInfo;
 use raftstore::store::util::KeysInfoFormatter;
 use raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
 use raftstore::store::Callback;
 use raftstore::store::Msg;
+use raftstore::store::StoreInfo;
 use storage::FlowStatistics;
 use util::collections::HashMap;
 use util::escape;
