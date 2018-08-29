@@ -52,9 +52,9 @@ use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, Lease, LeaseState};
+use super::{DestroyPeerJob, Store};
 
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
