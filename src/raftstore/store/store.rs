@@ -2195,10 +2195,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        // As leader, we believe a peer is down if we haven't receive it's heartbeat response in the
-        // last few seconds.
-        let last_heartbeat_limit =
-            Instant::now() - self.cfg.raft_heartbeat_interval() + Duration::from_secs(10);
+        // As leader, we would not keep caches for the peers that didn't response heartbeat in the
+        // last few seconds. That happens probably because another TiKV is down. In this case if we
+        // do not clean up the cache, it may keep growing.
+        let drop_cache_duration = self.cfg.raft_heartbeat_interval() + Duration::from_secs(30);
+        let cache_alive_limit = Instant::now() - drop_cache_duration;
 
         let mut total_gc_logs = 0;
 
@@ -2221,20 +2222,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  ^                                       ^
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
-            // `healthy_replicated_index` is the smallest `replicated_index` of healthy up nodes.
+            // `alive_cache_idx` is the smallest `replicated_index` of healthy up nodes.
+            // `alive_cache_idx` is only used to gc cache.
             let truncated_idx = peer.get_store().truncated_index();
             let last_idx = peer.get_store().last_index();
-            let (mut replicated_idx, mut healthy_replicated_idx) = (last_idx, last_idx);
+            let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
             for (peer_id, p) in peer.raft_group.raft.prs().iter() {
                 if replicated_idx > p.matched {
                     replicated_idx = p.matched;
                 }
                 if let Some(last_heartbeat) = peer.peer_heartbeats.get(peer_id) {
-                    if healthy_replicated_idx > p.matched
+                    if alive_cache_idx > p.matched
                         && p.matched >= truncated_idx
-                        && *last_heartbeat > last_heartbeat_limit
+                        && *last_heartbeat > cache_alive_limit
                     {
-                        healthy_replicated_idx = p.matched;
+                        alive_cache_idx = p.matched;
                     }
                 } else {
                     warn!(
@@ -2254,7 +2256,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
             }
             peer.mut_store()
-                .maybe_gc_cache(healthy_replicated_idx, applied_idx);
+                .maybe_gc_cache(alive_cache_idx, applied_idx);
             let first_idx = peer.get_store().first_index();
             let mut compact_idx;
             if applied_idx > first_idx
