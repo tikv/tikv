@@ -22,8 +22,6 @@ use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
-const LARGE_REGION_SIZE: u64 = 1024 * 1024 * 1024; // 1GB
-
 pub struct Checker {
     max_size: u64,
     split_size: u64,
@@ -166,7 +164,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 self.region_max_size
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= LARGE_REGION_SIZE {
+            if region_size >= self.region_max_size * self.split_limit * 2 {
                 policy = CheckPolicy::APPROXIMATE
             }
             // Need to check size.
