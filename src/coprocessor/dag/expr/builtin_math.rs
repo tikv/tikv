@@ -205,6 +205,25 @@ impl ScalarFunc {
             Ok(None)
         }
     }
+
+    #[inline]
+    pub fn cot(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let tan = n.tan();
+        if tan != 0.0 {
+            let cot = 1.0 / tan;
+            if !cot.is_infinite() && !cot.is_nan() {
+                return Ok(Some(cot));
+            }
+        }
+        Err(Error::overflow("DOUBLE", &format!("cot({})", n)))
+    }
+
+    #[inline]
+    pub fn degrees(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(n.to_degrees()))
+    }
 }
 
 #[cfg(test)]
@@ -757,4 +776,83 @@ mod test {
             assert_eq!(got, exp);
         }
     }
+
+    #[test]
+    fn test_cot() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(-1.0),
+                -0.6420926159343308_f64,
+            ),
+            (ScalarFuncSig::Cot, Datum::F64(1.0), 0.6420926159343308_f64),
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(f64::consts::PI / 4.0_f64),
+                1.0_f64 / f64::tan(f64::consts::PI / 4.0_f64),
+            ),
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(f64::consts::PI / 2.0_f64),
+                1.0_f64 / f64::tan(f64::consts::PI / 2.0_f64),
+            ),
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(f64::consts::PI),
+                1.0_f64 / f64::tan(f64::consts::PI),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        // for overflow
+        let tests_invalid_f64 = vec![(ScalarFuncSig::Cot, Datum::F64(0.0))];
+
+        for (sig, arg) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let mut f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_degrees() {
+        let tests = vec![
+            (ScalarFuncSig::Degrees, Datum::F64(0.0), -0.0_f64),
+            (
+                ScalarFuncSig::Degrees,
+                Datum::F64(1.0),
+                57.29577951308232_f64,
+            ),
+            (
+                ScalarFuncSig::Degrees,
+                Datum::F64(f64::consts::PI),
+                180.0_f64,
+            ),
+            (
+                ScalarFuncSig::Degrees,
+                Datum::F64(-f64::consts::PI / 2.0_f64),
+                -90.0_f64,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+    }
+
 }
