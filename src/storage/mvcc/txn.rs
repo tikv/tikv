@@ -293,10 +293,10 @@ impl<S: Snapshot> MvccTxn<S> {
         let write = Write::new(WriteType::Rollback, self.start_ts, None);
         let ts = self.start_ts;
         self.put_write(key.clone(), ts, write.to_bytes());
+        self.unlock_key(key.clone());
         if self.collapse_rollback {
-            self.collapse_prev_rollback(key.clone())?;
+            self.collapse_prev_rollback(key)?;
         }
-        self.unlock_key(key);
         Ok(())
     }
 
