@@ -463,7 +463,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
         // TODO: disable localreader if we did not enable raft's check_quorum.
         if self.delegate.leader_lease.is_some() {
             // We skip lease check, because it is postponed until `handle_read`.
-            LeaseState::Postponed
+            LeaseState::Valid
         } else {
             debug!("{} leader lease is None", self.delegate.tag,);
             self.metrics.rejected_by_no_lease += 1;

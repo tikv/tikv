@@ -509,8 +509,6 @@ pub enum LeaseState {
     Valid,
     /// The lease is expired.
     Expired,
-    /// Postponed lease check.
-    Postponed,
 }
 
 impl Lease {

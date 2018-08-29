@@ -1978,7 +1978,7 @@ pub trait RequestInspector {
         // Local read should be performed, if and only if leader is in lease.
         // None for now.
         match self.inspect_lease() {
-            LeaseState::Valid | LeaseState::Postponed => Ok(RequestPolicy::ReadLocal),
+            LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.
                 Ok(RequestPolicy::ReadIndex)
