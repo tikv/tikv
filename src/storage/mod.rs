@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::u64;
 use util;
 use util::collections::HashMap;
-use util::worker::{self, Builder, Worker};
+use util::worker::{self, Builder, ScheduleError, Worker};
 
 pub mod config;
 pub mod engine;
@@ -43,8 +43,9 @@ pub mod types;
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
-    new_local_engine, CFStatistics, Cursor, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TEMP_DIR,
+    new_local_engine, CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
+    FlowStatistics, Iterator, Modify, RocksEngine, ScanMode, Snapshot, Statistics,
+    StatisticsSummary, TEMP_DIR,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
@@ -340,24 +341,24 @@ impl Command {
             Command::Prewrite { ref mutations, .. } => for m in mutations {
                 match *m {
                     Mutation::Put((ref key, ref value)) => {
-                        bytes += key.encoded().len();
+                        bytes += key.as_encoded().len();
                         bytes += value.len();
                     }
                     Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
-                        bytes += key.encoded().len();
+                        bytes += key.as_encoded().len();
                     }
                 }
             },
             Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
                 for key in keys {
-                    bytes += key.encoded().len();
+                    bytes += key.as_encoded().len();
                 }
             }
             Command::ResolveLock { ref key_locks, .. } => for lock in key_locks {
-                bytes += lock.0.encoded().len();
+                bytes += lock.0.as_encoded().len();
             },
             Command::Cleanup { ref key, .. } => {
-                bytes += key.encoded().len();
+                bytes += key.as_encoded().len();
             }
             _ => {}
         }
@@ -476,10 +477,14 @@ impl<E: Engine> Storage<E> {
         self.engine.clone()
     }
 
+    #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        box_try!(self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }));
-        Ok(())
+        match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {
+            Ok(()) => Ok(()),
+            Err(ScheduleError::Full(_)) => Err(Error::SchedTooBusy),
+            Err(ScheduleError::Stopped(_)) => Err(Error::Closed),
+        }
     }
 
     fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
@@ -590,7 +595,7 @@ impl<E: Engine> Storage<E> {
                                 !(v.is_ok() && v.as_ref().unwrap().is_none())
                             )
                             .map(|(v, k)| match v {
-                                Ok(Some(x)) => Ok((k.raw().unwrap(), x)),
+                                Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
                                 Err(e) => Err(Error::from(e)),
                                 _ => unreachable!(),
                             })
@@ -649,22 +654,27 @@ impl<E: Engine> Storage<E> {
                         !ctx.get_not_fill_cache(),
                     );
 
-                    let scan_mode = if options.reverse_scan {
-                        ScanMode::Backward
+                    let mut scanner;
+                    if !options.reverse_scan {
+                        scanner = snap_store.scanner(
+                            ScanMode::Forward,
+                            options.key_only,
+                            Some(start_key),
+                            None,
+                        )?;
                     } else {
-                        ScanMode::Forward
+                        scanner = snap_store.scanner(
+                            ScanMode::Backward,
+                            options.key_only,
+                            None,
+                            Some(start_key),
+                        )?;
                     };
+                    let res = scanner.scan(limit);
 
-                    let mut scanner = snap_store.scanner(scan_mode, options.key_only, None, None)?;
-                    let res = if options.reverse_scan {
-                        scanner.reverse_scan(start_key, limit)
-                    } else {
-                        scanner.scan(start_key, limit)
-                    };
-
-                    let statistics = scanner.get_statistics();
-                    thread_ctx.collect_scan_count(CMD, statistics);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), statistics);
+                    let statistics = scanner.take_statistics();
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
                     res.map_err(Error::from).map(|results| {
                         thread_ctx.collect_key_reads(CMD, results.len() as u64);
@@ -701,7 +711,7 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
-            let size = m.key().encoded().len();
+            let size = m.key().as_encoded().len();
             if size > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
                 return Ok(());
@@ -940,8 +950,8 @@ impl<E: Engine> Storage<E> {
                         .map(|(k, v)| match v {
                             Ok(Some(v)) => {
                                 stats.data.flow_stats.read_keys += 1;
-                                stats.data.flow_stats.read_bytes += k.encoded().len() + v.len();
-                                Ok((k.take_encoded(), v))
+                                stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
+                                Ok((k.into_encoded(), v))
                             }
                             Err(e) => Err(Error::from(e)),
                             _ => unreachable!(),
@@ -1107,7 +1117,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.take_encoded());
+            option.set_upper_bound(end.into_encoded());
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);

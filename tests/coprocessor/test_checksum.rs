@@ -13,6 +13,8 @@
 
 use std::u64;
 
+use crc::crc64::{self, Digest, Hasher64};
+
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
@@ -77,8 +79,6 @@ fn reversed_checksum_crc64_xor<E: Engine>(
     range: KeyRange,
     scan_on: ChecksumScanOn,
 ) -> u64 {
-    use crc::crc64::{self, Digest, Hasher64};
-
     let ctx = Context::new();
     let snap = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),

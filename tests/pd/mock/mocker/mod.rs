@@ -16,14 +16,16 @@ use std::result;
 use kvproto::pdpb::*;
 
 mod bootstrap;
+mod incompatible;
 mod leader_change;
 mod retry;
 mod service;
 mod split;
 
 pub use self::bootstrap::AlreadyBootstrapped;
+pub use self::incompatible::Incompatible;
 pub use self::leader_change::LeaderChange;
-pub use self::retry::Retry;
+pub use self::retry::{NotRetry, Retry};
 pub use self::service::Service;
 pub use self::split::Split;
 
@@ -87,7 +89,14 @@ pub trait PdMocker {
         None
     }
 
-    fn report_split(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
+    fn ask_batch_split(&self, _: &AskBatchSplitRequest) -> Option<Result<AskBatchSplitResponse>> {
+        None
+    }
+
+    fn report_batch_split(
+        &self,
+        _: &ReportBatchSplitRequest,
+    ) -> Option<Result<ReportBatchSplitResponse>> {
         None
     }
 

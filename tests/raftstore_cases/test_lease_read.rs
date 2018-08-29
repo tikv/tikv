@@ -20,15 +20,12 @@ use std::time::*;
 
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
+
+use test_raftstore::*;
 use tikv::raftstore::store::engine::Peekable;
 use tikv::raftstore::store::keys;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's

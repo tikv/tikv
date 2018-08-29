@@ -17,15 +17,13 @@ use std::thread;
 use std::time::Duration;
 
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+
+use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
-use tikv::storage::CF_RAFT;
-
-use super::node::new_node_cluster;
-use super::util;
-use raftstore::transport_simulate::*;
-use raftstore::util::*;
+use tikv::storage::{CF_RAFT, CF_WRITE};
+use tikv::util::config::*;
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -46,10 +44,10 @@ fn test_node_base_merge() {
     assert_eq!(region.get_id(), right.get_id());
     assert_eq!(left.get_end_key(), right.get_start_key());
     assert_eq!(right.get_start_key(), b"k2");
-    let get = util::new_request(
+    let get = new_request(
         right.get_id(),
         right.get_region_epoch().clone(),
-        vec![util::new_get_cmd(b"k1")],
+        vec![new_get_cmd(b"k1")],
         false,
     );
     debug!("requesting {:?}", get);
@@ -74,10 +72,10 @@ fn test_node_base_merge() {
     // PrepareMerge + CommitMerge, so it should be 2.
     assert_eq!(new_epoch.get_version(), orgin_epoch.get_version() + 2);
     assert_eq!(new_epoch.get_conf_ver(), orgin_epoch.get_conf_ver());
-    let get = util::new_request(
+    let get = new_request(
         region.get_id(),
         new_epoch.to_owned(),
-        vec![util::new_get_cmd(b"k1")],
+        vec![new_get_cmd(b"k1")],
         false,
     );
     debug!("requesting {:?}", get);
@@ -115,7 +113,7 @@ fn test_node_base_merge() {
 /// Test whether merge will be aborted if prerequisites is not met.
 #[test]
 fn test_node_merge_prerequisites_check() {
-    // ::util::init_log();
+    // ::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -143,15 +141,15 @@ fn test_node_merge_prerequisites_check() {
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     cluster.must_put(b"k22", b"v22");
-    util::must_get_equal(&cluster.get_engine(3), b"k22", b"v22");
+    must_get_equal(&cluster.get_engine(3), b"k22", b"v22");
 
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
         right.get_id(),
         3,
     )));
     // It doesn't matter if the index and term is correct.
-    let compact_log = util::new_compact_log_request(100, 10);
-    let req = util::new_admin_request(right.get_id(), right.get_region_epoch(), compact_log);
+    let compact_log = new_compact_log_request(100, 10);
+    let req = new_admin_request(right.get_id(), right.get_region_epoch(), compact_log);
     debug!("requesting {:?}", req);
     let res = cluster
         .call_command_on_leader(req, Duration::from_secs(3))
@@ -162,7 +160,7 @@ fn test_node_merge_prerequisites_check() {
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     cluster.must_put(b"k23", b"v23");
-    util::must_get_equal(&cluster.get_engine(3), b"k23", b"v23");
+    must_get_equal(&cluster.get_engine(3), b"k23", b"v23");
 
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
         right.get_id(),
@@ -179,13 +177,13 @@ fn test_node_merge_prerequisites_check() {
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     cluster.must_put(b"k24", b"v24");
-    util::must_get_equal(&cluster.get_engine(3), b"k24", b"v24");
+    must_get_equal(&cluster.get_engine(3), b"k24", b"v24");
 }
 
 /// Test if stale peer will be handled properly after merge.
 #[test]
 fn test_node_check_merged_message() {
-    // ::util::init_log();
+    // ::init_log();
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -212,11 +210,11 @@ fn test_node_check_merged_message() {
     cluster.must_transfer_leader(left.get_id(), left_on_store1);
     pd_client.must_merge(left.get_id(), right.get_id());
     region = pd_client.get_region(b"k2").unwrap();
-    util::must_get_none(&cluster.get_engine(3), b"k3");
-    util::must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_none(&cluster.get_engine(3), b"k3");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     let region_on_store3 = find_peer(&region, 3).unwrap().to_owned();
     pd_client.must_remove_peer(region.get_id(), region_on_store3);
-    util::must_get_none(&cluster.get_engine(3), b"k1");
+    must_get_none(&cluster.get_engine(3), b"k1");
     cluster.clear_send_filters();
     pd_client.must_add_peer(region.get_id(), new_peer(3, 11));
 
@@ -226,12 +224,12 @@ fn test_node_check_merged_message() {
     left = pd_client.get_region(b"k1").unwrap();
     right = pd_client.get_region(b"k2").unwrap();
     pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
-    util::must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
     cluster.add_send_filter(IsolationFilterFactory::new(4));
     pd_client.must_remove_peer(left.get_id(), new_peer(4, 4));
     pd_client.must_merge(left.get_id(), right.get_id());
     cluster.clear_send_filters();
-    util::must_get_none(&cluster.get_engine(4), b"k1");
+    must_get_none(&cluster.get_engine(4), b"k1");
 
     // test gc work under complicated situation.
     cluster.must_put(b"k5", b"v5");
@@ -246,7 +244,7 @@ fn test_node_check_merged_message() {
     right = pd_client.get_region(b"k5").unwrap();
     let left_on_store3 = find_peer(&left, 3).unwrap().to_owned();
     pd_client.must_remove_peer(left.get_id(), left_on_store3);
-    util::must_get_none(&cluster.get_engine(3), b"k1");
+    must_get_none(&cluster.get_engine(3), b"k1");
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     left = pd_client.get_region(b"k1").unwrap();
     pd_client.must_add_peer(left.get_id(), new_peer(3, 5));
@@ -258,16 +256,16 @@ fn test_node_check_merged_message() {
     cluster.must_put(b"k4", b"v4");
     cluster.clear_send_filters();
     let engine3 = cluster.get_engine(3);
-    util::must_get_equal(&engine3, b"k1", b"v1");
-    util::must_get_equal(&engine3, b"k4", b"v4");
-    util::must_get_none(&engine3, b"k3");
-    util::must_get_none(&engine3, b"v5");
+    must_get_equal(&engine3, b"k1", b"v1");
+    must_get_equal(&engine3, b"k4", b"v4");
+    must_get_none(&engine3, b"k3");
+    must_get_none(&engine3, b"v5");
 }
 
 /// Test various cases that a store is isolated during merge.
 #[test]
 fn test_node_merge_dist_isolation() {
-    // ::util::init_log();
+    // ::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -291,7 +289,7 @@ fn test_node_merge_dist_isolation() {
         .unwrap()
         .clone();
     cluster.must_transfer_leader(left.get_id(), target_leader);
-    util::must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 
     // So cluster becomes:
     //  left region: 1         I 2 3(leader)
@@ -301,7 +299,7 @@ fn test_node_merge_dist_isolation() {
     pd_client.must_merge(left.get_id(), right.get_id());
     cluster.must_put(b"k4", b"v4");
     cluster.clear_send_filters();
-    util::must_get_equal(&cluster.get_engine(1), b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(1), b"k4", b"v4");
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
@@ -336,14 +334,14 @@ fn test_node_merge_dist_isolation() {
     cluster.must_put(b"k4", b"v4");
 
     cluster.clear_send_filters();
-    util::must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
 /// Similiar to `test_node_merge_dist_isolation`, but make the isolated store
 /// way behind others so others have to send it a snapshot.
 #[test]
 fn test_node_merge_brain_split() {
-    // ::util::ci_setup();
+    // ::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
@@ -370,8 +368,8 @@ fn test_node_merge_brain_split() {
     cluster.must_put(b"k21", b"v21");
     // Make sure peers on store 3 have replicated latest update, which means
     // they have already reported their progresses to leader.
-    util::must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
-    util::must_get_equal(&cluster.get_engine(3), b"k21", b"v21");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k21", b"v21");
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     pd_client.must_merge(left.get_id(), right.get_id());
@@ -379,8 +377,8 @@ fn test_node_merge_brain_split() {
     for i in 0..100 {
         cluster.must_put(format!("k4{}", i).as_bytes(), b"v4");
     }
-    util::must_get_equal(&cluster.get_engine(2), b"k40", b"v4");
-    util::must_get_equal(&cluster.get_engine(1), b"k40", b"v4");
+    must_get_equal(&cluster.get_engine(2), b"k40", b"v4");
+    must_get_equal(&cluster.get_engine(1), b"k40", b"v4");
 
     cluster.clear_send_filters();
 
@@ -394,9 +392,9 @@ fn test_node_merge_brain_split() {
         .unwrap()
         .unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
-    util::must_get_equal(&cluster.get_engine(3), b"k40", b"v5");
+    must_get_equal(&cluster.get_engine(3), b"k40", b"v5");
     for i in 1..100 {
-        util::must_get_equal(&cluster.get_engine(3), format!("k4{}", i).as_bytes(), b"v4");
+        must_get_equal(&cluster.get_engine(3), format!("k4{}", i).as_bytes(), b"v4");
     }
 
     let region = pd_client.get_region(b"k1").unwrap();
@@ -433,4 +431,59 @@ fn test_node_merge_brain_split() {
     cluster.must_put(b"k12", b"v12");
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(3), b"k12", b"v12");
+}
+
+/// Test whether approximate size and keys are updated after merge
+#[test]
+fn test_merge_approximate_size_and_keys() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+
+    cluster.run();
+
+    let mut range = 1..;
+    let middle_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
+    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"").unwrap();
+
+    cluster.must_split(&region, &middle_key);
+    thread::sleep(Duration::from_secs(1));
+
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+
+    assert_ne!(left, right);
+    let size = pd_client
+        .get_region_approximate_size(left.get_id())
+        .unwrap()
+        + pd_client
+            .get_region_approximate_size(right.get_id())
+            .unwrap();
+    assert_ne!(size, 0);
+    let keys = pd_client
+        .get_region_approximate_keys(left.get_id())
+        .unwrap()
+        + pd_client
+            .get_region_approximate_keys(right.get_id())
+            .unwrap();
+    assert_ne!(keys, 0);
+
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_secs(1));
+
+    let region = pd_client.get_region(b"").unwrap();
+    assert_eq!(
+        pd_client
+            .get_region_approximate_size(region.get_id())
+            .unwrap(),
+        size
+    );
+    assert_eq!(
+        pd_client
+            .get_region_approximate_keys(region.get_id())
+            .unwrap(),
+        keys
+    );
 }

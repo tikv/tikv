@@ -13,14 +13,10 @@
 
 use std::sync::Arc;
 
-use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::raftstore::store::{keys, Mutable, Peekable};
-use tikv::storage::mvcc::{Lock, LockType};
-use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
-use tikv::util::HandyRwLock;
-
 use futures::{future, Future, Stream};
 use grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use rocksdb::Writable;
+
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::kvrpcpb::*;
@@ -28,10 +24,13 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
-use rocksdb::Writable;
 
-use super::cluster::Cluster;
-use super::server::*;
+use test_raftstore::*;
+use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::raftstore::store::{keys, Mutable, Peekable};
+use tikv::storage::mvcc::{Lock, LockType};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
+use tikv::util::HandyRwLock;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;
@@ -491,7 +490,7 @@ fn test_split_region() {
         Key::from_encoded(resp.get_left().get_end_key().to_vec())
             .truncate_ts()
             .unwrap()
-            .encoded()
+            .as_encoded()
             .as_slice(),
         key
     );

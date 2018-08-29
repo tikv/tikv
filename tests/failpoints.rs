@@ -12,45 +12,26 @@
 // limitations under the License.
 
 #![recursion_limit = "100"]
-#![feature(slice_patterns, box_syntax, test)]
+#![feature(box_syntax)]
 #![cfg_attr(feature = "no-fail", allow(dead_code))]
 
 extern crate fail;
 extern crate futures;
-extern crate futures_cpupool;
-extern crate grpcio as grpc;
+extern crate grpcio;
 extern crate kvproto;
+extern crate raft;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
-extern crate slog_term;
-extern crate tempdir;
-extern crate test;
-#[macro_use]
+
+extern crate test_raftstore;
+extern crate test_storage;
+extern crate test_util;
 extern crate tikv;
-extern crate time;
-extern crate tipb;
-extern crate tokio_timer;
-extern crate toml;
 
 #[cfg(not(feature = "no-fail"))]
 mod failpoints_cases;
-#[allow(dead_code)]
-mod raftstore;
-#[allow(dead_code)]
-mod storage;
-#[allow(dead_code)]
-mod util;
 
 use std::sync::*;
 use std::thread;
@@ -61,7 +42,7 @@ lazy_static! {
     /// Failpoints are global structs, hence rules set in different cases
     /// may affect each other. So use a global lock to synchronize them.
     static ref LOCK: Mutex<()> = {
-        util::ci_setup();
+        test_util::setup_for_ci();
         Mutex::new(())
     };
 }

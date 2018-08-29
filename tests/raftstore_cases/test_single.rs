@@ -13,12 +13,8 @@
 
 use std::time::Duration;
 
+use test_raftstore::*;
 use tikv::util::config::*;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::server::new_server_cluster;
-use super::util::*;
 
 // TODO add stale epoch test cases.
 
