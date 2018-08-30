@@ -123,6 +123,18 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn sign(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let f = try_opt!(self.children[0].eval_real(ctx, row));
+        if f > 0f64 {
+            Ok(Some(1))
+        } else if f == 0f64 {
+            Ok(Some(0))
+        } else {
+            Ok(Some(-1))
+        }
+    }
+
+    #[inline]
     pub fn sqrt(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let f = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
         if f < 0f64 {
@@ -387,6 +399,26 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::I64(exp);
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_sign() {
+        let tests = vec![
+            (Datum::F64(42f64), Datum::I64(1)),
+            (Datum::F64(0f64), Datum::I64(0)),
+            (Datum::F64(-47f64), Datum::I64(-1)),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let op = scalar_func_expr(ScalarFuncSig::Sign, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
