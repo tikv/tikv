@@ -109,6 +109,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
+            | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -195,6 +196,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::Sign
             | ScalarFuncSig::Sqrt
+            | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
             | ScalarFuncSig::JsonTypeSig
@@ -278,8 +280,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Asin
-            | ScalarFuncSig::Atan1Arg
-            | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::CharLength
@@ -809,6 +809,8 @@ dispatch_call! {
         CaseWhenReal => case_when_real,
 
         Sqrt => sqrt,
+        Atan1Arg => atan_1_arg,
+        Atan2Args => atan_2_args,
         Cos => cos,
         Tan => tan,
         Pow => pow,
@@ -1019,6 +1021,7 @@ mod test {
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
+                    ScalarFuncSig::Atan2Args,
                 ],
                 2,
                 2,
@@ -1109,6 +1112,7 @@ mod test {
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::Sign,
                     ScalarFuncSig::Sqrt,
+                    ScalarFuncSig::Atan1Arg,
                     ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
                     ScalarFuncSig::JsonTypeSig,
@@ -1234,8 +1238,6 @@ mod test {
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Asin,
-            ScalarFuncSig::Atan1Arg,
-            ScalarFuncSig::Atan2Args,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::CharLength,
