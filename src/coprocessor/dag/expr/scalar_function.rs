@@ -109,6 +109,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
+            | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -193,7 +194,9 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToDec
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::CRC32
+            | ScalarFuncSig::Sign
             | ScalarFuncSig::Sqrt
+            | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
             | ScalarFuncSig::JsonTypeSig
@@ -279,8 +282,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Asin
-            | ScalarFuncSig::Atan1Arg
-            | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::CharLength
@@ -415,7 +416,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::Sign
             | ScalarFuncSig::Sin
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
@@ -757,6 +757,7 @@ dispatch_call! {
         FloorIntToInt => floor_int_to_int,
         FloorDecToInt => floor_dec_to_int,
         CRC32 => crc32,
+        Sign => sign,
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -808,6 +809,8 @@ dispatch_call! {
         CaseWhenReal => case_when_real,
 
         Sqrt => sqrt,
+        Atan1Arg => atan_1_arg,
+        Atan2Args => atan_2_args,
         Cos => cos,
         Tan => tan,
         Pow => pow,
@@ -1020,6 +1023,7 @@ mod test {
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
+                    ScalarFuncSig::Atan2Args,
                 ],
                 2,
                 2,
@@ -1108,7 +1112,9 @@ mod test {
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
                     ScalarFuncSig::CRC32,
+                    ScalarFuncSig::Sign,
                     ScalarFuncSig::Sqrt,
+                    ScalarFuncSig::Atan1Arg,
                     ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
                     ScalarFuncSig::JsonTypeSig,
@@ -1236,8 +1242,6 @@ mod test {
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Asin,
-            ScalarFuncSig::Atan1Arg,
-            ScalarFuncSig::Atan2Args,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::CharLength,
@@ -1372,7 +1376,6 @@ mod test {
             ScalarFuncSig::SetVar,
             ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
-            ScalarFuncSig::Sign,
             ScalarFuncSig::Sin,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
