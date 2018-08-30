@@ -48,6 +48,7 @@ const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
+const CLEANUP_MAX_BLOCK_DURATION: Duration = Duration::from_secs(5);
 
 /// region related task.
 #[derive(Debug)]
@@ -162,14 +163,12 @@ impl PendingDeleteRanges {
         ranges
     }
 
+    fn remove(&mut self, start_key: &[u8]) {
+        self.ranges.remove(start_key);
+    }
+
     // before an insert is called, must call drain_overlap_ranges to clean the overlap range
-    pub fn insert(
-        &mut self,
-        region_id: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-        timeout: time::Instant,
-    ) {
+    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
@@ -180,23 +179,20 @@ impl PendingDeleteRanges {
         }
         let info = StalePeerInfo {
             region_id,
-            end_key,
+            end_key: end_key.to_owned(),
             timeout,
         };
-        self.ranges.insert(start_key, info);
+        self.ranges.insert(start_key.to_owned(), info);
     }
 
-    pub fn drain_timeout_ranges(&mut self, now: time::Instant) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
-        let ranges = self
-            .ranges
+    pub fn timeout_ranges<'a>(
+        &'a self,
+        now: time::Instant,
+    ) -> impl Iterator<Item = (u64, Vec<u8>, Vec<u8>)> + 'a {
+        self.ranges
             .iter()
-            .filter(|&(_, info)| info.timeout <= now)
+            .filter(move |&(_, info)| info.timeout <= now)
             .map(|(start_key, info)| (info.region_id, start_key.clone(), info.end_key.clone()))
-            .collect();
-        for &(_, ref start_key, _) in &ranges {
-            self.ranges.remove(start_key).unwrap();
-        }
-        ranges
     }
 
     pub fn len(&self) -> usize {
@@ -369,44 +365,40 @@ impl SnapContext {
     }
 
     fn cleanup_range(
-        &mut self,
+        &self,
         region_id: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
+        start_key: &[u8],
+        end_key: &[u8],
         use_delete_files: bool,
     ) {
         if use_delete_files {
-            if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, &start_key, &end_key)
-            {
+            if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, start_key, end_key) {
                 error!(
                     "[region {}] failed to delete files in [{}, {}): {:?}",
                     region_id,
-                    escape(&start_key),
-                    escape(&end_key),
+                    escape(start_key),
+                    escape(end_key),
                     e
                 );
                 return;
             }
         }
-        if let Err(e) = util::delete_all_in_range(
-            &self.engines.kv,
-            &start_key,
-            &end_key,
-            self.use_delete_range,
-        ) {
+        if let Err(e) =
+            util::delete_all_in_range(&self.engines.kv, start_key, end_key, self.use_delete_range)
+        {
             error!(
                 "[region {}] failed to delete data in [{}, {}): {:?}",
                 region_id,
-                escape(&start_key),
-                escape(&end_key),
+                escape(start_key),
+                escape(end_key),
                 e
             );
         } else {
             info!(
                 "[region {}] succeed in deleting data in [{}, {})",
                 region_id,
-                escape(&start_key),
-                escape(&end_key),
+                escape(start_key),
+                escape(end_key),
             );
         }
     }
@@ -416,27 +408,28 @@ impl SnapContext {
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         for (region_id, s_key, e_key) in overlap_ranges {
-            self.cleanup_range(region_id, s_key, e_key, false /* use_delete_files */);
+            let use_delete_files = false;
+            self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
         }
     }
 
     fn insert_pending_delete_range(
         &mut self,
         region_id: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
+        start_key: &[u8],
+        end_key: &[u8],
     ) -> bool {
         if self.clean_stale_peer_delay.as_secs() == 0 {
             return false;
         }
 
-        self.cleanup_overlap_ranges(&start_key, &end_key);
+        self.cleanup_overlap_ranges(start_key, end_key);
 
         info!(
             "[region {}] register deleting data in [{}, {})",
             region_id,
-            escape(&start_key),
-            escape(&end_key),
+            escape(start_key),
+            escape(end_key),
         );
         let timeout = time::Instant::now() + self.clean_stale_peer_delay;
         self.pending_delete_ranges
@@ -448,11 +441,24 @@ impl SnapContext {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
         let now = time::Instant::now();
-        let mut timeout_ranges = self.pending_delete_ranges.drain_timeout_ranges(now);
-        for (region_id, start_key, end_key) in timeout_ranges.drain(..) {
-            self.cleanup_range(
-                region_id, start_key, end_key, true, /* use_delete_files */
-            );
+        let mut cleaned_range_keys = vec![];
+        {
+            for (region_id, start_key, end_key) in self.pending_delete_ranges.timeout_ranges(now) {
+                let use_delete_files = true;
+                self.cleanup_range(
+                    region_id,
+                    start_key.as_slice(),
+                    end_key.as_slice(),
+                    use_delete_files,
+                );
+                cleaned_range_keys.push(start_key);
+                if now.elapsed() >= CLEANUP_MAX_BLOCK_DURATION {
+                    break;
+                }
+            }
+        }
+        for key in cleaned_range_keys {
+            self.pending_delete_ranges.remove(&key);
         }
     }
 }
@@ -507,13 +513,12 @@ impl Runnable<Task> for Runner {
             } => {
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
-                if !self.ctx.insert_pending_delete_range(
-                    region_id,
-                    start_key.clone(),
-                    end_key.clone(),
-                ) {
+                if !self
+                    .ctx
+                    .insert_pending_delete_range(region_id, &start_key, &end_key)
+                {
                     self.ctx.cleanup_range(
-                        region_id, start_key, end_key, false, /* use_delete_files */
+                        region_id, &start_key, &end_key, false, /* use_delete_files */
                     );
                 }
             }
