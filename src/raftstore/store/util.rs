@@ -28,6 +28,7 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use util::escape;
 use util::properties::RangeProperties;
 use util::rocksdb::stats::get_range_entries_and_versions;
 use util::time::monotonic_raw_now;
@@ -323,6 +324,15 @@ pub fn get_region_properties_cf(
         .map_err(|e| e.into())
 }
 
+/// Get the approximate size of the region.
+pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
+    let mut size = 0;
+    for cfname in LARGE_CFS {
+        size += get_region_approximate_size_cf(db, cfname, region)?
+    }
+    Ok(size)
+}
+
 pub fn get_region_approximate_size_cf(
     db: &DB,
     cfname: &str,
@@ -333,12 +343,33 @@ pub fn get_region_approximate_size_cf(
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
     let (_, mut size) = db.get_approximate_memtable_stats_cf(cf, &range);
+
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
         size += props.get_approximate_size_in_range(&start, &end);
     }
     Ok(size)
+}
+
+/// Get the approximate number of keys in the region.
+pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
+    // try to get from RangeProperties first.
+    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
+        Ok(v) => if v > 0 {
+            return Ok(v);
+        },
+        Err(e) => debug!(
+            "old_version:get keys from RangeProperties failed with err:{:?}",
+            e
+        ),
+    }
+
+    let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
+    Ok(keys)
 }
 
 pub fn get_region_approximate_keys_cf(
@@ -351,12 +382,29 @@ pub fn get_region_approximate_keys_cf(
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
     let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+
     let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
     for (_, v) in &*collection {
         let props = RangeProperties::decode(v.user_collected_properties())?;
         keys += props.get_approximate_keys_in_range(&start, &end);
     }
     Ok(keys)
+}
+
+/// Get region approximate middle key based on default and write cf size.
+pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+
+    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+    let middle_by_cf = if default_cf_size >= write_cf_size {
+        CF_DEFAULT
+    } else {
+        CF_WRITE
+    };
+
+    get_region_approximate_middle_cf(db, middle_by_cf, &region)
 }
 
 /// Get the approxmiate middle key of the region. If we suppose the region
@@ -386,58 +434,121 @@ pub fn get_region_approximate_middle_cf(
                 .map(|(k, _)| k.to_owned()),
         );
     }
-    keys.sort();
     if keys.is_empty() {
         return Ok(None);
     }
+    keys.sort();
     // Calculate the position by (len-1)/2. So it's the left one
     // of two middle positions if the number of keys is even.
     let middle = (keys.len() - 1) / 2;
     Ok(Some(keys.swap_remove(middle)))
 }
 
-pub fn get_region_approximate_size(db: &DB, region: &metapb::Region) -> Result<u64> {
-    let mut size = 0;
-    for cfname in LARGE_CFS {
-        size += get_region_approximate_size_cf(db, cfname, region)?
-    }
-    Ok(size)
-}
-
-/// Get the approximate number of keys in the region.
-pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
-    // try to get from RangeProperties first.
-    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
-        Ok(v) => if v > 0 {
-            return Ok(v);
-        },
-        Err(e) => debug!(
-            "old_version:get keys from RangeProperties failed with err:{:?}",
-            e
-        ),
-    }
-
-    let cf = rocksdb_util::get_cf_handle(db, CF_WRITE)?;
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
-    Ok(keys)
-}
-
-/// Get region approximate middle key based on default and write cf size.
-pub fn get_region_approximate_middle(db: &DB, region: &metapb::Region) -> Result<Option<Vec<u8>>> {
+/// Get region approximate split keys based on default and write cf.
+pub fn get_region_approximate_split_keys(
+    db: &DB,
+    region: &metapb::Region,
+    split_size: u64,
+    max_size: u64,
+    batch_split_limit: u64,
+) -> Result<Vec<Vec<u8>>> {
     let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
 
-    let middle_by_cf = if default_cf_size >= write_cf_size {
-        CF_DEFAULT
+    // assume the size of keys is uniform distribution in both cfs.
+    let (cf, cf_split_size) = if default_cf_size >= write_cf_size {
+        (
+            CF_DEFAULT,
+            split_size * default_cf_size / (default_cf_size + write_cf_size),
+        )
     } else {
-        CF_WRITE
+        (
+            CF_WRITE,
+            split_size * write_cf_size / (default_cf_size + write_cf_size),
+        )
     };
 
-    get_region_approximate_middle_cf(db, middle_by_cf, &region)
+    get_region_approximate_split_keys_cf(
+        db,
+        cf,
+        &region,
+        cf_split_size,
+        max_size,
+        batch_split_limit,
+    )
+}
+
+pub fn get_region_approximate_split_keys_cf(
+    db: &DB,
+    cfname: &str,
+    region: &metapb::Region,
+    split_size: u64,
+    max_size: u64,
+    batch_split_limit: u64,
+) -> Result<Vec<Vec<u8>>> {
+    let cf = rocksdb_util::get_cf_handle(db, cfname)?;
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let range = Range::new(&start, &end);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+
+    let mut keys = vec![];
+    let mut total_size = 0;
+    for (_, v) in &*collection {
+        let props = RangeProperties::decode(v.user_collected_properties())?;
+        total_size += props.get_approximate_size_in_range(&start, &end);
+        keys.extend(
+            props
+                .offsets
+                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .map(|(k, _)| k.to_owned()),
+        );
+    }
+    if keys.len() == 1 {
+        return Ok(vec![]);
+    }
+    keys.sort();
+
+    // use total size of this range and the number of keys in this range to
+    // calculate the average distance between two keys, and we produce a
+    // split_key every `split_size / distance` keys.
+    let len = keys.len();
+    let distance = total_size as f64 / len as f64;
+    assert!(split_size != 0);
+    let n = (split_size as f64 / distance).ceil() as usize;
+
+    // cause first element of the iterator will always be returned by step_by(),
+    // so the first key returned may not the desired split key. Note that, the
+    // start key of region is not included, so we we drop first n - 1 keys.
+    //
+    // For example, the split size is `3 * distance`. And the numbers stand for the
+    // key in `RangeProperties`, `^` stands for produced split key.
+    //
+    // skip:
+    // start___1___2___3___4___5___6___7....
+    //                 ^           ^
+    //
+    // not skip:
+    // start___1___2___3___4___5___6___7....
+    //         ^           ^           ^
+    let mut split_keys = keys
+        .into_iter()
+        .skip(n - 1)
+        .step_by(n)
+        .collect::<Vec<Vec<u8>>>();
+
+    if split_keys.len() as u64 > batch_split_limit {
+        split_keys.truncate(batch_split_limit as usize);
+    } else {
+        // make sure not to split when less than max_size for last part
+        let rest = (len % n) as u64;
+        if rest * distance as u64 + split_size < max_size {
+            split_keys.pop();
+        }
+    }
+    Ok(split_keys)
 }
 
 /// Check if replicas of two regions are on the same stores.
@@ -586,10 +697,17 @@ impl Lease {
         }
     }
 
-    pub fn maybe_new_remote_lease(&mut self) -> Option<RemoteLease> {
-        if self.remote.is_some() {
-            // At most one connected RemoteLease.
-            return None;
+    /// Return a new `RemoteLease` if there is none.
+    pub fn maybe_new_remote_lease(&mut self, term: u64) -> Option<RemoteLease> {
+        if let Some(ref remote) = self.remote {
+            if remote.term() == term {
+                // At most one connected RemoteLease in the same term.
+                return None;
+            } else {
+                // Term has changed. It is unreachable in the current implementation,
+                // because we expire remote lease when leaders step down.
+                unreachable!("Must expire the old remote lease first!");
+            }
         }
         let expired_time = match self.bound {
             Some(Either::Right(ts)) => timespec_to_u64(ts),
@@ -597,10 +715,12 @@ impl Lease {
         };
         let remote = RemoteLease {
             expired_time: Arc::new(AtomicU64::new(expired_time)),
+            term,
         };
         // Clone the remote.
         let remote_clone = RemoteLease {
             expired_time: Arc::clone(&remote.expired_time),
+            term,
         };
         self.remote = Some(remote);
         Some(remote_clone)
@@ -624,6 +744,7 @@ impl fmt::Debug for Lease {
 #[derive(Debug)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
+    term: u64,
 }
 
 impl RemoteLease {
@@ -643,6 +764,10 @@ impl RemoteLease {
 
     fn expire(&self) {
         self.expired_time.store(0, AtomicOrdering::Release);
+    }
+
+    pub fn term(&self) -> u64 {
+        self.term
     }
 }
 
@@ -750,6 +875,24 @@ impl Engines {
     }
 }
 
+pub struct KeysInfoFormatter<'a>(pub &'a [Vec<u8>]);
+
+impl<'a> fmt::Display for KeysInfoFormatter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0.len() {
+            0 => write!(f, "no key"),
+            1 => write!(f, "key \"{}\"", escape(self.0.first().unwrap())),
+            _ => write!(
+                f,
+                "{} keys range from \"{}\" to \"{}\"",
+                self.0.len(),
+                escape(self.0.first().unwrap()),
+                escape(self.0.last().unwrap())
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{iter, process, thread};
@@ -797,7 +940,7 @@ mod tests {
 
         // Empty lease.
         let mut lease = Lease::new(duration);
-        let remote = lease.maybe_new_remote_lease().unwrap();
+        let remote = lease.maybe_new_remote_lease(1).unwrap();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);
             if state == LeaseState::Expired || state == LeaseState::Suspect {
@@ -834,6 +977,17 @@ mod tests {
         lease.expire();
         inspect_test(&lease, Some(monotonic_raw_now()), LeaseState::Expired);
         inspect_test(&lease, None, LeaseState::Expired);
+
+        // An expired remote lease can never renew.
+        lease.renew(monotonic_raw_now() + TimeDuration::minutes(1));
+        assert_eq!(
+            remote.inspect(Some(monotonic_raw_now())),
+            LeaseState::Expired
+        );
+
+        // A new remote lease.
+        let m1 = lease.maybe_new_remote_lease(1).unwrap();
+        assert_eq!(m1.inspect(Some(monotonic_raw_now())), LeaseState::Valid);
     }
 
     #[test]
@@ -1467,5 +1621,119 @@ mod tests {
             .into_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
+    }
+
+    #[test]
+    fn test_get_region_approximate_split_keys() {
+        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat(b'v').take(256));
+
+        // total size for one key and value
+        const ENTRY_SIZE: u64 = 256 + 9;
+
+        for i in 0..4 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+        let region = make_region(1, vec![], vec![]);
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 1)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
+
+        assert_eq!(split_keys.is_empty(), true);
+
+        for i in 4..5 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
+
+        assert_eq!(split_keys, vec![b"key_002".to_vec()]);
+
+        for i in 5..10 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
+
+        assert_eq!(split_keys, vec![b"key_002".to_vec(), b"key_005".to_vec()]);
+
+        for i in 10..20 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+        let split_keys =
+            get_region_approximate_split_keys(&engine, &region, 3 * ENTRY_SIZE, 5 * ENTRY_SIZE, 5)
+                .unwrap()
+                .into_iter()
+                .map(|k| {
+                    Key::from_encoded_slice(keys::origin_key(&k))
+                        .into_raw()
+                        .unwrap()
+                })
+                .collect::<Vec<Vec<u8>>>();
+
+        assert_eq!(
+            split_keys,
+            vec![
+                b"key_002".to_vec(),
+                b"key_005".to_vec(),
+                b"key_008".to_vec(),
+                b"key_011".to_vec(),
+                b"key_014".to_vec(),
+            ]
+        );
     }
 }
