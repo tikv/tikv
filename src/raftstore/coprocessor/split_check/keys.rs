@@ -252,68 +252,6 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
-        let mut cfg = Config::default();
-        cfg.region_max_keys = 100;
-        cfg.region_split_keys = 80;
-        cfg.batch_split_limit = 1;
-
-        let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
-        );
-
-        // so split key will be z0080
-        put_data(&engine, 0, 90, false);
-
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        // keys has not reached the max_keys 100 yet.
-        match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. })
-            | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
-            }
-            others => panic!("expect recv empty, but got {:?}", others),
-        }
-
-        put_data(&engine, 90, 160, true);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        must_split_at(
-            &rx,
-            &region,
-            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
-        );
-
-        drop(rx);
-        // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
-    }
-
-    #[test]
-    fn test_batch_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
-        let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
-
-        let mut region = Region::new();
-        region.set_id(1);
-        region.set_start_key(vec![]);
-        region.set_end_key(vec![]);
-        region.mut_peers().push(Peer::new());
-        region.mut_region_epoch().set_version(2);
-        region.mut_region_epoch().set_conf_ver(5);
-
-        let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-batch-split");
         let mut cfg = Config::default();
         cfg.region_max_keys = 100;
