@@ -13,6 +13,9 @@
 
 use std::mem;
 
+use super::super::error::Result;
+use kvproto::metapb::Region;
+use raftstore::store::util as raftstore_util;
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -75,6 +78,16 @@ impl SplitChecker for Checker {
         } else {
             vec![]
         }
+    }
+
+    fn approximate_split_keys(&self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+        Ok(box_try!(raftstore_util::get_region_approximate_split_keys(
+            engine,
+            region,
+            self.split_size,
+            self.max_size,
+            self.batch_split_limit,
+        )))
     }
 }
 
