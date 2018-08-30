@@ -127,32 +127,37 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
 
 const MAX_WRITE_BATCH_SIZE: usize = 4 * 1024 * 1024;
 
+/// Return a vector which indicates the cf should be flushed or not for all cfs in the DB.
 pub fn delete_all_in_range(
     db: &DB,
     start_key: &[u8],
     end_key: &[u8],
     use_delete_range: bool,
-) -> Result<()> {
+) -> Result<Vec<bool>> {
     if start_key >= end_key {
-        return Ok(());
+        return Ok(vec![]);
     }
 
-    for cf in db.cf_names() {
-        delete_all_in_range_cf(db, cf, start_key, end_key, use_delete_range)?;
+    let cf_names = db.cf_names();
+    let mut need_flush_mem_table = Vec::with_capacity(cf_names.len());
+    for cf in cf_names {
+        let need_flush = delete_all_in_range_cf(db, cf, start_key, end_key, use_delete_range)?;
+        need_flush_mem_table.push(need_flush);
     }
-
-    Ok(())
+    Ok(need_flush_mem_table)
 }
 
+/// Return true means we should call flush_cf before apply snapshot.
 pub fn delete_all_in_range_cf(
     db: &DB,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
     use_delete_range: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
     let mut wb = WriteBatch::new();
+    let mut need_flush_mem_table = false;
     // Since CF_RAFT and CF_LOCK is usually small, so using
     // traditional way to cleanup.
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
@@ -162,6 +167,7 @@ pub fn delete_all_in_range_cf(
         } else {
             wb.delete_range_cf(handle, start_key, end_key)?;
         }
+        need_flush_mem_table = true;
     } else {
         let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
@@ -173,6 +179,7 @@ pub fn delete_all_in_range_cf(
                 // Otherwise it may cause dirty data when applying snapshot.
                 db.write(wb)?;
                 wb = WriteBatch::new();
+                need_flush_mem_table = true;
             }
 
             if !it.next() {
@@ -183,9 +190,10 @@ pub fn delete_all_in_range_cf(
 
     if wb.count() > 0 {
         db.write(wb)?;
+        need_flush_mem_table = true;
     }
 
-    Ok(())
+    Ok(need_flush_mem_table)
 }
 
 pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {

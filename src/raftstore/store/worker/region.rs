@@ -279,12 +279,18 @@ impl SnapContext {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(util::delete_all_in_range(
+        let need_flush_mem_table = box_try!(util::delete_all_in_range(
             &self.engines.kv,
             &start_key,
             &end_key,
             self.use_delete_range
         ));
+        for (cf, need_flush) in self.engines.kv.cf_names().iter().zip(need_flush_mem_table) {
+            if need_flush {
+                let handle = self.engines.kv.cf_handle(cf).unwrap();
+                box_try!(self.engines.kv.flush_cf(handle, true));
+            }
+        }
         check_abort(&abort)?;
 
         let state_key = keys::apply_state_key(region_id);
