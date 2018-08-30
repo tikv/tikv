@@ -221,7 +221,7 @@ impl<C: Sender<Msg>> Runner<C> {
                 host.split_keys()
             }
             CheckPolicy::APPROXIMATE => {
-                let res = host.approximate_split_key(region, &self.engine);
+                let res = host.approximate_split_keys(region, &self.engine);
                 if let Err(e) = res {
                     error!(
                         "[region {}] failed to get approxiamte split key: {}",
@@ -230,7 +230,9 @@ impl<C: Sender<Msg>> Runner<C> {
                     return;
                 }
                 res.unwrap()
-                    .map_or_else(Vec::new, |r| vec![keys::origin_key(&r).to_vec()])
+                    .into_iter()
+                    .map(|k| keys::origin_key(&k).to_vec())
+                    .collect()
             }
         };
 
