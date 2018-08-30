@@ -542,8 +542,6 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     res
 }
 
-// TODO: remove following attribute
-#[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
 fn do_div_mod(
     mut lhs: Decimal,
     rhs: Decimal,
@@ -734,8 +732,8 @@ fn do_div_mod(
             res.frac_cnt = frac_word_to - int_word_to as u8;
             res = Res::Truncated(res.unwrap());
         }
-        for idx in l_idx..l_stop as usize {
-            res.word_buf[idx_to as usize] = buf[idx];
+        for v in buf.iter().take(l_stop as usize).skip(l_idx) {
+            res.word_buf[idx_to as usize] = *v;
             idx_to += 1;
         }
     }
