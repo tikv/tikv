@@ -50,12 +50,12 @@ impl ScalarFunc {
         if s.len() == 16 {
             let v: &[u8; 16] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
-                format!("{}", Ipv6Addr::from(*v)).into_bytes().to_vec(),
+                format!("{}", Ipv6Addr::from(*v)).into_bytes(),
             )))
         } else if s.len() == 4 {
             let v: &[u8; 4] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
-                format!("{}", Ipv4Addr::from(*v)).into_bytes().to_vec(),
+                format!("{}", Ipv4Addr::from(*v)).into_bytes(),
             )))
         } else {
             Ok(None)
