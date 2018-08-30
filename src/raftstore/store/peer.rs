@@ -753,6 +753,10 @@ impl Peer {
     pub fn check_stale_state(&mut self) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
+            //
+            // We update the leader_missing_time in the `fn step`. However one peer region
+            // does not send any raft messages, so we have to check and update it before
+            // reporting stale states.
             self.leader_missing_time = None;
             return StaleState::Valid;
         }
