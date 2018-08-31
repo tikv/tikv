@@ -46,7 +46,7 @@ use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::*;
-use raftstore::store::msg::{Callback, ReadResponse};
+use raftstore::store::msg::Callback;
 use raftstore::store::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use raftstore::store::peer_storage::ApplySnapResult;
 use raftstore::store::transport::Transport;
@@ -1548,40 +1548,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
-    }
-
-    pub fn propose_batch_raft_snapshot_command(
-        &mut self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: Callback,
-    ) {
-        let size = batch.len();
-        BATCH_SNAPSHOT_COMMANDS.observe(size as f64);
-        let mut ret = Vec::with_capacity(size);
-        for msg in batch {
-            match self.pre_propose_raft_command(&msg) {
-                Ok(Some(resp)) => {
-                    ret.push(Some(ReadResponse {
-                        response: resp,
-                        snapshot: None,
-                    }));
-                    continue;
-                }
-                Err(e) => {
-                    ret.push(Some(ReadResponse {
-                        response: new_error(e),
-                        snapshot: None,
-                    }));
-                    continue;
-                }
-                _ => (),
-            }
-
-            let region_id = msg.get_header().get_region_id();
-            let peer = self.region_peers.get_mut(&region_id).unwrap();
-            ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
-        }
-        on_finished.invoke_batch_read(ret)
     }
 
     pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {
