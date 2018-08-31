@@ -13,6 +13,10 @@
 
 use std::mem;
 
+use super::super::error::Result;
+use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+use raftstore::store::util as raftstore_util;
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -27,16 +31,23 @@ pub struct Checker {
     current_size: u64,
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
+    policy: CheckPolicy,
 }
 
 impl Checker {
-    pub fn new(max_size: u64, split_size: u64, batch_split_limit: u64) -> Checker {
+    pub fn new(
+        max_size: u64,
+        split_size: u64,
+        batch_split_limit: u64,
+        policy: CheckPolicy,
+    ) -> Checker {
         Checker {
             max_size,
             split_size,
             current_size: 0,
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
+            policy,
         }
     }
 }
@@ -76,6 +87,20 @@ impl SplitChecker for Checker {
             vec![]
         }
     }
+
+    fn policy(&self) -> CheckPolicy {
+        self.policy
+    }
+
+    fn approximate_split_keys(&self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+        Ok(box_try!(raftstore_util::get_region_approximate_split_keys(
+            engine,
+            region,
+            self.split_size,
+            self.max_size,
+            self.batch_split_limit,
+        )))
+    }
 }
 
 pub struct SizeCheckObserver<C> {
@@ -104,7 +129,13 @@ impl<C: Sender<Msg>> SizeCheckObserver<C> {
 impl<C> Coprocessor for SizeCheckObserver<C> {}
 
 impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
-    fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
+    fn add_checker(
+        &self,
+        ctx: &mut ObserverContext,
+        host: &mut Host,
+        engine: &DB,
+        mut policy: CheckPolicy,
+    ) {
         let region = ctx.region();
         let region_id = region.get_id();
         let region_size = match util::get_region_approximate_size(engine, region) {
@@ -119,11 +150,13 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                     self.region_max_size,
                     self.split_size,
                     self.split_limit,
+                    policy,
                 )));
                 return;
             }
         };
 
+        // send it to rafastore to update region approximate size
         let res = Msg::RegionApproximateSize {
             region_id,
             size: region_size,
@@ -143,11 +176,16 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 region_size,
                 self.region_max_size
             );
+            // when meet large region use approximate way to produce split keys
+            if region_size >= self.region_max_size * self.split_limit * 2 {
+                policy = CheckPolicy::APPROXIMATE
+            }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 self.region_max_size,
                 self.split_size,
                 self.split_limit,
+                policy,
             )));
         } else {
             // Does not need to check size.
@@ -212,89 +250,6 @@ pub mod tests {
 
     #[test]
     fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
-        let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
-
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
-
-        let mut region = Region::new();
-        region.set_id(1);
-        region.set_start_key(vec![]);
-        region.set_end_key(vec![]);
-        region.mut_peers().push(Peer::new());
-        region.mut_region_epoch().set_version(2);
-        region.mut_region_epoch().set_conf_ver(5);
-
-        let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
-        let mut cfg = Config::default();
-        cfg.region_max_size = ReadableSize(100);
-        cfg.region_split_size = ReadableSize(60);
-        cfg.batch_split_limit = 1;
-
-        let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
-        );
-
-        // so split key will be z0006
-        for i in 0..7 {
-            let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put(&s, &s).unwrap();
-        }
-
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        // size has not reached the max_size 100 yet.
-        match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
-            }
-            others => panic!("expect recv empty, but got {:?}", others),
-        }
-
-        for i in 7..11 {
-            let s = keys::data_key(format!("{:04}", i).as_bytes());
-            engine.put(&s, &s).unwrap();
-        }
-
-        // Approximate size of memtable is inaccurate for small data,
-        // we flush it to SST so we can use the size properties instead.
-        engine.flush(true).unwrap();
-
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        must_split_at(&rx, &region, vec![b"0006".to_vec()]);
-
-        // So split key will be z0003
-        for i in 0..6 {
-            let s = keys::data_key(format!("{:04}", i).as_bytes());
-            for cf in ALL_CFS {
-                let handle = engine.cf_handle(cf).unwrap();
-                engine.put_cf(handle, &s, &s).unwrap();
-            }
-        }
-        for cf in ALL_CFS {
-            let handle = engine.cf_handle(cf).unwrap();
-            engine.flush_cf(handle, true).unwrap();
-        }
-
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        must_split_at(&rx, &region, vec![b"0003".to_vec()]);
-        drop(rx);
-        // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
-    }
-
-    #[test]
-    fn test_batch_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
@@ -392,7 +347,7 @@ pub mod tests {
 
     #[test]
     fn test_checker_with_same_max_and_split_size() {
-        let mut checker = Checker::new(24, 24, 1);
+        let mut checker = Checker::new(24, 24, 1, CheckPolicy::SCAN);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
@@ -407,7 +362,7 @@ pub mod tests {
 
     #[test]
     fn test_checker_with_max_twice_bigger_than_split_size() {
-        let mut checker = Checker::new(20, 10, 1);
+        let mut checker = Checker::new(20, 10, 1, CheckPolicy::SCAN);
         let region = Region::default();
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {
