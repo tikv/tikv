@@ -246,6 +246,7 @@ impl ScalarFunc {
             | ScalarFuncSig::InDuration
             | ScalarFuncSig::InJson
             | ScalarFuncSig::IntervalInt
+            | ScalarFuncSig::Elt
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
@@ -306,7 +307,6 @@ impl ScalarFunc {
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
-            | ScalarFuncSig::Elt
             | ScalarFuncSig::Exp
             | ScalarFuncSig::ExportSet3Arg
             | ScalarFuncSig::ExportSet4Arg
@@ -863,8 +863,8 @@ dispatch_call! {
         DateFormatSig => date_format,
         Bin => bin,
         UnHex => un_hex,
-
         Inet6Aton => inet6_aton,
+        Elt => elt,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1176,6 +1176,7 @@ mod test {
                     ScalarFuncSig::InJson,
                     ScalarFuncSig::IntervalInt,
                     ScalarFuncSig::IntervalReal,
+                    ScalarFuncSig::Elt,
                 ],
                 2,
                 usize::MAX,
@@ -1261,7 +1262,6 @@ mod test {
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
-            ScalarFuncSig::Elt,
             ScalarFuncSig::Exp,
             ScalarFuncSig::ExportSet3Arg,
             ScalarFuncSig::ExportSet4Arg,
