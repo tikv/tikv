@@ -65,6 +65,12 @@
 # grpc-raft-conn-num = 10
 # Amount to read ahead on individual grpc streams.
 # grpc-stream-initial-window-size = "2MB"
+# Time to wait before sending out a ping to check if server is still alive.
+# This is only for communications between tikv instances.
+# grpc-keepalive-time = "10s"
+# Time to wait before closing the connection without receiving keepalive ping
+# ack.
+# grpc-keepalive-timeout = "3s"
 
 # How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
