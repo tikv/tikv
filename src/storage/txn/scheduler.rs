@@ -107,7 +107,8 @@ pub enum Msg<E: Engine> {
     },
     WritePrepareFinished {
         cid: u64,
-        cmd: Command,
+        ctx: Context,
+        tag: &'static str,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
         rows: usize,
@@ -127,26 +128,7 @@ pub enum Msg<E: Engine> {
 /// Debug for messages.
 impl<E: Engine> Debug for Msg<E> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            Msg::Quit => write!(f, "Quit"),
-            Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
-            Msg::RetryGetSnapshots(ref tasks) => write!(f, "RetryGetSnapshots {:?}", tasks),
-            Msg::SnapshotFinished { ref cids, .. } => {
-                write!(f, "SnapshotFinished [cids={:?}]", cids)
-            }
-            Msg::BatchSnapshotFinished { ref batch } => {
-                let ids: Vec<&Vec<_>> = batch.iter().map(|&(ref ids, _, _)| ids).collect();
-                write!(f, "BatchSnapshotFinished cids: {:?}", ids)
-            }
-            Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
-            Msg::WritePrepareFinished { cid, ref cmd, .. } => {
-                write!(f, "WritePrepareFinished [cid={}, cmd={:?}]", cid, cmd)
-            }
-            Msg::WritePrepareFailed { cid, ref err } => {
-                write!(f, "WritePrepareFailed [cid={}, err={:?}]", cid, err)
-            }
-            Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
-        }
+        write!(f, "{}", self)
     }
 }
 
@@ -165,9 +147,13 @@ impl<E: Engine> Display for Msg<E> {
                 write!(f, "BatchSnapshotFinished cids: {:?}", ids)
             }
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
-            Msg::WritePrepareFinished { cid, ref cmd, .. } => {
-                write!(f, "WritePrepareFinished [cid={}, cmd={:?}]", cid, cmd)
-            }
+            Msg::WritePrepareFinished {
+                cid, ref ctx, tag, ..
+            } => write!(
+                f,
+                "WritePrepareFinished [cid={}, tag={}, ctx={:?}]",
+                cid, tag, ctx
+            ),
             Msg::WritePrepareFailed { cid, ref err } => {
                 write!(f, "WritePrepareFailed [cid={}, err={:?}]", cid, err)
             }
@@ -434,7 +420,7 @@ fn process_read<E: Engine>(
     snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_read");
-    debug!("process read cmd(cid={}) in worker pool.", cid);
+    debug!("process read cmd(cid={}, {}) in worker pool.", cid, cmd);
     let mut statistics = Statistics::default();
     let pr = match process_read_impl::<E>(sched_ctx, cmd, snapshot, &mut statistics) {
         Err(e) => ProcessResult::Failed { err: e.into() },
@@ -598,6 +584,7 @@ fn process_write<E: Engine>(
     snapshot: E::Snap,
 ) -> Statistics {
     fail_point!("txn_before_process_write");
+    debug!("process write cmd(cid={} {}) in worker pool", cid, cmd);
     let mut statistics = Statistics::default();
     if let Err(e) = process_write_impl(cid, cmd, scheduler.clone(), snapshot, &mut statistics) {
         if let Err(err) = scheduler.schedule(Msg::WritePrepareFailed { cid, err: e }) {
@@ -613,25 +600,26 @@ fn process_write<E: Engine>(
 
 fn process_write_impl<E: Engine>(
     cid: u64,
-    mut cmd: Command,
+    cmd: Command,
     scheduler: worker::Scheduler<Msg<E>>,
     snapshot: E::Snap,
     statistics: &mut Statistics,
 ) -> Result<()> {
-    let (pr, modifies, rows) = match cmd {
+    let tag = cmd.tag();
+    let (pr, modifies, rows, ctx) = match cmd {
         Command::Prewrite {
-            ref ctx,
-            ref mutations,
-            ref primary,
+            ctx,
+            mutations,
+            primary,
             start_ts,
-            ref options,
+            options,
             ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = mutations.len();
             for m in mutations {
-                match txn.prewrite(m.clone(), primary, options) {
+                match txn.prewrite(m, &primary, &options) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
@@ -644,16 +632,16 @@ fn process_write_impl<E: Engine>(
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
                 let modifies = txn.into_modifies();
-                (pr, modifies, rows)
+                (pr, modifies, rows, ctx)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![], 0)
+                (pr, vec![], 0, ctx)
             }
         }
         Command::Commit {
-            ref ctx,
-            ref keys,
+            ctx,
+            keys,
             lock_ts,
             commit_ts,
             ..
@@ -671,23 +659,20 @@ fn process_write_impl<E: Engine>(
             }
 
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows)
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx)
         }
         Command::Cleanup {
-            ref ctx,
-            ref key,
-            start_ts,
-            ..
+            ctx, key, start_ts, ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             txn.rollback(key)?;
 
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), 1)
+            (ProcessResult::Res, txn.into_modifies(), 1, ctx)
         }
         Command::Rollback {
-            ref ctx,
-            ref keys,
+            ctx,
+            keys,
             start_ts,
             ..
         } => {
@@ -698,19 +683,19 @@ fn process_write_impl<E: Engine>(
             }
 
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows)
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx)
         }
         Command::ResolveLock {
-            ref ctx,
-            ref mut txn_status,
-            ref mut scan_key,
-            ref key_locks,
+            ctx,
+            mut txn_status,
+            mut scan_key,
+            key_locks,
         } => {
             let mut scan_key = scan_key.take();
             let mut modifies: Vec<Modify> = vec![];
             let mut write_size = 0;
             let rows = key_locks.len();
-            for &(ref current_key, ref current_lock) in key_locks {
+            for (current_key, current_lock) in key_locks {
                 let mut txn =
                     MvccTxn::new(snapshot.clone(), current_lock.ts, !ctx.get_not_fill_cache())?;
                 let status = txn_status.get(&current_lock.ts);
@@ -725,9 +710,9 @@ fn process_write_impl<E: Engine>(
                             commit_ts,
                         });
                     }
-                    txn.commit(current_key, commit_ts)?;
+                    txn.commit(current_key.clone(), commit_ts)?;
                 } else {
-                    txn.rollback(current_key)?;
+                    txn.rollback(current_key.clone())?;
                 }
                 write_size += txn.write_size();
 
@@ -735,7 +720,7 @@ fn process_write_impl<E: Engine>(
                 modifies.append(&mut txn.into_modifies());
 
                 if write_size >= MAX_TXN_WRITE_SIZE {
-                    scan_key = Some(current_key.to_owned());
+                    scan_key = Some(current_key);
                     break;
                 }
             }
@@ -745,20 +730,21 @@ fn process_write_impl<E: Engine>(
                 ProcessResult::NextCommand {
                     cmd: Command::ResolveLock {
                         ctx: ctx.clone(),
-                        txn_status: mem::replace(txn_status, Default::default()),
+                        txn_status,
                         scan_key: scan_key.take(),
                         key_locks: vec![],
                     },
                 }
             };
-            (pr, modifies, rows)
+            (pr, modifies, rows, ctx)
         }
         _ => panic!("unsupported write command"),
     };
 
     box_try!(scheduler.schedule(Msg::WritePrepareFinished {
         cid,
-        cmd,
+        ctx,
+        tag,
         pr,
         to_be_write: modifies,
         rows,
@@ -1177,7 +1163,8 @@ impl<E: Engine> Scheduler<E> {
     fn on_write_prepare_finished(
         &mut self,
         cid: u64,
-        cmd: Command,
+        cmd_ctx: Context,
+        cmd_tag: &'static str,
         pr: ProcessResult,
         to_be_write: Vec<Modify>,
         rows: usize,
@@ -1188,11 +1175,8 @@ impl<E: Engine> Scheduler<E> {
         if to_be_write.is_empty() {
             return self.on_write_finished(cid, pr, Ok(()));
         }
-        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.scheduler.clone(), rows);
-        if let Err(e) = self
-            .engine
-            .async_write(cmd.get_context(), to_be_write, engine_cb)
-        {
+        let engine_cb = make_engine_cb(cmd_tag, cid, pr, self.scheduler.clone(), rows);
+        if let Err(e) = self.engine.async_write(&cmd_ctx, to_be_write, engine_cb) {
             SCHED_STAGE_COUNTER_VEC
                 .with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
                 .inc();
@@ -1270,11 +1254,12 @@ impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
             Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
             Msg::WritePrepareFinished {
                 cid,
-                cmd,
+                ctx,
+                tag,
                 pr,
                 to_be_write,
                 rows,
-            } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
+            } => self.on_write_prepare_finished(cid, ctx, tag, pr, to_be_write, rows),
             Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
             Msg::WriteFinished {
                 cid, pr, result, ..
