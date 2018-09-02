@@ -162,6 +162,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CastJsonAsDuration
             | ScalarFuncSig::CastJsonAsJson
             | ScalarFuncSig::Date
+            | ScalarFuncSig::LastDay
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -348,7 +349,6 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::JSONAnyValue
-            | ScalarFuncSig::LastDay
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
             | ScalarFuncSig::LeastDecimal
@@ -880,6 +880,8 @@ dispatch_call! {
         CastJsonAsTime => cast_json_as_time,
 
         Date => date,
+        LastDay => last_day,
+
         IfNullTime => if_null_time,
         IfTime => if_time,
 
@@ -1079,6 +1081,7 @@ mod test {
                     ScalarFuncSig::CastJsonAsDuration,
                     ScalarFuncSig::CastJsonAsJson,
                     ScalarFuncSig::Date,
+                    ScalarFuncSig::LastDay,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1307,7 +1310,6 @@ mod test {
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
             ScalarFuncSig::JSONAnyValue,
-            ScalarFuncSig::LastDay,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
             ScalarFuncSig::LeastDecimal,
