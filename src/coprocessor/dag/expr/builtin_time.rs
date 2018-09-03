@@ -12,12 +12,12 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
+use chrono::offset::TimeZone;
 use chrono::Datelike;
 use coprocessor::codec::error::Error;
 use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
-use chrono::offset::TimeZone;
 
 impl ScalarFunc {
     #[inline]
@@ -88,9 +88,12 @@ impl ScalarFunc {
         let mut res = t.to_mut().clone();
 
         let time = t.get_time();
-        res.set_time(time.timezone()
-                         .ymd_opt(time.year(), time.month(), t.last_day_of_month())
-                         .and_hms_opt(0, 0, 0).unwrap());
+        res.set_time(
+            time.timezone()
+                .ymd_opt(time.year(), time.month(), t.last_day_of_month())
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+        );
         Ok(Some(Cow::Owned(res)))
     }
 }

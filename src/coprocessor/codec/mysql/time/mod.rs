@@ -587,8 +587,7 @@ impl Time {
     }
 
     pub fn is_leap_year(&self) -> bool {
-        return self.time.year() % 4 == 0
-            && (self.time.year() % 100 != 0 || self.time.year() % 400 == 0);
+        self.time.year() % 4 == 0 && (self.time.year() % 100 != 0 || self.time.year() % 400 == 0)
     }
 
     pub fn last_day_of_month(&self) -> u32 {
