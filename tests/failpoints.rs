@@ -17,6 +17,7 @@
 
 extern crate fail;
 extern crate futures;
+extern crate grpcio;
 extern crate kvproto;
 extern crate raft;
 #[macro_use]
