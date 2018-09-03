@@ -14,15 +14,18 @@
 use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
-use super::{Callback, Error, Key, Result};
+use super::{Callback, Error, Key, Result, ALL_CFS};
 use kvproto::kvrpcpb::Context;
+use raftstore::store::keys;
+use raftstore::store::util::delete_all_in_range_cf;
+use rocksdb::rocksdb::DB;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use util::rocksdb::get_cf_handle;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
-
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 
@@ -38,37 +41,69 @@ pub const GC_MAX_PENDING_TASKS: usize = 2;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 
-struct GCTask {
-    pub ctx: Context,
-    pub safe_point: u64,
-    pub callback: Callback<()>,
+enum GCWorkerTask {
+    GC {
+        ctx: Context,
+        safe_point: u64,
+        callback: Callback<()>,
+    },
+    DestroyRange {
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        callback: Callback<()>,
+    },
 }
 
-impl Display for GCTask {
+impl GCWorkerTask {
+    pub fn take_callback(self) -> Callback<()> {
+        match self {
+            GCWorkerTask::GC { callback, .. } => callback,
+            GCWorkerTask::DestroyRange { callback, .. } => callback,
+        }
+    }
+}
+
+impl Display for GCWorkerTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let epoch = format!("{:?}", self.ctx.region_epoch.as_ref());
-        f.debug_struct("GCTask")
-            .field("region", &self.ctx.get_region_id())
-            .field("epoch", &epoch)
-            .field("safe_point", &self.safe_point)
-            .finish()
+        match self {
+            GCWorkerTask::GC {
+                ctx, safe_point, ..
+            } => {
+                let epoch = format!("{:?}", ctx.region_epoch.as_ref());
+                f.debug_struct("GC")
+                    .field("region", &ctx.get_region_id())
+                    .field("epoch", &epoch)
+                    .field("safe_point", safe_point)
+                    .finish()
+            }
+            GCWorkerTask::DestroyRange {
+                start_key, end_key, ..
+            } => f
+                .debug_struct("DestroyRange")
+                .field("start_key", &format!("{}", start_key))
+                .field("end_key", &format!("{}", end_key))
+                .finish(),
+        }
     }
 }
 
 /// `GCRunner` is used to perform GC on the engine
 struct GCRunner<E: Engine> {
     engine: E,
+    local_storage: Option<Arc<DB>>,
+
     ratio_threshold: f64,
 
     stats: StatisticsSummary,
 }
 
 impl<E: Engine> GCRunner<E> {
-    pub fn new(engine: E, ratio_threshold: f64) -> GCRunner<E> {
+    pub fn new(engine: E, local_storage: Option<Arc<DB>>, ratio_threshold: f64) -> GCRunner<E> {
         GCRunner {
             engine,
+            local_storage,
             ratio_threshold,
-
             stats: StatisticsSummary::default(),
         }
     }
@@ -176,7 +211,7 @@ impl<E: Engine> GCRunner<E> {
         Ok(next_scan_key)
     }
 
-    pub fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
+    fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
         debug!(
             "doing gc on region {}, safe_point {}",
             ctx.get_region_id(),
@@ -211,26 +246,97 @@ impl<E: Engine> GCRunner<E> {
         );
         Ok(())
     }
-}
 
-impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
-    fn run(&mut self, mut task: GCTask) {
+    fn destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
+        debug!(
+            "destroying range start_key: {}, end_key: {}",
+            start_key, end_key
+        );
+
+        // TODO: Refine usage of errors
+
+        let local_storage = self.local_storage.as_ref().ok_or_else(|| {
+            let e: Error = box_err!("destroy range not supported: local_storage not set");
+            warn!("destroy range failed: {:?}", &e);
+            e
+        })?;
+
+        // Convert keys to RocksDB layer form
+        // TODO: Logic coupled with raftstore's implementation. Maybe better design is to do it in
+        // somewhere of the same layer with apply_worker.
+        let start_data_key = keys::data_key(start_key.as_encoded());
+        let end_data_key = keys::data_end_key(end_key.as_encoded());
+
+        // First, call delete_files_in_range to free as much disk space as possible
+        // TODO: Will LOCK_CF cause problem here?
+        for cf in ALL_CFS {
+            let cf_handle = get_cf_handle(local_storage, cf).unwrap();
+            local_storage
+                .delete_files_in_range_cf(cf_handle, &start_data_key, &end_data_key, false)
+                .map_err(|e| {
+                    let e: Error = box_err!(e);
+                    warn!("destroy range failed at delete_files_in_range_cf: {:?}", e);
+                    e
+                })?;
+        }
+
+        // Then, delete all remaining keys in the range.
+        for cf in ALL_CFS {
+            // TODO: set use_delete_range with config here.
+            delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
+                .map_err(|e| {
+                    let e: Error = box_err!(e);
+                    warn!("destroy range failed at delete_all_in_range_cf: {:?}", e);
+                    e
+                })?;
+        }
+
+        debug!(
+            "destroy range start_key: {}, end_key: {} finished",
+            start_key, end_key
+        );
+        Ok(())
+    }
+
+    fn handle_gc_worker_task(&mut self, task: GCWorkerTask) {
         GC_GCTASK_COUNTER.inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
-        let result = self.gc(&mut task.ctx, task.safe_point);
+
+        let (result, callback) = match task {
+            GCWorkerTask::GC {
+                mut ctx,
+                safe_point,
+                callback,
+            } => (self.gc(&mut ctx, safe_point), callback),
+            GCWorkerTask::DestroyRange {
+                ctx,
+                start_key,
+                end_key,
+                callback,
+            } => (self.destroy_range(&ctx, &start_key, &end_key), callback),
+        };
+
+        // TODO: fix metrics
         GC_DURATION_HISTOGRAM.observe(duration_to_sec(timer.elapsed()));
-        slow_log!(timer, "{}", task);
+        //        slow_log!(timer, "{}", task);
 
         if result.is_err() {
             GC_GCTASK_FAIL_COUNTER.inc();
         }
-        (task.callback)(result);
+        callback(result);
+    }
+}
+
+impl<E: Engine> Runnable<GCWorkerTask> for GCRunner<E> {
+    #[inline]
+    fn run(&mut self, task: GCWorkerTask) {
+        self.handle_gc_worker_task(task);
     }
 
     // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
     // to handle a task. It's not proper here, so override it to remove the log.
-    fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
+    fn run_batch(&mut self, tasks: &mut Vec<GCWorkerTask>) {
         for task in tasks.drain(..) {
             self.run(task);
         }
@@ -252,9 +358,13 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
 #[derive(Clone)]
 pub struct GCWorker<E: Engine> {
     engine: E,
+    /// `local_storage` represent the underlying RocksDB of the `engine`.
+    local_storage: Option<Arc<DB>>,
+
     ratio_threshold: f64,
-    worker: Arc<Mutex<Worker<GCTask>>>,
-    worker_scheduler: worker::Scheduler<GCTask>,
+
+    worker: Arc<Mutex<Worker<GCWorkerTask>>>,
+    worker_scheduler: worker::Scheduler<GCWorkerTask>,
 }
 
 impl<E: Engine> GCWorker<E> {
@@ -267,14 +377,28 @@ impl<E: Engine> GCWorker<E> {
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GCWorker {
             engine,
+            local_storage: None,
             ratio_threshold,
             worker,
             worker_scheduler,
         }
     }
 
-    pub fn start(&self) -> Result<()> {
-        let runner = GCRunner::new(self.engine.clone(), self.ratio_threshold);
+    /// This method should be called before `start`.
+    /// Set `local_storage`, the underlying RocksDB of the `engine`. `local_storage` is where we
+    /// will run `destroy_range` on. If it was set, the `gc_worker` will be able to handle
+    /// `destroy_range`. Since we cant't simply get it from `engine`, we need the caller to set it
+    /// explicitly.
+    pub fn set_local_storage(&mut self, local_storage: Arc<DB>) {
+        self.local_storage = Some(local_storage);
+    }
+
+    pub fn start(&mut self) -> Result<()> {
+        let runner = GCRunner::new(
+            self.engine.clone(),
+            self.local_storage.take(),
+            self.ratio_threshold,
+        );
         self.worker
             .lock()
             .unwrap()
@@ -291,20 +415,46 @@ impl<E: Engine> GCWorker<E> {
         }
     }
 
+    fn handle_schedule_error(e: ScheduleError<GCWorkerTask>) -> Result<()> {
+        match e {
+            ScheduleError::Full(task) => {
+                GC_TOO_BUSY_COUNTER.inc();
+                (task.take_callback())(Err(Error::GCWorkerTooBusy));
+                Ok(())
+            }
+            _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
+        }
+    }
+
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         self.worker_scheduler
-            .schedule(GCTask {
+            .schedule(GCWorkerTask::GC {
                 ctx,
                 safe_point,
                 callback,
             })
-            .or_else(|e| match e {
-                ScheduleError::Full(task) => {
-                    GC_TOO_BUSY_COUNTER.inc();
-                    (task.callback)(Err(Error::GCWorkerTooBusy));
-                    Ok(())
-                }
-                _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
+            .or_else(Self::handle_schedule_error)
+    }
+
+    /// Clean up all keys in a range and quickly free the disk space. The range might span over
+    /// multiple regions, and the `ctx` doesn't indicate region. The request will be done directly
+    /// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
+    /// the range will never be accessed any more. However, `destroy_range` is allowed to be called
+    /// multiple times on an single range.
+    pub fn async_destroy_range(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        self.worker_scheduler
+            .schedule(GCWorkerTask::DestroyRange {
+                ctx,
+                start_key,
+                end_key,
+                callback,
             })
+            .or_else(Self::handle_schedule_error)
     }
 }

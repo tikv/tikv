@@ -242,6 +242,7 @@ impl Debug for Command {
 }
 
 pub const CMD_TAG_GC: &str = "gc";
+pub const CMD_TAG_DESTROY_RANGE: &str = "destroy_range";
 
 impl Command {
     pub fn readonly(&self) -> bool {
@@ -436,6 +437,10 @@ impl<E: Engine> Storage<E> {
             gc_worker,
             max_key_size: config.max_key_size,
         })
+    }
+
+    pub fn mut_gc_worker(&mut self) -> &mut GCWorker<E> {
+        &mut self.gc_worker
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -860,6 +865,21 @@ impl<E: Engine> Storage<E> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&[CMD_TAG_GC])
+            .inc();
+        Ok(())
+    }
+
+    pub fn async_destroy_range(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        self.gc_worker
+            .async_destroy_range(ctx, start_key, end_key, callback)?;
+        KV_COMMAND_COUNTER_VEC
+            .with_label_values(&[CMD_TAG_DESTROY_RANGE])
             .inc();
         Ok(())
     }
