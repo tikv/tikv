@@ -15,14 +15,13 @@ use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 use std::convert::TryInto;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 impl ScalarFunc {
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        if is_given_string_ipv4(&input) {
+        if Ipv4Addr::from_str(&input).is_ok() {
             Ok(Some(1))
         } else {
             Ok(Some(0))
@@ -61,19 +60,19 @@ impl ScalarFunc {
             Ok(None)
         }
     }
-}
 
-fn is_given_string_ipv4(some_str: &str) -> bool {
-    let address = IpAddr::from_str(some_str);
-    if let Ok(add) = address {
-        return add.is_ipv4();
+    pub fn is_ipv6(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        if Ipv6Addr::from_str(&input).is_ok() {
+            Ok(Some(1))
+        } else {
+            Ok(Some(0))
+        }
     }
-    false
 }
 
 #[cfg(test)]
 mod test {
-    use super::is_given_string_ipv4;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
@@ -100,15 +99,23 @@ mod test {
     }
 
     #[test]
-    fn test_is_given_string_ipv4_success() {
-        let is_ipv4 = is_given_string_ipv4("127.0.0.1");
-        assert_eq!(is_ipv4, true);
-    }
+    fn test_is_ipv6() {
+        let cases = vec![
+            // input, expected
+            ("::1", 1i64),
+            ("1:2:3:4:5:6:7:10000", 0i64),
+        ];
 
-    #[test]
-    fn test_is_given_string_ipv4_fail() {
-        let is_ipv4 = is_given_string_ipv4("A.123.a.X");
-        assert_eq!(is_ipv4, false);
+        let mut ctx = EvalContext::default();
+        for (input_str, expected) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+
+            let op = scalar_func_expr(ScalarFuncSig::IsIPv6, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::from(expected);
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
