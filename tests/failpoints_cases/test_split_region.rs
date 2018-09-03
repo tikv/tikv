@@ -46,5 +46,5 @@ fn test_slow_split() {
     assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
 
     fail::cfg("raftstore_follower_slow_split", "off").unwrap();
-    assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+    assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
 }
