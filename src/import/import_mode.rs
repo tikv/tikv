@@ -153,17 +153,14 @@ mod tests {
                 cf_opts.get_level_zero_slowdown_writes_trigger(),
                 opts.level0_slowdown_writes_trigger
             );
-            // TODO: https://github.com/facebook/rocksdb/pull/3823
-            // These options are set correctly, but we can't get them
-            // because of the issue above.
-            // assert_eq!(
-            //     cf_opts.get_soft_pending_compaction_bytes_limit(),
-            //     opts.soft_pending_compaction_bytes_limit
-            // );
-            // assert_eq!(
-            //     cf_opts.get_hard_pending_compaction_bytes_limit(),
-            //     opts.hard_pending_compaction_bytes_limit
-            // );
+            assert_eq!(
+                cf_opts.get_soft_pending_compaction_bytes_limit(),
+                opts.soft_pending_compaction_bytes_limit
+            );
+            assert_eq!(
+                cf_opts.get_hard_pending_compaction_bytes_limit(),
+                opts.hard_pending_compaction_bytes_limit
+            );
         }
     }
 
