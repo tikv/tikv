@@ -819,6 +819,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.destroy_range.start_coarse_timer();
 
+        // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
+        // MAX_KEY as end here.
+        assert!(!req.get_start_key().is_empty());
+        assert!(!req.get_end_key().is_empty());
+
         let (cb, f) = paired_future_callback();
         let res = self.storage.async_destroy_range(
             req.take_context(),
