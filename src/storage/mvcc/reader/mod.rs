@@ -542,28 +542,25 @@ mod tests {
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
-            txn.commit(&k, commit_ts).unwrap();
+            txn.commit(Key::from_raw(pk), commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
-            let k = Key::from_raw(pk);
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.collapse_rollback(false);
-            txn.rollback(&k).unwrap();
+            txn.rollback(Key::from_raw(pk)).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
-            let k = Key::from_raw(pk);
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
                 let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
-                txn.gc(&k, safe_point).unwrap();
+                txn.gc(Key::from_raw(pk), safe_point).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
                     return;
