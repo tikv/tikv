@@ -48,7 +48,7 @@ const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
-const CLEANUP_MAX_BLOCK_DURATION: Duration = Duration::from_secs(5);
+const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// region related task.
 #[derive(Debug)]
@@ -163,8 +163,10 @@ impl PendingDeleteRanges {
         ranges
     }
 
-    fn remove(&mut self, start_key: &[u8]) {
-        self.ranges.remove(start_key);
+    fn remove(&mut self, start_key: &[u8]) -> Option<(u64, Vec<u8>, Vec<u8>)> {
+        self.ranges
+            .remove(start_key)
+            .map(|peer_info| (peer_info.region_id, start_key.to_owned(), peer_info.end_key))
     }
 
     // before an insert is called, must call drain_overlap_ranges to clean the overlap range
@@ -407,8 +409,8 @@ impl SnapContext {
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
+        let use_delete_files = false;
         for (region_id, s_key, e_key) in overlap_ranges {
-            let use_delete_files = false;
             self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
         }
     }
@@ -443,8 +445,8 @@ impl SnapContext {
         let now = time::Instant::now();
         let mut cleaned_range_keys = vec![];
         {
+            let use_delete_files = true;
             for (region_id, start_key, end_key) in self.pending_delete_ranges.timeout_ranges(now) {
-                let use_delete_files = true;
                 self.cleanup_range(
                     region_id,
                     start_key.as_slice(),
@@ -452,13 +454,17 @@ impl SnapContext {
                     use_delete_files,
                 );
                 cleaned_range_keys.push(start_key);
-                if now.elapsed() >= CLEANUP_MAX_BLOCK_DURATION {
+                if now.elapsed() >= CLEANUP_MAX_DURATION {
                     break;
                 }
             }
         }
         for key in cleaned_range_keys {
-            self.pending_delete_ranges.remove(&key);
+            assert!(
+                self.pending_delete_ranges.remove(&key).is_some(),
+                "cleanup pending_delete_ranges {} should exist",
+                escape(&key)
+            );
         }
     }
 }
