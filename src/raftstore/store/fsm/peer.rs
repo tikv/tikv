@@ -964,7 +964,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if peer.is_leader() {
                     peer.heartbeat_pd(&self.pd_worker);
                 }
-                (peer.peer_stat, peer.is_leader())
+                (peer.peer_stat.clone(), peer.is_leader())
             }
         };
 
@@ -1018,7 +1018,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
-            new_peer.peer_stat = peer_stat;
+            new_peer.peer_stat = peer_stat.clone();
 
             let campaigned = new_peer.maybe_campaign(is_leader, &mut self.pending_raft_groups);
 

@@ -209,7 +209,7 @@ pub struct ConsistencyState {
     pub hash: Vec<u8>,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
