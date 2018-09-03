@@ -1,12 +1,12 @@
 ---
-title: Secure the TiKV Cluster 
-summary: Learn how to secure the TiKV cluster.
+title: TiKV Security Configuration 
+summary:  Learn about the security configuration in TiKV.
 category: operations
 ---
 
-# Secure the TiKV Cluster
+# TiKV Security Configuration
 
-TiKV has SSL/TLS integration to encrypt the data exchanged between nodes. This document describes how to secure the TiKV cluster.
+TiKV has SSL/TLS integration to encrypt the data exchanged between nodes. This document describes the security configuration in the TiKV cluster.
 
 ## ca-path = "/path/to/ca.pem"
 
