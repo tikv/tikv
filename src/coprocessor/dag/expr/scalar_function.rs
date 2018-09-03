@@ -162,6 +162,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CastJsonAsDuration
             | ScalarFuncSig::CastJsonAsJson
             | ScalarFuncSig::Date
+            | ScalarFuncSig::LastDay
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -202,6 +203,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::Reverse
+            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -351,7 +354,6 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::JSONAnyValue
-            | ScalarFuncSig::LastDay
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
             | ScalarFuncSig::LeastDecimal
@@ -397,8 +399,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
-            | ScalarFuncSig::Reverse
-            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RouldReal
@@ -868,6 +868,8 @@ dispatch_call! {
         Bin => bin,
         LTrim => ltrim,
         RTrim => rtrim,
+        Reverse => reverse,
+        ReverseBinary => reverse_binary,
         UnHex => un_hex,
 
         Inet6Aton => inet6_aton,
@@ -884,6 +886,8 @@ dispatch_call! {
         CastJsonAsTime => cast_json_as_time,
 
         Date => date,
+        LastDay => last_day,
+
         IfNullTime => if_null_time,
         IfTime => if_time,
 
@@ -1083,6 +1087,7 @@ mod test {
                     ScalarFuncSig::CastJsonAsDuration,
                     ScalarFuncSig::CastJsonAsJson,
                     ScalarFuncSig::Date,
+                    ScalarFuncSig::LastDay,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1129,6 +1134,8 @@ mod test {
                     ScalarFuncSig::Length,
                     ScalarFuncSig::LTrim,
                     ScalarFuncSig::RTrim,
+                    ScalarFuncSig::Reverse,
+                    ScalarFuncSig::ReverseBinary,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
@@ -1314,7 +1321,6 @@ mod test {
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
             ScalarFuncSig::JSONAnyValue,
-            ScalarFuncSig::LastDay,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
             ScalarFuncSig::LeastDecimal,
@@ -1360,8 +1366,6 @@ mod test {
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
-            ScalarFuncSig::Reverse,
-            ScalarFuncSig::ReverseBinary,
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RouldReal,

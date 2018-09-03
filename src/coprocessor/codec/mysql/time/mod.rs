@@ -184,6 +184,14 @@ impl Time {
         self.fsp = fsp;
     }
 
+    pub fn get_time(&self) -> DateTime<Tz> {
+        self.time
+    }
+
+    pub fn set_time(&mut self, time: DateTime<Tz>) {
+        self.time = time
+    }
+
     fn to_numeric_str(&self) -> String {
         if self.tp == mysql::types::DATE {
             // TODO: pure calculation should be enough.
@@ -576,6 +584,22 @@ impl Time {
             }
         }
         Ok(ret)
+    }
+
+    pub fn is_leap_year(&self) -> bool {
+        self.time.year() % 4 == 0 && (self.time.year() % 100 != 0 || self.time.year() % 400 == 0)
+    }
+
+    pub fn last_day_of_month(&self) -> u32 {
+        match self.time.month() {
+            4 | 6 | 9 | 11 => 30,
+            2 => if self.is_leap_year() {
+                29
+            } else {
+                28
+            },
+            _ => 31,
+        }
     }
 }
 
