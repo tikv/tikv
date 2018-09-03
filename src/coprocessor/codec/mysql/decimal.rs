@@ -732,10 +732,10 @@ fn do_div_mod(
             res.frac_cnt = frac_word_to - int_word_to as u8;
             res = Res::Truncated(res.unwrap());
         }
-        for v in buf.iter().take(l_stop as usize).skip(l_idx) {
-            res.word_buf[idx_to as usize] = *v;
-            idx_to += 1;
-        }
+        let src = &buf[l_idx..l_stop as usize];
+        let idx_to = idx_to as usize;
+        let dest = &mut res.word_buf[idx_to..idx_to + src.len()];
+        dest.copy_from_slice(src);
     }
     Some(res)
 }
