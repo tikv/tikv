@@ -202,6 +202,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::Reverse
+            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -212,7 +214,8 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
-            | ScalarFuncSig::UnHex => (1, 1),
+            | ScalarFuncSig::UnHex
+            | ScalarFuncSig::MD5 => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -372,7 +375,6 @@ impl ScalarFunc {
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
-            | ScalarFuncSig::MD5
             | ScalarFuncSig::MicroSecond
             | ScalarFuncSig::Minute
             | ScalarFuncSig::Month
@@ -396,8 +398,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
-            | ScalarFuncSig::Reverse
-            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RouldReal
@@ -866,10 +866,14 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        Reverse => reverse,
+        ReverseBinary => reverse_binary,
         UnHex => un_hex,
 
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
+
+        MD5 => md5,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1124,10 +1128,13 @@ mod test {
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::Reverse,
+                    ScalarFuncSig::ReverseBinary,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv6,
+                    ScalarFuncSig::MD5,
                 ],
                 1,
                 1,
@@ -1331,7 +1338,6 @@ mod test {
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
-            ScalarFuncSig::MD5,
             ScalarFuncSig::MicroSecond,
             ScalarFuncSig::Minute,
             ScalarFuncSig::Month,
@@ -1355,8 +1361,6 @@ mod test {
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
-            ScalarFuncSig::Reverse,
-            ScalarFuncSig::ReverseBinary,
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RouldReal,
