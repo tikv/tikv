@@ -17,6 +17,7 @@ use kvproto::metapb::Region;
 use rocksdb::{SeekKey, DB};
 
 use coprocessor::codec::table as table_codec;
+use kvproto::pdpb::CheckPolicy;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::keys;
 use storage::types::Key;
@@ -32,6 +33,7 @@ use super::Host;
 pub struct Checker {
     first_encoded_table_prefix: Option<Vec<u8>>,
     split_key: Option<Vec<u8>>,
+    policy: CheckPolicy,
 }
 
 impl SplitChecker for Checker {
@@ -71,6 +73,10 @@ impl SplitChecker for Checker {
             Some(key) => vec![key],
         }
     }
+
+    fn policy(&self) -> CheckPolicy {
+        self.policy
+    }
 }
 
 #[derive(Default)]
@@ -79,7 +85,13 @@ pub struct TableCheckObserver;
 impl Coprocessor for TableCheckObserver {}
 
 impl SplitCheckObserver for TableCheckObserver {
-    fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
+    fn add_checker(
+        &self,
+        ctx: &mut ObserverContext,
+        host: &mut Host,
+        engine: &DB,
+        policy: CheckPolicy,
+    ) {
         let region = ctx.region();
         if is_same_table(region.get_start_key(), region.get_end_key()) {
             // Region is inside a table, skip for saving IO.
@@ -107,7 +119,10 @@ impl SplitCheckObserver for TableCheckObserver {
         {
             // For now, let us scan region if encoded_start_key or encoded_end_key
             // is less than TABLE_PREFIX_KEY_LEN.
-            host.add_checker(Box::new(Checker::default()));
+            host.add_checker(Box::new(Checker {
+                policy,
+                ..Default::default()
+            }));
             return;
         }
 
@@ -158,6 +173,7 @@ impl SplitCheckObserver for TableCheckObserver {
         host.add_checker(Box::new(Checker {
             first_encoded_table_prefix,
             split_key,
+            policy,
         }));
     }
 }
@@ -183,9 +199,9 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
 }
 
 fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
-    if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).raw() {
+    if let Ok(raw_key) = Key::from_encoded_slice(encoded_key).to_raw() {
         table_codec::extract_table_prefix(&raw_key)
-            .map(|k| Key::from_raw(k).take_encoded())
+            .map(|k| Key::from_raw(k).into_encoded())
             .ok()
     } else {
         None
@@ -257,7 +273,7 @@ mod test {
         for i in 1..3 {
             let mut key = gen_table_prefix(i);
             key.extend_from_slice(padding);
-            let k = keys::data_key(Key::from_raw(&key).encoded());
+            let k = keys::data_key(Key::from_raw(&key).as_encoded());
             engine.put_cf(write_cf, &k, &k).unwrap();
             data_keys.push(k)
         }
@@ -267,12 +283,12 @@ mod test {
             for (start_id, end_id, want) in cases {
                 region.set_start_key(
                     start_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).into_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 region.set_end_key(
                     end_id
-                        .map(|id| Key::from_raw(&gen_table_prefix(id)).take_encoded())
+                        .map(|id| Key::from_raw(&gen_table_prefix(id)).into_encoded())
                         .unwrap_or_else(Vec::new),
                 );
                 assert_eq!(last_key_of_region(&engine, &region).unwrap(), want);
@@ -334,7 +350,7 @@ mod test {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
                         Ok(Msg::SplitRegion { split_keys, .. }) => {
-                            assert_eq!(split_keys, vec![key.take_encoded()]);
+                            assert_eq!(split_keys, vec![key.into_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),
                     }
@@ -349,7 +365,7 @@ mod test {
 
         let gen_encoded_table_prefix = |table_id| {
             let key = Key::from_raw(&gen_table_prefix(table_id));
-            key.take_encoded()
+            key.into_encoded()
         };
 
         // arbitrary padding.
@@ -365,7 +381,7 @@ mod test {
 
             let mut key = gen_table_prefix(i);
             key.extend_from_slice(padding);
-            let s = keys::data_key(Key::from_raw(&key).encoded());
+            let s = keys::data_key(Key::from_raw(&key).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
@@ -392,7 +408,7 @@ mod test {
         for i in 1..4 {
             let mut key = gen_table_prefix(3);
             key.extend_from_slice(format!("{:?}{}", padding, i).as_bytes());
-            let s = keys::data_key(Key::from_raw(&key).encoded());
+            let s = keys::data_key(Key::from_raw(&key).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 
@@ -413,10 +429,10 @@ mod test {
         for i in 0..3 {
             // m is less than t and is the prefix of meta keys.
             let key = format!("m{:?}{}", padding, i);
-            let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+            let s = keys::data_key(Key::from_raw(key.as_bytes()).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
             let key = format!("u{:?}{}", padding, i);
-            let s = keys::data_key(Key::from_raw(key.as_bytes()).encoded());
+            let s = keys::data_key(Key::from_raw(key.as_bytes()).as_encoded());
             engine.put_cf(write_cf, &s, &s).unwrap();
         }
 

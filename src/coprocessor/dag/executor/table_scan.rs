@@ -181,7 +181,7 @@ impl<S: Snapshot> Executor for TableScanExecutor<S> {
         match self.current_range.as_ref() {
             Some(range) => {
                 if !util::is_point(range) {
-                    let scanner = self.scanner.as_ref().unwrap();
+                    let scanner = self.scanner.as_mut().unwrap();
                     if scanner.stop_scan(&mut ret_range) {
                         return Some(ret_range);
                     }
