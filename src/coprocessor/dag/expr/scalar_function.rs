@@ -200,6 +200,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
+            | ScalarFuncSig::Sin
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
@@ -416,7 +417,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::Sin
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
@@ -814,6 +814,7 @@ dispatch_call! {
         Atan2Args => atan_2_args,
         Cos => cos,
         Tan => tan,
+        Sin => sin,
         Pow => pow,
     }
     DEC_CALLS {
@@ -1123,6 +1124,7 @@ mod test {
                     ScalarFuncSig::Atan1Arg,
                     ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
+                    ScalarFuncSig::Sin,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
@@ -1381,7 +1383,6 @@ mod test {
             ScalarFuncSig::SetVar,
             ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
-            ScalarFuncSig::Sin,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
