@@ -115,26 +115,26 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
-    fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
-        let key = key.clone().append_ts(ts);
+    fn put_value(&mut self, key: Key, ts: u64, value: Value) {
+        let key = key.append_ts(ts);
         self.write_size += key.as_encoded().len() + value.len();
         self.writes.push(Modify::Put(CF_DEFAULT, key, value));
     }
 
-    fn delete_value(&mut self, key: &Key, ts: u64) {
-        let key = key.clone().append_ts(ts);
+    fn delete_value(&mut self, key: Key, ts: u64) {
+        let key = key.append_ts(ts);
         self.write_size += key.as_encoded().len();
         self.writes.push(Modify::Delete(CF_DEFAULT, key));
     }
 
-    fn put_write(&mut self, key: &Key, ts: u64, value: Value) {
-        let key = key.clone().append_ts(ts);
+    fn put_write(&mut self, key: Key, ts: u64, value: Value) {
+        let key = key.append_ts(ts);
         self.write_size += CF_WRITE.len() + key.as_encoded().len() + value.len();
         self.writes.push(Modify::Put(CF_WRITE, key, value));
     }
 
-    fn delete_write(&mut self, key: &Key, ts: u64) {
-        let key = key.clone().append_ts(ts);
+    fn delete_write(&mut self, key: Key, ts: u64) {
+        let key = key.append_ts(ts);
         self.write_size += CF_WRITE.len() + key.as_encoded().len();
         self.writes.push(Modify::Delete(CF_WRITE, key));
     }
@@ -201,19 +201,19 @@ impl<S: Snapshot> MvccTxn<S> {
             );
             if value.is_some() {
                 let ts = self.start_ts;
-                self.put_value(&key, ts, value.unwrap());
+                self.put_value(key, ts, value.unwrap());
             }
         }
         Ok(())
     }
 
-    pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
-        let (lock_type, short_value) = match self.reader.load_lock(key)? {
+    pub fn commit(&mut self, key: Key, commit_ts: u64) -> Result<()> {
+        let (lock_type, short_value) = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
-                return match self.reader.get_txn_commit_info(key, self.start_ts)? {
+                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // None: related Rollback has been collapsed.
@@ -243,21 +243,21 @@ impl<S: Snapshot> MvccTxn<S> {
             self.start_ts,
             short_value,
         );
-        self.put_write(key, commit_ts, write.to_bytes());
-        self.unlock_key(key.clone());
+        self.put_write(key.clone(), commit_ts, write.to_bytes());
+        self.unlock_key(key);
         Ok(())
     }
 
-    pub fn rollback(&mut self, key: &Key) -> Result<()> {
-        match self.reader.load_lock(key)? {
+    pub fn rollback(&mut self, key: Key) -> Result<()> {
+        match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If prewrite type is DEL or LOCK, it is no need to delete value.
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
-                    self.delete_value(key, lock.ts);
+                    self.delete_value(key.clone(), lock.ts);
                 }
             }
             _ => {
-                return match self.reader.get_txn_commit_info(key, self.start_ts)? {
+                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
@@ -267,7 +267,9 @@ impl<S: Snapshot> MvccTxn<S> {
                             MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                             info!(
                                 "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                                key, self.start_ts, ts
+                                key.clone(),
+                                self.start_ts,
+                                ts
                             );
                             Err(Error::Committed { commit_ts: ts })
                         }
@@ -277,7 +279,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
                         // collapse previous rollback if exist.
                         if self.collapse_rollback {
-                            self.collapse_prev_rollback(key)?;
+                            self.collapse_prev_rollback(key.clone())?;
                         }
 
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
@@ -290,7 +292,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
         let write = Write::new(WriteType::Rollback, self.start_ts, None);
         let ts = self.start_ts;
-        self.put_write(key, ts, write.to_bytes());
+        self.put_write(key.clone(), ts, write.to_bytes());
         self.unlock_key(key.clone());
         if self.collapse_rollback {
             self.collapse_prev_rollback(key)?;
@@ -298,8 +300,8 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    fn collapse_prev_rollback(&mut self, key: &Key) -> Result<()> {
-        if let Some((commit_ts, write)) = self.reader.seek_write(key, self.start_ts)? {
+    fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
+        if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback {
                 self.delete_write(key, commit_ts);
             }
@@ -307,14 +309,14 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<GcInfo> {
+    pub fn gc(&mut self, key: Key, safe_point: u64) -> Result<GcInfo> {
         let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
         let mut found_versions = 0;
         let mut deleted_versions = 0;
         let mut latest_delete = None;
         let mut is_completed = true;
-        while let Some((commit, write)) = self.gc_reader.seek_write(key, ts)? {
+        while let Some((commit, write)) = self.gc_reader.seek_write(&key, ts)? {
             ts = commit - 1;
             found_versions += 1;
 
@@ -326,9 +328,9 @@ impl<S: Snapshot> MvccTxn<S> {
             }
 
             if remove_older {
-                self.delete_write(key, commit);
+                self.delete_write(key.clone(), commit);
                 if write.write_type == WriteType::Put && write.short_value.is_none() {
-                    self.delete_value(key, write.start_ts);
+                    self.delete_value(key.clone(), write.start_ts);
                 }
                 deleted_versions += 1;
                 continue;
@@ -353,7 +355,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     latest_delete = Some(commit);
                 }
                 WriteType::Rollback | WriteType::Lock => {
-                    self.delete_write(key, commit);
+                    self.delete_write(key.clone(), commit);
                     deleted_versions += 1;
                 }
                 WriteType::Put => {}
@@ -754,7 +756,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10, true).unwrap();
-        txn.commit(&key, 15).unwrap();
+        txn.commit(key, 15).unwrap();
         assert!(txn.write_size() > 0);
         engine.write(&ctx, txn.into_modifies()).unwrap();
     }

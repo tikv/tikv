@@ -221,7 +221,7 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        txn.commit(&Key::from_raw(key), commit_ts).unwrap();
+        txn.commit(Key::from_raw(key), commit_ts).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -229,7 +229,7 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        assert!(txn.commit(&Key::from_raw(key), commit_ts).is_err());
+        assert!(txn.commit(Key::from_raw(key), commit_ts).is_err());
     }
 
     pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
@@ -237,7 +237,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         txn.collapse_rollback(false);
-        txn.rollback(&Key::from_raw(key)).unwrap();
+        txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -245,7 +245,7 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        txn.rollback(&Key::from_raw(key)).unwrap();
+        txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -253,14 +253,14 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        assert!(txn.rollback(&Key::from_raw(key)).is_err());
+        assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 0, true).unwrap();
-        txn.gc(&Key::from_raw(key), safe_point).unwrap();
+        txn.gc(Key::from_raw(key), safe_point).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
