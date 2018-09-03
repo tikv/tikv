@@ -203,6 +203,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::Reverse
+            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -396,8 +398,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
-            | ScalarFuncSig::Reverse
-            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RouldReal
@@ -866,6 +866,8 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        Reverse => reverse,
+        ReverseBinary => reverse_binary,
         UnHex => un_hex,
 
         Inet6Aton => inet6_aton,
@@ -1128,6 +1130,8 @@ mod test {
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::Reverse,
+                    ScalarFuncSig::ReverseBinary,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
@@ -1359,8 +1363,6 @@ mod test {
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
-            ScalarFuncSig::Reverse,
-            ScalarFuncSig::ReverseBinary,
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RouldReal,
