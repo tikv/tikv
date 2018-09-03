@@ -29,7 +29,7 @@ TiKV uses gRPC, a remote procedure call (RPC) framework, to build a distributed 
 
 ## grpc-keepalive-time
 
-- Time to wait before sending out a ping to check if the server is still alive. This is only for the communication between TiKV instances
+- Time to wait before sending out a ping to check whether the server is still alive. This is only for the communication between TiKV instances
 - Default: 10s
 
 ## grpc-keepalive-timeout
