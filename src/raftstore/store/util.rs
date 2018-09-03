@@ -107,10 +107,19 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     }
 }
 
+/// `is_first_vote_msg` checks `msg` is the first vote (or prevote) message or not. It's used for
+/// when the message is receiving but there is no such region in `Store::region_peers` and the
+/// region overlaps with others. In this case we should put `msg` into `pending_votes` instead of
+/// create the peer.
 #[inline]
 pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
-    msg.get_message().get_msg_type() == MessageType::MsgRequestVote
-        && msg.get_message().get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
+    let msg_type = msg.get_message().get_msg_type();
+    let term = msg.get_message().get_term();
+    match msg_type {
+        MessageType::MsgRequestVote => term == peer_storage::RAFT_INIT_LOG_TERM + 1,
+        MessageType::MsgRequestPreVote => term == peer_storage::RAFT_INIT_LOG_TERM,
+        _ => false,
+    }
 }
 
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";

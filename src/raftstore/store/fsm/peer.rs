@@ -964,15 +964,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if peer.is_leader() {
                     peer.heartbeat_pd(&self.pd_worker);
                 }
-                (peer.peer_stat.clone(), peer.is_leader())
+                (peer.peer_stat, peer.is_leader())
             }
         };
+
         if is_leader {
             // Notify pd immediately to let it update the region meta.
             if let Err(e) = report_split_pd(&regions, &self.pd_worker) {
                 error!("{} failed to notify pd: {}", self.tag, e);
             }
+        } else {
+            fail_point!("raftstore_follower_slow_split");
         }
+
         let last_key = enc_end_key(regions.last().unwrap());
         self.region_ranges
             .remove(&last_key)
@@ -980,35 +984,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
+
             let not_exist = self
                 .region_ranges
                 .insert(enc_end_key(&new_region), new_region_id)
                 .is_none();
-            assert!(
-                not_exist,
-                "[region {}] should not exists",
-                new_region.get_id()
-            );
+            assert!(not_exist, "[region {}] should not exists", new_region_id);
+
             if new_region_id == region_id {
                 continue;
             }
+
             // Insert new regions and validation
             info!(
                 "[region {}] insert new region {:?}",
-                new_region.get_id(),
-                new_region
+                new_region_id, new_region
             );
-            if let Some(peer) = self.region_peers.get(&new_region_id) {
-                // If the store received a raft msg with the new region raft group
-                // before splitting, it will creates a uninitialized peer.
-                // We can remove this uninitialized peer directly.
-                if peer.get_store().is_initialized() {
-                    panic!(
-                        "[region {}] duplicated region for split region",
-                        new_region_id
-                    );
-                }
-            }
 
             let mut new_peer = match Peer::create(self, &new_region) {
                 Ok(new_peer) => new_peer,
@@ -1018,14 +1009,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("create new split region {:?} err {:?}", new_region, e);
                 }
             };
+            let peer = new_peer.peer.clone();
+
             for peer in new_region.get_peers() {
                 // Add this peer to cache.
                 new_peer.insert_peer_cache(peer.clone());
             }
-            let peer = new_peer.peer.clone();
+
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
-            new_peer.peer_stat = peer_stat.clone();
+            new_peer.peer_stat = peer_stat;
+
             let campaigned = new_peer.maybe_campaign(is_leader, &mut self.pending_raft_groups);
 
             if is_leader {
@@ -1035,7 +1029,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             new_peer.register_delegates();
-            self.region_peers.insert(new_region_id, new_peer);
+
+            let not_exist = self.region_peers.insert(new_region_id, new_peer).is_none();
+            assert!(
+                not_exist,
+                "[region {}] duplicated region for split region",
+                new_region_id
+            );
 
             if !campaigned {
                 if let Some(msg) = self
