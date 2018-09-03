@@ -371,7 +371,13 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         executor: &mut ReadExecutor,
     ) {
         let region_id = request.get_header().get_region_id();
-        match self.pre_propose_raft_command(&request) {
+        let d = self.pre_propose_raft_command(&request);
+        fail_point!(
+            "localreader_on_propose_raft_command",
+            d.is_ok() && d.as_ref().unwrap().is_some(),
+            |_| {}
+        );
+        match d {
             Ok(Some(delegate)) => {
                 let mut metrics = self.metrics.borrow_mut();
                 if let Some(resp) = delegate.handle_read(&request, executor, &mut *metrics) {
