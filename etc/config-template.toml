@@ -220,6 +220,7 @@
 # bit smaller.
 # region-max-keys = 1440000
 # region-split-keys = 960000
+
 [rocksdb]
 # Maximum number of concurrent background jobs (compactions and flushes)
 # max-background-jobs = 8
@@ -312,25 +313,23 @@ max-sub-compactions = 2
 
 # Allows OS to incrementally sync files to disk while they are being
 # written, asynchronously, in the background.
-# bytes-per-sync = "0MB"
+# bytes-per-sync = "1MB"
 
 # Allows OS to incrementally sync WAL to disk while it is being written.
-# wal-bytes-per-sync = "0KB"
+# wal-bytes-per-sync = "512KB"
 
 # Specify the maximal size of the Rocksdb info log file. If the log file
 # is larger than `max_log_file_size`, a new info log file will be created.
 # If max_log_file_size == 0, all logs will be written to one log file.
-# Default: 1GB
 # info-log-max-size = "1GB"
 
 # Time for the Rocksdb info log file to roll (in seconds).
 # If specified with non-zero value, log file will be rolled
 # if it has been active longer than `log_file_time_to_roll`.
-# Default: 0 (disabled)
+# 0 means disabled.
 # info-log-roll-time = "0"
 
 # Maximal Rocksdb info log files to be kept.
-# Default: 10
 # info-log-keep-log-file-num = 10
 
 # This specifies the Rocksdb info LOG dir.
@@ -338,7 +337,6 @@ max-sub-compactions = 2
 # If it is non empty, the log files will be in the specified dir,
 # and the db data dir's absolute path will be used as the log file
 # name's prefix.
-# Default: empty
 # info-log-dir = ""
 
 # Column Family default used to store actual data of the database.
@@ -481,8 +479,8 @@ max-sub-compactions = 2
 # use-direct-io-for-flush-and-compaction = false
 # enable-pipelined-write = true
 # allow-concurrent-memtable-write = false
-# bytes-per-sync = "0MB"
-# wal-bytes-per-sync = "0KB"
+# bytes-per-sync = "1MB"
+# wal-bytes-per-sync = "512KB"
 
 # info-log-max-size = "1GB"
 # info-log-roll-time = "0"
