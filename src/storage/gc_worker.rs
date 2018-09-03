@@ -142,7 +142,7 @@ impl<E: Engine> GCRunner<E> {
         let snapshot = self.get_snapshot(ctx)?;
         let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache()).unwrap();
         for k in keys {
-            let gc_info = txn.gc(&k, safe_point)?;
+            let gc_info = txn.gc(k.clone(), safe_point)?;
 
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                 info!(
