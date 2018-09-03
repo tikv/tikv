@@ -1,6 +1,6 @@
 ---
 title: TiKV Security Configuration 
-summary:  Learn about the security configuration in TiKV.
+summary: Learn about the security configuration in TiKV.
 category: operations
 ---
 
