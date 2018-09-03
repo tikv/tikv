@@ -13,6 +13,7 @@
 
 use std::mem;
 
+use kvproto::pdpb::CheckPolicy;
 use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
 use util::transport::{RetryableSendCh, Sender};
@@ -27,16 +28,23 @@ pub struct Checker {
     current_count: u64,
     split_keys: Vec<Vec<u8>>,
     batch_split_limit: u64,
+    policy: CheckPolicy,
 }
 
 impl Checker {
-    pub fn new(max_keys_count: u64, split_threshold: u64, batch_split_limit: u64) -> Checker {
+    pub fn new(
+        max_keys_count: u64,
+        split_threshold: u64,
+        batch_split_limit: u64,
+        policy: CheckPolicy,
+    ) -> Checker {
         Checker {
             max_keys_count,
             split_threshold,
             current_count: 0,
             split_keys: Vec::with_capacity(1),
             batch_split_limit,
+            policy,
         }
     }
 }
@@ -74,6 +82,10 @@ impl SplitChecker for Checker {
             vec![]
         }
     }
+
+    fn policy(&self) -> CheckPolicy {
+        self.policy
+    }
 }
 
 pub struct KeysCheckObserver<C> {
@@ -102,7 +114,13 @@ impl<C: Sender<Msg>> KeysCheckObserver<C> {
 impl<C> Coprocessor for KeysCheckObserver<C> {}
 
 impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
-    fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
+    fn add_checker(
+        &self,
+        ctx: &mut ObserverContext,
+        host: &mut Host,
+        engine: &DB,
+        policy: CheckPolicy,
+    ) {
         let region = ctx.region();
         let region_id = region.get_id();
         let region_keys = match util::get_region_approximate_keys(engine, region) {
@@ -117,6 +135,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
                     self.region_max_keys,
                     self.split_keys,
                     self.batch_split_limit,
+                    policy,
                 )));
                 return;
             }
@@ -146,6 +165,7 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 self.region_max_keys,
                 self.split_keys,
                 self.batch_split_limit,
+                policy,
             )));
         } else {
             // Does not need to check keys.
@@ -161,14 +181,12 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-    use std::sync::Arc;
+    use std::cmp;
+    use std::sync::{mpsc, Arc};
 
-    use kvproto::metapb::Peer;
-    use kvproto::metapb::Region;
+    use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::Writable;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
+    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
 
     use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
@@ -183,98 +201,35 @@ mod tests {
 
     use super::super::size::tests::must_split_at;
 
-    #[test]
-    fn test_split_check() {
-        let path = TempDir::new("test-raftstore").unwrap();
-        let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+    fn put_data(engine: &DB, mut start_idx: u64, end_idx: u64, fill_short_value: bool) {
+        let write_cf = engine.cf_handle(CF_WRITE).unwrap();
+        let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+        let write_value = if fill_short_value {
+            Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec()))
+        } else {
+            Write::new(WriteType::Put, 0, None)
+        }.to_bytes();
 
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
-
-        let mut region = Region::new();
-        region.set_id(1);
-        region.set_start_key(vec![]);
-        region.set_end_key(vec![]);
-        region.mut_peers().push(Peer::new());
-        region.mut_region_epoch().set_version(2);
-        region.mut_region_epoch().set_conf_ver(5);
-
-        let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
-        let mut cfg = Config::default();
-        cfg.region_max_keys = 100;
-        cfg.region_split_keys = 80;
-        cfg.batch_split_limit = 1;
-
-        let mut runnable = SplitCheckRunner::new(
-            Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
-        );
-
-        // so split key will be z0080
-        for i in 0..90 {
-            let key = keys::data_key(
-                Key::from_raw(format!("{:04}", i).as_bytes())
-                    .append_ts(2)
-                    .as_encoded(),
-            );
-            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
-            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-            engine.put_cf(write_cf, &key, &write_value).unwrap();
-            engine.flush_cf(write_cf, true).unwrap();
-            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
-            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
-            engine.flush_cf(default_cf, true).unwrap();
-        }
-
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        // keys has not reached the max_keys 100 yet.
-        match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. })
-            | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
+        while start_idx < end_idx {
+            let batch_idx = cmp::min(start_idx + 20, end_idx);
+            for i in start_idx..batch_idx {
+                let key = keys::data_key(
+                    Key::from_raw(format!("{:04}", i).as_bytes())
+                        .append_ts(2)
+                        .as_encoded(),
+                );
+                engine.put_cf(write_cf, &key, &write_value).unwrap();
+                engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
             }
-            others => panic!("expect recv empty, but got {:?}", others),
-        }
-
-        for i in 90..160 {
-            let key = keys::data_key(
-                Key::from_raw(format!("{:04}", i).as_bytes())
-                    .append_ts(2)
-                    .as_encoded(),
-            );
-
-            let write_value =
-                Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec())).to_bytes();
-            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-            engine.put_cf(write_cf, &key, &write_value).unwrap();
+            // Flush to generate SST files, so that properties can be utilized.
             engine.flush_cf(write_cf, true).unwrap();
-            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
-            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
             engine.flush_cf(default_cf, true).unwrap();
+            start_idx = batch_idx;
         }
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
-        must_split_at(
-            &rx,
-            &region,
-            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
-        );
-
-        drop(rx);
-        // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
     }
 
     #[test]
-    fn test_batch_split_check() {
+    fn test_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
@@ -310,21 +265,7 @@ mod tests {
         );
 
         // so split key will be z0080
-        for i in 0..90 {
-            let key = keys::data_key(
-                Key::from_raw(format!("{:04}", i).as_bytes())
-                    .append_ts(2)
-                    .as_encoded(),
-            );
-            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
-            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-            engine.put_cf(write_cf, &key, &write_value).unwrap();
-            engine.flush_cf(write_cf, true).unwrap();
-            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
-            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
-            engine.flush_cf(default_cf, true).unwrap();
-        }
-
+        put_data(&engine, 0, 90, false);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
@@ -335,23 +276,7 @@ mod tests {
             others => panic!("expect recv empty, but got {:?}", others),
         }
 
-        for i in 90..160 {
-            let key = keys::data_key(
-                Key::from_raw(format!("{:04}", i).as_bytes())
-                    .append_ts(2)
-                    .as_encoded(),
-            );
-
-            let write_value =
-                Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec())).to_bytes();
-            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-            engine.put_cf(write_cf, &key, &write_value).unwrap();
-            engine.flush_cf(write_cf, true).unwrap();
-            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
-            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
-            engine.flush_cf(default_cf, true).unwrap();
-        }
-
+        put_data(&engine, 90, 160, true);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
@@ -359,22 +284,7 @@ mod tests {
             vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
         );
 
-        for i in 160..300 {
-            let key = keys::data_key(
-                Key::from_raw(format!("{:04}", i).as_bytes())
-                    .append_ts(2)
-                    .as_encoded(),
-            );
-
-            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
-            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-            engine.put_cf(write_cf, &key, &write_value).unwrap();
-            engine.flush_cf(write_cf, true).unwrap();
-            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
-            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
-            engine.flush_cf(default_cf, true).unwrap();
-        }
-
+        put_data(&engine, 160, 300, false);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,
@@ -386,22 +296,7 @@ mod tests {
             ],
         );
 
-        for i in 300..500 {
-            let key = keys::data_key(
-                Key::from_raw(format!("{:04}", i).as_bytes())
-                    .append_ts(2)
-                    .as_encoded(),
-            );
-
-            let write_value = Write::new(WriteType::Put, 0, None).to_bytes();
-            let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-            engine.put_cf(write_cf, &key, &write_value).unwrap();
-            engine.flush_cf(write_cf, true).unwrap();
-            let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
-            engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
-            engine.flush_cf(default_cf, true).unwrap();
-        }
-
+        put_data(&engine, 300, 500, false);
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         must_split_at(
             &rx,

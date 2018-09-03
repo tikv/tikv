@@ -203,13 +203,7 @@ mod test {
             let pk = primary_key.as_bytes();
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    None,
-                    IsolationLevel::SI,
-                    true,
-                );
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -223,16 +217,10 @@ mod test {
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(
-                    self.snapshot.clone(),
-                    START_TS,
-                    None,
-                    IsolationLevel::SI,
-                    true,
-                );
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.commit(&Key::from_raw(key), COMMIT_TS).unwrap();
+                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }

@@ -20,6 +20,7 @@ use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
 use raftstore::store::util as raftstore_util;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
@@ -29,14 +30,16 @@ pub struct Checker {
     buckets: Vec<Vec<u8>>,
     cur_bucket_size: u64,
     each_bucket_size: u64,
+    policy: CheckPolicy,
 }
 
 impl Checker {
-    fn new(each_bucket_size: u64) -> Checker {
+    fn new(each_bucket_size: u64, policy: CheckPolicy) -> Checker {
         Checker {
             each_bucket_size,
             cur_bucket_size: 0,
             buckets: vec![],
+            policy,
         }
     }
 }
@@ -62,10 +65,15 @@ impl SplitChecker for Checker {
         }
     }
 
-    fn approximate_split_key(&self, region: &Region, engine: &DB) -> Result<Option<Vec<u8>>> {
-        Ok(box_try!(raftstore_util::get_region_approximate_middle(
-            engine, region
-        )))
+    fn approximate_split_keys(&self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+        Ok(box_try!(
+            raftstore_util::get_region_approximate_middle(engine, region)
+                .map(|keys| keys.map_or(vec![], |key| vec![key]))
+        ))
+    }
+
+    fn policy(&self) -> CheckPolicy {
+        self.policy
     }
 }
 
@@ -91,11 +99,11 @@ impl HalfCheckObserver {
 impl Coprocessor for HalfCheckObserver {}
 
 impl SplitCheckObserver for HalfCheckObserver {
-    fn add_checker(&self, _: &mut ObserverContext, host: &mut Host, _: &DB) {
+    fn add_checker(&self, _: &mut ObserverContext, host: &mut Host, _: &DB, policy: CheckPolicy) {
         if host.auto_split() {
             return;
         }
-        host.add_checker(Box::new(Checker::new(self.half_split_bucket_size)))
+        host.add_checker(Box::new(Checker::new(self.half_split_bucket_size, policy)))
     }
 }
 
