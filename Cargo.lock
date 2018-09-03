@@ -1127,6 +1127,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-crypto"
+version = "0.2.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "gcc 0.3.54 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.42 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1507,6 +1519,7 @@ dependencies = [
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
+ "rust-crypto 0.2.36 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.71 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1909,6 +1922,7 @@ dependencies = [
 "checksum regex 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "5bbbea44c5490a1e84357ff28b7d518b4619a159fed5d25f6c1de2d19cc42814"
 "checksum regex-syntax 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)" = "747ba3b235651f6e2f67dfa8bcdcd073ddb7c243cb21c442fc12395dfcac212d"
 "checksum rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)" = "<none>"
+"checksum rust-crypto 0.2.36 (registry+https://github.com/rust-lang/crates.io-index)" = "f76d05d3993fd5f4af9434e8e436db163a12a9d40e1a58a726f27a01dfd12a2a"
 "checksum rustc-demangle 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)" = "bcfe5b13211b4d78e5c2cadfebd7769197d95c639c35a50057eb4c05de811395"
 "checksum rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)" = "dcf128d1287d2ea9d80910b5f1120d0b8eede3fbf1abe91c40d39ea7d51e6fda"
 "checksum rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"
