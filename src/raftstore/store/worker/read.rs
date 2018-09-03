@@ -26,8 +26,8 @@ use time::Timespec;
 
 use raftstore::errors::RAFTSTORE_IS_BUSY;
 use raftstore::store::msg::Callback;
-use raftstore::store::store::Store;
 use raftstore::store::util::{self, LeaseState, RemoteLease};
+use raftstore::store::Store;
 use raftstore::store::{
     cmd_resp, Msg as StoreMsg, Peer, ReadExecutor, ReadResponse, RequestInspector, RequestPolicy,
 };
