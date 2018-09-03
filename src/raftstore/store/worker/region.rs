@@ -597,25 +597,28 @@ mod test {
 
         // at t1, [a, c) and [x, z) will timeout
         let now = time::Instant::now();
-        let ranges = pending_delete_ranges.timeout_ranges(now);
+        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
         assert_eq!(
-            ranges.collect::<Vec<_>>(),
+            ranges,
             [
                 (id, b"a".to_vec(), b"c".to_vec()),
                 (id, b"x".to_vec(), b"z".to_vec()),
             ]
         );
+        for (_, start_key, _) in ranges {
+            pending_delete_ranges.remove(&start_key);
+        }
         assert_eq!(pending_delete_ranges.len(), 1);
 
         thread::sleep(delay / 2);
 
         // at t2, [g, q) will timeout
         let now = time::Instant::now();
-        let ranges = pending_delete_ranges.timeout_ranges(now);
-        assert_eq!(
-            ranges.collect::<Vec<_>>(),
-            [(id + 2, b"g".to_vec(), b"q".to_vec())]
-        );
+        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
+        assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
+        for (_, start_key, _) in ranges {
+            pending_delete_ranges.remove(&start_key);
+        }
         assert_eq!(pending_delete_ranges.len(), 0);
     }
 }
