@@ -211,7 +211,8 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::Inet6Aton
-            | ScalarFuncSig::UnHex => (1, 1),
+            | ScalarFuncSig::UnHex
+            | ScalarFuncSig::MD5 => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -372,7 +373,6 @@ impl ScalarFunc {
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
-            | ScalarFuncSig::MD5
             | ScalarFuncSig::MicroSecond
             | ScalarFuncSig::Minute
             | ScalarFuncSig::Month
@@ -869,6 +869,7 @@ dispatch_call! {
         UnHex => un_hex,
         Inet6Aton => inet6_aton,
         Elt => elt,
+        MD5 => md5,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1127,6 +1128,7 @@ mod test {
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv6,
+                    ScalarFuncSig::MD5,
                 ],
                 1,
                 1,
@@ -1331,7 +1333,6 @@ mod test {
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
-            ScalarFuncSig::MD5,
             ScalarFuncSig::MicroSecond,
             ScalarFuncSig::Minute,
             ScalarFuncSig::Month,
