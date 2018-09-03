@@ -16,7 +16,7 @@ This section describes the usage of PD Scheduler parameters.
 
 ### `max-merge-region-keys && max-merge-region-size`
 
-If the Region size is smaller than `max-merge-region-size` and the number of rows in the Region is smaller than `max-merge-region-keys` at the same time, the Region will try to merge with adjacent Regions. The default value of both the two parameters is 0. Currently, `merge` is not enabled by default.
+If the Region size is smaller than `max-merge-region-size` and the number of keys in the Region is smaller than `max-merge-region-keys` at the same time, the Region will try to merge with adjacent Regions. The default value of both the two parameters is 0. Currently, `merge` is not enabled by default.
 
 ### `split-merge-interval`
 
