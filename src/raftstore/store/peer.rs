@@ -52,9 +52,9 @@ use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::store::{DestroyPeerJob, Store};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, Lease, LeaseState};
+use super::{DestroyPeerJob, Store};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -106,7 +106,7 @@ impl ReadIndexQueue {
 }
 
 /// The returned states of the peer after checking whether it is stale
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum StaleState {
     Valid,
     ToValidate,
@@ -751,6 +751,15 @@ impl Peer {
     }
 
     pub fn check_stale_state(&mut self) -> StaleState {
+        if self.is_leader() {
+            // Leaders always have valid state.
+            //
+            // We update the leader_missing_time in the `fn step`. However one peer region
+            // does not send any raft messages, so we have to check and update it before
+            // reporting stale states.
+            self.leader_missing_time = None;
+            return StaleState::Valid;
+        }
         let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
         // Updates the `leader_missing_time` according to the current state.
         //

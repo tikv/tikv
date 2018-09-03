@@ -14,6 +14,7 @@
 use rocksdb::DB;
 
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 use raftstore::store::msg::Msg;
@@ -223,6 +224,7 @@ impl CoprocessorHost {
         region: &Region,
         engine: &DB,
         auto_split: bool,
+        policy: CheckPolicy,
     ) -> SplitCheckerHost {
         let mut host = SplitCheckerHost::new(auto_split);
         loop_ob!(
@@ -230,7 +232,8 @@ impl CoprocessorHost {
             &self.registry.split_check_observers,
             add_checker,
             &mut host,
-            engine
+            engine,
+            policy
         );
         host
     }
