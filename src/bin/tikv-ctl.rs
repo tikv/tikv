@@ -1522,6 +1522,11 @@ fn main() {
         );
 
     let matches = app.clone().get_matches();
+    if matches.args.is_empty() {
+        let _ = app.print_help();
+        println!();
+        return;
+    }
 
     // Deal with arguments about key utils.
     if let Some(hex) = matches.value_of("hex-to-escaped") {
@@ -1531,7 +1536,7 @@ fn main() {
         println!("{}", &unescape(escaped).to_hex().to_uppercase());
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
-        match Key::from_encoded(unescape(encoded)).take_raw() {
+        match Key::from_encoded(unescape(encoded)).into_raw() {
             Ok(k) => println!("{}", escape(&k)),
             Err(e) => eprintln!("decode meets error: {}", e),
         };

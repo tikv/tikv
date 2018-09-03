@@ -40,10 +40,12 @@ extern crate crc;
 extern crate crossbeam;
 #[macro_use]
 extern crate crossbeam_channel;
+extern crate crypto;
 #[macro_use]
 extern crate fail;
 extern crate fnv;
 extern crate fs2;
+#[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
 extern crate fxhash;
