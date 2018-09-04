@@ -1,10 +1,14 @@
 # TiKV
 
-[![Build Status](https://circleci.com/gh/pingcap/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/pingcap/tikv) [![Coverage Status](https://codecov.io/gh/pingcap/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/pingcap/tikv) ![GitHub release](https://img.shields.io/github/release/pingcap/tikv.svg)
+[![Build Status](https://circleci.com/gh/tikv/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/tikv/tikv) [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 
-TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a distributed Key-Value database powered by Rust and Raft. TiKV is based on the design of Google Spanner and HBase, but is much simpler without dependency on any distributed file system.
+TiKV ("Ti" stands for Titanium) is a distributed transactional key-value database, originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol. TiKV is built in Rust and powered by Raft, and was inspired by the design of Google Spanner and HBase, but without dependency on any specific distributed file system.
 
-With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
+With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
+
+TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io) (CNCF). If you are a
+company that wants to help shape the evolution of cloud native technologies, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF
+[announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
 
 TiKV has the following key features:
 
@@ -49,9 +53,9 @@ When a node starts, the metadata of the Node, Store and Region are recorded into
 
 ## Try TiKV
 
-TiKV is a component of the [TiDB project](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage the cluster. You can use TiKV together with TiDB. You can also use TiKV separately.
+TiKV was originally a component of [TiDB](https://github.com/pingcap/tidb). To run TiKV you must build and run it with PD, which is used to manage a TiKV cluster. You can use TiKV together with TiDB or separately on its own.
 
-We provide multiple deployment methods, but it is recommended to use the Ansible deployment for the production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/pingcap/tikv/wiki/TiKV-Documentation).
+We provide multiple deployment methods, but it is recommended to use our Ansible deployment for production environment. The TiKV documentation is available on [TiKV's wiki page](https://github.com/tikv/tikv/wiki/TiKV-Documentation).
 
 ### Testing deployment
 
@@ -96,7 +100,7 @@ To build TiKV you'll need to at least have the following installed:
 ### Getting the repository
 
 ```
-git clone https://github.com/pingcap/tikv.git
+git clone https://github.com/tikv/tikv.git
 cd tikv
 # Future instructions assume you are in this repository
 ```
@@ -147,7 +151,7 @@ Our CI systems automatically test all the pull requests, so making sure the full
 
 ### Getting the rest of the system working
 
-To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
+To get other components ([TiDB](https://github.com/pingcap/tidb) and [PD](https://github.com/pingcap/pd)) working, we suggest you follow the [development guide](https://github.com/pingcap/docs/blob/master/dev-guide/development.md), because you need the `pd-server` at least to work alongside `tikv-server` for integration level testing.
 
 ### Configuration
 
@@ -157,7 +161,7 @@ Read our configuration guide to learn about various [configuration options](http
 
 Contributions are welcome! See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
 
-For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/pingcap/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level.
+For beginners, we have prepared many suitable tasks for you. Checkout our [Help Wanted issues](https://github.com/tikv/tikv/issues?q=is%3Aissue+is%3Aopen+label%3A%22S%3A+HelpWanted%22) for a list, in which we have also marked the difficulty level.
 
 If you are planning something big, for example, relates to multiple components or changes current behaviors, make sure to open an issue to discuss with us before going on.
 

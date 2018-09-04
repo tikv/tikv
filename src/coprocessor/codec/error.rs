@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use coprocessor::codec::mysql::Time;
+use coprocessor::dag::expr::EvalContext;
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
 use std::str::Utf8Error;
@@ -66,6 +69,20 @@ quick_error! {
 }
 
 impl Error {
+    pub fn handle_invalid_time_error<'a>(
+        ctx: &mut EvalContext,
+        err: Error,
+    ) -> Result<Option<Cow<'a, Time>>> {
+        if err.code() == ERR_TRUNCATE_WRONG_VALUE {
+            return Err(err);
+        }
+        if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
+            return Err(err);
+        }
+        ctx.warnings.append_warning(err);
+        Ok(None)
+    }
+
     pub fn overflow(data: &str, expr: &str) -> Error {
         let msg = format!("{} value is out of range in {:?}", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
@@ -91,8 +108,8 @@ impl Error {
         Error::Eval(msg.into(), ERR_UNKNOWN)
     }
 
-    pub fn unknown_timezone(tz: i64) -> Error {
-        let msg = format!("unknown or incorrect time zone: {}", tz);
+    pub fn invalid_timezone(given_time_zone: &str) -> Error {
+        let msg = format!("unknown or incorrect time zone: {}", given_time_zone);
         Error::Eval(msg, ERR_UNKNOWN_TIMEZONE)
     }
 
@@ -122,6 +139,16 @@ impl Error {
 
     pub fn unexpected_eof() -> Error {
         util::codec::Error::unexpected_eof().into()
+    }
+
+    pub fn invalid_time_format(val: &str) -> Error {
+        let msg = format!("invalid time format: '{}'", val);
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
+    }
+
+    pub fn incorrect_datetime_value(val: &str) -> Error {
+        let msg = format!("Incorrect datetime value: '{}'", val);
+        Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
     }
 }
 

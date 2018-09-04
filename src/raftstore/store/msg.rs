@@ -23,12 +23,13 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
+use raftstore::store::util::KeysInfoFormatter;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
 use super::{Peer, RegionSnapshot};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadResponse {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot>,
@@ -172,7 +173,7 @@ pub enum Msg {
         region_epoch: RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
-        split_key: Vec<u8>,
+        split_keys: Vec<Vec<u8>>,
         callback: Callback,
     },
 
@@ -241,10 +242,15 @@ impl fmt::Debug for Msg {
                 escape(hash)
             ),
             Msg::SplitRegion {
-                ref region_id,
-                ref split_key,
+                region_id,
+                ref split_keys,
                 ..
-            } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
+            } => write!(
+                fmt,
+                "Split region {} with {}",
+                region_id,
+                KeysInfoFormatter(&split_keys)
+            ),
             Msg::RegionApproximateSize { region_id, size } => write!(
                 fmt,
                 "Region's approximate size [region_id: {}, size: {:?}]",
@@ -309,7 +315,7 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
     use raftstore::Error;
     use util::transport::SendCh;
 
@@ -364,6 +370,7 @@ mod tests {
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
+        request.set_status_request(StatusRequest::new());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
         match call_command(sendch, request, Duration::from_millis(10)) {
             Err(Error::Timeout(_)) => {}

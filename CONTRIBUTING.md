@@ -180,3 +180,9 @@ If the change affects many subsystems, you can use ```*``` instead, like ```*:``
 For the why part, if no specific reason for the change,
 you can use one of some generic reasons like "Improve documentation.",
 "Improve performance.", "Improve robustness.", "Improve test coverage."
+
+### Signing off the Commit
+
+The project now enables [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/)
+
+You can use option `-s` for `git commit` to automatically add a `Signed-off-by` to the commit message. 

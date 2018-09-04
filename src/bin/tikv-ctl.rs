@@ -1522,6 +1522,11 @@ fn main() {
         );
 
     let matches = app.clone().get_matches();
+    if matches.args.is_empty() {
+        let _ = app.print_help();
+        println!();
+        return;
+    }
 
     // Deal with arguments about key utils.
     if let Some(hex) = matches.value_of("hex-to-escaped") {
@@ -1531,7 +1536,7 @@ fn main() {
         println!("{}", &unescape(escaped).to_hex().to_uppercase());
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
-        match Key::from_encoded(unescape(encoded)).raw() {
+        match Key::from_encoded(unescape(encoded)).into_raw() {
             Ok(k) => println!("{}", escape(&k)),
             Err(e) => eprintln!("decode meets error: {}", e),
         };
@@ -1805,12 +1810,12 @@ fn convert_gbmb(mut bytes: u64) -> String {
     const GB: u64 = 1024 * 1024 * 1024;
     const MB: u64 = 1024 * 1024;
     if bytes < MB {
-        return bytes.to_string();
+        return format!("{} B", bytes);
     }
     let mb = if bytes % GB == 0 {
         String::from("")
     } else {
-        format!("{:.3} MB ", (bytes % GB) as f64 / MB as f64)
+        format!("{:.3} MB", (bytes % GB) as f64 / MB as f64)
     };
     bytes /= GB;
     let gb = if bytes == 0 {

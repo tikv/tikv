@@ -12,6 +12,10 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
+use chrono::offset::TimeZone;
+use chrono::Datelike;
+use coprocessor::codec::error::Error;
+use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
@@ -31,6 +35,67 @@ impl ScalarFunc {
         let res = t.date_format(format_mask_str)?;
         Ok(Some(Cow::Owned(res.into_bytes())))
     }
+
+    #[inline]
+    pub fn date<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let mut t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err),
+            Ok(None) => {
+                return Error::handle_invalid_time_error(
+                    ctx,
+                    Error::incorrect_datetime_value("None"),
+                )
+            }
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            );
+        }
+        let mut res = t.to_mut().clone();
+        res.set_tp(mysql::types::DATE).unwrap();
+        Ok(Some(Cow::Owned(res)))
+    }
+
+    #[inline]
+    pub fn last_day<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let mut t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err),
+            Ok(None) => {
+                return Error::handle_invalid_time_error(
+                    ctx,
+                    Error::incorrect_datetime_value("None"),
+                );
+            }
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            );
+        }
+        let mut res = t.to_mut().clone();
+
+        let time = t.get_time();
+        res.set_time(
+            time.timezone()
+                .ymd_opt(time.year(), time.month(), t.last_day_of_month())
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+        );
+        Ok(Some(Cow::Owned(res)))
+    }
 }
 
 #[cfg(test)]
@@ -38,8 +103,11 @@ mod test {
     use coprocessor::codec::mysql::Time;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::*;
     use coprocessor::dag::expr::{EvalContext, Expression};
+    use std::sync::Arc;
     use tipb::expression::ScalarFuncSig;
+
     #[test]
     fn test_date_format() {
         let tests = vec![
@@ -89,6 +157,70 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
+        }
+    }
+
+    #[test]
+    fn test_date() {
+        let tests = vec![
+            ("2011-11-11", "2011-11-11"),
+            ("2011-11-11 10:10:10", "2011-11-11"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let exp = Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap());
+            let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::Date, &[input]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "null should be wrong"),
+            Err(_) => assert!(true),
+        }
+
+        // test zero case
+        let cfg = EvalConfig::new()
+            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg = datum_expr(Datum::Time(
+            Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
+        ));
+        let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "zero timestamp should be wrong"),
+            Err(_) => assert!(true),
+        }
+    }
+    #[test]
+    fn test_last_day() {
+        let tests = vec![
+            ("2011-11-11", "2011-11-30"),
+            ("2008-02-10", "2008-02-29"),
+            ("2000-02-11", "2000-02-29"),
+            ("2100-02-11", "2100-02-28"),
+            ("2011-11-11", "2011-11-30"),
+            ("2011-11-11 10:10:10", "2011-11-30 00:00:00"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let exp = Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap());
+            let f = scalar_func_expr(ScalarFuncSig::LastDay, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

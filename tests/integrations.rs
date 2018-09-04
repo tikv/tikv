@@ -11,56 +11,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(mpsc_recv_timeout)]
-#![feature(test)]
-#![feature(btree_range)]
-#![feature(collections_bound)]
 #![feature(box_syntax)]
-#![feature(const_fn)]
+#![feature(test)]
 
 extern crate crc;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate grpcio as grpc;
-#[cfg(feature = "mem-profiling")]
-extern crate jemallocator;
 extern crate kvproto;
 #[macro_use]
 extern crate log;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
 extern crate protobuf;
 extern crate raft;
 extern crate rand;
 extern crate rocksdb;
-extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
-extern crate slog_term;
+extern crate slog;
 extern crate tempdir;
 extern crate test;
-#[macro_use]
-extern crate tikv;
-extern crate time;
 extern crate tipb;
-extern crate tokio_timer;
 extern crate toml;
 extern crate uuid;
+
+#[macro_use]
+extern crate tikv;
+extern crate test_coprocessor;
+extern crate test_raftstore;
+extern crate test_storage;
+extern crate test_util;
 
 mod config;
 mod coprocessor;
 mod import;
 mod pd;
-mod raftstore;
 mod raftstore_cases;
-mod storage;
 mod storage_cases;
-mod util;
 
 // The prefix "_" here is to guarantee running this case first.
 #[test]
 fn _0_ci_setup() {
-    util::ci_setup();
+    test_util::setup_for_ci();
 }
 
 #[test]
