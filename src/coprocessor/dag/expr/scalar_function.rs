@@ -198,6 +198,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Sign
             | ScalarFuncSig::Sqrt
             | ScalarFuncSig::Atan1Arg
+            | ScalarFuncSig::Acos
+            | ScalarFuncSig::Asin
             | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
             | ScalarFuncSig::Sin
@@ -264,8 +266,7 @@ impl ScalarFunc {
             ScalarFuncSig::PI => (0, 0),
 
             // unimplement signature
-            ScalarFuncSig::Acos
-            | ScalarFuncSig::AddDateAndDuration
+            ScalarFuncSig::AddDateAndDuration
             | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::AddDateDatetimeInt
             | ScalarFuncSig::AddDateDatetimeString
@@ -285,7 +286,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
-            | ScalarFuncSig::Asin
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::CharLength
@@ -812,6 +812,8 @@ dispatch_call! {
         Sqrt => sqrt,
         Atan1Arg => atan_1_arg,
         Atan2Args => atan_2_args,
+        Acos => acos,
+        Asin => asin,
         Cos => cos,
         Tan => tan,
         Sin => sin,
@@ -1122,6 +1124,8 @@ mod test {
                     ScalarFuncSig::Sign,
                     ScalarFuncSig::Sqrt,
                     ScalarFuncSig::Atan1Arg,
+                    ScalarFuncSig::Acos,
+                    ScalarFuncSig::Asin,
                     ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
                     ScalarFuncSig::Sin,
@@ -1230,7 +1234,6 @@ mod test {
 
         // unimplemented signature
         let cases = vec![
-            ScalarFuncSig::Acos,
             ScalarFuncSig::AddDateAndDuration,
             ScalarFuncSig::AddDateAndString,
             ScalarFuncSig::AddDateDatetimeInt,
@@ -1251,7 +1254,6 @@ mod test {
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
-            ScalarFuncSig::Asin,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::CharLength,
