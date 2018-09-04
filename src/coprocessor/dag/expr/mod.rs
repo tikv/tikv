@@ -15,6 +15,7 @@ mod builtin_arithmetic;
 mod builtin_cast;
 mod builtin_compare;
 mod builtin_control;
+mod builtin_encryption;
 mod builtin_json;
 mod builtin_like;
 mod builtin_math;
