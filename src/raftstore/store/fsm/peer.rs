@@ -1030,12 +1030,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             new_peer.register_delegates();
 
-            let not_exist = self.region_peers.insert(new_region_id, new_peer).is_none();
-            assert!(
-                not_exist,
-                "[region {}] duplicated region for split region",
-                new_region_id
-            );
+            if let Some(exist_peer) = self.region_peers.insert(new_region_id, new_peer) {
+                // Suppose a new node is added by conf change and the snapshot comes slowly.
+                // Then, the region splits and the first vote message comes to the new node
+                // before the old snapshot, which will create an uninitialized peer on the
+                // store. After that, the old snapshot comes, followed with a split proposal.
+                // After the split proposal is applied, the uninitialized peer will be meet.
+                // We can remove this uninitialized peer directly.
+                if exist_peer.get_store().is_initialized() {
+                    panic!(
+                        "[region {}] duplicated region for split region",
+                        new_region_id
+                    );
+                }
+            }
 
             if !campaigned {
                 if let Some(msg) = self

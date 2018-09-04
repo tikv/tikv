@@ -23,7 +23,7 @@ use test_raftstore::*;
 #[test]
 fn test_slow_split() {
     let _guard = ::setup();
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 2);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -32,6 +32,15 @@ fn test_slow_split() {
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+
+    // Only allow 1 MsgRequestPreVote per follower.
+    let filter = Box::new(
+        RegionPacketFilter::new(1000, 1) // new reigon id is 1000
+            .msg_type(MessageType::MsgRequestPreVote)
+            .direction(Direction::Send)
+            .allow(1),
+    );
+    cluster.sim.wl().add_send_filter(1, filter);
 
     let (tx, rx) = mpsc::channel();
     let notifier = Box::new(MessageTypeNotifier::new(
@@ -46,5 +55,5 @@ fn test_slow_split() {
     assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
 
     fail::cfg("raftstore_follower_slow_split", "off").unwrap();
-    assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+    assert!(rx.recv_timeout(Duration::from_secs(2)).is_ok());
 }

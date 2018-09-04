@@ -116,8 +116,9 @@ pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
     let msg_type = msg.get_message().get_msg_type();
     let term = msg.get_message().get_term();
     match msg_type {
-        MessageType::MsgRequestVote => term == peer_storage::RAFT_INIT_LOG_TERM + 1,
-        MessageType::MsgRequestPreVote => term == peer_storage::RAFT_INIT_LOG_TERM,
+        MessageType::MsgRequestVote | MessageType::MsgRequestPreVote => {
+            term == peer_storage::RAFT_INIT_LOG_TERM + 1
+        }
         _ => false,
     }
 }
