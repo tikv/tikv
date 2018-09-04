@@ -162,6 +162,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CastJsonAsDuration
             | ScalarFuncSig::CastJsonAsJson
             | ScalarFuncSig::Date
+            | ScalarFuncSig::LastDay
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -199,9 +200,11 @@ impl ScalarFunc {
             | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
+            | ScalarFuncSig::Sin
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
@@ -213,6 +216,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::Inet6Aton
+            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::UnHex
             | ScalarFuncSig::MD5 => (1, 1),
 
@@ -286,7 +290,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Asin
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
-            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
@@ -340,7 +343,6 @@ impl ScalarFunc {
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
@@ -351,7 +353,6 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::JSONAnyValue
-            | ScalarFuncSig::LastDay
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
             | ScalarFuncSig::LeastDecimal
@@ -416,7 +417,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::Sin
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
@@ -775,6 +775,7 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
         RightShift => right_shift,
@@ -814,6 +815,7 @@ dispatch_call! {
         Atan2Args => atan_2_args,
         Cos => cos,
         Tan => tan,
+        Sin => sin,
         Pow => pow,
     }
     DEC_CALLS {
@@ -871,8 +873,9 @@ dispatch_call! {
         UnHex => un_hex,
 
         Inet6Aton => inet6_aton,
+        Inet6Ntoa => inet6_ntoa,
 
-        MD5 =>md5,
+        MD5 => md5,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -884,6 +887,8 @@ dispatch_call! {
         CastJsonAsTime => cast_json_as_time,
 
         Date => date,
+        LastDay => last_day,
+
         IfNullTime => if_null_time,
         IfTime => if_time,
 
@@ -1083,6 +1088,7 @@ mod test {
                     ScalarFuncSig::CastJsonAsDuration,
                     ScalarFuncSig::CastJsonAsJson,
                     ScalarFuncSig::Date,
+                    ScalarFuncSig::LastDay,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1120,12 +1126,14 @@ mod test {
                     ScalarFuncSig::Atan1Arg,
                     ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
+                    ScalarFuncSig::Sin,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
+                    ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Reverse,
                     ScalarFuncSig::ReverseBinary,
@@ -1249,7 +1257,6 @@ mod test {
             ScalarFuncSig::Asin,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
-            ScalarFuncSig::CharLength,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
             ScalarFuncSig::ConcatWS,
@@ -1303,7 +1310,6 @@ mod test {
             ScalarFuncSig::HexIntArg,
             ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::Inet6Ntoa,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
@@ -1314,7 +1320,6 @@ mod test {
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
             ScalarFuncSig::JSONAnyValue,
-            ScalarFuncSig::LastDay,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
             ScalarFuncSig::LeastDecimal,
@@ -1379,7 +1384,6 @@ mod test {
             ScalarFuncSig::SetVar,
             ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
-            ScalarFuncSig::Sin,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
