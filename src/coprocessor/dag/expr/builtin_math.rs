@@ -185,6 +185,26 @@ impl ScalarFunc {
         }
         Ok(Some(pow))
     }
+
+    #[inline]
+    pub fn asin(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if n >= -1f64 && n <= 1f64 {
+            Ok(Some(n.asin()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn acos(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if n >= -1f64 && n <= 1f64 {
+            Ok(Some(n.acos()))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -651,6 +671,90 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_asin() {
+        let tests = vec![
+            (ScalarFuncSig::Asin, Datum::F64(0.0_f64), 0.0_f64),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(1f64),
+                f64::consts::PI / 2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(-1f64),
+                -f64::consts::PI / 2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(f64::consts::SQRT_2 / 2.0_f64),
+                f64::consts::PI / 4.0_f64,
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Asin, Datum::F64(f64::INFINITY), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(f64::NAN), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(2f64), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(-2f64), Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_acos() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Acos,
+                Datum::F64(0f64),
+                f64::consts::PI / 2.0_f64,
+            ),
+            (ScalarFuncSig::Acos, Datum::F64(1f64), 0.0_f64),
+            (ScalarFuncSig::Acos, Datum::F64(-1f64), f64::consts::PI),
+            (
+                ScalarFuncSig::Acos,
+                Datum::F64(f64::consts::SQRT_2 / 2.0_f64),
+                f64::consts::PI / 4.0_f64,
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Acos, Datum::F64(f64::INFINITY), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(f64::NAN), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(2f64), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(-2f64), Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
