@@ -290,7 +290,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
-            | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
@@ -1260,7 +1259,6 @@ mod test {
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
-            ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
