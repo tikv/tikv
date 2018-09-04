@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(try_from)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
@@ -42,6 +43,7 @@ extern crate crc;
 extern crate crossbeam;
 #[macro_use]
 extern crate crossbeam_channel;
+extern crate crypto;
 #[macro_use]
 extern crate fail;
 extern crate fnv;

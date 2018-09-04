@@ -17,6 +17,7 @@ use kvproto::metapb::Region;
 use rocksdb::{SeekKey, DB};
 
 use coprocessor::codec::table as table_codec;
+use kvproto::pdpb::CheckPolicy;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::keys;
 use storage::types::Key;
@@ -32,6 +33,7 @@ use super::Host;
 pub struct Checker {
     first_encoded_table_prefix: Option<Vec<u8>>,
     split_key: Option<Vec<u8>>,
+    policy: CheckPolicy,
 }
 
 impl SplitChecker for Checker {
@@ -71,6 +73,10 @@ impl SplitChecker for Checker {
             Some(key) => vec![key],
         }
     }
+
+    fn policy(&self) -> CheckPolicy {
+        self.policy
+    }
 }
 
 #[derive(Default)]
@@ -79,7 +85,13 @@ pub struct TableCheckObserver;
 impl Coprocessor for TableCheckObserver {}
 
 impl SplitCheckObserver for TableCheckObserver {
-    fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
+    fn add_checker(
+        &self,
+        ctx: &mut ObserverContext,
+        host: &mut Host,
+        engine: &DB,
+        policy: CheckPolicy,
+    ) {
         let region = ctx.region();
         if is_same_table(region.get_start_key(), region.get_end_key()) {
             // Region is inside a table, skip for saving IO.
@@ -107,7 +119,10 @@ impl SplitCheckObserver for TableCheckObserver {
         {
             // For now, let us scan region if encoded_start_key or encoded_end_key
             // is less than TABLE_PREFIX_KEY_LEN.
-            host.add_checker(Box::new(Checker::default()));
+            host.add_checker(Box::new(Checker {
+                policy,
+                ..Default::default()
+            }));
             return;
         }
 
@@ -158,6 +173,7 @@ impl SplitCheckObserver for TableCheckObserver {
         host.add_checker(Box::new(Checker {
             first_encoded_table_prefix,
             split_key,
+            policy,
         }));
     }
 }

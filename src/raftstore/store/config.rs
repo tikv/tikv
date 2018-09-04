@@ -92,6 +92,8 @@ pub struct Config {
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
 
+    pub leader_transfer_max_log_lag: u64,
+
     pub snap_apply_batch_size: ReadableSize,
 
     // Interval (ms) to check region whether the data is consistent.
@@ -169,6 +171,7 @@ impl Default for Config {
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
+            leader_transfer_max_log_lag: 10,
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -283,6 +286,12 @@ impl Config {
                 "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
                 stale_state_check,
                 election_timeout * 2
+            ));
+        }
+
+        if self.leader_transfer_max_log_lag < 10 {
+            return Err(box_err!(
+                "raftstore.leader-transfer-max-log-lag should be >= 10."
             ));
         }
 

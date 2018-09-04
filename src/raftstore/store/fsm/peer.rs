@@ -2088,7 +2088,9 @@ impl<T: Transport> Peer<T> {
         // In this case, peer B would notice that the leader is missing for a long time,
         // and it would check with pd to confirm whether it's still a member of the cluster.
         // If not, it destroys itself as a stale peer which is removed out already.
-        match self.peer.check_stale_state() {
+        let state = self.peer.check_stale_state();
+        fail_point!("peer_check_stale_state", state != StaleState::Valid, |_| {});
+        match state {
             StaleState::Valid => (),
             StaleState::LeaderMissing => {
                 warn!(
@@ -2106,7 +2108,7 @@ impl<T: Transport> Peer<T> {
                 );
                 let task = PdTask::ValidatePeer {
                     peer: self.peer.peer.clone(),
-                    region: self.peer.region().clone(),
+                    region: self.region().clone(),
                     merge_source: None,
                 };
                 if let Err(e) = self.pd_scheduler.schedule(task) {

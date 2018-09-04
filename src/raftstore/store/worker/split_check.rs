@@ -183,15 +183,18 @@ impl Runner {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut host =
-            self.coprocessor
-                .new_split_checker_host(region, &self.engine, task.auto_split);
+        let mut host = self.coprocessor.new_split_checker_host(
+            region,
+            &self.engine,
+            task.auto_split,
+            task.policy,
+        );
         if host.skip() {
             debug!("[region {}] skip split check", region.get_id());
             return;
         }
 
-        let split_keys = match task.policy {
+        let split_keys = match host.policy() {
             CheckPolicy::SCAN => {
                 let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
                 let res = MergedIterator::new(
@@ -217,7 +220,7 @@ impl Runner {
                 host.split_keys()
             }
             CheckPolicy::APPROXIMATE => {
-                let res = host.approximate_split_key(region, &self.engine);
+                let res = host.approximate_split_keys(region, &self.engine);
                 if let Err(e) = res {
                     error!(
                         "[region {}] failed to get approxiamte split key: {}",
@@ -226,7 +229,9 @@ impl Runner {
                     return;
                 }
                 res.unwrap()
-                    .map_or_else(Vec::new, |r| vec![keys::origin_key(&r).to_vec()])
+                    .into_iter()
+                    .map(|k| keys::origin_key(&k).to_vec())
+                    .collect()
             }
         };
 

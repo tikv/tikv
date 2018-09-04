@@ -34,6 +34,7 @@ extern crate uuid;
 
 #[macro_use]
 extern crate tikv;
+extern crate test_coprocessor;
 extern crate test_raftstore;
 extern crate test_storage;
 extern crate test_util;

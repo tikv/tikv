@@ -89,6 +89,9 @@ fn test_read_leader_in_lease() {
 fn test_batch_snapshot() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
+    // Set election timeout and max leader lease to 3s.
+    // Large max leader lease stabilizes the test.
+    let election_timeout = configure_for_lease_read(&mut cluster, Some(300), Some(10));
     cluster.run();
 
     let key = b"key";
@@ -112,7 +115,7 @@ fn test_batch_snapshot() {
         assert!(s.is_some());
     }
     // sleep util leader lease is expired.
-    thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
+    thread::sleep(election_timeout);
     let batch = vec![ctx; size];
     let snapshots = must_batch_snapshot(batch, &storage);
     assert_eq!(size, snapshots.len());
