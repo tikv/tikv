@@ -192,7 +192,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::*;
-    use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
 
@@ -201,13 +200,15 @@ mod tests {
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
+    use kvproto::metapb::RegionEpoch;
+    use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::Transport;
-    use raftstore::store::Msg as StoreMsg;
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
     use server::readpool::{self, ReadPool};
     use storage::{self, Config as StorageConfig, Storage};
+    use util::mpsc::loose_bounded;
     use util::security::SecurityConfig;
     use util::worker::FutureWorker;
 
@@ -233,31 +234,54 @@ mod tests {
 
     #[derive(Clone)]
     struct TestRaftStoreRouter {
-        tx: Sender<usize>,
-        significant_msg_sender: Sender<SignificantMsg>,
+        router: Router,
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+        /// Send RaftMessage to local store.
+        fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+            self.router.send_raft_message(msg).unwrap();
             Ok(())
         }
 
-        fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+        /// Send RaftCmdRequest to local store.
+        fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
+            self.router.send_cmd(req, cb).unwrap();
             Ok(())
         }
 
-        fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
-            self.significant_msg_sender.send(msg).unwrap();
+        /// Send a batch of RaftCmdRequests to local store.
+        fn send_batch_commands(
+            &self,
+            _: Vec<RaftCmdRequest>,
+            _: BatchReadCallback,
+        ) -> RaftStoreResult<()> {
+            unimplemented!()
+        }
+
+        fn async_split(
+            &self,
+            _: u64,
+            _: RegionEpoch,
+            _: Vec<Vec<u8>>,
+            _: Callback,
+        ) -> RaftStoreResult<()> {
+            unimplemented!()
+        }
+
+        /// Send significant message. We should guarantee that the message can't be dropped.
+        fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+            self.router
+                .send_peer_message(region_id, PeerMsg::SignificantMsg(msg))
+                .unwrap();
             Ok(())
         }
     }
 
-    fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
-        *msg == SignificantMsg::Unreachable {
-            region_id,
-            to_peer_id,
+    fn is_unreachable_to(msg: &PeerMsg, to_peer_id: u64) -> bool {
+        match msg {
+            PeerMsg::SignificantMsg(ref msg) => *msg == SignificantMsg::Unreachable { to_peer_id },
+            _ => false,
         }
     }
 
@@ -277,12 +301,10 @@ mod tests {
         let mut storage = Storage::new(&storage_cfg, storage_read_pool).unwrap();
         storage.start(&storage_cfg).unwrap();
 
-        let (tx, rx) = mpsc::channel();
-        let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
-        let router = TestRaftStoreRouter {
-            tx,
-            significant_msg_sender,
-        };
+        let (tx, rx) = Router::new_for_test(1);
+        let (tx2, rx2) = loose_bounded(10);
+        tx.register_mailbox(2, tx2);
+        let router = TestRaftStoreRouter { router: tx };
 
         let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
@@ -301,12 +323,12 @@ mod tests {
             &security_mgr,
             storage,
             cop_read_pool,
-            router,
+            router.clone(),
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),
                 addr: Arc::clone(&addr),
             },
-            SnapManager::new("", None),
+            SnapManager::new("", router.router),
             None,
             None,
         ).unwrap();
@@ -314,30 +336,40 @@ mod tests {
         server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
-        trans.report_unreachable(RaftMessage::new());
-        let mut resp = significant_msg_receiver.try_recv().unwrap();
-        assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
+        let mut msg = RaftMessage::new();
+        msg.set_region_id(1);
+        msg.mut_to_peer().set_id(2);
+        msg.mut_to_peer().set_store_id(1);
+        trans.report_unreachable(msg);
+        let mut resp = rx.try_recv().unwrap();
+        assert!(is_unreachable_to(&resp, 2), "{:?}", resp);
 
         let mut msg = RaftMessage::new();
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
-        assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
+        resp = rx.try_recv().unwrap();
+        assert!(is_unreachable_to(&resp, 0), "{:?}", resp);
 
         *addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
 
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+        resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        match resp {
+            PeerMsg::RaftMessage(m) => assert_eq!(m, msg),
+            _ => panic!("raft message expected, but got {:?}", resp),
+        }
 
         msg.mut_to_peer().set_store_id(2);
+        msg.mut_to_peer().set_id(5);
         msg.set_region_id(2);
+        assert!(rx2.try_recv().is_err());
         quick_fail.store(true, Ordering::SeqCst);
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
-        assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);
+        resp = rx2.try_recv().unwrap();
+        assert!(is_unreachable_to(&resp, 5), "{:?}", resp);
         server.stop().unwrap();
     }
 }

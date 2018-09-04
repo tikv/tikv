@@ -18,11 +18,12 @@ use tempdir::TempDir;
 use test;
 
 use kvproto::kvrpcpb::Context;
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
+use kvproto::metapb::{Region, RegionEpoch};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
+use kvproto::raft_serverpb::RaftMessage;
 
 use tikv::raftstore::store::{
-    cmd_resp, engine, util, BatchReadCallback, Callback, Msg, ReadResponse, RegionSnapshot,
+    cmd_resp, engine, util, BatchReadCallback, Callback, PeerMsg, ReadResponse, RegionSnapshot,
     SignificantMsg, WriteResponse,
 };
 use tikv::raftstore::Result;
@@ -46,11 +47,11 @@ impl SyncBenchRouter {
 }
 
 impl SyncBenchRouter {
-    fn invoke(&self, msg: Msg) {
+    fn invoke(&self, msg: PeerMsg) {
         let mut response = RaftCmdResponse::new();
         cmd_resp::bind_term(&mut response, 1);
         match msg {
-            Msg::RaftCmd {
+            PeerMsg::RaftCmd {
                 request, callback, ..
             } => match callback {
                 Callback::Read(cb) => {
@@ -70,7 +71,7 @@ impl SyncBenchRouter {
                 }
                 _ => unreachable!(),
             },
-            Msg::BatchRaftSnapCmds { on_finished, .. } => {
+            PeerMsg::BatchRaftSnapCmds { on_finished, .. } => {
                 let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
                 let region = self.region.to_owned();
                 match on_finished {
@@ -87,17 +88,30 @@ impl SyncBenchRouter {
 }
 
 impl RaftStoreRouter for SyncBenchRouter {
-    fn send(&self, msg: Msg) -> Result<()> {
-        self.invoke(msg);
+    fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
+        self.invoke(PeerMsg::RaftMessage(msg));
         Ok(())
     }
 
-    fn try_send(&self, msg: Msg) -> Result<()> {
-        self.invoke(msg);
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
+        self.invoke(PeerMsg::new_raft_cmd(req, cb));
         Ok(())
     }
 
-    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+    fn send_batch_commands(
+        &self,
+        batch: Vec<RaftCmdRequest>,
+        on_finished: BatchReadCallback,
+    ) -> Result<()> {
+        self.invoke(PeerMsg::new_batch_raft_snapshot_cmd(batch, on_finished));
+        Ok(())
+    }
+
+    fn async_split(&self, _: u64, _: RegionEpoch, _: Vec<Vec<u8>>, _: Callback) -> Result<()> {
+        Ok(())
+    }
+
+    fn significant_send(&self, _: u64, _: SignificantMsg) -> Result<()> {
         Ok(())
     }
 }

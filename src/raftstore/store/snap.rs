@@ -28,14 +28,13 @@ use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 
 use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::util::check_key_in_region;
-use raftstore::store::Msg;
+use raftstore::store::{Router, StoreMsg};
 use raftstore::Result as RaftStoreResult;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use util::transport::SendCh;
 use util::HandyRwLock;
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
@@ -1105,11 +1104,9 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&SendCh<Msg>>) {
-    if let Some(ch) = ch {
-        if let Err(e) = ch.try_send(Msg::SnapshotStats) {
-            error!("notify snapshot stats failed {:?}", e)
-        }
+fn notify_stats(ch: &Router) {
+    if let Err(e) = ch.send_store_message(StoreMsg::SnapshotStats) {
+        error!("notify snapshot stats failed {:?}", e)
     }
 }
 
@@ -1118,13 +1115,13 @@ fn notify_stats(ch: Option<&SendCh<Msg>>) {
 pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    ch: Option<SendCh<Msg>>,
+    ch: Router,
     limiter: Option<Arc<IOLimiter>>,
     max_total_size: u64,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+    pub fn new<T: Into<String>>(path: T, ch: Router) -> SnapManager {
         SnapManagerBuilder::default().build(path, ch)
     }
 
@@ -1334,7 +1331,7 @@ impl SnapManager {
             }
         }
 
-        notify_stats(self.ch.as_ref());
+        notify_stats(&self.ch);
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1352,7 +1349,7 @@ impl SnapManager {
             core.registry.remove(key);
         }
         if handled {
-            notify_stats(self.ch.as_ref());
+            notify_stats(&self.ch);
             return;
         }
         warn!("stale deregister key: {} {:?}", key, entry);
@@ -1424,7 +1421,7 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+    pub fn build<T: Into<String>>(&self, path: T, ch: Router) -> SnapManager {
         let limiter = if self.max_write_bytes_per_sec > 0 {
             Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
         } else {
@@ -1470,8 +1467,8 @@ mod test {
     use std::path::PathBuf;
 
     use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-    use raftstore::store::keys;
     use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+    use raftstore::store::{keys, Router};
     use raftstore::Result;
     use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use util::rocksdb;
@@ -2156,7 +2153,8 @@ mod test {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::new(path, None);
+        let (router, _) = Router::new_for_test(1);
+        let mut mgr = SnapManager::new(path, router.clone());
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2164,7 +2162,7 @@ mod test {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::new(path2, None);
+        mgr = SnapManager::new(path2, router);
         assert!(mgr.init().is_err());
     }
 
@@ -2172,7 +2170,8 @@ mod test {
     fn test_snap_mgr_v2() {
         let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None);
+        let (router, _) = Router::new_for_test(1);
+        let mgr = SnapManager::new(path.clone(), router.clone());
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2240,7 +2239,7 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::new(path, None);
+        let mgr = SnapManager::new(path, router);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2271,7 +2270,8 @@ mod test {
     fn test_snap_deletion_on_registry() {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(), None);
+        let (router, _) = Router::new_for_test(1);
+        let src_mgr = SnapManager::new(src_path.clone(), router.clone());
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
@@ -2306,7 +2306,7 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(), None);
+        let dst_mgr = SnapManager::new(dst_path.clone(), router);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
@@ -2339,9 +2339,10 @@ mod test {
         let kv = get_test_db_for_regions(&kv_path, &regions).unwrap();
 
         let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
+        let (router, _) = Router::new_for_test(1);
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(10240)
-            .build(snapfiles_path.path().to_str().unwrap(), None);
+            .build(snapfiles_path.path().to_str().unwrap(), router);
         let snapshot = DbSnapshot::new(kv);
 
         // Add an oldest snapshot for receiving.

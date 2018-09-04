@@ -77,6 +77,7 @@ fn test_overlap_cleanup() {
 // stay in Snapshot forever.
 #[test]
 fn test_server_snapshot_on_resolve_failure() {
+    // ::test_util::init_log();
     let _guard = ::setup();
     let mut cluster = new_server_cluster(1, 4);
     configure_for_snapshot(&mut cluster);

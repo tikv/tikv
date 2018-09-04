@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
@@ -235,20 +234,23 @@ impl EntryCache {
 
 #[derive(Default)]
 pub struct CacheQueryStats {
-    pub hit: u64,
-    pub miss: u64,
+    pub hit: Cell<u64>,
+    pub miss: Cell<u64>,
 }
 
 impl CacheQueryStats {
+    #[inline]
     pub fn flush(&mut self) {
-        RAFT_ENTRY_FETCHES
-            .with_label_values(&["hit"])
-            .inc_by(self.hit as i64);
-        RAFT_ENTRY_FETCHES
-            .with_label_values(&["miss"])
-            .inc_by(self.miss as i64);
-        self.hit = 0;
-        self.miss = 0;
+        if self.hit.get() > 0 {
+            RAFT_ENTRY_FETCHES
+                .with_label_values(&["hit"])
+                .inc_by(self.hit.replace(0) as i64);
+        }
+        if self.miss.get() > 0 {
+            RAFT_ENTRY_FETCHES
+                .with_label_values(&["miss"])
+                .inc_by(self.miss.replace(0) as i64);
+        }
     }
 }
 
@@ -266,7 +268,7 @@ pub struct PeerStorage {
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
-    stats: Rc<RefCell<CacheQueryStats>>,
+    stats: CacheQueryStats,
 
     pub tag: String,
 }
@@ -461,9 +463,13 @@ impl PeerStorage {
         region: &metapb::Region,
         region_sched: Scheduler<RegionTask>,
         tag: String,
-        stats: Rc<RefCell<CacheQueryStats>>,
     ) -> Result<PeerStorage> {
-        debug!("creating storage on {} for {:?}", engines.kv.path(), region);
+        debug!(
+            "{} creating storage on {} for {:?}",
+            tag,
+            engines.kv.path(),
+            region
+        );
         let raft_state = init_raft_state(&engines.raft, region)?;
         let apply_state = init_apply_state(&engines.kv, region)?;
         if raft_state.get_last_index() < apply_state.get_applied_index() {
@@ -488,7 +494,7 @@ impl PeerStorage {
             applied_index_term: RAFT_INIT_LOG_TERM,
             last_term,
             cache: EntryCache::default(),
-            stats,
+            stats: CacheQueryStats::default(),
         })
     }
 
@@ -546,7 +552,7 @@ impl PeerStorage {
         let region_id = self.get_region_id();
         if high <= cache_low {
             // not overlap
-            self.stats.borrow_mut().miss += 1;
+            self.stats.miss.update(|m| m + 1);
             fetch_entries_to(
                 &self.engines.raft,
                 region_id,
@@ -559,7 +565,7 @@ impl PeerStorage {
         }
         let mut fetched_size = 0;
         let begin_idx = if low < cache_low {
-            self.stats.borrow_mut().miss += 1;
+            self.stats.miss.update(|m| m + 1);
             fetched_size = fetch_entries_to(
                 &self.engines.raft,
                 region_id,
@@ -577,7 +583,7 @@ impl PeerStorage {
             low
         };
 
-        self.stats.borrow_mut().hit += 1;
+        self.stats.hit.update(|m| m + 1);
         self.cache
             .fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
         Ok(ents)
@@ -1024,6 +1030,11 @@ impl PeerStorage {
         self.region().get_id()
     }
 
+    #[inline]
+    pub fn region_sched(&self) -> Scheduler<RegionTask> {
+        self.region_sched.clone()
+    }
+
     pub fn schedule_applying_snapshot(&mut self) {
         let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
@@ -1032,9 +1043,12 @@ impl PeerStorage {
             status,
         };
         // TODO: gracefully remove region instead.
-        self.region_sched
-            .schedule(task)
-            .expect("snap apply job should not fail");
+        if self.region_sched.schedule(task).is_err() {
+            warn!(
+                "[region {}] failed to schedule applying snapshot, are we shutting down?",
+                self.get_region_id()
+            );
+        }
     }
 
     /// Save memory states to disk.
@@ -1136,6 +1150,11 @@ impl PeerStorage {
             prev_region,
             region: self.region().clone(),
         })
+    }
+
+    #[inline]
+    pub fn flush_cache_metrics(&mut self) {
+        self.stats.flush();
     }
 }
 
@@ -1436,11 +1455,11 @@ mod test {
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
-    use raftstore::store::bootstrap;
     use raftstore::store::local_metrics::RaftMetrics;
     use raftstore::store::util::Engines;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
+    use raftstore::store::{bootstrap, Router};
     use rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
@@ -1463,8 +1482,7 @@ mod test {
         let engines = Engines::new(kv_db, raft_db);
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
-        let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(engines, &region, sched, "".to_owned(), metrics).unwrap()
+        PeerStorage::new(engines, &region, sched, "".to_owned()).unwrap()
     }
 
     fn new_storage_from_ents(
@@ -1476,8 +1494,8 @@ mod test {
         let mut kv_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         let mut metrics = RaftMetrics::default();
-        let trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
+        let mut trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &mut trans);
         store
             .append(&mut ctx, &ents[1..], &mut ready_ctx)
             .expect("");
@@ -1501,8 +1519,8 @@ mod test {
     fn append_ents(store: &mut PeerStorage, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
         let mut metrics = RaftMetrics::default();
-        let trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, ents.len());
+        let mut trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &mut trans);
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         store.engines.raft.write(ready_ctx.raft_wb).expect("");
@@ -1728,7 +1746,8 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let (router, _) = Router::new_for_test(1);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), router);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1765,8 +1784,8 @@ mod test {
         let mut ctx = InvokeContext::new(&s);
         let mut kv_wb = WriteBatch::new();
         let mut metrics = RaftMetrics::default();
-        let trans = 0;
-        let mut ready_ctx = ReadyContext::new(&mut metrics, &trans, 2);
+        let mut trans = 0;
+        let mut ready_ctx = ReadyContext::new(&mut metrics, &mut trans);
         s.append(
             &mut ctx,
             &[new_entry(6, 5), new_entry(7, 5)],
@@ -2018,7 +2037,8 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let (router, _) = Router::new_for_test(1);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), router);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);

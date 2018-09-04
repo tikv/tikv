@@ -44,7 +44,6 @@ pub mod sys;
 pub mod threadpool;
 pub mod time;
 pub mod timer;
-pub mod transport;
 pub mod worker;
 
 pub use self::rocksdb::properties;

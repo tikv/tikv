@@ -14,7 +14,6 @@
 use std::fmt::{self, Debug, Formatter};
 use std::io::Error as IoError;
 use std::result;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use kvproto::errorpb;
@@ -34,9 +33,7 @@ use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
 use raftstore::store::engine::Peekable;
 use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{
-    Msg as StoreMsg, RegionIterator, RegionSnapshot, SeekRegionFilter, SeekRegionResult,
-};
+use raftstore::store::{RegionIterator, RegionSnapshot, SeekRegionFilter, SeekRegionResult};
 use rocksdb::TablePropertiesCollection;
 use server::transport::RaftStoreRouter;
 use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
@@ -474,32 +471,11 @@ impl<S: RaftStoreRouter> RegionInfoProvider for RaftKv<S> {
     // This method may block until raftstore returns the result.
     fn seek_region(
         &self,
-        from_key: &[u8],
-        filter: SeekRegionFilter,
-        limit: u32,
+        _: &[u8],
+        _: SeekRegionFilter,
+        _: u32,
     ) -> engine::Result<SeekRegionResult> {
-        let (tx, rx) = mpsc::channel();
-        let callback = box move |result| {
-            tx.send(result).unwrap_or_else(|e| {
-                panic!(
-                    "raftstore failed to send seek_local_region result back to raft router: {:?}",
-                    e
-                );
-            });
-        };
-
-        self.router.try_send(StoreMsg::SeekRegion {
-            from_key: from_key.to_vec(),
-            filter,
-            limit,
-            callback,
-        })?;
-        rx.recv().map_err(|e| {
-            box_err!(
-                "failed to receive seek_local_region result from raftstore: {:?}",
-                e
-            )
-        })
+        unimplemented!()
     }
 }
 

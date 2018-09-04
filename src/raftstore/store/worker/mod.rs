@@ -11,39 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore;
-use raftstore::store::msg::Msg;
-use std::sync::mpsc::Sender;
-use util::transport::SendCh;
-
-pub trait MsgSender {
-    fn send(&self, msg: Msg) -> raftstore::Result<()>;
-    // same as send, but with retry.
-    fn try_send(&self, msg: Msg) -> raftstore::Result<()>;
-}
-
-impl MsgSender for SendCh<Msg> {
-    fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
-    }
-
-    fn try_send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::try_send(self, msg).map_err(|e| box_err!("{:?}", e))
-    }
-}
-
-impl MsgSender for Sender<Msg> {
-    fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        Sender::send(self, msg).unwrap();
-        Ok(())
-    }
-
-    fn try_send(&self, msg: Msg) -> raftstore::Result<()> {
-        Sender::send(self, msg).unwrap();
-        Ok(())
-    }
-}
-
 pub mod apply;
 mod cleanup_sst;
 mod compact;

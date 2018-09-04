@@ -49,7 +49,7 @@ use std::fs::File;
 use std::path::Path;
 use std::process;
 use std::sync::atomic::Ordering;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 use std::usize;
 
@@ -70,7 +70,6 @@ use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
-use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
 use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
 
@@ -115,10 +114,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Initialize raftstore channels.
-    let mut event_loop = store::create_event_loop(&cfg.raft_store)
-        .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
-    let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-    let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
+    let (router, rx) = store::create_router(&cfg.raft_store);
 
     // Create Local Reader.
     let local_reader = Builder::new("local-reader")
@@ -127,9 +123,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let local_ch = local_reader.scheduler();
 
     // Create router.
-    let raft_router =
-        ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender, local_ch);
-    let compaction_listener = new_compaction_listener(store_sendch.clone());
+    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
+    let compaction_listener = new_compaction_listener(router.clone());
 
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
@@ -172,7 +167,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .max_total_size(cfg.server.snap_max_total_size.0)
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
-            Some(store_sendch),
+            router.clone(),
         );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
@@ -203,19 +198,18 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let trans = server.transport();
 
     // Create node.
-    let mut node = Node::new(&mut event_loop, &server_cfg, &cfg.raft_store, pd_client);
+    let mut node = Node::new(router.clone(), &server_cfg, &cfg.raft_store, pd_client);
 
     // Create CoprocessorHost.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
+    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.router());
 
     node.start(
-        event_loop,
         engines.clone(),
         trans,
         snap_mgr,
-        significant_msg_receiver,
         pd_worker,
         local_reader,
+        rx,
         coprocessor_host,
         importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));

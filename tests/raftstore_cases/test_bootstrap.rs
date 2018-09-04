@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 
 use tempdir::TempDir;
 
@@ -22,9 +22,7 @@ use kvproto::raft_serverpb::RegionLocalState;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{
-    bootstrap_store, create_event_loop, keys, Engines, Peekable, SnapManager,
-};
+use tikv::raftstore::store::{self, bootstrap_store, keys, Engines, Peekable, SnapManager};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
 use tikv::util::rocksdb;
@@ -50,7 +48,6 @@ fn test_node_bootstrap_with_prepared_data() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let cfg = new_tikv_config(0);
 
-    let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
     let engine =
@@ -61,14 +58,14 @@ fn test_node_bootstrap_with_prepared_data() {
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
+    let (router, rx) = store::create_router(&cfg.raft_store);
     let mut node = Node::new(
-        &mut event_loop,
+        router.clone(),
         &cfg.server,
         &cfg.raft_store,
         Arc::clone(&pd_client),
     );
-    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
-    let (_, snapshot_status_receiver) = mpsc::channel();
+    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), router);
     let pd_worker = FutureWorker::new("test-pd-worker");
     let local_reader = Worker::new("test-local-reader");
 
@@ -94,7 +91,7 @@ fn test_node_bootstrap_with_prepared_data() {
     );
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.router());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
@@ -103,13 +100,12 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // try to restart this node, will clear the prepare data
     node.start(
-        event_loop,
         engines,
         simulate_trans,
         snap_mgr,
-        snapshot_status_receiver,
         pd_worker,
         local_reader,
+        rx,
         coprocessor_host,
         importer,
     ).unwrap();

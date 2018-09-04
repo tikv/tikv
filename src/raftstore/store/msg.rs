@@ -27,7 +27,8 @@ use raftstore::store::util::KeysInfoFormatter;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
-use super::{Peer, RegionSnapshot};
+use super::{peer::Peer, RegionSnapshot, SnapKey};
+use raftstore::store::worker::ApplyTaskRes;
 
 #[derive(Debug, Clone)]
 pub struct ReadResponse {
@@ -98,6 +99,7 @@ impl Callback {
     pub fn invoke_read(self, args: ReadResponse) {
         match self {
             Callback::Read(read) => read(args),
+            Callback::None => (),
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
@@ -105,6 +107,7 @@ impl Callback {
     pub fn invoke_batch_read(self, args: Vec<Option<ReadResponse>>) {
         match self {
             Callback::BatchRead(batch_read) => batch_read(args),
+            Callback::None => (),
             other => panic!("expect Callback::BatchRead(..), got {:?}", other),
         }
     }
@@ -122,35 +125,37 @@ impl fmt::Debug for Callback {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Tick {
+pub enum PeerTick {
     Raft,
     RaftLogGc,
     SplitRegionCheck,
-    CompactCheck,
     PdHeartbeat,
-    PdStoreHeartbeat,
-    SnapGc,
-    CompactLockCf,
-    ConsistencyCheck,
     CheckMerge,
     CheckPeerStaleState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum StoreTick {
+    CompactCheck,
+    CompactLockCf,
+    PdStoreHeartbeat,
+    SnapGc,
     CleanupImportSST,
+    ConsistencyCheck,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum SignificantMsg {
     SnapshotStatus {
-        region_id: u64,
         to_peer_id: u64,
         status: SnapshotStatus,
     },
     Unreachable {
-        region_id: u64,
         to_peer_id: u64,
     },
 }
 
-pub enum Msg {
+pub enum PeerMsg {
     Quit,
 
     // For notify.
@@ -169,7 +174,6 @@ pub enum Msg {
     },
 
     SplitRegion {
-        region_id: u64,
         region_epoch: RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
@@ -177,38 +181,50 @@ pub enum Msg {
         callback: Callback,
     },
 
-    // For snapshot stats.
-    SnapshotStats,
-
     // For consistency check
     ComputeHashResult {
-        region_id: u64,
         index: u64,
         hash: Vec<u8>,
     },
 
     // For region size
     RegionApproximateSize {
-        region_id: u64,
         size: u64,
     },
 
     // For region keys
     RegionApproximateKeys {
-        region_id: u64,
         keys: u64,
     },
 
-    // Compaction finished event
-    CompactedEvent(CompactedEvent),
+    CompactionDeclinedBytes(u64),
+
     HalfSplitRegion {
-        region_id: u64,
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
     },
-    MergeFail {
-        region_id: u64,
+
+    MergeResult {
+        target: metapb::Peer,
+        stale: bool,
     },
+    GcSnap(Vec<(SnapKey, bool)>),
+
+    Tick(PeerTick),
+    SignificantMsg(SignificantMsg),
+    ApplyRes(ApplyTaskRes),
+}
+
+pub enum StoreMsg {
+    Quit,
+    // Redirect to store if region not found.
+    RaftMessage(RaftMessage),
+
+    // For snapshot stats.
+    SnapshotStats,
+
+    // Compaction finished event
+    CompactedEvent(CompactedEvent),
 
     ValidateSSTResult {
         invalid_ssts: Vec<SSTMeta>,
@@ -220,63 +236,52 @@ pub enum Msg {
         limit: u32,
         callback: SeekRegionCallback,
     },
+
+    Tick(StoreTick),
 }
 
-impl fmt::Debug for Msg {
+impl fmt::Debug for PeerMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Msg::Quit => write!(fmt, "Quit"),
-            Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
-            Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
-            Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
-            Msg::ComputeHashResult {
-                region_id,
-                index,
-                ref hash,
-            } => write!(
+            PeerMsg::Quit => write!(fmt, "Quit"),
+            PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+            PeerMsg::RaftCmd { .. } => write!(fmt, "Raft Command"),
+            PeerMsg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
+            PeerMsg::ComputeHashResult { index, ref hash } => write!(
                 fmt,
-                "ComputeHashResult [region_id: {}, index: {}, hash: {}]",
-                region_id,
+                "ComputeHashResult [index: {}, hash: {}]",
                 index,
                 escape(hash)
             ),
-            Msg::SplitRegion {
-                region_id,
-                ref split_keys,
-                ..
-            } => write!(
-                fmt,
-                "Split region {} with {}",
-                region_id,
-                KeysInfoFormatter(&split_keys)
-            ),
-            Msg::RegionApproximateSize { region_id, size } => write!(
-                fmt,
-                "Region's approximate size [region_id: {}, size: {:?}]",
-                region_id, size
-            ),
-            Msg::RegionApproximateKeys { region_id, keys } => write!(
-                fmt,
-                "Region's approximate keys [region_id: {}, keys: {:?}]",
-                region_id, keys
-            ),
-            Msg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
-            Msg::HalfSplitRegion { ref region_id, .. } => {
-                write!(fmt, "Half Split region {}", region_id)
+            PeerMsg::SplitRegion { ref split_keys, .. } => {
+                write!(fmt, "Split at key {}", KeysInfoFormatter(split_keys))
             }
-            Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
-            Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
-            Msg::SeekRegion { ref from_key, .. } => {
-                write!(fmt, "Seek Region from_key {:?}", from_key)
+            PeerMsg::RegionApproximateSize { size } => {
+                write!(fmt, "Region's approximate size [size: {:?}]", size)
             }
+            PeerMsg::RegionApproximateKeys { keys } => {
+                write!(fmt, "Region's approximate keys [keys: {:?}]", keys)
+            }
+            PeerMsg::CompactionDeclinedBytes(bytes) => {
+                write!(fmt, "Compaction declined bytes {}", bytes)
+            }
+            PeerMsg::HalfSplitRegion { .. } => write!(fmt, "Half Split region"),
+            PeerMsg::MergeResult { ref target, stale } => write!(
+                fmt,
+                "MergeResult source: {:?}, successful: {}",
+                target, stale
+            ),
+            PeerMsg::GcSnap(_) => write!(fmt, "GcSnap"),
+            PeerMsg::Tick(t) => write!(fmt, "{:?}", t),
+            PeerMsg::SignificantMsg(ref msg) => write!(fmt, "{:?}", msg),
+            PeerMsg::ApplyRes(_) => write!(fmt, "ApplyRes"),
         }
     }
 }
 
-impl Msg {
-    pub fn new_raft_cmd(request: RaftCmdRequest, callback: Callback) -> Msg {
-        Msg::RaftCmd {
+impl PeerMsg {
+    pub fn new_raft_cmd(request: RaftCmdRequest, callback: Callback) -> PeerMsg {
+        PeerMsg::RaftCmd {
             send_time: Instant::now(),
             request,
             callback,
@@ -286,99 +291,34 @@ impl Msg {
     pub fn new_batch_raft_snapshot_cmd(
         batch: Vec<RaftCmdRequest>,
         on_finished: BatchReadCallback,
-    ) -> Msg {
-        Msg::BatchRaftSnapCmds {
+    ) -> PeerMsg {
+        PeerMsg::BatchRaftSnapCmds {
             send_time: Instant::now(),
             batch,
             on_finished: Callback::BatchRead(on_finished),
         }
     }
 
-    pub fn new_half_split_region(
-        region_id: u64,
-        region_epoch: RegionEpoch,
-        policy: CheckPolicy,
-    ) -> Msg {
-        Msg::HalfSplitRegion {
-            region_id,
+    pub fn new_half_split_region(region_epoch: RegionEpoch, policy: CheckPolicy) -> PeerMsg {
+        PeerMsg::HalfSplitRegion {
             region_epoch,
             policy,
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::thread;
-    use std::time::Duration;
-
-    use mio::{EventLoop, Handler};
-
-    use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
-    use raftstore::Error;
-    use util::transport::SendCh;
-
-    fn call_command(
-        sendch: &SendCh<Msg>,
-        request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse, Error> {
-        wait_op!(
-            |cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                let callback = Callback::Write(Box::new(move |write_resp: WriteResponse| {
-                    cb(write_resp.response);
-                }));
-                sendch.try_send(Msg::new_raft_cmd(request, callback))
-            },
-            timeout
-        ).ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
-    }
-
-    struct TestHandler;
-
-    impl Handler for TestHandler {
-        type Timeout = ();
-        type Message = Msg;
-
-        fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Self::Message) {
-            match msg {
-                Msg::Quit => event_loop.shutdown(),
-                Msg::RaftCmd {
-                    callback, request, ..
-                } => {
-                    // a trick for test timeout.
-                    if request.get_header().get_region_id() == u64::max_value() {
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                    callback.invoke_with_response(RaftCmdResponse::new());
-                }
-                // we only test above message types, others panic.
-                _ => unreachable!(),
+impl fmt::Debug for StoreMsg {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            StoreMsg::Quit => write!(fmt, "Quit"),
+            StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+            StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),
+            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
+            StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            StoreMsg::SeekRegion { ref from_key, .. } => {
+                write!(fmt, "Seek Region from_key {:?}", from_key)
             }
+            StoreMsg::Tick(t) => write!(fmt, "{:?}", t),
         }
-    }
-
-    #[test]
-    fn test_sender() {
-        let mut event_loop = EventLoop::new().unwrap();
-        let sendch = &SendCh::new(event_loop.channel(), "test-sender");
-
-        let t = thread::spawn(move || {
-            event_loop.run(&mut TestHandler).unwrap();
-        });
-
-        let mut request = RaftCmdRequest::new();
-        request.mut_header().set_region_id(u64::max_value());
-        request.set_status_request(StatusRequest::new());
-        assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
-        match call_command(sendch, request, Duration::from_millis(10)) {
-            Err(Error::Timeout(_)) => {}
-            _ => panic!("should failed with timeout"),
-        }
-
-        sendch.try_send(Msg::Quit).unwrap();
-
-        t.join().unwrap();
     }
 }

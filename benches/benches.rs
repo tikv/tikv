@@ -18,7 +18,6 @@ extern crate byteorder;
 extern crate crossbeam_channel;
 extern crate kvproto;
 extern crate log;
-extern crate mio;
 extern crate protobuf;
 extern crate raft;
 extern crate rand;

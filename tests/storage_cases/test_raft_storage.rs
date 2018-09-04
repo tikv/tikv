@@ -27,7 +27,7 @@ fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, C
 }
 
 #[test]
-fn test_raft_storage() {
+fn test_raft_storage_basic() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
     let key = Key::from_raw(b"key");
     assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);

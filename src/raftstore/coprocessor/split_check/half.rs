@@ -101,7 +101,6 @@ impl SplitCheckObserver for HalfCheckObserver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
     use std::sync::Arc;
 
     use kvproto::metapb::Peer;
@@ -111,12 +110,11 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{keys, Router, SplitCheckRunner, SplitCheckTask};
     use storage::{Key, ALL_CFS, CF_DEFAULT};
     use util::config::ReadableSize;
     use util::properties::SizePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::transport::RetryableSendCh;
     use util::worker::Runnable;
 
     use super::super::size::tests::must_split_at;
@@ -145,14 +143,13 @@ mod tests {
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
-        let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
+        let (tx, rx) = Router::new_for_test(1);
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0005

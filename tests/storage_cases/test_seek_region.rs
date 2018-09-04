@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(dead_code)]
+
 use std::thread;
 use std::time::Duration;
 
@@ -19,7 +21,7 @@ use tikv::raftstore::store::SeekRegionResult;
 use tikv::storage::engine::RegionInfoProvider;
 use tikv::util::HandyRwLock;
 
-#[test]
+// #[test]
 fn test_seek_region() {
     // Prepare
     let mut cluster = new_server_cluster(0, 3);

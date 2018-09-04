@@ -11,14 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
-
 use std::cmp;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use protobuf::RepeatedField;
@@ -41,6 +38,7 @@ use import::SSTImporter;
 use raft::NO_LIMIT;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use raftstore::store::fsm::{ConfigProvider, Store};
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
 use raftstore::store::peer::Peer;
@@ -48,15 +46,13 @@ use raftstore::store::peer_storage::{
     self, compact_raft_log, write_initial_apply_state, write_peer_state,
 };
 use raftstore::store::util::check_region_epoch;
-use raftstore::store::{cmd_resp, keys, util, Engines, Store};
+use raftstore::store::{cmd_resp, keys, util, Engines, PeerMsg, Router, Transport};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::HashMap;
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
-
-use super::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
@@ -346,7 +342,7 @@ impl<'a> ApplyContextCore<'a> {
     }
 
     /// Finish applys for the delegate.
-    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: Vec<ExecResult>) {
+    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.wb_mut());
         }
@@ -517,7 +513,8 @@ pub struct ApplyDelegate {
 }
 
 impl ApplyDelegate {
-    fn from_peer(peer: &Peer) -> ApplyDelegate {
+    fn from_peer(peer: impl AsRef<Peer>) -> ApplyDelegate {
+        let peer = peer.as_ref();
         let reg = Registration::new(peer);
         ApplyDelegate::from_registration(peer.engines(), reg)
     }
@@ -561,7 +558,7 @@ impl ApplyDelegate {
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         apply_ctx.committed_count += committed_entries.len();
-        let mut results = vec![];
+        let mut results = VecDeque::new();
         for entry in committed_entries {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -584,7 +581,7 @@ impl ApplyDelegate {
             };
 
             if let Some(res) = res {
-                results.push(res);
+                results.push_back(res);
             }
         }
 
@@ -1958,7 +1955,7 @@ impl RegionProposal {
 }
 
 pub struct ApplyBatch {
-    vec: Vec<Apply>,
+    apply: Apply,
     start: Instant,
 }
 
@@ -1968,16 +1965,16 @@ pub struct Destroy {
 
 /// region related task.
 pub enum Task {
-    Applies(ApplyBatch),
+    Apply(ApplyBatch),
     Registration(Registration),
-    Proposals(Vec<RegionProposal>),
+    Proposals(RegionProposal),
     Destroy(Destroy),
 }
 
 impl Task {
-    pub fn applies(applies: Vec<Apply>) -> Task {
-        Task::Applies(ApplyBatch {
-            vec: applies,
+    pub fn apply(apply: Apply) -> Task {
+        Task::Apply(ApplyBatch {
+            apply,
             start: Instant::now_coarse(),
         })
     }
@@ -1994,8 +1991,8 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Applies(ref a) => write!(f, "async applys count {}", a.vec.len()),
-            Task::Proposals(ref p) => write!(f, "region proposal count {}", p.len()),
+            Task::Apply(ref a) => write!(f, "[region {}] async applys", a.apply.region_id),
+            Task::Proposals(ref p) => write!(f, "[region {}] region proposal", p.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
@@ -2021,14 +2018,14 @@ pub struct ApplyRes {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: Vec<ExecResult>,
+    pub exec_res: VecDeque<ExecResult>,
     pub metrics: ApplyMetrics,
     pub merged: bool,
 }
 
 #[derive(Debug)]
 pub enum TaskRes {
-    Applys(Vec<ApplyRes>),
+    Apply(ApplyRes),
     Destroy(ApplyDelegate),
 }
 
@@ -2038,28 +2035,28 @@ pub struct Runner {
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
     delegates: HashMap<u64, Option<ApplyDelegate>>,
-    notifier: Sender<TaskRes>,
+    notifier: Router,
     sync_log: bool,
     use_delete_range: bool,
     tag: String,
 }
 
 impl Runner {
-    pub fn new<T, C>(
+    pub fn new<T: Transport, C>(
         store: &Store<T, C>,
-        notifier: Sender<TaskRes>,
+        notifier: Router,
         sync_log: bool,
         use_delete_range: bool,
     ) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
-        for (&region_id, p) in store.get_peers() {
-            delegates.insert(region_id, Some(ApplyDelegate::from_peer(p)));
+        for p in store.get_peers() {
+            delegates.insert(p.region_id(), Some(ApplyDelegate::from_peer(&p)));
         }
         Runner {
             engines: store.engines(),
-            host: Arc::clone(&store.coprocessor_host),
-            importer: Arc::clone(&store.importer),
+            host: store.coprocessor_host(),
+            importer: store.sst_importer(),
             delegates,
             notifier,
             sync_log,
@@ -2068,21 +2065,21 @@ impl Runner {
         }
     }
 
-    fn handle_applies(&mut self, applys: Vec<Apply>) {
+    fn handle_apply(&mut self, apply: Apply) {
         let t = SlowTimer::new();
 
         let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
-            .apply_res_capacity(applys.len())
+            .apply_res_capacity(1)
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
-        for apply in applys {
+        'handle_apply: {
             if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
-                continue;
+                break 'handle_apply;
             }
             let mut delegate = match self.delegates.get_mut(&apply.region_id) {
                 None => {
                     error!("[region {}] is missing", apply.region_id);
-                    continue;
+                    break 'handle_apply;
                 }
                 Some(e) => e.take().unwrap(),
             };
@@ -2115,8 +2112,17 @@ impl Runner {
             }
         }
 
-        if !core.apply_res.is_empty() {
-            self.notifier.send(TaskRes::Applys(core.apply_res)).unwrap();
+        for res in core.apply_res {
+            let region_id = res.region_id;
+            if let Err(e) = self
+                .notifier
+                .force_send_peer_message(res.region_id, PeerMsg::ApplyRes(TaskRes::Apply(res)))
+            {
+                warn!(
+                    "[region {}] failed to report apply result {:?}",
+                    region_id, e
+                );
+            }
         }
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
@@ -2129,38 +2135,33 @@ impl Runner {
         );
     }
 
-    fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
-        let mut propose_num = 0;
-        for region_proposal in proposals {
-            propose_num += region_proposal.props.len();
-            let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
-                Some(d) => d.as_mut().unwrap(),
-                None => {
-                    for p in region_proposal.props {
-                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                        notify_region_removed(region_proposal.region_id, region_proposal.id, cmd);
-                    }
-                    continue;
+    fn handle_proposals(&mut self, region_proposal: RegionProposal) {
+        let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
+            Some(d) => d.as_mut().unwrap(),
+            None => {
+                for p in region_proposal.props {
+                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                    notify_region_removed(region_proposal.region_id, region_proposal.id, cmd);
                 }
-            };
-            assert_eq!(delegate.id, region_proposal.id);
-            for p in region_proposal.props {
-                let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                if p.is_conf_change {
-                    if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                        // if it loses leadership before conf change is replicated, there may be
-                        // a stale pending conf change before next conf change is applied. If it
-                        // becomes leader again with the stale pending conf change, will enter
-                        // this block, so we notify leadership may have been changed.
-                        notify_stale_command(&delegate.tag, delegate.term, cmd);
-                    }
-                    delegate.pending_cmds.set_conf_change(cmd);
-                } else {
-                    delegate.pending_cmds.append_normal(cmd);
+                return;
+            }
+        };
+        assert_eq!(delegate.id, region_proposal.id);
+        for p in region_proposal.props {
+            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            if p.is_conf_change {
+                if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
+                    // if it loses leadership before conf change is replicated, there may be
+                    // a stale pending conf change before next conf change is applied. If it
+                    // becomes leader again with the stale pending conf change, will enter
+                    // this block, so we notify leadership may have been changed.
+                    notify_stale_command(&delegate.tag, delegate.term, cmd);
                 }
+                delegate.pending_cmds.set_conf_change(cmd);
+            } else {
+                delegate.pending_cmds.append_normal(cmd);
             }
         }
-        APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
     fn handle_registration(&mut self, s: Registration) {
@@ -2187,7 +2188,12 @@ impl Runner {
             let mut meta = meta.unwrap();
             info!("{} remove from apply delegates", meta.tag);
             meta.destroy();
-            self.notifier.send(TaskRes::Destroy(meta)).unwrap();
+            if let Err(e) = self
+                .notifier
+                .send_peer_message(d.region_id, PeerMsg::ApplyRes(TaskRes::Destroy(meta)))
+            {
+                warn!("{} fail to report destroy message: {:?}", d.region_id, e);
+            }
         }
     }
 
@@ -2201,10 +2207,10 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Applies(a) => {
+            Task::Apply(a) => {
                 let elapsed = duration_to_sec(a.start.elapsed());
                 APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
-                self.handle_applies(a.vec);
+                self.handle_apply(a.apply);
             }
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
@@ -2221,6 +2227,7 @@ impl Runnable<Task> for Runner {
 mod tests {
     use std::cell::RefCell;
     use std::sync::atomic::*;
+    use std::sync::mpsc::Sender;
     use std::sync::*;
     use std::time::*;
 
@@ -2237,6 +2244,7 @@ mod tests {
     use super::*;
     use import::test_helpers::*;
     use util::collections::HashMap;
+    use util::mpsc::loose_bounded;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
@@ -2259,7 +2267,7 @@ mod tests {
         engines: Engines,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
-        tx: Sender<TaskRes>,
+        tx: Router,
     ) -> Runner {
         Runner {
             engines,
@@ -2322,7 +2330,9 @@ mod tests {
 
     #[test]
     fn test_basic_flow() {
-        let (tx, rx) = mpsc::channel();
+        let (router, rx) = Router::new_for_test(1);
+        let (tx2, rx2) = loose_bounded(10);
+        router.register_mailbox(2, tx2);
         let (_tmp, engines) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
@@ -2330,7 +2340,7 @@ mod tests {
             engines.clone(),
             Arc::clone(&host),
             Arc::clone(&importer),
-            tx,
+            router,
         );
 
         let mut reg = Registration::default();
@@ -2362,7 +2372,7 @@ mod tests {
             }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run(Task::Proposals(region_proposal));
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
@@ -2381,7 +2391,7 @@ mod tests {
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run(Task::Proposals(region_proposal));
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].as_ref().unwrap().pending_cmds.normals;
@@ -2399,7 +2409,7 @@ mod tests {
 
         let p = Proposal::new(true, 4, 0, Callback::None);
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run(Task::Proposals(region_proposal));
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2]
@@ -2413,32 +2423,22 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::applies(vec![Apply::new(
-            1,
-            1,
-            vec![new_entry(2, 3, None)],
-        )]));
+        runner.run(Task::apply(Apply::new(1, 1, vec![new_entry(2, 3, None)])));
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
-        runner.run(Task::applies(vec![Apply::new(2, 11, vec![])]));
+        runner.run(Task::apply(Apply::new(2, 11, vec![])));
         // empty entries should be ignored.
-        assert!(rx.try_recv().is_err());
+        assert!(rx2.try_recv().is_err());
         assert_eq!(runner.delegates[&2].as_ref().unwrap().term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(engines.kv.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::applies(vec![Apply::new(
-            2,
-            11,
-            vec![new_entry(5, 4, None)],
-        )]));
-        let res = match rx.try_recv() {
-            Ok(TaskRes::Applys(res)) => res,
+        runner.run(Task::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])));
+        let apply_res = match rx2.try_recv() {
+            Ok(PeerMsg::ApplyRes(TaskRes::Apply(res))) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
-        assert_eq!(res.len(), 1);
-        let apply_res = &res[0];
         assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
@@ -2459,8 +2459,8 @@ mod tests {
         }
 
         runner.run(Task::destroy(2));
-        let destroy_res = match rx.try_recv() {
-            Ok(TaskRes::Destroy(d)) => d,
+        let destroy_res = match rx2.try_recv() {
+            Ok(PeerMsg::ApplyRes(TaskRes::Destroy(d))) => d,
             e => panic!("expected destroy result, but got {:?}", e),
         };
         assert_eq!(destroy_res.id, 1);
@@ -2926,7 +2926,7 @@ mod tests {
             RaftCmdResponse::new(),
         );
         delegate2.apply_state = core.exec_ctx.take().unwrap().apply_state;
-        core.finish_for(&mut delegate2, vec![]);
+        core.finish_for(&mut delegate2, VecDeque::new());
 
         core.restore_stash(stash);
         assert_eq!(core.last_applied_index, 3);
@@ -2938,7 +2938,7 @@ mod tests {
             RaftCmdResponse::new(),
         );
         delegate1.apply_state = core.exec_ctx.take().unwrap().apply_state;
-        core.finish_for(&mut delegate1, vec![]);
+        core.finish_for(&mut delegate1, VecDeque::new());
         core.write_to_db(&engines.kv);
 
         assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);

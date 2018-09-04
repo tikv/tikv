@@ -12,10 +12,11 @@
 // limitations under the License.
 
 use std::mem;
+use std::sync::Mutex;
 
-use raftstore::store::{keys, util, Msg};
+use raftstore::store::fsm::Router;
+use raftstore::store::{keys, util, PeerMsg};
 use rocksdb::DB;
-use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -76,32 +77,32 @@ impl SplitChecker for Checker {
     }
 }
 
-pub struct KeysCheckObserver<C> {
+pub struct KeysCheckObserver {
     region_max_keys: u64,
     split_keys: u64,
     batch_split_limit: u64,
-    ch: RetryableSendCh<Msg, C>,
+    ch: Mutex<Router>,
 }
 
-impl<C: Sender<Msg>> KeysCheckObserver<C> {
+impl KeysCheckObserver {
     pub fn new(
         region_max_keys: u64,
         split_keys: u64,
         batch_split_limit: u64,
-        ch: RetryableSendCh<Msg, C>,
-    ) -> KeysCheckObserver<C> {
+        ch: Router,
+    ) -> KeysCheckObserver {
         KeysCheckObserver {
             region_max_keys,
             split_keys,
             batch_split_limit,
-            ch,
+            ch: Mutex::new(ch),
         }
     }
 }
 
-impl<C> Coprocessor for KeysCheckObserver<C> {}
+impl Coprocessor for KeysCheckObserver {}
 
-impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl SplitCheckObserver for KeysCheckObserver {
     fn add_checker(&self, ctx: &mut ObserverContext, host: &mut Host, engine: &DB) {
         let region = ctx.region();
         let region_id = region.get_id();
@@ -122,11 +123,8 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             }
         };
 
-        let res = Msg::RegionApproximateKeys {
-            region_id,
-            keys: region_keys,
-        };
-        if let Err(e) = self.ch.try_send(res) {
+        let res = PeerMsg::RegionApproximateKeys { keys: region_keys };
+        if let Err(e) = self.ch.lock().unwrap().send_peer_message(region_id, res) {
             warn!(
                 "[region {}] failed to send approximate region keys: {}",
                 region_id, e
@@ -162,19 +160,18 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
 #[cfg(test)]
 mod tests {
     use std::cmp;
-    use std::sync::{mpsc, Arc};
+    use std::sync::Arc;
 
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{keys, PeerMsg, Router, SplitCheckRunner, SplitCheckTask};
     use storage::mvcc::{Write, WriteType};
     use storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
     use util::properties::RangePropertiesCollectorFactory;
     use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::transport::RetryableSendCh;
     use util::worker::Runnable;
 
     use raftstore::coprocessor::{Config, CoprocessorHost};
@@ -231,8 +228,7 @@ mod tests {
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
-        let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
+        let (tx, rx) = Router::new_for_test(1);
         let mut cfg = Config::default();
         cfg.region_max_keys = 100;
         cfg.region_split_keys = 80;
@@ -240,8 +236,8 @@ mod tests {
 
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0080
@@ -250,10 +246,8 @@ mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. })
-            | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
-            }
+            Ok(PeerMsg::RegionApproximateSize { .. })
+            | Ok(PeerMsg::RegionApproximateKeys { .. }) => {}
             others => panic!("expect recv empty, but got {:?}", others),
         }
 
@@ -293,8 +287,7 @@ mod tests {
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
-        let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-batch-split");
+        let (tx, rx) = Router::new_for_test(1);
         let mut cfg = Config::default();
         cfg.region_max_keys = 100;
         cfg.region_split_keys = 80;
@@ -302,8 +295,8 @@ mod tests {
 
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0080
@@ -311,10 +304,8 @@ mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. })
-            | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
-            }
+            Ok(PeerMsg::RegionApproximateSize { .. })
+            | Ok(PeerMsg::RegionApproximateKeys { .. }) => {}
             others => panic!("expect recv empty, but got {:?}", others),
         }
 

@@ -24,6 +24,8 @@
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
+#![feature(label_break_value)]
+#![feature(cell_update)]
 #![recursion_limit = "200"]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
@@ -57,7 +59,6 @@ extern crate lazy_static;
 extern crate libc;
 #[macro_use]
 extern crate log;
-extern crate mio;
 extern crate murmur3;
 extern crate num;
 #[macro_use]

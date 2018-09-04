@@ -25,6 +25,7 @@ use crossbeam::sync::AtomicOption;
 use crossbeam_channel;
 use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
 use std::sync::Arc;
@@ -216,25 +217,25 @@ const CHECK_INTERVAL: usize = 8;
 /// A sender of channel that limits the maximun pending messages count loosely.
 pub struct LooseBoundedSender<T> {
     sender: Sender<T>,
-    tried_cnt: usize,
+    tried_cnt: Cell<usize>,
     limit: usize,
 }
 
 impl<T> LooseBoundedSender<T> {
     /// Send a message regardless its capacity limit.
     #[inline]
-    pub fn force_send(&mut self, t: T) -> Result<(), SendError<T>> {
-        self.tried_cnt += 1;
+    pub fn force_send(&self, t: T) -> Result<(), SendError<T>> {
+        self.tried_cnt.update(|t| t + 1);
         self.sender.send(t)
     }
 
     #[inline]
-    pub fn try_send(&mut self, t: T) -> Result<(), TrySendError<T>> {
-        if self.tried_cnt < CHECK_INTERVAL {
+    pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
+        if self.tried_cnt.get() < CHECK_INTERVAL {
             self.force_send(t)
                 .map_err(|SendError(t)| TrySendError::Disconnected(t))
         } else if self.sender.sender.len() < self.limit {
-            self.tried_cnt = 0;
+            self.tried_cnt.set(0);
             self.force_send(t)
                 .map_err(|SendError(t)| TrySendError::Disconnected(t))
         } else {
@@ -248,7 +249,7 @@ impl<T> Clone for LooseBoundedSender<T> {
     fn clone(&self) -> LooseBoundedSender<T> {
         LooseBoundedSender {
             sender: self.sender.clone(),
-            tried_cnt: self.tried_cnt,
+            tried_cnt: self.tried_cnt.clone(),
             limit: self.limit,
         }
     }
@@ -259,7 +260,7 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
     (
         LooseBoundedSender {
             sender,
-            tried_cnt: 0,
+            tried_cnt: Cell::new(0),
             limit: cap,
         },
         receiver,
@@ -405,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_loose() {
-        let (mut tx, rx) = super::loose_bounded(10);
+        let (tx, rx) = super::loose_bounded(10);
         tx.try_send(1).unwrap();
         for i in 2..11 {
             tx.clone().try_send(i).unwrap();
@@ -442,7 +443,7 @@ mod tests {
             assert_eq!(tx.try_send(2), Err(TrySendError::Disconnected(2)));
         }
 
-        let (mut tx, rx) = super::loose_bounded(10);
+        let (tx, rx) = super::loose_bounded(10);
         tx.try_send(2).unwrap();
         drop(tx);
         assert_eq!(rx.recv(), Ok(2));
@@ -453,7 +454,7 @@ mod tests {
             Err(RecvTimeoutError::Disconnected)
         );
 
-        let (mut tx, rx) = super::loose_bounded(10);
+        let (tx, rx) = super::loose_bounded(10);
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx.try_send(10).unwrap();
