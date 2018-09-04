@@ -310,6 +310,10 @@ impl Cluster {
         self.region_sizes.get(&region_id).cloned()
     }
 
+    fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
+        self.region_approximate_keys.get(&region_id).cloned()
+    }
+
     fn get_stores(&self) -> Vec<metapb::Store> {
         self.stores.values().map(|s| s.store.clone()).collect()
     }
@@ -876,6 +880,10 @@ impl TestPdClient {
 
     pub fn get_region_size(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_size(region_id)
+    }
+
+    pub fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
+        self.cluster.rl().get_region_approximate_keys(region_id)
     }
 }
 

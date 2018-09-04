@@ -1841,6 +1841,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         peer.mut_store().region = region;
         if peer.is_leader() {
+            // make approximate size and keys updated in time.
+            peer.size_diff_hint = self.cfg.region_split_check_diff.0;
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
         }
