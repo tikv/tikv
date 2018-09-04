@@ -204,6 +204,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
@@ -256,6 +257,7 @@ impl ScalarFunc {
             | ScalarFuncSig::InDuration
             | ScalarFuncSig::InJson
             | ScalarFuncSig::IntervalInt
+            | ScalarFuncSig::Elt
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
@@ -289,7 +291,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Asin
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
-            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
@@ -314,7 +315,6 @@ impl ScalarFunc {
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
-            | ScalarFuncSig::Elt
             | ScalarFuncSig::Exp
             | ScalarFuncSig::ExportSet3Arg
             | ScalarFuncSig::ExportSet4Arg
@@ -775,6 +775,7 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
         RightShift => right_shift,
@@ -870,11 +871,10 @@ dispatch_call! {
         Reverse => reverse,
         ReverseBinary => reverse_binary,
         UnHex => un_hex,
-
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
-
         MD5 => md5,
+        Elt => elt,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1132,6 +1132,7 @@ mod test {
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
+                    ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Reverse,
                     ScalarFuncSig::ReverseBinary,
@@ -1197,6 +1198,7 @@ mod test {
                     ScalarFuncSig::InJson,
                     ScalarFuncSig::IntervalInt,
                     ScalarFuncSig::IntervalReal,
+                    ScalarFuncSig::Elt,
                 ],
                 2,
                 usize::MAX,
@@ -1255,7 +1257,6 @@ mod test {
             ScalarFuncSig::Asin,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
-            ScalarFuncSig::CharLength,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
             ScalarFuncSig::ConcatWS,
@@ -1280,7 +1281,6 @@ mod test {
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
-            ScalarFuncSig::Elt,
             ScalarFuncSig::Exp,
             ScalarFuncSig::ExportSet3Arg,
             ScalarFuncSig::ExportSet4Arg,
