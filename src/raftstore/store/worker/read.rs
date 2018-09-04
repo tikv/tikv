@@ -319,7 +319,10 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         // Check region id.
         let region_id = req.get_header().get_region_id();
         let delegate = match self.delegates.get(&region_id) {
-            Some(delegate) => delegate,
+            Some(delegate) => {
+                fail_point!("localreader_on_find_delegate");
+                delegate
+            }
             None => {
                 self.metrics.borrow_mut().rejected_by_no_region += 1;
                 return Ok(None);
@@ -371,13 +374,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         executor: &mut ReadExecutor,
     ) {
         let region_id = request.get_header().get_region_id();
-        let d = self.pre_propose_raft_command(&request);
-        fail_point!(
-            "localreader_on_propose_raft_command",
-            d.is_ok() && d.as_ref().unwrap().is_some(),
-            |_| {}
-        );
-        match d {
+        match self.pre_propose_raft_command(&request) {
             Ok(Some(delegate)) => {
                 let mut metrics = self.metrics.borrow_mut();
                 if let Some(resp) = delegate.handle_read(&request, executor, &mut *metrics) {

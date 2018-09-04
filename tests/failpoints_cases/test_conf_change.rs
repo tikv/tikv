@@ -57,11 +57,14 @@ fn test_destory_local_reader() {
     // Remove peer (1, 1) from region 1.
     pd_client.must_remove_peer(r1, new_peer(1, 1));
 
+    // Make sure region 1 is removed from store 1.
+    cluster.must_region_not_exist(r1, 1);
+
     let region = pd_client.get_region_by_id(r1).wait().unwrap().unwrap();
 
-    // Local reader panics if it finds a delegates.
-    let reader_on_propose = "localreader_on_propose_raft_command";
-    fail::cfg(reader_on_propose, "panic").unwrap();
+    // Local reader panics if it finds a delegate.
+    let reader_has_delegate = "localreader_on_find_delegate";
+    fail::cfg(reader_has_delegate, "panic").unwrap();
 
     let resp = read_on_peer(
         &mut cluster,
@@ -74,5 +77,5 @@ fn test_destory_local_reader() {
     debug!("resp: {:?}", resp);
     assert!(resp.unwrap().get_header().has_error());
 
-    fail::remove(reader_on_propose);
+    fail::remove(reader_has_delegate);
 }
