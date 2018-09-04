@@ -62,6 +62,13 @@ impl GCTask {
             GCTask::DestroyRange { callback, .. } => callback,
         }
     }
+
+    pub fn get_label(&self) -> &'static str {
+        match self {
+            GCTask::GC { .. } => "gc",
+            GCTask::DestroyRange { .. } => "destroy_range",
+        }
+    }
 }
 
 impl Display for GCTask {
@@ -298,33 +305,33 @@ impl<E: Engine> GCRunner<E> {
         Ok(())
     }
 
-    fn handle_gc_worker_task(&mut self, task: GCTask) {
-        GC_GCTASK_COUNTER.inc();
+    fn handle_gc_worker_task(&mut self, mut task: GCTask) {
+        let label = task.get_label();
+        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
 
-        let (result, callback) = match task {
+        let result = match &mut task {
             GCTask::GC {
-                mut ctx,
-                safe_point,
-                callback,
-            } => (self.gc(&mut ctx, safe_point), callback),
+                ctx, safe_point, ..
+            } => self.gc(ctx, *safe_point),
             GCTask::DestroyRange {
                 ctx,
                 start_key,
                 end_key,
-                callback,
-            } => (self.destroy_range(&ctx, &start_key, &end_key), callback),
+                ..
+            } => self.destroy_range(ctx, start_key, end_key),
         };
 
-        // TODO: fix metrics
-        GC_DURATION_HISTOGRAM.observe(duration_to_sec(timer.elapsed()));
-        //        slow_log!(timer, "{}", task);
+        GC_TASK_DURATION_HISTOGRAM_VEC
+            .with_label_values(&[label])
+            .observe(duration_to_sec(timer.elapsed()));
+        slow_log!(timer, "{}", task);
 
         if result.is_err() {
-            GC_GCTASK_FAIL_COUNTER.inc();
+            GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
         }
-        callback(result);
+        (task.take_callback())(result);
     }
 }
 
@@ -336,6 +343,7 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
 
     // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
     // to handle a task. It's not proper here, so override it to remove the log.
+    #[inline]
     fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
         for task in tasks.drain(..) {
             self.run(task);
