@@ -200,6 +200,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Atan1Arg
             | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
+            | ScalarFuncSig::Sin
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
@@ -216,6 +217,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::Inet6Aton
+            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::UnHex
             | ScalarFuncSig::MD5 => (1, 1),
 
@@ -343,7 +345,6 @@ impl ScalarFunc {
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
@@ -416,7 +417,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::Sin
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
@@ -814,6 +814,7 @@ dispatch_call! {
         Atan2Args => atan_2_args,
         Cos => cos,
         Tan => tan,
+        Sin => sin,
         Pow => pow,
     }
     DEC_CALLS {
@@ -873,8 +874,9 @@ dispatch_call! {
         UnHex => un_hex,
 
         Inet6Aton => inet6_aton,
+        Inet6Ntoa => inet6_ntoa,
 
-        MD5 =>md5,
+        MD5 => md5,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1125,6 +1127,7 @@ mod test {
                     ScalarFuncSig::Atan1Arg,
                     ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
+                    ScalarFuncSig::Sin,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
@@ -1310,7 +1313,6 @@ mod test {
             ScalarFuncSig::HexIntArg,
             ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::Inet6Ntoa,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
@@ -1383,7 +1385,6 @@ mod test {
             ScalarFuncSig::SetVar,
             ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
-            ScalarFuncSig::Sin,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
