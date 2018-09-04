@@ -539,7 +539,8 @@ impl Peer {
         }
         self.mut_store().set_region(region.clone());
         let progress = ReadProgress::region(region);
-        // Always update read delegate's region.
+        // Always update read delegate's region to avoid stale region info after a follower
+        // becomeing a leader.
         self.update_read_progress(progress);
     }
 

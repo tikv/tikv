@@ -361,7 +361,6 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
             // It can not handle other policies.
             Ok(_) => Ok(None),
-
             Err(e) => Err(e),
         }
     }
