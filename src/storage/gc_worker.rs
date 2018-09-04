@@ -41,7 +41,7 @@ pub const GC_MAX_PENDING_TASKS: usize = 2;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 
-enum GCWorkerTask {
+enum GCTask {
     GC {
         ctx: Context,
         safe_point: u64,
@@ -55,19 +55,19 @@ enum GCWorkerTask {
     },
 }
 
-impl GCWorkerTask {
+impl GCTask {
     pub fn take_callback(self) -> Callback<()> {
         match self {
-            GCWorkerTask::GC { callback, .. } => callback,
-            GCWorkerTask::DestroyRange { callback, .. } => callback,
+            GCTask::GC { callback, .. } => callback,
+            GCTask::DestroyRange { callback, .. } => callback,
         }
     }
 }
 
-impl Display for GCWorkerTask {
+impl Display for GCTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            GCWorkerTask::GC {
+            GCTask::GC {
                 ctx, safe_point, ..
             } => {
                 let epoch = format!("{:?}", ctx.region_epoch.as_ref());
@@ -77,7 +77,7 @@ impl Display for GCWorkerTask {
                     .field("safe_point", safe_point)
                     .finish()
             }
-            GCWorkerTask::DestroyRange {
+            GCTask::DestroyRange {
                 start_key, end_key, ..
             } => f
                 .debug_struct("DestroyRange")
@@ -248,7 +248,7 @@ impl<E: Engine> GCRunner<E> {
     }
 
     fn destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
-        debug!(
+        info!(
             "destroying range start_key: {}, end_key: {}",
             start_key, end_key
         );
@@ -291,25 +291,25 @@ impl<E: Engine> GCRunner<E> {
                 })?;
         }
 
-        debug!(
+        info!(
             "destroy range start_key: {}, end_key: {} finished",
             start_key, end_key
         );
         Ok(())
     }
 
-    fn handle_gc_worker_task(&mut self, task: GCWorkerTask) {
+    fn handle_gc_worker_task(&mut self, task: GCTask) {
         GC_GCTASK_COUNTER.inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
 
         let (result, callback) = match task {
-            GCWorkerTask::GC {
+            GCTask::GC {
                 mut ctx,
                 safe_point,
                 callback,
             } => (self.gc(&mut ctx, safe_point), callback),
-            GCWorkerTask::DestroyRange {
+            GCTask::DestroyRange {
                 ctx,
                 start_key,
                 end_key,
@@ -328,15 +328,15 @@ impl<E: Engine> GCRunner<E> {
     }
 }
 
-impl<E: Engine> Runnable<GCWorkerTask> for GCRunner<E> {
+impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     #[inline]
-    fn run(&mut self, task: GCWorkerTask) {
+    fn run(&mut self, task: GCTask) {
         self.handle_gc_worker_task(task);
     }
 
     // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
     // to handle a task. It's not proper here, so override it to remove the log.
-    fn run_batch(&mut self, tasks: &mut Vec<GCWorkerTask>) {
+    fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
         for task in tasks.drain(..) {
             self.run(task);
         }
@@ -363,8 +363,8 @@ pub struct GCWorker<E: Engine> {
 
     ratio_threshold: f64,
 
-    worker: Arc<Mutex<Worker<GCWorkerTask>>>,
-    worker_scheduler: worker::Scheduler<GCWorkerTask>,
+    worker: Arc<Mutex<Worker<GCTask>>>,
+    worker_scheduler: worker::Scheduler<GCTask>,
 }
 
 impl<E: Engine> GCWorker<E> {
@@ -415,7 +415,7 @@ impl<E: Engine> GCWorker<E> {
         }
     }
 
-    fn handle_schedule_error(e: ScheduleError<GCWorkerTask>) -> Result<()> {
+    fn handle_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
         match e {
             ScheduleError::Full(task) => {
                 GC_TOO_BUSY_COUNTER.inc();
@@ -428,7 +428,7 @@ impl<E: Engine> GCWorker<E> {
 
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         self.worker_scheduler
-            .schedule(GCWorkerTask::GC {
+            .schedule(GCTask::GC {
                 ctx,
                 safe_point,
                 callback,
@@ -449,7 +449,7 @@ impl<E: Engine> GCWorker<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         self.worker_scheduler
-            .schedule(GCWorkerTask::DestroyRange {
+            .schedule(GCTask::DestroyRange {
                 ctx,
                 start_key,
                 end_key,
