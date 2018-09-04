@@ -23,7 +23,7 @@ use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, Check
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 
-use super::test_select::*;
+use test_coprocessor::*;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::new();
@@ -66,7 +66,7 @@ fn test_checksum() {
         let request = new_checksum_request(range.clone(), scan_on);
         let expected = reversed_checksum_crc64_xor(&store, range, scan_on);
 
-        let response = handle_request(&end_point, request);
+        let response = handle_request(&end_point.scheduler(), request);
         let mut resp = ChecksumResponse::new();
         resp.merge_from_bytes(response.get_data()).unwrap();
         assert_eq!(resp.get_checksum(), expected);
