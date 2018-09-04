@@ -213,12 +213,15 @@ impl ScalarFunc {
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
+            | ScalarFuncSig::BitCount
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
+            | ScalarFuncSig::HexIntArg
+            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::UnHex
             | ScalarFuncSig::MD5 => (1, 1),
 
@@ -289,7 +292,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
-            | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
@@ -340,8 +342,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GreatestReal
             | ScalarFuncSig::GreatestString
             | ScalarFuncSig::GreatestTime
-            | ScalarFuncSig::HexIntArg
-            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -775,6 +775,7 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        BitCount => bit_count,
         CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
@@ -872,6 +873,8 @@ dispatch_call! {
         Bin => bin,
         Reverse => reverse,
         ReverseBinary => reverse_binary,
+        HexIntArg => hex_int_arg,
+        HexStrArg => hex_str_arg,
         UnHex => un_hex,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
@@ -1134,8 +1137,9 @@ mod test {
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
-                    ScalarFuncSig::BitNegSig,
+                    ScalarFuncSig::BitCount,
                     ScalarFuncSig::BitLength,
+                    ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Reverse,
@@ -1257,7 +1261,6 @@ mod test {
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
-            ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
@@ -1308,8 +1311,6 @@ mod test {
             ScalarFuncSig::GreatestReal,
             ScalarFuncSig::GreatestString,
             ScalarFuncSig::GreatestTime,
-            ScalarFuncSig::HexIntArg,
-            ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
