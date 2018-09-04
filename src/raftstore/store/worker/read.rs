@@ -103,16 +103,17 @@ impl ReadDelegate {
                 {
                     // Cache snapshot_time for remaining requests in the same batch.
                     *last_valid_ts = snapshot_time;
-                    if let Ok(mut resp) = executor.execute(req, &self.region) {
-                        // Leader can read local if and only if it is in lease.
-                        cmd_resp::bind_term(&mut resp.response, term);
-                        return Some(resp);
-                    }
+                    let mut resp = executor.execute(req, &self.region);
+                    // Leader can read local if and only if it is in lease.
+                    cmd_resp::bind_term(&mut resp.response, term);
+                    return Some(resp);
                 } else {
                     metrics.rejected_by_lease_expire += 1;
+                    debug!("{} rejected by lease expire", self.tag);
                 }
             } else {
                 metrics.rejected_by_term_mismatch += 1;
+                debug!("{} rejected by term mismatch", self.tag);
             }
         }
 
@@ -267,8 +268,8 @@ impl LocalReader<mio::Sender<StoreMsg>> {
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
         for (&region_id, p) in store.get_peers() {
             let delegate = ReadDelegate::from_peer(p);
-            debug!(
-                "{} init ReadDelegate for peer {:?}",
+            info!(
+                "{} create ReadDelegate for peer {:?}",
                 delegate.tag, delegate.peer_id
             );
             delegates.insert(region_id, delegate);
@@ -313,6 +314,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         // Check store id.
         if let Err(e) = util::check_store_id(req, self.store_id) {
             self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
+            debug!("rejected by store id not match {:?}", e);
             return Err(e);
         }
 
@@ -322,10 +324,10 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             Some(delegate) => delegate,
             None => {
                 self.metrics.borrow_mut().rejected_by_no_region += 1;
+                debug!("rejectd by no region {}", region_id);
                 return Ok(None);
             }
         };
-
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
             self.metrics.borrow_mut().rejected_by_peer_id_mismatch += 1;
@@ -347,6 +349,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
             self.metrics.borrow_mut().rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
+            debug!("{} rejectd by stale epoch", delegate.tag);
             return Ok(None);
         }
 
@@ -358,6 +361,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
             // It can not handle other policies.
             Ok(_) => Ok(None),
+
             Err(e) => Err(e),
         }
     }
@@ -451,7 +455,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             true
         } else {
             debug!(
-                "{} deny, applied_index_term {} != term {} ",
+                "{} rejected by applied_index_term {} != term {} ",
                 self.delegate.tag, self.delegate.applied_index_term, self.delegate.term
             );
             self.metrics.rejected_by_appiled_term += 1;
@@ -465,7 +469,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             // We skip lease check, because it is postponed until `handle_read`.
             LeaseState::Valid
         } else {
-            debug!("{} leader lease is None", self.delegate.tag,);
+            debug!("{} rejected by leader lease", self.delegate.tag);
             self.metrics.rejected_by_no_lease += 1;
             LeaseState::Expired
         }
