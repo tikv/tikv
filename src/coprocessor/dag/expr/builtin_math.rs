@@ -170,6 +170,12 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn sin(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(n.sin()))
+    }
+
+    #[inline]
     pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let y = try_opt!(self.children[1].eval_real(ctx, row));
@@ -179,6 +185,26 @@ impl ScalarFunc {
         }
         Ok(Some(pow))
     }
+
+    #[inline]
+    pub fn asin(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if n >= -1f64 && n <= 1f64 {
+            Ok(Some(n.asin()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn acos(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if n >= -1f64 && n <= 1f64 {
+            Ok(Some(n.acos()))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +213,7 @@ mod test {
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
@@ -572,6 +599,35 @@ mod test {
     }
 
     #[test]
+    fn test_sin() {
+        let tests = vec![
+            (ScalarFuncSig::Sin, Datum::F64(0.0_f64), 0.0_f64),
+            (ScalarFuncSig::Sin, Datum::F64(PI / 4.0_f64), FRAC_1_SQRT_2),
+            (ScalarFuncSig::Sin, Datum::F64(PI / 2.0_f64), 1.0_f64),
+            (ScalarFuncSig::Sin, Datum::F64(PI), 0.0_f64),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Sin, Datum::F64(f64::INFINITY)),
+            (ScalarFuncSig::Sin, Datum::F64(f64::NAN)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!(got.f64().is_nan());
+        }
+    }
+
+    #[test]
     fn test_pow() {
         let tests = vec![
             (
@@ -615,6 +671,90 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_asin() {
+        let tests = vec![
+            (ScalarFuncSig::Asin, Datum::F64(0.0_f64), 0.0_f64),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(1f64),
+                f64::consts::PI / 2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(-1f64),
+                -f64::consts::PI / 2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(f64::consts::SQRT_2 / 2.0_f64),
+                f64::consts::PI / 4.0_f64,
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Asin, Datum::F64(f64::INFINITY), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(f64::NAN), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(2f64), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(-2f64), Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_acos() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Acos,
+                Datum::F64(0f64),
+                f64::consts::PI / 2.0_f64,
+            ),
+            (ScalarFuncSig::Acos, Datum::F64(1f64), 0.0_f64),
+            (ScalarFuncSig::Acos, Datum::F64(-1f64), f64::consts::PI),
+            (
+                ScalarFuncSig::Acos,
+                Datum::F64(f64::consts::SQRT_2 / 2.0_f64),
+                f64::consts::PI / 4.0_f64,
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Acos, Datum::F64(f64::INFINITY), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(f64::NAN), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(2f64), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(-2f64), Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
