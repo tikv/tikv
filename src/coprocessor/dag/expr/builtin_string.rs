@@ -188,6 +188,19 @@ impl ScalarFunc {
         let result = Vec::from_hex(hex_string);
         result.map(|t| Some(Cow::Owned(t))).or(Ok(None))
     }
+
+    #[inline]
+    pub fn elt<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let i = try_opt!(self.children[0].eval_int(ctx, row));
+        if i <= 0 || i + 1 > self.children.len() as i64 {
+            return Ok(None);
+        }
+        self.children[i as usize].eval_string(ctx, row)
+    }
 }
 
 #[cfg(test)]
@@ -195,9 +208,11 @@ mod test {
     use coprocessor::codec::mysql::charset::{CHARSET_BIN, COLLATION_BIN_ID};
     use coprocessor::codec::mysql::types::{BINARY_FLAG, VAR_STRING};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr, string_datum_expr_with_tp};
+    use coprocessor::dag::expr::test::{
+        col_expr, datum_expr, scalar_func_expr, string_datum_expr_with_tp,
+    };
     use coprocessor::dag::expr::{EvalContext, Expression};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::expression::{Expr, ScalarFuncSig};
 
     #[test]
     fn test_length() {
@@ -835,6 +850,90 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_elt() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::I64(1),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"DataBase".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::I64(2),
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Null,
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::I64(1),
+                    Datum::Null,
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::I64(3),
+                    Datum::Null,
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::I64(0),
+                    Datum::Null,
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::I64(-1),
+                    Datum::Null,
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::I64(4),
+                    Datum::Null,
+                    Datum::Bytes(b"Hello".to_vec()),
+                    Datum::Bytes(b"Hola".to_vec()),
+                    Datum::Bytes("Cześć".as_bytes().to_vec()),
+                    Datum::Bytes("你好".as_bytes().to_vec()),
+                    Datum::Bytes("Здравствуйте".as_bytes().to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::Bytes("Cześć".as_bytes().to_vec()),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::Elt, &children);
+            let e = Expression::build(&mut ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
         }
     }
 }
