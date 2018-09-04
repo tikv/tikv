@@ -21,6 +21,7 @@ use rocksdb::DB;
 use super::error::Result;
 use super::{KeyEntry, ObserverContext, SplitChecker};
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
 
 pub use self::half::HalfCheckObserver;
 pub use self::keys::KeysCheckObserver;
@@ -51,6 +52,15 @@ impl Host {
         self.checkers.is_empty()
     }
 
+    pub fn policy(&self) -> CheckPolicy {
+        for checker in &self.checkers {
+            if checker.policy() == CheckPolicy::APPROXIMATE {
+                return CheckPolicy::APPROXIMATE;
+            }
+        }
+        CheckPolicy::SCAN
+    }
+
     /// Hook to call for every check during split.
     ///
     /// Return true means abort early.
@@ -74,18 +84,14 @@ impl Host {
         vec![]
     }
 
-    pub fn approximate_split_key(
-        mut self,
-        region: &Region,
-        engine: &DB,
-    ) -> Result<Option<Vec<u8>>> {
+    pub fn approximate_split_keys(mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
         for checker in &mut self.checkers {
-            match box_try!(checker.approximate_split_key(region, engine)) {
-                Some(split_key) => return Ok(Some(split_key)),
-                None => continue,
+            let keys = box_try!(checker.approximate_split_keys(region, engine));
+            if !keys.is_empty() {
+                return Ok(keys);
             }
         }
-        Ok(None)
+        Ok(vec![])
     }
 
     #[inline]

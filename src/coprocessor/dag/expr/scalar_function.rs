@@ -109,6 +109,7 @@ impl ScalarFunc {
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
+            | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -160,6 +161,8 @@ impl ScalarFunc {
             | ScalarFuncSig::CastJsonAsTime
             | ScalarFuncSig::CastJsonAsDuration
             | ScalarFuncSig::CastJsonAsJson
+            | ScalarFuncSig::Date
+            | ScalarFuncSig::LastDay
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -192,11 +195,20 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorDecToDec
             | ScalarFuncSig::FloorDecToInt
             | ScalarFuncSig::CRC32
+            | ScalarFuncSig::Sign
             | ScalarFuncSig::Sqrt
+            | ScalarFuncSig::Atan1Arg
+            | ScalarFuncSig::Acos
+            | ScalarFuncSig::Asin
+            | ScalarFuncSig::Cos
             | ScalarFuncSig::Tan
+            | ScalarFuncSig::Sin
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::CharLength
+            | ScalarFuncSig::Reverse
+            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -204,9 +216,13 @@ impl ScalarFunc {
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
+            | ScalarFuncSig::IsIPv6
+            | ScalarFuncSig::Inet6Aton
+            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
-            | ScalarFuncSig::UnHex => (1, 1),
+            | ScalarFuncSig::UnHex
+            | ScalarFuncSig::MD5 => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -245,6 +261,7 @@ impl ScalarFunc {
             | ScalarFuncSig::InDuration
             | ScalarFuncSig::InJson
             | ScalarFuncSig::IntervalInt
+            | ScalarFuncSig::Elt
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
 
             ScalarFuncSig::JsonSetSig
@@ -254,8 +271,7 @@ impl ScalarFunc {
             ScalarFuncSig::PI => (0, 0),
 
             // unimplement signature
-            ScalarFuncSig::Acos
-            | ScalarFuncSig::AddDateAndDuration
+            ScalarFuncSig::AddDateAndDuration
             | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::AddDateDatetimeInt
             | ScalarFuncSig::AddDateDatetimeString
@@ -275,12 +291,8 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
-            | ScalarFuncSig::Asin
-            | ScalarFuncSig::Atan1Arg
-            | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
-            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
@@ -288,14 +300,12 @@ impl ScalarFunc {
             | ScalarFuncSig::Conv
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
-            | ScalarFuncSig::Cos
             | ScalarFuncSig::Cot
             | ScalarFuncSig::CurrentDate
             | ScalarFuncSig::CurrentTime0Arg
             | ScalarFuncSig::CurrentTime1Arg
             | ScalarFuncSig::CurrentUser
             | ScalarFuncSig::Database
-            | ScalarFuncSig::Date
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::DateLiteral
             | ScalarFuncSig::DayName
@@ -307,7 +317,6 @@ impl ScalarFunc {
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
-            | ScalarFuncSig::Elt
             | ScalarFuncSig::Exp
             | ScalarFuncSig::ExportSet3Arg
             | ScalarFuncSig::ExportSet4Arg
@@ -334,8 +343,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GreatestString
             | ScalarFuncSig::GreatestTime
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::Inet6Aton
-            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
@@ -345,9 +352,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
-            | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::JSONAnyValue
-            | ScalarFuncSig::LastDay
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
             | ScalarFuncSig::LeastDecimal
@@ -371,7 +376,6 @@ impl ScalarFunc {
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
-            | ScalarFuncSig::MD5
             | ScalarFuncSig::MicroSecond
             | ScalarFuncSig::Minute
             | ScalarFuncSig::Month
@@ -395,8 +399,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
-            | ScalarFuncSig::Reverse
-            | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RouldReal
@@ -415,8 +417,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::Sign
-            | ScalarFuncSig::Sin
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
@@ -757,6 +757,7 @@ dispatch_call! {
         FloorIntToInt => floor_int_to_int,
         FloorDecToInt => floor_dec_to_int,
         CRC32 => crc32,
+        Sign => sign,
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -774,11 +775,13 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
         RightShift => right_shift,
         ASCII => ascii,
         IsIPv4 => is_ipv4,
+        IsIPv6 => is_ipv6,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -808,7 +811,13 @@ dispatch_call! {
         CaseWhenReal => case_when_real,
 
         Sqrt => sqrt,
+        Atan1Arg => atan_1_arg,
+        Atan2Args => atan_2_args,
+        Acos => acos,
+        Asin => asin,
+        Cos => cos,
         Tan => tan,
+        Sin => sin,
         Pow => pow,
     }
     DEC_CALLS {
@@ -861,9 +870,15 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        Reverse => reverse,
+        ReverseBinary => reverse_binary,
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
         UnHex => un_hex,
+        Inet6Aton => inet6_aton,
+        Inet6Ntoa => inet6_ntoa,
+        MD5 => md5,
+        Elt => elt,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -873,6 +888,9 @@ dispatch_call! {
         CastTimeAsTime => cast_time_as_time,
         CastDurationAsTime => cast_duration_as_time,
         CastJsonAsTime => cast_json_as_time,
+
+        Date => date,
+        LastDay => last_day,
 
         IfNullTime => if_null_time,
         IfTime => if_time,
@@ -1016,6 +1034,7 @@ mod test {
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
+                    ScalarFuncSig::Atan2Args,
                 ],
                 2,
                 2,
@@ -1071,6 +1090,8 @@ mod test {
                     ScalarFuncSig::CastJsonAsTime,
                     ScalarFuncSig::CastJsonAsDuration,
                     ScalarFuncSig::CastJsonAsJson,
+                    ScalarFuncSig::Date,
+                    ScalarFuncSig::LastDay,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1103,18 +1124,29 @@ mod test {
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
                     ScalarFuncSig::CRC32,
+                    ScalarFuncSig::Sign,
                     ScalarFuncSig::Sqrt,
+                    ScalarFuncSig::Atan1Arg,
+                    ScalarFuncSig::Acos,
+                    ScalarFuncSig::Asin,
+                    ScalarFuncSig::Cos,
                     ScalarFuncSig::Tan,
+                    ScalarFuncSig::Sin,
                     ScalarFuncSig::JsonTypeSig,
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
+                    ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::Reverse,
+                    ScalarFuncSig::ReverseBinary,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
+                    ScalarFuncSig::IsIPv6,
+                    ScalarFuncSig::MD5,
                 ],
                 1,
                 1,
@@ -1172,6 +1204,7 @@ mod test {
                     ScalarFuncSig::InJson,
                     ScalarFuncSig::IntervalInt,
                     ScalarFuncSig::IntervalReal,
+                    ScalarFuncSig::Elt,
                 ],
                 2,
                 usize::MAX,
@@ -1206,7 +1239,6 @@ mod test {
 
         // unimplemented signature
         let cases = vec![
-            ScalarFuncSig::Acos,
             ScalarFuncSig::AddDateAndDuration,
             ScalarFuncSig::AddDateAndString,
             ScalarFuncSig::AddDateDatetimeInt,
@@ -1227,12 +1259,8 @@ mod test {
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
-            ScalarFuncSig::Asin,
-            ScalarFuncSig::Atan1Arg,
-            ScalarFuncSig::Atan2Args,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
-            ScalarFuncSig::CharLength,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
             ScalarFuncSig::ConcatWS,
@@ -1240,14 +1268,12 @@ mod test {
             ScalarFuncSig::Conv,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
-            ScalarFuncSig::Cos,
             ScalarFuncSig::Cot,
             ScalarFuncSig::CurrentDate,
             ScalarFuncSig::CurrentTime0Arg,
             ScalarFuncSig::CurrentTime1Arg,
             ScalarFuncSig::CurrentUser,
             ScalarFuncSig::Database,
-            ScalarFuncSig::Date,
             ScalarFuncSig::DateDiff,
             ScalarFuncSig::DateLiteral,
             ScalarFuncSig::DayName,
@@ -1259,7 +1285,6 @@ mod test {
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
-            ScalarFuncSig::Elt,
             ScalarFuncSig::Exp,
             ScalarFuncSig::ExportSet3Arg,
             ScalarFuncSig::ExportSet4Arg,
@@ -1286,8 +1311,6 @@ mod test {
             ScalarFuncSig::GreatestString,
             ScalarFuncSig::GreatestTime,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::Inet6Aton,
-            ScalarFuncSig::Inet6Ntoa,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
@@ -1297,9 +1320,7 @@ mod test {
             ScalarFuncSig::IntAnyValue,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
-            ScalarFuncSig::IsIPv6,
             ScalarFuncSig::JSONAnyValue,
-            ScalarFuncSig::LastDay,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
             ScalarFuncSig::LeastDecimal,
@@ -1323,7 +1344,6 @@ mod test {
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
-            ScalarFuncSig::MD5,
             ScalarFuncSig::MicroSecond,
             ScalarFuncSig::Minute,
             ScalarFuncSig::Month,
@@ -1347,8 +1367,6 @@ mod test {
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
-            ScalarFuncSig::Reverse,
-            ScalarFuncSig::ReverseBinary,
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RouldReal,
@@ -1367,8 +1385,6 @@ mod test {
             ScalarFuncSig::SetVar,
             ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
-            ScalarFuncSig::Sign,
-            ScalarFuncSig::Sin,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
