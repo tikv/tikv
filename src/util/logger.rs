@@ -49,9 +49,7 @@ where
     let logger = slog::Logger::root(drain, slog_o!());
 
     slog_scope::set_global_logger(logger).cancel_reset();
-    slog_stdlog::init().map(|_| {
-        log::set_max_level(convert_slog_level_to_log_level(level).to_log_level_filter());
-    })
+    slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))
 }
 
 pub fn init_log_for_tikv_only<D>(drain: D, level: Level) -> Result<(), SetLoggerError>
