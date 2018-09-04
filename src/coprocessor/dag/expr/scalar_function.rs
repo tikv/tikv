@@ -206,6 +206,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::ASCII
+            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::ReverseBinary
             | ScalarFuncSig::Upper
@@ -217,6 +218,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::Inet6Aton
+            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::UnHex
             | ScalarFuncSig::MD5 => (1, 1),
 
@@ -288,7 +290,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
-            | ScalarFuncSig::CharLength
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
@@ -342,7 +343,6 @@ impl ScalarFunc {
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
@@ -775,6 +775,7 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
         RightShift => right_shift,
@@ -874,8 +875,9 @@ dispatch_call! {
         UnHex => un_hex,
 
         Inet6Aton => inet6_aton,
+        Inet6Ntoa => inet6_ntoa,
 
-        MD5 =>md5,
+        MD5 => md5,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1135,6 +1137,7 @@ mod test {
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::BitLength,
+                    ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::Reverse,
                     ScalarFuncSig::ReverseBinary,
@@ -1256,7 +1259,6 @@ mod test {
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
-            ScalarFuncSig::CharLength,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
             ScalarFuncSig::ConcatWS,
@@ -1310,7 +1312,6 @@ mod test {
             ScalarFuncSig::HexIntArg,
             ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::Inet6Ntoa,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
