@@ -319,7 +319,7 @@ pub mod test {
             let txn_modifies = {
                 let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
                 for &(ref key, _) in kv_data {
-                    txn.commit(&Key::from_raw(key), COMMIT_TS).unwrap();
+                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
                 }
                 txn.into_modifies()
             };

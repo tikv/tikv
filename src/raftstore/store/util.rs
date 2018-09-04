@@ -741,7 +741,6 @@ impl fmt::Debug for Lease {
 /// A remote lease, it can only be derived by `Lease`. It will be sent
 /// to the local read thread, so name it remote. If Lease expires, the remote must
 /// expire too.
-#[derive(Debug)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
     term: u64,
@@ -768,6 +767,18 @@ impl RemoteLease {
 
     pub fn term(&self) -> u64 {
         self.term
+    }
+}
+
+impl fmt::Debug for RemoteLease {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("RemoteLease")
+            .field(
+                "expired_time",
+                &u64_to_timespec(self.expired_time.load(AtomicOrdering::Relaxed)),
+            )
+            .field("term", &self.term)
+            .finish()
     }
 }
 

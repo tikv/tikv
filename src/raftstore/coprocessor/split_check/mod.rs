@@ -21,6 +21,7 @@ use rocksdb::DB;
 use super::error::Result;
 use super::{KeyEntry, ObserverContext, SplitChecker};
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
 
 pub use self::half::HalfCheckObserver;
 pub use self::keys::KeysCheckObserver;
@@ -49,6 +50,15 @@ impl Host {
     #[inline]
     pub fn skip(&self) -> bool {
         self.checkers.is_empty()
+    }
+
+    pub fn policy(&self) -> CheckPolicy {
+        for checker in &self.checkers {
+            if checker.policy() == CheckPolicy::APPROXIMATE {
+                return CheckPolicy::APPROXIMATE;
+            }
+        }
+        CheckPolicy::SCAN
     }
 
     /// Hook to call for every check during split.
