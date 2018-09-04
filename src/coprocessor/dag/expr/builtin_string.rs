@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use hex;
 use hex::FromHex;
 use std::i64;
 
@@ -130,6 +131,26 @@ impl ScalarFunc {
         }
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         Ok(Some(Cow::Owned(s.to_lowercase().into_bytes())))
+    }
+
+    #[inline]
+    pub fn hex_int_arg<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let i = try_opt!(self.children[0].eval_int(ctx, row));
+        Ok(Some(Cow::Owned(format!("{:X}", i).into_bytes())))
+    }
+
+    #[inline]
+    pub fn hex_str_arg<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        Ok(Some(Cow::Owned(hex::encode_upper(s.to_vec()).into_bytes())))
     }
 
     #[inline]
@@ -692,6 +713,51 @@ mod test {
                 COLLATION_BIN_ID,
             );
             let op = scalar_func_expr(ScalarFuncSig::CharLength, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_hex_int_arg() {
+        let cases = vec![
+            (Datum::I64(12), Datum::Bytes(b"C".to_vec())),
+            (Datum::I64(0x12), Datum::Bytes(b"12".to_vec())),
+            (Datum::I64(0b1100), Datum::Bytes(b"C".to_vec())),
+            (Datum::I64(0), Datum::Bytes(b"0".to_vec())),
+            (Datum::I64(-1), Datum::Bytes(b"FFFFFFFFFFFFFFFF".to_vec())),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::HexIntArg, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_hex_str_arg() {
+        let cases = vec![
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::Bytes(b"616263".to_vec()),
+            ),
+            (
+                Datum::Bytes("你好".as_bytes().to_vec()),
+                Datum::Bytes(b"E4BDA0E5A5BD".to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::HexStrArg, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
