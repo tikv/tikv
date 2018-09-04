@@ -85,9 +85,11 @@ impl Drop for RocksEngineCore {
     }
 }
 
+#[derive(Clone)]
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
+    db: Arc<DB>,
 }
 
 impl RocksEngine {
@@ -105,12 +107,17 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = rocksdb::new_engine(&path, cfs, cfs_opts)?;
-        box_try!(worker.start(Runner(Arc::new(db))));
+        let db = Arc::new(rocksdb::new_engine(&path, cfs, cfs_opts)?);
+        box_try!(worker.start(Runner(Arc::clone(&db))));
         Ok(RocksEngine {
             sched: worker.scheduler(),
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
+            db,
         })
+    }
+
+    pub fn get_rocksdb(&self) -> Arc<DB> {
+        Arc::clone(&self.db)
     }
 
     pub fn stop(&self) {
@@ -128,15 +135,6 @@ impl Debug for RocksEngine {
             "Rocksdb [is_temp: {}]",
             self.core.lock().unwrap().temp_dir.is_some()
         )
-    }
-}
-
-impl Clone for RocksEngine {
-    fn clone(&self) -> Self {
-        Self {
-            core: Arc::clone(&self.core),
-            sched: self.sched.clone(),
-        }
     }
 }
 

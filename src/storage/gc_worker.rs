@@ -466,3 +466,199 @@ impl<E: Engine> GCWorker<E> {
             .or_else(Self::handle_schedule_error)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::Future;
+    use server::readpool::{self, ReadPool};
+    use std::collections::BTreeMap;
+    use storage::engine::{new_local_engine, TEMP_DIR};
+    use storage::{Config, Mutation, Options, ReadPoolContext, Storage};
+    use util::worker::FutureWorker;
+
+    /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
+    /// be encoded form without ts.
+    fn check_data<E: Engine>(storage: &Storage<E>, expected_data: &BTreeMap<Vec<u8>, Vec<u8>>) {
+        let scan_res = storage
+            .async_scan(
+                Context::default(),
+                Key::from_encoded_slice(b""),
+                expected_data.len() + 1,
+                1,
+                Options::default(),
+            )
+            .wait()
+            .unwrap();
+
+        let all_equal = scan_res
+            .into_iter()
+            .map(|res| res.unwrap())
+            .zip(expected_data.iter())
+            .all(|((k1, v1), (k2, v2))| &k1 == k2 && &v1 == v2);
+        assert!(all_equal);
+    }
+
+    fn test_destroy_range_impl(
+        init_keys: &[Vec<u8>],
+        start_ts: u64,
+        commit_ts: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<()> {
+        // Return Result from this function so we can use the `wait_op` macro here.
+
+        let engine = new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let db = engine.get_rocksdb();
+
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let read_pool = ReadPool::new(
+            "storage-readpool",
+            &readpool::Config::default_for_test(),
+            || || ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let mut storage = Storage::from_engine(engine, &Config::default(), read_pool).unwrap();
+        storage.mut_gc_worker().set_local_storage(db);
+        storage.start(&Config::default()).unwrap();
+
+        // Convert keys to key value pairs, where the value is "value-{key}".
+        let data: BTreeMap<_, _> = init_keys
+            .iter()
+            .map(|key| {
+                let mut value = b"value-".to_vec();
+                value.extend_from_slice(key);
+                (Key::from_raw(key).into_encoded(), value)
+            })
+            .collect();
+
+        // Generate `Mutation`s from these keys.
+        let mutations: Vec<_> = init_keys
+            .iter()
+            .map(|key| {
+                let mut value = b"value-".to_vec();
+                value.extend_from_slice(key);
+                Mutation::Put((Key::from_raw(key), value))
+            })
+            .collect();
+        let primary = init_keys[0].clone();
+
+        // Write these data to the storage.
+        wait_op!(|cb| storage.async_prewrite(
+            Context::default(),
+            mutations,
+            primary,
+            start_ts,
+            Options::default(),
+            cb
+        )).unwrap()
+            .unwrap();
+
+        // Commit.
+        let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
+        wait_op!(|cb| storage.async_commit(Context::default(), keys, start_ts, commit_ts, cb))
+            .unwrap()
+            .unwrap();
+
+        // Assert these data is successfully written to the storage.
+        check_data(&storage, &data);
+
+        let start_key = Key::from_raw(start_key);
+        let end_key = Key::from_raw(end_key);
+
+        // Calculate expected data set after deleting the range.
+        let data: BTreeMap<_, _> = data
+            .into_iter()
+            .filter(|(k, _)| k < start_key.as_encoded() || k >= end_key.as_encoded())
+            .collect();
+
+        // Invoke destroy range.
+        wait_op!(|cb| storage.async_destroy_range(Context::default(), start_key, end_key, cb))
+            .unwrap()
+            .unwrap();
+
+        // Check remaining data is as expected.
+        check_data(&storage, &data);
+
+        storage.stop().unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_destroy_range() {
+        test_destroy_range_impl(
+            &[
+                b"key1".to_vec(),
+                b"key2".to_vec(),
+                b"key3".to_vec(),
+                b"key4".to_vec(),
+                b"key5".to_vec(),
+            ],
+            5,
+            10,
+            b"key2",
+            b"key4",
+        ).unwrap();
+
+        test_destroy_range_impl(
+            &[b"key1".to_vec(), b"key9".to_vec()],
+            5,
+            10,
+            b"key3",
+            b"key7",
+        ).unwrap();
+
+        test_destroy_range_impl(
+            &[
+                b"key3".to_vec(),
+                b"key4".to_vec(),
+                b"key5".to_vec(),
+                b"key6".to_vec(),
+                b"key7".to_vec(),
+            ],
+            5,
+            10,
+            b"key1",
+            b"key9",
+        ).unwrap();
+
+        test_destroy_range_impl(
+            &[
+                b"key1".to_vec(),
+                b"key2".to_vec(),
+                b"key3".to_vec(),
+                b"key4".to_vec(),
+                b"key5".to_vec(),
+            ],
+            5,
+            10,
+            b"key2\x00",
+            b"key4",
+        ).unwrap();
+
+        test_destroy_range_impl(
+            &[
+                b"key1".to_vec(),
+                b"key1\x00".to_vec(),
+                b"key1\x00\x00".to_vec(),
+                b"key1\x00\x00\x00".to_vec(),
+            ],
+            5,
+            10,
+            b"key1\x00",
+            b"key1\x00\x00",
+        ).unwrap();
+
+        test_destroy_range_impl(
+            &[
+                b"key1".to_vec(),
+                b"key1\x00".to_vec(),
+                b"key1\x00\x00".to_vec(),
+                b"key1\x00\x00\x00".to_vec(),
+            ],
+            5,
+            10,
+            b"key1\x00",
+            b"key1\x00",
+        ).unwrap();
+    }
+}
