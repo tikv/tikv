@@ -220,6 +220,8 @@ impl ScalarFunc {
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
+            | ScalarFuncSig::HexIntArg
+            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::UnHex
             | ScalarFuncSig::MD5 => (1, 1),
 
@@ -340,8 +342,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GreatestReal
             | ScalarFuncSig::GreatestString
             | ScalarFuncSig::GreatestTime
-            | ScalarFuncSig::HexIntArg
-            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -873,6 +873,8 @@ dispatch_call! {
         Bin => bin,
         Reverse => reverse,
         ReverseBinary => reverse_binary,
+        HexIntArg => hex_int_arg,
+        HexStrArg => hex_str_arg,
         UnHex => un_hex,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
@@ -1309,8 +1311,6 @@ mod test {
             ScalarFuncSig::GreatestReal,
             ScalarFuncSig::GreatestString,
             ScalarFuncSig::GreatestTime,
-            ScalarFuncSig::HexIntArg,
-            ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
