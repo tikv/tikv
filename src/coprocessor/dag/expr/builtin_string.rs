@@ -680,6 +680,7 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+        
         // Test binary string case
         let cases = vec![
             (Datum::Bytes(b"HELLO".to_vec()), Datum::I64(5)),
