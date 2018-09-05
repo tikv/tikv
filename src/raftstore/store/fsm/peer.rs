@@ -1034,8 +1034,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
                 // before the old snapshot, which will create an uninitialized peer on the
-                // store. After that, the old snapshot comes, followed with a split proposal.
-                // After the split proposal is applied, the uninitialized peer will be meet.
+                // store. After that, the old snapshot comes, followed with the last split
+                // proposal. After it's applied, the uninitialized peer will be meet.
                 // We can remove this uninitialized peer directly.
                 if exist_peer.get_store().is_initialized() {
                     panic!(

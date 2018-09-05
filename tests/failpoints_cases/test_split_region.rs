@@ -35,7 +35,7 @@ fn test_slow_split() {
 
     // Only allow 1 MsgRequestPreVote per follower.
     let filter = Box::new(
-        RegionPacketFilter::new(1000, 1) // new reigon id is 1000
+        RegionPacketFilter::new(1000, 1) // new region id is 1000
             .msg_type(MessageType::MsgRequestPreVote)
             .direction(Direction::Send)
             .allow(1),
