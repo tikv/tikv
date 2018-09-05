@@ -225,6 +225,8 @@ impl ScalarFunc {
             | ScalarFuncSig::HexIntArg
             | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::UnHex
+            | ScalarFuncSig::Cot
+            | ScalarFuncSig::Degrees
             | ScalarFuncSig::MD5 => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -302,7 +304,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Conv
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
-            | ScalarFuncSig::Cot
             | ScalarFuncSig::CurrentDate
             | ScalarFuncSig::CurrentTime0Arg
             | ScalarFuncSig::CurrentTime1Arg
@@ -315,7 +316,6 @@ impl ScalarFunc {
             | ScalarFuncSig::DayOfWeek
             | ScalarFuncSig::DayOfYear
             | ScalarFuncSig::DecimalAnyValue
-            | ScalarFuncSig::Degrees
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
@@ -820,6 +820,8 @@ dispatch_call! {
         Tan => tan,
         Sin => sin,
         Pow => pow,
+        Cot => cot,
+        Degrees => degrees,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -1153,6 +1155,8 @@ mod test {
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv6,
                     ScalarFuncSig::MD5,
+                    ScalarFuncSig::Cot,
+                    ScalarFuncSig::Degrees,
                 ],
                 1,
                 1,
@@ -1273,7 +1277,6 @@ mod test {
             ScalarFuncSig::Conv,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
-            ScalarFuncSig::Cot,
             ScalarFuncSig::CurrentDate,
             ScalarFuncSig::CurrentTime0Arg,
             ScalarFuncSig::CurrentTime1Arg,
@@ -1286,7 +1289,6 @@ mod test {
             ScalarFuncSig::DayOfWeek,
             ScalarFuncSig::DayOfYear,
             ScalarFuncSig::DecimalAnyValue,
-            ScalarFuncSig::Degrees,
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
