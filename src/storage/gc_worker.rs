@@ -287,6 +287,11 @@ impl<E: Engine> GCRunner<E> {
                 })?;
         }
 
+        info!(
+            "destroy range start_key: {}, end_key: {} finished deleting files in range",
+            start_key, end_key
+        );
+
         // Then, delete all remaining keys in the range.
         for cf in ALL_CFS {
             // TODO: set use_delete_range with config here.
@@ -299,7 +304,7 @@ impl<E: Engine> GCRunner<E> {
         }
 
         info!(
-            "destroy range start_key: {}, end_key: {} finished",
+            "destroy range start_key: {}, end_key: {} finished cleaning up all",
             start_key, end_key
         );
         Ok(())
