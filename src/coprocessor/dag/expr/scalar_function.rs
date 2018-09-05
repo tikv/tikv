@@ -215,6 +215,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Bin
             | ScalarFuncSig::LTrim
             | ScalarFuncSig::RTrim
+            | ScalarFuncSig::BitCount
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
@@ -293,7 +294,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
-            | ScalarFuncSig::BitCount
             | ScalarFuncSig::Char
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Concat
@@ -775,6 +775,7 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        BitCount => bit_count,
         CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
@@ -1138,8 +1139,9 @@ mod test {
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
-                    ScalarFuncSig::BitNegSig,
+                    ScalarFuncSig::BitCount,
                     ScalarFuncSig::BitLength,
+                    ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::LTrim,
@@ -1263,7 +1265,6 @@ mod test {
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
-            ScalarFuncSig::BitCount,
             ScalarFuncSig::Char,
             ScalarFuncSig::Compress,
             ScalarFuncSig::Concat,
