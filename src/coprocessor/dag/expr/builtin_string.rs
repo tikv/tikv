@@ -13,12 +13,14 @@
 
 use hex;
 use hex::FromHex;
+use std::borrow::Cow;
 use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
-use std::borrow::Cow;
+
+const SPACE: u8 = 0o40u8;
 
 impl ScalarFunc {
     #[inline]
@@ -61,6 +63,42 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let i = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(Cow::Owned(format!("{:b}", i).into_bytes())))
+    }
+
+    #[inline]
+    pub fn ltrim<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let pos = val.iter().position(|&x| x != SPACE);
+        if let Some(i) = pos {
+            match val {
+                Cow::Borrowed(val) => Ok(Some(Cow::Borrowed(&val[i..]))),
+                Cow::Owned(val) => Ok(Some(Cow::Owned(val[i..].to_owned()))),
+            }
+        } else {
+            Ok(Some(Cow::Owned(b"".to_vec())))
+        }
+    }
+
+    #[inline]
+    pub fn rtrim<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let pos = val.iter().rev().position(|&x| x != SPACE);
+        if let Some(i) = pos {
+            match val {
+                Cow::Borrowed(val) => Ok(Some(Cow::Borrowed(&val[..val.len() - i]))),
+                Cow::Owned(val) => Ok(Some(Cow::Owned(val[..val.len() - i].to_owned()))),
+            }
+        } else {
+            Ok(Some(Cow::Owned(b"".to_vec())))
+        }
     }
 
     pub fn left<'a, 'b: 'a>(
@@ -302,6 +340,92 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    #[test]
+    fn test_ltrim() {
+        let cases = vec![
+            ("   bar   ", "bar   "),
+            ("   b   ar   ", "b   ar   "),
+            ("bar", "bar"),
+            ("    ", ""),
+            ("\t  bar", "\t  bar"),
+            ("\r  bar", "\r  bar"),
+            ("\n  bar", "\n  bar"),
+            ("  \tbar", "\tbar"),
+            ("", ""),
+            ("  你好", "你好"),
+            ("  你  好", "你  好"),
+            (
+                "  분산 데이터베이스    ",
+                "분산 데이터베이스    ",
+            ),
+            (
+                "   あなたのことが好きです   ",
+                "あなたのことが好きです   ",
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, exp) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+            assert_eq!(got, exp, "ltrim('{:?}')", input_str);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "ltrim(NULL)");
+    }
+
+    #[test]
+    fn test_rtrim() {
+        let cases = vec![
+            ("   bar   ", "   bar"),
+            ("bar", "bar"),
+            ("ba  r", "ba  r"),
+            ("    ", ""),
+            ("  bar\t  ", "  bar\t"),
+            (" bar   \t", " bar   \t"),
+            ("bar   \r", "bar   \r"),
+            ("bar   \n", "bar   \n"),
+            ("", ""),
+            ("  你好  ", "  你好"),
+            ("  你  好  ", "  你  好"),
+            (
+                "  분산 데이터베이스    ",
+                "  분산 데이터베이스",
+            ),
+            (
+                "   あなたのことが好きです   ",
+                "   あなたのことが好きです",
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input_str, exp) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+            assert_eq!(got, exp, "rtrim('{:?}')", input_str);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "rtrim(NULL)");
     }
 
     #[test]

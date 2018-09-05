@@ -213,6 +213,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
+            | ScalarFuncSig::LTrim
+            | ScalarFuncSig::RTrim
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::BitLength
             | ScalarFuncSig::BitNegSig
@@ -372,7 +374,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
-            | ScalarFuncSig::LTrim
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
@@ -411,7 +412,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::Rpad
             | ScalarFuncSig::RpadBinary
-            | ScalarFuncSig::RTrim
             | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
@@ -871,6 +871,8 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        LTrim => ltrim,
+        RTrim => rtrim,
         Reverse => reverse,
         ReverseBinary => reverse_binary,
         HexIntArg => hex_int_arg,
@@ -1142,6 +1144,8 @@ mod test {
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
+                    ScalarFuncSig::LTrim,
+                    ScalarFuncSig::RTrim,
                     ScalarFuncSig::Reverse,
                     ScalarFuncSig::ReverseBinary,
                     ScalarFuncSig::Lower,
@@ -1341,7 +1345,6 @@ mod test {
             ScalarFuncSig::Log2Args,
             ScalarFuncSig::Lpad,
             ScalarFuncSig::LpadBinary,
-            ScalarFuncSig::LTrim,
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
@@ -1380,7 +1383,6 @@ mod test {
             ScalarFuncSig::RowSig,
             ScalarFuncSig::Rpad,
             ScalarFuncSig::RpadBinary,
-            ScalarFuncSig::RTrim,
             ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
