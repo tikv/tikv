@@ -108,7 +108,7 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
 }
 
 /// `is_first_vote_msg` checks `msg` is the first vote (or prevote) message or not. It's used for
-/// when the message is receiving but there is no such region in `Store::region_peers` and the
+/// when the message is received but there is no such region in `Store::region_peers` and the
 /// region overlaps with others. In this case we should put `msg` into `pending_votes` instead of
 /// create the peer.
 #[inline]
@@ -1180,6 +1180,24 @@ mod tests {
             msg.set_msg_type(msg_type);
             msg.set_term(term);
             assert_eq!(is_first_vote_msg(&msg), is_vote);
+        }
+    }
+
+    #[test]
+    fn test_msg_can_create_peer() {
+        let tbl = vec![
+            (MessageType::MsgRequestVote, INVALID_INDEX, true),
+            (MessageType::MsgRequestPreVote, INVALID_INDEX, true),
+            (MessageType::MsgHeartbeat, INVALID_INDEX, false),
+            (MessageType::MsgHeartbeat, 100, true),
+            (MessageType::MsgAppend, 100, false),
+        ];
+
+        for (msg_type, commit, can_create) in tbl {
+            let mut msg = Message::new();
+            msg.set_msg_type(msg_type);
+            msg.set_commit(commit);
+            assert_eq!(msg_can_create_peer(&msg), can_create);
         }
     }
 
