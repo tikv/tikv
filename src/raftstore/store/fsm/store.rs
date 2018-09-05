@@ -111,7 +111,6 @@ pub struct Store<T: 'static, C: 'static> {
     timer: Handle,
     latch: CountDownLatch,
     need_flush_trans: bool,
-    stopped: bool,
 }
 
 pub struct StoreInfo {
@@ -277,7 +276,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             latch,
             timer: GLOBAL_TIMER_HANDLE.clone(),
             need_flush_trans: false,
-            stopped: false,
         };
         s.init()?;
         Ok(s)
@@ -543,9 +541,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn stop(&mut self) {
         info!("{} start to stop raftstore.", self.tag);
 
-        // Applying snapshot may take an unexpected long time.
-        self.router.broadcast_shutdown();
-
         // Wait all workers finish.
         let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
         handles.push(self.split_check_worker.stop());
@@ -565,7 +560,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         self.coprocessor_host.shutdown();
-        self.stopped = true;
 
         info!("{} stop raftstore finished.", self.tag);
     }
@@ -1250,10 +1244,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 limit,
                 callback,
             } => self.seek_region(&from_key, filter, limit, callback),
-            StoreMsg::Quit => {
-                info!("{} receive quit message", self.tag);
-                self.stop();
-            }
         }
     }
 }
@@ -1270,6 +1260,10 @@ impl<T: Transport, C: PdClient> Future for Store<T, C> {
                 msgs.push(m);
             }
             Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Ok(Async::Ready(None)) => {
+                self.stop();
+                return Ok(Async::Ready(()));
+            }
             _ => unreachable!(),
         }
         loop {
@@ -1277,26 +1271,28 @@ impl<T: Transport, C: PdClient> Future for Store<T, C> {
                 match self.receiver.poll() {
                     Ok(Async::Ready(Some(m))) => msgs.push(m),
                     Ok(Async::NotReady) => break,
+                    Ok(Async::Ready(None)) => {
+                        self.stop();
+                        return Ok(Async::Ready(()));
+                    }
                     _ => unreachable!(),
                 }
             }
+
             let keep_going = msgs.len() == self.cfg.messages_per_tick;
             for m in msgs.drain(..) {
                 self.on_store_msg(m);
             }
-            if !self.stopped {
-                if keep_going {
-                    continue;
-                }
-                // TODO: Maybe a special tick is better?
-                self.raft_metrics.flush();
-                if self.need_flush_trans {
-                    self.trans.flush();
-                    self.need_flush_trans = false;
-                }
-                return Ok(Async::NotReady);
+            if keep_going {
+                continue;
             }
-            return Ok(Async::Ready(()));
+            // TODO: Maybe a special tick is better?
+            self.raft_metrics.flush();
+            if self.need_flush_trans {
+                self.trans.flush();
+                self.need_flush_trans = false;
+            }
+            return Ok(Async::NotReady);
         }
     }
 }

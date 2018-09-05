@@ -379,10 +379,10 @@ where
             Some(f) => f,
         };
 
-        box_try!(self.router.send_store_message(StoreMsg::Quit));
         let handle = GLOBAL_TIMER_HANDLE.clone();
         // TODO: should report error if thread is aborted.
         loop {
+            self.router.broadcast_shutdown();
             let timeout = handle
                 .delay(Instant::now() + Duration::from_millis(500))
                 .map_err(|_| ());
@@ -390,7 +390,6 @@ where
                 Ok(Either::A(_)) | Err(Either::A(_)) => return Ok(()),
                 Ok(Either::B((_, f2))) | Err(Either::B((_, f2))) => f = f2,
             }
-            self.router.broadcast_shutdown();
         }
     }
 

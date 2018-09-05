@@ -767,6 +767,19 @@ impl<T: Transport> Peer<T> {
         }
 
         let mut meta = self.store_meta.lock().unwrap();
+        if meta.regions[&self.region_id()] != *self.region() {
+            if !self.peer.is_initialized() {
+                info!("{} stale delegate detected, skip.", self.peer.tag);
+                return Ok(Some(key));
+            } else {
+                panic!(
+                    "{} meta corrupted: {:?} != {:?}",
+                    self.peer.tag,
+                    meta.regions[&self.region_id()],
+                    self.region()
+                );
+            }
+        }
         let r = meta
             .region_ranges
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
@@ -1225,17 +1238,10 @@ impl<T: Transport> Peer<T> {
                         new_peer.peer.region()
                     )
                 }
-                if self
-                    .router
-                    .force_send_peer_message(new_region_id, PeerMsg::Quit)
-                    .is_err()
-                {
-                    warn!(
-                        "{} failed to stop stale peer, are we shutting down?",
-                        new_peer.peer.tag
-                    );
-                }
-                self.router.unregister_mailbox(new_region_id);
+                self.router
+                    .unregister_mailbox(new_region_id)
+                    .unwrap()
+                    .close();
             }
 
             if !campaigned {
@@ -2368,10 +2374,6 @@ impl<T: Transport> Peer<T> {
                 policy,
             } => self.on_schedule_half_split_region(&region_epoch, policy),
             PeerMsg::MergeResult { target, stale } => self.on_merge_result(target, stale),
-            PeerMsg::Quit => {
-                info!("{} receive quit message", self.peer.tag);
-                self.stop();
-            }
             PeerMsg::BatchRaftSnapCmds { .. } => unreachable!(),
         }
     }
@@ -2405,6 +2407,11 @@ impl<T: Transport> Future for Peer<T> {
                 msgs.push(m);
             }
             Ok(Async::NotReady) => return Ok(Async::NotReady),
+            // stop implicitly.
+            Ok(Async::Ready(None)) => {
+                self.stop();
+                return Ok(Async::Ready(()));
+            }
             _ => unreachable!(),
         }
         loop {
@@ -2412,6 +2419,10 @@ impl<T: Transport> Future for Peer<T> {
                 match self.receiver.poll() {
                     Ok(Async::Ready(Some(m))) => msgs.push(m),
                     Ok(Async::NotReady) => break,
+                    Ok(Async::Ready(None)) => {
+                        self.stop();
+                        return Ok(Async::Ready(()));
+                    }
                     _ => unreachable!(),
                 }
             }

@@ -147,9 +147,7 @@ impl Transport for ChannelTransport {
             }
         }
         for (from_store, region_id, to_peer_id, status) in snapshot_reports {
-            core.routers[&from_store]
-                .report_snapshot_status(region_id, to_peer_id, status)
-                .unwrap();
+            let _ = core.routers[&from_store].report_snapshot_status(region_id, to_peer_id, status);
         }
     }
 }

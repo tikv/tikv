@@ -189,9 +189,10 @@ impl Router {
     }
 
     pub fn broadcast_shutdown(&self) {
-        let mailboxes = self.mailboxes.lock().unwrap();
-        for mailbox in mailboxes.values() {
-            let _ = mailbox.force_send(PeerMsg::Quit);
+        self.store_box.close();
+        let mut mailboxes = self.mailboxes.lock().unwrap();
+        for (_, mailbox) in mailboxes.drain() {
+            mailbox.close();
         }
     }
 
@@ -205,9 +206,9 @@ impl Router {
         mbs.extend(mailboxes);
     }
 
-    pub fn unregister_mailbox(&self, region_id: u64) {
+    pub fn unregister_mailbox(&self, region_id: u64) -> Option<MailBox> {
         let mut mailboxes = self.mailboxes.lock().unwrap();
-        mailboxes.remove(&region_id);
+        mailboxes.remove(&region_id)
     }
 
     pub fn store_mailbox(&self) -> mpsc::LooseBoundedSender<StoreMsg> {

@@ -156,8 +156,6 @@ pub enum SignificantMsg {
 }
 
 pub enum PeerMsg {
-    Quit,
-
     // For notify.
     RaftMessage(RaftMessage),
 
@@ -216,7 +214,6 @@ pub enum PeerMsg {
 }
 
 pub enum StoreMsg {
-    Quit,
     // Redirect to store if region not found.
     RaftMessage(RaftMessage),
 
@@ -243,7 +240,6 @@ pub enum StoreMsg {
 impl fmt::Debug for PeerMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            PeerMsg::Quit => write!(fmt, "Quit"),
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             PeerMsg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             PeerMsg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
@@ -310,7 +306,6 @@ impl PeerMsg {
 impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            StoreMsg::Quit => write!(fmt, "Quit"),
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),

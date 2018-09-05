@@ -26,14 +26,14 @@ use crossbeam_channel;
 use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
 use std::sync::Arc;
 use std::time::Duration;
 
 struct State {
     sender_cnt: AtomicIsize,
-    receiver_cnt: AtomicIsize,
+    alive: AtomicBool,
     // Because we don't support sending messages asychrounously, so
     // only recv_task needs to be kept.
     recv_task: AtomicOption<Task>,
@@ -43,19 +43,14 @@ impl State {
     fn new() -> State {
         State {
             sender_cnt: AtomicIsize::new(1),
-            receiver_cnt: AtomicIsize::new(1),
+            alive: AtomicBool::new(true),
             recv_task: AtomicOption::new(),
         }
     }
 
     #[inline]
-    fn is_receiver_closed(&self) -> bool {
-        self.receiver_cnt.load(Ordering::Acquire) == 0
-    }
-
-    #[inline]
-    fn is_sender_closed(&self) -> bool {
-        self.sender_cnt.load(Ordering::Acquire) == 0
+    fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
     }
 }
 
@@ -78,9 +73,9 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
-        self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
-        if self.state.is_sender_closed() {
-            self.notify();
+        let res = self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
+        if res == 1 {
+            self.close();
         }
     }
 }
@@ -101,7 +96,7 @@ impl<T> Sender<T> {
 
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        if !self.state.is_receiver_closed() {
+        if self.state.is_alive() {
             self.sender.send(t);
             self.notify();
             return Ok(());
@@ -111,7 +106,7 @@ impl<T> Sender<T> {
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        if !self.state.is_receiver_closed() {
+        if self.state.is_alive() {
             crossbeam_channel::select! {
                 send(self.sender, t) => {},
                 default => return Err(TrySendError::Full(t)),
@@ -121,6 +116,12 @@ impl<T> Sender<T> {
         } else {
             Err(TrySendError::Disconnected(t))
         }
+    }
+
+    #[inline]
+    pub fn close(&self) {
+        self.state.alive.store(false, Ordering::Release);
+        self.notify()
     }
 }
 
@@ -138,7 +139,7 @@ impl<T> Receiver<T> {
         match self.receiver.try_recv() {
             Some(t) => Ok(t),
             None => {
-                if !self.state.is_sender_closed() {
+                if self.state.is_alive() {
                     return Err(TryRecvError::Empty);
                 }
                 self.receiver.try_recv().ok_or(TryRecvError::Disconnected)
@@ -161,7 +162,7 @@ impl<T> Receiver<T> {
 impl<T> Drop for Receiver<T> {
     #[inline]
     fn drop(&mut self) {
-        self.state.receiver_cnt.fetch_add(-1, Ordering::AcqRel);
+        self.state.alive.store(false, Ordering::Release);
     }
 }
 
@@ -241,6 +242,11 @@ impl<T> LooseBoundedSender<T> {
         } else {
             Err(TrySendError::Full(t))
         }
+    }
+
+    #[inline]
+    pub fn close(&self) {
+        self.sender.close();
     }
 }
 
