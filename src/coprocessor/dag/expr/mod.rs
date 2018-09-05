@@ -15,11 +15,13 @@ mod builtin_arithmetic;
 mod builtin_cast;
 mod builtin_compare;
 mod builtin_control;
+mod builtin_encryption;
 mod builtin_json;
 mod builtin_like;
 mod builtin_math;
 mod builtin_miscellaneous;
 mod builtin_op;
+mod builtin_other;
 mod builtin_string;
 mod builtin_time;
 mod column;
@@ -33,7 +35,9 @@ pub use coprocessor::codec::{Error, Result};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
+use rand::XorShiftRng;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::str;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use util::codec::number;
@@ -63,6 +67,24 @@ pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     tp: FieldType,
+    cus_rng: CusRng,
+}
+
+#[derive(Clone)]
+struct CusRng {
+    rng: RefCell<Option<XorShiftRng>>,
+}
+
+impl ::std::fmt::Debug for CusRng {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        write!(f, "()")
+    }
+}
+
+impl PartialEq for CusRng {
+    fn eq(&self, other: &CusRng) -> bool {
+        self == other
+    }
 }
 
 impl Expression {
@@ -267,6 +289,9 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             tp,
+                            cus_rng: CusRng {
+                                rng: RefCell::new(None),
+                            },
                         })
                     })
             }
