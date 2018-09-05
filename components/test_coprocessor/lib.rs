@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,11 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod test_conf_change;
-mod test_merge;
-mod test_pending_peers;
-mod test_snap;
-mod test_split_region;
-mod test_stale_peer;
-mod test_stale_read;
-mod test_storage;
+extern crate kvproto;
+extern crate tipb;
+
+extern crate futures;
+extern crate protobuf;
+
+extern crate test_storage;
+extern crate tikv;
+
+mod column;
+mod dag;
+mod fixture;
+mod store;
+mod table;
+mod util;
+
+pub use column::*;
+pub use dag::*;
+pub use fixture::*;
+pub use store::*;
+pub use table::*;
+pub use util::*;

@@ -105,20 +105,22 @@ impl<E: Engine> GCRunner<E> {
             ctx.get_isolation_level(),
         );
 
-        // If from.is_some(), it must not be the first scan of the region.
-        // So we must continue doing GC.
-        let skip_gc = from.is_none() && !reader.need_gc(safe_point, self.ratio_threshold);
+        let is_range_start = from.is_none();
+
+        // range start gc with from == None, and this is an optimization to
+        // skip gc before scanning all data.
+        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.ratio_threshold);
         let res = if skip_gc {
             KV_GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
         } else {
             reader
-                .scan_keys(from.clone(), limit)
+                .scan_keys(from, limit)
                 .map_err(Error::from)
                 .and_then(|(keys, next)| {
                     if keys.is_empty() {
                         assert!(next.is_none());
-                        if from.is_none() {
+                        if is_range_start {
                             KV_GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
@@ -140,7 +142,6 @@ impl<E: Engine> GCRunner<E> {
         let snapshot = self.get_snapshot(ctx)?;
         let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache()).unwrap();
         for k in keys {
-            // TODO: Duplicated code in scheduler.rs
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
