@@ -194,6 +194,8 @@ impl ScalarFunc {
             | ScalarFuncSig::FloorIntToDec
             | ScalarFuncSig::FloorDecToDec
             | ScalarFuncSig::FloorDecToInt
+            | ScalarFuncSig::Rand
+            | ScalarFuncSig::RandWithSeed
             | ScalarFuncSig::CRC32
             | ScalarFuncSig::Sign
             | ScalarFuncSig::Sqrt
@@ -393,9 +395,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::Radians
-            | ScalarFuncSig::Rand
             | ScalarFuncSig::RandomBytes
-            | ScalarFuncSig::RandWithSeed
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
@@ -804,6 +804,8 @@ dispatch_call! {
         CeilReal => ceil_real,
         FloorReal => floor_real,
         PI => pi,
+        Rand => rand,
+        RandWithSeed => rand_with_seed,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -1128,6 +1130,8 @@ mod test {
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
+                    ScalarFuncSig::Rand,
+                    ScalarFuncSig::RandWithSeed,
                     ScalarFuncSig::CRC32,
                     ScalarFuncSig::Sign,
                     ScalarFuncSig::Sqrt,
@@ -1366,9 +1370,7 @@ mod test {
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::Radians,
-            ScalarFuncSig::Rand,
             ScalarFuncSig::RandomBytes,
-            ScalarFuncSig::RandWithSeed,
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
