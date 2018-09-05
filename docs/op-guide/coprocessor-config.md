@@ -1,10 +1,10 @@
 ---
 title: TiKV Coprocessor Configuration 
-summary: Learn how to configure TiKV Coprocessor.
+summary: Learn how to configure Coprocessor in TiKV.
 category: operations
 ---
 
-# Configure TiKV Coprocessor
+# TiKV Coprocessor Configuration
 
 Coprocessor is the component that handles most of the read requests from TiDB. Unlike Storage, it is more high-leveled that it not only fetches KV data but also does computing like filter or aggregation. TiKV is used as a distribution computing engine and Coprocessor is also used to reduce data serialization and traffic. This document describes how to configure TiKV Coprocessor.
 
