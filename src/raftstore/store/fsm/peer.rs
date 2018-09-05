@@ -1264,6 +1264,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.size_diff_hint = self.cfg.region_split_check_diff.0;
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
+        } else {
+            // when follower becomes leader, it will invoke split check to update size and keys.
+            peer.approximate_size = None;
+            peer.approximate_keys = None;
         }
     }
 

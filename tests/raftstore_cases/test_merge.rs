@@ -438,7 +438,6 @@ fn test_node_merge_brain_split() {
 fn test_merge_approximate_size_and_keys() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-
     cluster.run();
 
     let mut range = 1..;
@@ -449,41 +448,59 @@ fn test_merge_approximate_size_and_keys() {
     let region = pd_client.get_region(b"").unwrap();
 
     cluster.must_split(&region, &middle_key);
+    // make sure split check is invoked so size and keys are updated.
     thread::sleep(Duration::from_secs(1));
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
-
     assert_ne!(left, right);
+
+    // make sure all peer's approximate size is not None.
+    cluster.must_transfer_leader(right.get_id(), right.get_peers()[0].clone());
+    thread::sleep(Duration::from_secs(1));
+    cluster.must_transfer_leader(right.get_id(), right.get_peers()[1].clone());
+    thread::sleep(Duration::from_secs(1));
+    cluster.must_transfer_leader(right.get_id(), right.get_peers()[2].clone());
+    thread::sleep(Duration::from_secs(1));
+
     let size = pd_client
-        .get_region_approximate_size(left.get_id())
-        .unwrap()
-        + pd_client
-            .get_region_approximate_size(right.get_id())
-            .unwrap();
+        .get_region_approximate_size(right.get_id())
+        .unwrap();
     assert_ne!(size, 0);
     let keys = pd_client
-        .get_region_approximate_keys(left.get_id())
-        .unwrap()
-        + pd_client
-            .get_region_approximate_keys(right.get_id())
-            .unwrap();
+        .get_region_approximate_keys(right.get_id())
+        .unwrap();
     assert_ne!(keys, 0);
 
     pd_client.must_merge(left.get_id(), right.get_id());
-    thread::sleep(Duration::from_secs(1));
+    // make sure split check is invoked so size and keys are updated.
+    thread::sleep(Duration::from_secs(2));
 
     let region = pd_client.get_region(b"").unwrap();
+    let new_size = pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap();
+    let new_keys = pd_client
+        .get_region_approximate_keys(region.get_id())
+        .unwrap();
+    // size and keys should be updated.
+    assert_ne!(new_size, size);
+    assert_ne!(new_keys, keys);
+
+    // after merge and then transfer leader, if not update new leader's approximate size, it maybe be stale.
+    cluster.must_transfer_leader(region.get_id(), region.get_peers()[0].clone());
+    // make sure split check is invoked
+    thread::sleep(Duration::from_secs(1));
     assert_eq!(
         pd_client
             .get_region_approximate_size(region.get_id())
             .unwrap(),
-        size
+        new_size
     );
     assert_eq!(
         pd_client
             .get_region_approximate_keys(region.get_id())
             .unwrap(),
-        keys
+        new_keys
     );
 }
