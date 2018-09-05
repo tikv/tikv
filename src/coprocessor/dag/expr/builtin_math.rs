@@ -160,6 +160,11 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn round_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        self.children[0].eval_int(ctx, row)
+    }
+
+    #[inline]
     pub fn sign(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let f = try_opt!(self.children[0].eval_real(ctx, row));
         if f > 0f64 {
@@ -534,6 +539,32 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::I64(exp);
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round() {
+        let tests = vec![
+            (ScalarFuncSig::RoundInt, Datum::I64(1), Datum::I64(1)),
+            (
+                ScalarFuncSig::RoundInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::RoundInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MIN),
+            ),
+        ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let expr = scalar_func_expr(sig, &[arg.clone()]);
+            let op = Expression::build(&mut ctx, expr).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
