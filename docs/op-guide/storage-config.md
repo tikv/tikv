@@ -14,7 +14,7 @@ There are two sections related to Storage: `[readpool.storage]` and `[storage]`.
 
 ### `[readpool.storage]`
 
-This configuration section mainly affects storage read operations. Most read requests from TiDB are not controlled by this configuration section. For configuring the read requests from TiDB, see [Coprocessor configurations](tikv-coprocessor-config.md).
+This configuration section mainly affects storage read operations. Most read requests from TiDB are not controlled by this configuration section. For configuring the read requests from TiDB, see [Coprocessor configurations](coprocessor-config.md).
 
 There are 3 thread pools for handling read operations, namely read-high, read-normal and read-low, which process high-priority, normal-priority and low-priority read requests respectively. The priority can be specified by corresponding fields in the gRPC request.
 

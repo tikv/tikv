@@ -823,6 +823,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
         self.pending_cross_snap.remove(&region_id);
+        // Destroy read delegates.
+        self.local_reader
+            .schedule(ReadTask::destroy(region_id))
+            .unwrap();
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
