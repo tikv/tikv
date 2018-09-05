@@ -30,7 +30,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::ConfChangeType;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use pd::{PdClient, PdTask};
@@ -292,8 +292,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg =
-            msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote;
+        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -973,8 +972,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Err(e) = report_split_pd(&regions, &self.pd_worker) {
                 error!("{} failed to notify pd: {}", self.tag, e);
             }
-        } else {
-            fail_point!("raftstore_follower_slow_split");
         }
 
         let last_key = enc_end_key(regions.last().unwrap());

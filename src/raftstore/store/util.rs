@@ -121,6 +121,12 @@ pub fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
     }
 }
 
+#[inline]
+pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
+    let msg_type = msg.get_msg_type();
+    msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote
+}
+
 /// `msg_can_create_peer` tells which messages can create new peers.
 // There could be two cases:
 // 1. Target peer already exists but has not established communication with leader yet
@@ -130,6 +136,7 @@ pub fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
 // Heartbeat message for the store of that peer to check whether to create a new peer
 // when receiving these messages, or just to wait for a pending region split to perform
 // later.
+#[inline]
 pub fn msg_can_create_peer(msg: &eraftpb::Message) -> bool {
     let msg_type = msg.get_msg_type();
     msg_type == MessageType::MsgRequestVote
@@ -1148,6 +1155,11 @@ mod tests {
         let tbl = vec![
             (
                 MessageType::MsgRequestVote,
+                peer_storage::RAFT_INIT_LOG_TERM + 1,
+                true,
+            ),
+            (
+                MessageType::MsgRequestPreVote,
                 peer_storage::RAFT_INIT_LOG_TERM + 1,
                 true,
             ),

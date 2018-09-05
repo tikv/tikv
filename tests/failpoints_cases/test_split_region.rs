@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use fail;
 use raft::eraftpb::MessageType;
-use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 
 use test_raftstore::*;
@@ -23,15 +22,15 @@ use test_raftstore::*;
 #[test]
 fn test_slow_split() {
     let _guard = ::setup();
-    let mut cluster = new_node_cluster(0, 2);
+    let mut cluster = new_node_cluster(0, 3);
     cluster.run();
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-
     let pd_client = Arc::clone(&cluster.pd_client);
-    let region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+    let region = cluster.get_region(b"");
+
+    // Only need peer 1 and 3.
+    pd_client.must_remove_peer(1, new_peer(2, 2));
+    cluster.stop_node(2);
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // Only allow 1 MsgRequestPreVote per follower.
     let filter = Box::new(
@@ -42,18 +41,31 @@ fn test_slow_split() {
     );
     cluster.sim.wl().add_send_filter(1, filter);
 
-    let (tx, rx) = mpsc::channel();
-    let notifier = Box::new(MessageTypeNotifier::new(
-        MessageType::MsgRequestPreVoteResponse,
-        tx.clone(),
+    // Ensure pre-vote message is really sended.
+    let (tx1, rx1) = mpsc::channel();
+    let prevote_notifier = Box::new(MessageTypeNotifier::new(
+        MessageType::MsgRequestPreVote,
+        tx1.clone(),
         Arc::from(AtomicBool::new(true)),
     ));
-    cluster.sim.wl().add_send_filter(2, notifier);
+    cluster.sim.wl().add_send_filter(1, prevote_notifier);
 
-    fail::cfg("raftstore_follower_slow_split", "pause").unwrap();
+    // Ensure pre-vote response is really sended.
+    let (tx2, rx2) = mpsc::channel();
+    let prevote_resp_notifier = Box::new(MessageTypeNotifier::new(
+        MessageType::MsgRequestPreVoteResponse,
+        tx2.clone(),
+        Arc::from(AtomicBool::new(true)),
+    ));
+    cluster.sim.wl().add_send_filter(3, prevote_resp_notifier);
+
+    // After split, pre-vote message should be sent to peer 2, but we can't receive
+    // pre-vote response because it's buffered in pending_votes.
+    fail::cfg("apply_before_split_1_3", "pause").unwrap();
     cluster.must_split(&region, b"k2");
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    assert!(rx1.recv_timeout(Duration::from_millis(100)).is_ok());
+    assert!(rx2.recv_timeout(Duration::from_millis(200)).is_err());
 
-    fail::cfg("raftstore_follower_slow_split", "off").unwrap();
-    assert!(rx.recv_timeout(Duration::from_secs(2)).is_ok());
+    fail::cfg("apply_before_split_1_3", "off").unwrap();
+    assert!(rx2.recv_timeout(Duration::from_secs(2)).is_ok());
 }
