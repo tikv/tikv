@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -36,11 +36,8 @@ fn test_follower_slow_split() {
     cluster.stop_node(2);
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // Records start_key and end_key in pre-vote messages.
-    let start_key = Arc::new(Mutex::new(Vec::new()));
-    let end_key = Arc::new(Mutex::new(Vec::new()));
-    let prevote_catched = Arc::new(AtomicBool::new(false));
-
+    // Use a channel to retrieve start_key and end_key in pre-vote messages.
+    let (range_tx, range_rx) = mpsc::channel();
     let prevote_filter = PrevoteRangeFilter {
         // Only send 1 pre-vote message to peer 3 so if peer 3 drops it,
         // it needs to start a new election.
@@ -48,9 +45,7 @@ fn test_follower_slow_split() {
             .msg_type(MessageType::MsgRequestPreVote)
             .direction(Direction::Send)
             .allow(1),
-        start_key: Arc::clone(&start_key),
-        end_key: Arc::clone(&end_key),
-        catched: Arc::clone(&prevote_catched),
+        tx: Mutex::new(range_tx),
     };
     cluster.sim.wl().add_send_filter(1, box prevote_filter);
 
@@ -66,20 +61,9 @@ fn test_follower_slow_split() {
     // After split, pre-vote message should be sent to peer 2.
     fail::cfg("apply_before_split_1_3", "pause").unwrap();
     cluster.must_split(&region, b"k2");
-    for _ in 0..100 {
-        sleep_ms(10);
-        if prevote_catched.load(Ordering::SeqCst) {
-            // We can't get the response because it's buffered in pending_votes.
-            assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
-            // The start key and end key of vote message must be set by peer 1.
-            assert_eq!(*start_key.lock().unwrap(), b"");
-            assert_eq!(*end_key.lock().unwrap(), b"k2");
-            break;
-        }
-    }
-    if !prevote_catched.load(Ordering::SeqCst) {
-        panic!("prevote should be catched after split");
-    }
+    let range = range_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+    assert_eq!(range.0, b"");
+    assert_eq!(range.1, b"k2");
 
     // After the follower split success, it will response to the pending vote.
     fail::cfg("apply_before_split_1_3", "off").unwrap();
@@ -89,18 +73,17 @@ fn test_follower_slow_split() {
 // Filter prevote message and record the range.
 struct PrevoteRangeFilter {
     filter: RegionPacketFilter,
-    start_key: Arc<Mutex<Vec<u8>>>,
-    end_key: Arc<Mutex<Vec<u8>>>,
-    catched: Arc<AtomicBool>,
+    tx: Mutex<mpsc::Sender<(Vec<u8>, Vec<u8>)>>,
 }
 
 impl Filter<RaftMessage> for PrevoteRangeFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         self.filter.before(msgs)?;
         if let Some(msg) = msgs.iter().filter(|m| is_vote_msg(m.get_message())).last() {
-            *self.start_key.lock().unwrap() = msg.get_start_key().to_owned();
-            *self.end_key.lock().unwrap() = msg.get_end_key().to_owned();
-            self.catched.store(true, Ordering::SeqCst);
+            let start_key = msg.get_start_key().to_owned();
+            let end_key = msg.get_end_key().to_owned();
+            let tx = self.tx.lock().unwrap();
+            let _ = tx.send((start_key, end_key));
         }
         Ok(())
     }

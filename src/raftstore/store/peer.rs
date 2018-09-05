@@ -53,7 +53,7 @@ use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, 
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, msg_can_create_peer, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::{DestroyPeerJob, Store};
 
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -1886,7 +1886,7 @@ impl Peer {
         // Heartbeat message for the store of that peer to check whether to create a new peer
         // when receiving these messages, or just to wait for a pending region split to perform
         // later.
-        if self.get_store().is_initialized() && msg_can_create_peer(&msg) {
+        if self.get_store().is_initialized() && is_initial_msg(&msg) {
             let region = self.region();
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());

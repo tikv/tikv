@@ -1006,7 +1006,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Then, the region splits and the first vote message comes to the new node
                 // before the old snapshot, which will create an uninitialized peer on the
                 // store. After that, the old snapshot comes, followed with the last split
-                // proposal. After it's applied, the uninitialized peer will be meet.
+                // proposal. After it's applied, the uninitialized peer will be met.
                 // We can remove this uninitialized peer directly.
                 if peer.get_store().is_initialized() {
                     panic!(

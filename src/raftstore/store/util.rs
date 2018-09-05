@@ -127,7 +127,7 @@ pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
     msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote
 }
 
-/// `msg_can_create_peer` tells which messages can create new peers.
+/// `is_initial_msg` checks whether the `msg` can be used to initialize a new peer or not.
 // There could be two cases:
 // 1. Target peer already exists but has not established communication with leader yet
 // 2. Target peer is added newly due to member change or region split, but it's not
@@ -137,7 +137,7 @@ pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
 // when receiving these messages, or just to wait for a pending region split to perform
 // later.
 #[inline]
-pub fn msg_can_create_peer(msg: &eraftpb::Message) -> bool {
+pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
     let msg_type = msg.get_msg_type();
     msg_type == MessageType::MsgRequestVote
         || msg_type == MessageType::MsgRequestPreVote
@@ -1169,6 +1169,11 @@ mod tests {
                 false,
             ),
             (
+                MessageType::MsgRequestPreVote,
+                peer_storage::RAFT_INIT_LOG_TERM,
+                false,
+            ),
+            (
                 MessageType::MsgHup,
                 peer_storage::RAFT_INIT_LOG_TERM + 1,
                 false,
@@ -1184,12 +1189,12 @@ mod tests {
     }
 
     #[test]
-    fn test_msg_can_create_peer() {
+    fn test_is_initial_msg() {
         let tbl = vec![
             (MessageType::MsgRequestVote, INVALID_INDEX, true),
             (MessageType::MsgRequestPreVote, INVALID_INDEX, true),
-            (MessageType::MsgHeartbeat, INVALID_INDEX, false),
-            (MessageType::MsgHeartbeat, 100, true),
+            (MessageType::MsgHeartbeat, INVALID_INDEX, true),
+            (MessageType::MsgHeartbeat, 100, false),
             (MessageType::MsgAppend, 100, false),
         ];
 
@@ -1197,7 +1202,7 @@ mod tests {
             let mut msg = Message::new();
             msg.set_msg_type(msg_type);
             msg.set_commit(commit);
-            assert_eq!(msg_can_create_peer(&msg), can_create);
+            assert_eq!(is_initial_msg(&msg), can_create);
         }
     }
 

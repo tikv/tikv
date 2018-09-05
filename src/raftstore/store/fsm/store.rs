@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::util::{msg_can_create_peer, KeysInfoFormatter};
+use raftstore::store::util::{is_initial_msg, KeysInfoFormatter};
 use raftstore::Result;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
@@ -550,7 +550,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(true);
         }
 
-        if !msg_can_create_peer(msg.get_message()) {
+        if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
             debug!(
                 "target peer {:?} doesn't exist, stale message {:?}.",
