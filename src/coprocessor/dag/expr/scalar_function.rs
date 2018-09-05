@@ -219,6 +219,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RTrim
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::BitLength
+            | ScalarFuncSig::RoundInt
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
@@ -404,7 +405,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RouldReal
             | ScalarFuncSig::RoundDec
-            | ScalarFuncSig::RoundInt
             | ScalarFuncSig::RoundWithFracDec
             | ScalarFuncSig::RoundWithFracInt
             | ScalarFuncSig::RoundWithFracReal
@@ -758,6 +758,8 @@ dispatch_call! {
         FloorDecToInt => floor_dec_to_int,
         CRC32 => crc32,
         Sign => sign,
+
+        RoundInt => round_int,
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -1379,7 +1381,6 @@ mod test {
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RouldReal,
             ScalarFuncSig::RoundDec,
-            ScalarFuncSig::RoundInt,
             ScalarFuncSig::RoundWithFracDec,
             ScalarFuncSig::RoundWithFracInt,
             ScalarFuncSig::RoundWithFracReal,
