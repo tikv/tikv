@@ -10,7 +10,7 @@ This guide describes how to install and deploy TiKV using Ansible. Ansible is an
 
 [TiDB-Ansible](https://github.com/pingcap/tidb-ansible) is a TiDB cluster deployment tool developed by PingCAP, based on Ansible playbook. TiDB-Ansible enables you to quickly deploy a new TiKV cluster which includes PD, TiKV, and the cluster monitoring modules.
 
-> **Note:** For the production environment, use TiDB-Ansible to deploy your TiKV cluster. If you only want to try TiKV out and explore the features, see [Install and Deploy TiKV using Docker Compose](deploy-tikv-using-docker-compose.md) on a single machine.
+> **Warning:** For the production environment, use TiDB-Ansible to deploy your TiKV cluster. If you only want to try TiKV out and explore the features, see [Install and Deploy TiKV using Docker Compose](deploy-tikv-using-docker-compose.md) on a single machine.
 
 ## Prepare
 
