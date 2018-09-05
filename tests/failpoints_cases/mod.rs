@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod test_conf_change;
 mod test_merge;
 mod test_pending_peers;
 mod test_snap;
+mod test_stale_peer;
 mod test_stale_read;
 mod test_storage;

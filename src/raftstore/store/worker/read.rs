@@ -26,8 +26,8 @@ use time::Timespec;
 
 use raftstore::errors::RAFTSTORE_IS_BUSY;
 use raftstore::store::msg::Callback;
-use raftstore::store::store::Store;
 use raftstore::store::util::{self, LeaseState, RemoteLease};
+use raftstore::store::Store;
 use raftstore::store::{
     cmd_resp, Msg as StoreMsg, Peer, ReadExecutor, ReadResponse, RequestInspector, RequestPolicy,
 };
@@ -319,7 +319,10 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         // Check region id.
         let region_id = req.get_header().get_region_id();
         let delegate = match self.delegates.get(&region_id) {
-            Some(delegate) => delegate,
+            Some(delegate) => {
+                fail_point!("localreader_on_find_delegate");
+                delegate
+            }
             None => {
                 self.metrics.borrow_mut().rejected_by_no_region += 1;
                 return Ok(None);
