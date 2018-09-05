@@ -1001,6 +1001,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 "[region {}] insert new region {:?}",
                 new_region_id, new_region
             );
+            if let Some(peer) = self.region_peers.get(&new_region_id) {
+                // Suppose a new node is added by conf change and the snapshot comes slowly.
+                // Then, the region splits and the first vote message comes to the new node
+                // before the old snapshot, which will create an uninitialized peer on the
+                // store. After that, the old snapshot comes, followed with the last split
+                // proposal. After it's applied, the uninitialized peer will be meet.
+                // We can remove this uninitialized peer directly.
+                if peer.get_store().is_initialized() {
+                    panic!(
+                        "[region {}] duplicated region for split region",
+                        new_region_id
+                    );
+                }
+            }
 
             let mut new_peer = match Peer::create(self, &new_region) {
                 Ok(new_peer) => new_peer,
@@ -1030,21 +1044,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             new_peer.register_delegates();
-
-            if let Some(exist_peer) = self.region_peers.insert(new_region_id, new_peer) {
-                // Suppose a new node is added by conf change and the snapshot comes slowly.
-                // Then, the region splits and the first vote message comes to the new node
-                // before the old snapshot, which will create an uninitialized peer on the
-                // store. After that, the old snapshot comes, followed with the last split
-                // proposal. After it's applied, the uninitialized peer will be meet.
-                // We can remove this uninitialized peer directly.
-                if exist_peer.get_store().is_initialized() {
-                    panic!(
-                        "[region {}] duplicated region for split region",
-                        new_region_id
-                    );
-                }
-            }
+            self.region_peers.insert(new_region_id, new_peer);
 
             if !campaigned {
                 if let Some(msg) = self
