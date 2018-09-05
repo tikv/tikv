@@ -31,7 +31,7 @@ harness = false
 name = "benches"
 
 [dependencies]
-log = { version = "0.3", features = ["release_max_level_info"] }
+log = { version = "0.3", features = ["release_max_level_debug"] }
 slog = "2.3"
 slog-async = "2.3"
 slog-scope = "4.0"
