@@ -341,7 +341,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
                 raft_metrics.message_dropped.region_nonexistent += 1;
-                if util::is_first_vote_msg(msg) {
+                if util::is_first_vote_msg(msg.get_message()) {
                     self.pending_votes.push(msg.to_owned());
                     info!(
                         "[region {}] doesn't exist yet, wait for it to be split",

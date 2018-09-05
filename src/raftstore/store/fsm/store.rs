@@ -29,13 +29,11 @@ use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use raft::eraftpb::MessageType;
-use raft::INVALID_INDEX;
 
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::util::KeysInfoFormatter;
+use raftstore::store::util::{msg_can_create_peer, KeysInfoFormatter};
 use raftstore::Result;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
@@ -552,12 +550,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(true);
         }
 
-        let message = msg.get_message();
-        let msg_type = message.get_msg_type();
-        if msg_type != MessageType::MsgRequestVote
-            && msg_type != MessageType::MsgRequestPreVote
-            && (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX)
-        {
+        if !msg_can_create_peer(msg.get_message()) {
+            let msg_type = msg.get_message().get_msg_type();
             debug!(
                 "target peer {:?} doesn't exist, stale message {:?}.",
                 target, msg_type
@@ -575,7 +569,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
-                if util::is_first_vote_msg(msg) {
+                if util::is_first_vote_msg(msg.get_message()) {
                     self.pending_votes.push(msg.to_owned());
                 }
                 self.raft_metrics.message_dropped.region_overlap += 1;
