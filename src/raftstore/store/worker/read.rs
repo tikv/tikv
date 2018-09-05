@@ -309,7 +309,10 @@ impl LocalReader {
         // Check region id.
         let region_id = req.get_header().get_region_id();
         let delegate = match self.delegates.get(&region_id) {
-            Some(delegate) => delegate,
+            Some(delegate) => {
+                fail_point!("localreader_on_find_delegate");
+                delegate
+            }
             None => {
                 self.metrics.borrow_mut().rejected_by_no_region += 1;
                 return Ok(None);

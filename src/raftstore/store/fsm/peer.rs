@@ -1016,6 +1016,11 @@ impl<T: Transport> Peer<T> {
         assert!(!self.peer.is_applying_snapshot());
         let mut meta = self.store_meta.lock().unwrap();
         meta.pending_cross_snap.remove(&region_id);
+        // Destroy read delegates.
+        let _ = self
+            .peer
+            .read_scheduler
+            .schedule(ReadTask::destroy(region_id));
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_scheduler.schedule(task) {
             error!("{} failed to notify pd: {}", self.peer.tag, e);

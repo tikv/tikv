@@ -736,9 +736,9 @@ impl<T: Simulator> Cluster<T> {
             .take_region_epoch()
     }
 
-    pub fn region_detail(&mut self, region_id: u64, peer_id: u64) -> RegionDetailResponse {
+    pub fn region_detail(&mut self, region_id: u64, store_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
-        let peer = new_peer(peer_id, peer_id);
+        let peer = new_peer(store_id, 0);
         let req = new_status_request(region_id, peer, status_cmd);
         let resp = self.call_command(req, Duration::from_secs(5));
         assert!(resp.is_ok(), "{:?}", resp);
@@ -902,6 +902,30 @@ impl<T: Simulator> Cluster<T> {
                 .unwrap();
 
             if !is_error_response(&resp) {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!(
+                    "region {} doesn't exist on store {} after {} tries",
+                    region_id, store_id, try_cnt
+                );
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
+    /// Make sure region not exists on that store.
+    pub fn must_region_not_exist(&mut self, region_id: u64, store_id: u64) {
+        let mut try_cnt = 0;
+        loop {
+            let status_cmd = new_region_detail_cmd();
+            let peer = new_peer(store_id, 0);
+            let req = new_status_request(region_id, peer, status_cmd);
+            let resp = self.call_command(req, Duration::from_secs(5)).unwrap();
+            if resp.get_header().has_error() && resp.get_header().get_error().has_region_not_found()
+            {
                 return;
             }
 
