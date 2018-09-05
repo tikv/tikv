@@ -57,6 +57,8 @@ use raftstore::store::worker::{
 };
 use raftstore::store::{util, Msg, SignificantMsg, SnapKey, SnapshotDeleter, Store, Tick};
 
+const ENTRY_CACHE_LIFE_TIME_SECS: u64 = 30;
+
 pub struct DestroyPeerJob {
     pub initialized: bool,
     pub async_remove: bool,
@@ -1608,7 +1610,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
         // do not clean up the cache, it may keep growing.
-        let drop_cache_duration = self.cfg.raft_heartbeat_interval() + Duration::from_secs(30);
+        let drop_cache_duration =
+            self.cfg.raft_heartbeat_interval() + Duration::from_secs(ENTRY_CACHE_LIFE_TIME_SECS);
         let cache_alive_limit = Instant::now() - drop_cache_duration;
 
         let mut total_gc_logs = 0;
