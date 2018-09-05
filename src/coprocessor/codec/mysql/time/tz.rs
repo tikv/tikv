@@ -16,6 +16,11 @@ use std::str::FromStr;
 
 use chrono::*;
 use chrono_tz;
+use datetime;
+
+lazy_static! {
+    pub static ref LOCAL_TIME_ZONE_NAME: Option<String> = datetime::sys_timezone();
+}
 
 /// A time zone represented by either offset (i.e. +8) or name (i.e. Asia/Shanghai). In addition,
 /// local time zone is also valid.
@@ -39,13 +44,18 @@ impl Tz {
         FixedOffset::east_opt(secs as i32).map(Tz::Offset)
     }
 
+    /// Constructs a time zone from the name.
+    pub fn from_tz_name(name: &str) -> Option<Self> {
+        chrono_tz::Tz::from_str(name).ok().map(Tz::Name)
+    }
+
     /// Constructs a time zone from the name. If the specified time zone name is `system`,
     /// a local time zone will be constructed.
-    pub fn from_tz_name(name: &str) -> Option<Self> {
+    pub fn from_tz_name_or_local(name: &str) -> Option<Self> {
         if name.to_lowercase() == "system" {
-            Some(Tz::local())
+            Some(Self::local())
         } else {
-            chrono_tz::Tz::from_str(name).ok().map(Tz::Name)
+            Self::from_tz_name(name)
         }
     }
 
@@ -56,6 +66,17 @@ impl Tz {
 
     /// Constructs a local time zone.
     pub fn local() -> Self {
+        // Attempt to resolve a time zone name first, because somehow `chrono::Local` is slow.
+        if let Some(local_time_zone_name) = LOCAL_TIME_ZONE_NAME.as_ref() {
+            if let Some(tz) = Self::from_tz_name(local_time_zone_name) {
+                return tz;
+            }
+        }
+        // Let's print it each time, so that users can be warned!
+        warn!(
+            "Failed to detect local time zone from `/etc/localtime`. \
+             Performance may be impacted."
+        );
         Tz::Local(Local)
     }
 }

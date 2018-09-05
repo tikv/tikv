@@ -111,6 +111,7 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
+extern crate datetime;
 
 #[macro_use]
 pub mod util;
