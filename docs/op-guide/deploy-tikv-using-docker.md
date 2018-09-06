@@ -36,7 +36,7 @@ If you want to test TiKV with a limited number of nodes, you can also use one PD
 Start Docker and pull the latest images of TiKV and PD from [Docker Hub](https://hub.docker.com) using the following command:
 
 ```bash
-docker pull tikv/tikv:latest
+docker pull pingcap/tikv:latest
 docker pull pingcap/pd:latest
 ```
 
@@ -109,7 +109,7 @@ Log in to the three TiKV machines and start TiKV respectively:
     -p 20160:20160 \
     -v /etc/localtime:/etc/localtime:ro \
     -v /data:/data \
-    tikv/tikv:latest \
+    pingcap/tikv:latest \
     --addr="0.0.0.0:20160" \
     --advertise-addr="192.168.1.104:20160" \
     --data-dir="/data/tikv1" \
@@ -123,7 +123,7 @@ Log in to the three TiKV machines and start TiKV respectively:
     -p 20160:20160 \
     -v /etc/localtime:/etc/localtime:ro \
     -v /data:/data \
-    tikv/tikv:latest \
+    pingcap/tikv:latest \
     --addr="0.0.0.0:20160" \
     --advertise-addr="192.168.1.105:20160" \
     --data-dir="/data/tikv2" \
@@ -137,7 +137,7 @@ Log in to the three TiKV machines and start TiKV respectively:
     -p 20160:20160 \
     -v /etc/localtime:/etc/localtime:ro \
     -v /data:/data \
-    tikv/tikv:latest \
+    pingcap/tikv:latest \
     --addr="0.0.0.0:20160" \
     --advertise-addr="192.168.1.106:20160" \
     --data-dir="/data/tikv3" \
