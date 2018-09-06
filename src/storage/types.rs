@@ -190,7 +190,6 @@ impl Key {
     //
     // TODO: If the last 8 byte is memory aligned, it would be better.
     #[inline]
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
         let user_key_len = user_key.len();
         if ts_encoded_key.len() != user_key_len + number::U64_SIZE {
