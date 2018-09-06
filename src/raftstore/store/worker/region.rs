@@ -454,7 +454,11 @@ impl SnapContext {
                     use_delete_files,
                 );
                 cleaned_range_keys.push(start_key);
-                if now.elapsed() >= CLEANUP_MAX_DURATION {
+                let elapsed = now.elapsed();
+                if elapsed >= CLEANUP_MAX_DURATION {
+                    let len = cleaned_range_keys.len();
+                    let elapsed = elapsed.as_millis() as f64 / 1000f64;
+                    info!("clean {} timeout ranges in {}s, now backoff", len, elapsed);
                     break;
                 }
             }
