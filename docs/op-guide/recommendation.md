@@ -8,7 +8,7 @@ category: operations
 
 As an open source distributed Key-Value database with high performance, TiKV can be deployed in the Intel architecture server and major virtualization environments and runs well. TiKV supports most of the major hardware networks and Linux operating systems.
 
-TiKV must work together with Placement Driver (PD). PD is the cluster manager of TiKV, which periodically checks replication constraints to balance load and data automatically.
+TiKV must work together with [Placement Driver](https://github.com/pingcap/pd/) (PD). PD is the cluster manager of TiKV, which periodically checks replication constraints to balance load and data automatically.
 
 ## Linux OS version requirements
 
