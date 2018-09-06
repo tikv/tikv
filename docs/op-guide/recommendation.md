@@ -35,7 +35,10 @@ You can deploy and run TiKV on the 64-bit generic hardware server platform in th
 | TiKV    | 8 core+   | 32 GB+  | SAS, 200 GB+ | Gigabit network card | 3       |
 |         |         |         |              | Total Server Number |  4      |
 
-> **Note**: For performance-related test, do not use low-performance storage and network hardware configuration, in order to guarantee the correctness of the test result.
+> **Note**: 
+> 
+> - Do not deploy PD and TiKV on the same server.
+> - For performance-related test, do not use low-performance storage and network hardware configuration, in order to guarantee the correctness of the test result.
 
 ### Production environment
 
@@ -44,7 +47,7 @@ You can deploy and run TiKV on the 64-bit generic hardware server platform in th
 | PD | 4 core+ | 8 GB+ | SSD | 10 Gigabit network card (2 preferred) | 3 |
 | TiKV | 16 core+ | 32 GB+ | SSD | 10 Gigabit network card (2 preferred) | 3 |
 | Monitor | 8 core+ | 16 GB+ | SAS | Gigabit network card | 1 |
-|     |     |     |      |  Total Server Number   |    9   |
+|     |     |     |      |  Total Server Number   |    7   |
 
 > **Note**:
 > 
