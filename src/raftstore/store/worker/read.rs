@@ -324,7 +324,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             Some(delegate) => delegate,
             None => {
                 self.metrics.borrow_mut().rejected_by_no_region += 1;
-                debug!("rejectd by no region {}", region_id);
+                debug!("rejected by no region {}", region_id);
                 return Ok(None);
             }
         };
@@ -349,7 +349,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
             self.metrics.borrow_mut().rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("{} rejectd by stale epoch", delegate.tag);
+            debug!("{} rejected by stale epoch", delegate.tag);
             return Ok(None);
         }
 
