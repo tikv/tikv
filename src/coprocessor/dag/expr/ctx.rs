@@ -147,7 +147,7 @@ impl EvalConfig {
     }
 
     pub fn set_time_zone_by_name(mut self, tz_name: &str) -> Result<Self> {
-        match Tz::from_tz_name(tz_name) {
+        match Tz::from_tz_name_or_local(tz_name) {
             Some(tz) => {
                 self.tz = tz;
                 Ok(self)

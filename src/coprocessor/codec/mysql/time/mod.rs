@@ -760,7 +760,7 @@ mod test {
             ("Universal", 0),
         ];
         for (name, offset) in tz_table {
-            let tz = Tz::from_tz_name(name).unwrap();
+            let tz = Tz::from_tz_name_or_local(name).unwrap();
             f(tz, offset)
         }
     }
@@ -868,7 +868,7 @@ mod test {
         ];
 
         for (tz_name, time_str, utc_timestamp) in ok_tables {
-            let tz = Tz::from_tz_name(tz_name).unwrap();
+            let tz = Tz::from_tz_name_or_local(tz_name).unwrap();
             let t = Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).unwrap();
             assert_eq!(t.time.timestamp(), utc_timestamp);
         }
@@ -886,7 +886,7 @@ mod test {
         ];
 
         for (tz_name, time_str) in fail_tables {
-            let tz = Tz::from_tz_name(tz_name).unwrap();
+            let tz = Tz::from_tz_name_or_local(tz_name).unwrap();
             assert!(Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).is_err());
         }
     }
@@ -900,20 +900,20 @@ mod test {
             (1988, 04, 10, 01, 00, 00),
             (1988, 09, 11, 00, 00, 00),
             (1988, 09, 11, 00, 00, 01),
-            (1988, 09, 10, 23, 59, 59),
-            (1988, 09, 10, 23, 00, 00),
+            // (1988, 09, 10, 23, 59, 59), // ambiguous
+            // (1988, 09, 10, 23, 00, 00), // ambiguous
             (1988, 09, 10, 22, 59, 59),
             (2015, 01, 02, 23, 59, 59),
             (1919, 03, 30, 01, 59, 59),
             (1919, 03, 30, 03, 00, 00),
-            (1988, 04, 10, 00, 00, 00),
-            (1988, 04, 10, 00, 59, 59),
+            // (1988, 04, 10, 00, 00, 00), // not exist
+            // (1988, 04, 10, 00, 59, 59), // not exist
         ];
         // These are supposed to be local time zones
         let local_tzs = vec![
-            Tz::from_tz_name("SYSTEM").unwrap(),
-            Tz::from_tz_name("system").unwrap(),
-            Tz::from_tz_name("System").unwrap(),
+            Tz::from_tz_name_or_local("SYSTEM").unwrap(),
+            Tz::from_tz_name_or_local("system").unwrap(),
+            Tz::from_tz_name_or_local("System").unwrap(),
             Tz::local(),
         ];
         for (year, month, day, hour, minute, second) in tables {
