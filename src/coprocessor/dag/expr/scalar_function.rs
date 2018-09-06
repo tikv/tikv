@@ -352,13 +352,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetFormat
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
-            | ScalarFuncSig::GreatestDecimal
-            | ScalarFuncSig::GreatestInt
-            | ScalarFuncSig::GreatestReal
-            | ScalarFuncSig::GreatestString
-            | ScalarFuncSig::GreatestTime
-            | ScalarFuncSig::HexIntArg
-            | ScalarFuncSig::HexStrArg
             | ScalarFuncSig::Hour
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -823,6 +816,8 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+        GreatestReal => greatest_real,
+        LeastReal => least_real,
         Sqrt => sqrt,
         Atan1Arg => atan_1_arg,
         Atan2Args => atan_2_args,
@@ -834,9 +829,6 @@ dispatch_call! {
         Pow => pow,
         Cot => cot,
         Degrees => degrees,
-        DivideReal => divide_real,
-        GreatestReal => greatest_real,
-        LeastReal => least_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -1345,13 +1337,6 @@ mod test {
             ScalarFuncSig::GetFormat,
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
-            ScalarFuncSig::GreatestDecimal,
-            ScalarFuncSig::GreatestInt,
-            ScalarFuncSig::GreatestReal,
-            ScalarFuncSig::GreatestString,
-            ScalarFuncSig::GreatestTime,
-            ScalarFuncSig::HexIntArg,
-            ScalarFuncSig::HexStrArg,
             ScalarFuncSig::Hour,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,

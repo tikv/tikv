@@ -227,7 +227,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut res = Cow::from(vec![]);
+        let mut res = None;
         let mut least = Time::new(
             ctx.cfg.tz.timestamp(
                 mysql::time::MAX_TIMESTAMP,
@@ -236,7 +236,6 @@ impl ScalarFunc {
             mysql::types::DATETIME,
             mysql::MAX_FSP,
         )?;
-        let mut find_invalid_time = false;
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
@@ -244,18 +243,17 @@ impl ScalarFunc {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
-                    _ => if !find_invalid_time {
-                        res = Cow::Owned(s.into_owned().into_bytes());
-                        find_invalid_time = true;
+                    _ => if res == None {
+                        res = Some(Cow::Owned(s.into_owned().into_bytes()));
                     },
                 },
             }
         }
 
-        if !find_invalid_time {
-            res = Cow::Owned(least.to_string().into_bytes());
+        if res == None {
+            res = Some(Cow::Owned(least.to_string().into_bytes()));
         }
-        Ok(Some(res))
+        Ok(res)
     }
 
     pub fn least_string<'a, 'b: 'a>(
