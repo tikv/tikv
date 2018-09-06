@@ -330,6 +330,7 @@ impl<'a> ApplyContextCore<'a> {
     /// Write all the changes into rocksdb.
     pub fn write_to_db(&mut self, engine: &DB) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+            let _perf = WritePerfContext::new("apply");
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
             engine

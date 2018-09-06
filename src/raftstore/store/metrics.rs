@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use prometheus::*;
+use rocksdb::{set_perf_level, PerfContext, PerfLevel};
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -219,4 +220,62 @@ lazy_static! {
             "Total number of raft invalid proposal.",
             &["type"]
         ).unwrap();
+    pub static ref STORE_WRITE_TIME: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_write_time_micros",
+            "Bucketed histogram of rocksdb write time",
+            &["tag", "state"],
+            exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+}
+
+pub struct WritePerfContext {
+    tag: &'static str,
+    wal_time: u64,
+    memtable_time: u64,
+    delay_time: u64,
+    pre_and_post_process_time: u64,
+    db_mutex_lock_time: u64,
+}
+
+impl WritePerfContext {
+    pub fn new(tag: &'static str) -> WritePerfContext {
+        set_perf_level(PerfLevel::EnableTime);
+        let ctx = PerfContext::get();
+        WritePerfContext {
+            tag,
+            wal_time: ctx.write_wal_time(),
+            memtable_time: ctx.write_memtable_time(),
+            delay_time: ctx.write_delay_time(),
+            pre_and_post_process_time: ctx.write_pre_and_post_process_time(),
+            db_mutex_lock_time: ctx.db_mutex_lock_nanos(),
+        }
+    }
+}
+
+impl Drop for WritePerfContext {
+    fn drop(&mut self) {
+        let end = PerfContext::get();
+        let wal_time = end.write_wal_time() - self.wal_time;
+        STORE_WRITE_TIME
+            .with_label_values(&[self.tag, "wal"])
+            .observe(wal_time as f64 / 1000.0);
+        let memtable_time = end.write_memtable_time() - self.memtable_time;
+        STORE_WRITE_TIME
+            .with_label_values(&[self.tag, "memtable"])
+            .observe(memtable_time as f64 / 1000.0);
+        let delay_time = end.write_delay_time() - self.delay_time;
+        STORE_WRITE_TIME
+            .with_label_values(&[self.tag, "delay"])
+            .observe(delay_time as f64 / 1000.0);
+        let process_time = end.write_pre_and_post_process_time() - self.pre_and_post_process_time;
+        STORE_WRITE_TIME
+            .with_label_values(&[self.tag, "process"])
+            .observe(process_time as f64 / 1000.0);
+        let lock_time = end.db_mutex_lock_nanos() - self.db_mutex_lock_time;
+        STORE_WRITE_TIME
+            .with_label_values(&[self.tag, "lock"])
+            .observe(lock_time as f64 / 1000.0);
+    }
+>>>>>>> ac74dbbe... raftstore: add perf context for writes
 }

@@ -679,6 +679,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // but region state may not changed in disk.
         fail_point!("raft_before_save");
         if !kv_wb.is_empty() {
+            let _perf = WritePerfContext::new("kv");
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
@@ -692,6 +693,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         fail_point!("raft_between_save");
 
         if !raft_wb.is_empty() {
+            let _perf = WritePerfContext::new("raft");
             // RaftLocalState, Raft Log Entry
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log || sync_log);
