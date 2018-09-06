@@ -210,7 +210,7 @@ You can use the `modify-tikv-config` command to dynamically modify the configura
 
 - `-m` is used to specify the target RocksDB. You can set it to `kvdb` or `raftdb`.
 - `-n` is used to specify the configuration name. 
-    You can refer to the arguments of `[rocksdb]` and `[raftdb]` (corresponding to `kvdb` and `raftdb`) in the [TiKV configuration template](https://github.com/pingcap/tikv/blob/master/etc/config-template.toml#L213-L500).
+    You can refer to the arguments of `[rocksdb]` and `[raftdb]` (corresponding to `kvdb` and `raftdb`) in the [TiKV configuration template](https://github.com/tikv/tikv/blob/master/etc/config-template.toml#L213-L500).
     You can use `default|write|lock + . + argument name` to specify the configuration of different CFs. For `kvdb`, you can set it to `default`, `write`, or `lock`; for `raftdb`, you can only set it to `default`.
 - `-v` is used to specify the configuration value.
 
