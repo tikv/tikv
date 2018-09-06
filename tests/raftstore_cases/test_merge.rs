@@ -437,7 +437,7 @@ fn test_node_merge_brain_split() {
 #[test]
 fn test_merge_approximate_size_and_keys() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     cluster.run();
 
     let mut range = 1..;
@@ -449,7 +449,7 @@ fn test_merge_approximate_size_and_keys() {
 
     cluster.must_split(&region, &middle_key);
     // make sure split check is invoked so size and keys are updated.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(100));
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
@@ -457,11 +457,11 @@ fn test_merge_approximate_size_and_keys() {
 
     // make sure all peer's approximate size is not None.
     cluster.must_transfer_leader(right.get_id(), right.get_peers()[0].clone());
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(100));
     cluster.must_transfer_leader(right.get_id(), right.get_peers()[1].clone());
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(100));
     cluster.must_transfer_leader(right.get_id(), right.get_peers()[2].clone());
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(100));
 
     let size = pd_client
         .get_region_approximate_size(right.get_id())
@@ -474,7 +474,7 @@ fn test_merge_approximate_size_and_keys() {
 
     pd_client.must_merge(left.get_id(), right.get_id());
     // make sure split check is invoked so size and keys are updated.
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
 
     let region = pd_client.get_region(b"").unwrap();
     let new_size = pd_client
@@ -490,7 +490,7 @@ fn test_merge_approximate_size_and_keys() {
     // after merge and then transfer leader, if not update new leader's approximate size, it maybe be stale.
     cluster.must_transfer_leader(region.get_id(), region.get_peers()[0].clone());
     // make sure split check is invoked
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(100));
     assert_eq!(
         pd_client
             .get_region_approximate_size(region.get_id())
