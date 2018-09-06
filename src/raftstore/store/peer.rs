@@ -53,10 +53,9 @@ use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, 
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::{DestroyPeerJob, Store};
 
-const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -1469,7 +1468,7 @@ impl Peer {
         }
 
         let last_index = self.get_store().last_index();
-        last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
+        last_index <= status.progress[&peer_id].matched + self.cfg.leader_transfer_max_log_lag
     }
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
@@ -1887,16 +1886,11 @@ impl Peer {
         // Heartbeat message for the store of that peer to check whether to create a new peer
         // when receiving these messages, or just to wait for a pending region split to perform
         // later.
-        if self.get_store().is_initialized()
-            && (msg_type == MessageType::MsgRequestVote ||
-            // the peer has not been known to this leader, it may exist or not.
-            (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX))
-        {
+        if self.get_store().is_initialized() && is_initial_msg(&msg) {
             let region = self.region();
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
-
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
