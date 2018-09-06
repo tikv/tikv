@@ -19,7 +19,7 @@ use std::time::Duration;
 use tempdir::TempDir;
 
 use protobuf;
-use rand::Rng;
+use rand::{thread_rng, Rng};
 use rocksdb::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -541,7 +541,7 @@ pub fn put_cf_till_size<T: Simulator>(
     assert!(limit > 0);
     let mut len = 0;
     let mut last_len = 0;
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     let mut key = vec![];
     while len < limit {
         let key_id = range.next().unwrap();

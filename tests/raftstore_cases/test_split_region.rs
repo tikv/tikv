@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{self, Rng};
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -25,12 +24,15 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::transport_simulate::*;
 use super::util;
+
 use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
 use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
+
+use raftstore::util::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
