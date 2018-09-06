@@ -36,7 +36,7 @@ make_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
-        destroy_range,
+        unsafe_destroy_range,
         coprocessor,
         coprocessor_stream,
         mvcc_get_by_key,

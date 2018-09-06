@@ -47,7 +47,7 @@ enum GCTask {
         safe_point: u64,
         callback: Callback<()>,
     },
-    DestroyRange {
+    UnsafeDestroyRange {
         ctx: Context,
         start_key: Key,
         end_key: Key,
@@ -59,14 +59,14 @@ impl GCTask {
     pub fn take_callback(self) -> Callback<()> {
         match self {
             GCTask::GC { callback, .. } => callback,
-            GCTask::DestroyRange { callback, .. } => callback,
+            GCTask::UnsafeDestroyRange { callback, .. } => callback,
         }
     }
 
     pub fn get_label(&self) -> &'static str {
         match self {
             GCTask::GC { .. } => "gc",
-            GCTask::DestroyRange { .. } => "destroy_range",
+            GCTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
         }
     }
 }
@@ -84,10 +84,10 @@ impl Display for GCTask {
                     .field("safe_point", safe_point)
                     .finish()
             }
-            GCTask::DestroyRange {
+            GCTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
-                .debug_struct("DestroyRange")
+                .debug_struct("UnsafeDestroyRange")
                 .field("start_key", &format!("{}", start_key))
                 .field("end_key", &format!("{}", end_key))
                 .finish(),
@@ -255,7 +255,7 @@ impl<E: Engine> GCRunner<E> {
         Ok(())
     }
 
-    fn destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
+    fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
         info!(
             "destroying range start_key: {}, end_key: {}",
             start_key, end_key
@@ -321,12 +321,12 @@ impl<E: Engine> GCRunner<E> {
             GCTask::GC {
                 ctx, safe_point, ..
             } => self.gc(ctx, *safe_point),
-            GCTask::DestroyRange {
+            GCTask::UnsafeDestroyRange {
                 ctx,
                 start_key,
                 end_key,
                 ..
-            } => self.destroy_range(ctx, start_key, end_key),
+            } => self.unsafe_destroy_range(ctx, start_key, end_key),
         };
 
         GC_TASK_DURATION_HISTOGRAM_VEC
@@ -455,7 +455,7 @@ impl<E: Engine> GCWorker<E> {
     /// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
     /// the range will never be accessed any more. However, `destroy_range` is allowed to be called
     /// multiple times on an single range.
-    pub fn async_destroy_range(
+    pub fn async_unsafe_destroy_range(
         &self,
         ctx: Context,
         start_key: Key,
@@ -463,7 +463,7 @@ impl<E: Engine> GCWorker<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         self.worker_scheduler
-            .schedule(GCTask::DestroyRange {
+            .schedule(GCTask::UnsafeDestroyRange {
                 ctx,
                 start_key,
                 end_key,
@@ -578,8 +578,12 @@ mod tests {
             .collect();
 
         // Invoke destroy range.
-        wait_op!(|cb| storage.async_destroy_range(Context::default(), start_key, end_key, cb))
-            .unwrap()
+        wait_op!(|cb| storage.async_unsafe_destroy_range(
+            Context::default(),
+            start_key,
+            end_key,
+            cb
+        )).unwrap()
             .unwrap();
 
         // Check remaining data is as expected.

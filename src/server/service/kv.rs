@@ -811,13 +811,15 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn destroy_range(
+    fn unsafe_destroy_range(
         &self,
         ctx: RpcContext,
-        mut req: DestroyRangeRequest,
-        sink: UnarySink<DestroyRangeResponse>,
+        mut req: UnsafeDestroyRangeRequest,
+        sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.destroy_range.start_coarse_timer();
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .unsafe_destroy_range
+            .start_coarse_timer();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
         // MAX_KEY as end here.
@@ -825,7 +827,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         assert!(!req.get_end_key().is_empty());
 
         let (cb, f) = paired_future_callback();
-        let res = self.storage.async_destroy_range(
+        let res = self.storage.async_unsafe_destroy_range(
             req.take_context(),
             Key::from_raw(&req.take_start_key()),
             Key::from_raw(&req.take_end_key()),
@@ -834,7 +836,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
-                let mut resp = DestroyRangeResponse::new();
+                let mut resp = UnsafeDestroyRangeResponse::new();
                 // Region error is impossible here.
                 if let Err(e) = v {
                     resp.set_error(format!("{}", e));
@@ -844,7 +846,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "destroy_range", e);
-                GRPC_MSG_FAIL_COUNTER.destroy_range.inc();
+                GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
             });
 
         ctx.spawn(future);

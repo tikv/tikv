@@ -869,7 +869,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn async_destroy_range(
+    pub fn async_unsafe_destroy_range(
         &self,
         ctx: Context,
         start_key: Key,
@@ -877,7 +877,7 @@ impl<E: Engine> Storage<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         self.gc_worker
-            .async_destroy_range(ctx, start_key, end_key, callback)?;
+            .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&[CMD_TAG_DESTROY_RANGE])
             .inc();

@@ -18,8 +18,7 @@ rand = "0.3"
 log = "0.3.9"
 
 [dependencies.kvproto]
-git = "https://github.com/MyonKeminta/kvproto.git"
-branch = "misono/add-destroy-range"
+git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
