@@ -975,7 +975,6 @@ pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Resul
 
 /// Split bytes array into two part: first one is a whole datum's encoded data,
 /// and the second part is the remaining data.
-#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
 pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     if buf.is_empty() {
         return Err(box_err!("{} is too short", escape(buf)));
