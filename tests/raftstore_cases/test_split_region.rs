@@ -732,3 +732,57 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
 }
+
+#[test]
+fn test_node_split_update_region_right_derive() {
+    let mut cluster = new_node_cluster(0, 3);
+    // Election timeout and max leader lease is 1s.
+    configure_for_lease_read(&mut cluster, Some(100), Some(10));
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    let origin_leader = cluster.leader_of_region(right.get_id()).unwrap();
+    let new_leader = right
+        .get_peers()
+        .iter()
+        .cloned()
+        .find(|p| p.get_id() != origin_leader.get_id())
+        .unwrap();
+
+    // Make sure split is done in the new_leader.
+    // "k4" belongs to the right.
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(new_leader.get_store_id()), b"k4", b"v4");
+
+    // Transfer leadership to another peer.
+    cluster.must_transfer_leader(right.get_id(), new_leader.clone());
+
+    // Make sure the new_leader is in lease.
+    cluster.must_put(b"k4", b"v5");
+
+    // "k1" is not in the range of right.
+    let get = new_request(
+        right.get_id(),
+        right.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+    debug!("requesting {:?}", get);
+    let resp = cluster
+        .call_command_on_leader(get, Duration::from_secs(5))
+        .unwrap();
+    assert!(resp.get_header().has_error(), "{:?}", resp);
+    assert!(
+        resp.get_header().get_error().has_key_not_in_region(),
+        "{:?}",
+        resp
+    );
+}
