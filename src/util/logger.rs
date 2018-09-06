@@ -18,6 +18,7 @@ use std::path::Path;
 
 use chrono;
 use grpc;
+use log;
 use log::SetLoggerError;
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_scope;
@@ -48,7 +49,7 @@ where
     let logger = slog::Logger::root(drain, slog_o!());
 
     slog_scope::set_global_logger(logger).cancel_reset();
-    slog_stdlog::init()
+    slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))
 }
 
 pub fn init_log_for_tikv_only<D>(drain: D, level: Level) -> Result<(), SetLoggerError>
@@ -87,6 +88,16 @@ pub fn get_string_by_level(lv: Level) -> &'static str {
         Level::Debug => "debug",
         Level::Trace => "trace",
         Level::Info => "info",
+    }
+}
+
+pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
+    match lv {
+        Level::Critical | Level::Error => log::LogLevel::Error,
+        Level::Warning => log::LogLevel::Warn,
+        Level::Debug => log::LogLevel::Debug,
+        Level::Trace => log::LogLevel::Trace,
+        Level::Info => log::LogLevel::Info,
     }
 }
 
