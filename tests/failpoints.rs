@@ -17,6 +17,7 @@
 
 extern crate fail;
 extern crate futures;
+extern crate grpcio;
 extern crate kvproto;
 extern crate raft;
 #[macro_use]
@@ -24,6 +25,7 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 
+extern crate test_coprocessor;
 extern crate test_raftstore;
 extern crate test_storage;
 extern crate test_util;

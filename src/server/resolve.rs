@@ -214,6 +214,10 @@ mod tests {
             unimplemented!()
         }
 
+        fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+            unimplemented!();
+        }
+
         fn ask_batch_split(
             &self,
             _: metapb::Region,

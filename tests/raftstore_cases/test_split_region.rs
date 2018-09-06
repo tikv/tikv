@@ -16,8 +16,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, thread};
 
-use rand::{self, Rng};
-
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
 
@@ -26,7 +24,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
-use tikv::storage::{CF_DEFAULT, CF_WRITE};
+use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
@@ -171,48 +169,6 @@ fn test_server_split_region_twice() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-/// Keep putting random kvs until specified size limit is reached.
-fn put_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    limit: u64,
-    range: &mut Iterator<Item = u64>,
-) -> Vec<u8> {
-    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
-}
-
-fn put_cf_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    cf: &'static str,
-    limit: u64,
-    range: &mut Iterator<Item = u64>,
-) -> Vec<u8> {
-    assert!(limit > 0);
-    let mut len = 0;
-    let mut last_len = 0;
-    let mut rng = rand::thread_rng();
-    let mut key = vec![];
-    while len < limit {
-        let key_id = range.next().unwrap();
-        let key_str = format!("{:09}", key_id);
-        key = key_str.into_bytes();
-        let mut value = vec![0; 64];
-        rng.fill_bytes(&mut value);
-        cluster.must_put_cf(cf, &key, &value);
-        // plus 1 for the extra encoding prefix
-        len += key.len() as u64 + 1;
-        len += value.len() as u64;
-        // Flush memtable to SST periodically, to make approximate size more accurate.
-        if len - last_len >= 1000 {
-            cluster.must_flush_cf(cf, true);
-            last_len = len;
-        }
-    }
-    // Approximate size of memtable is inaccurate for small data,
-    // we flush it to SST so we can use the size properties instead.
-    cluster.must_flush_cf(cf, true);
-    key
-}
-
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.coprocessor.region_max_size = ReadableSize(REGION_MAX_SIZE);
@@ -289,9 +245,23 @@ fn test_node_auto_split_region() {
 }
 
 #[test]
+fn test_incompatible_node_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_node_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
 fn test_server_auto_split_region() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
+    test_auto_split_region(&mut cluster);
+}
+
+#[test]
+fn test_incompatible_server_auto_split_region() {
+    let count = 5;
+    let mut cluster = new_incompatible_server_cluster(0, count);
     test_auto_split_region(&mut cluster);
 }
 
@@ -761,4 +731,58 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(mid_key.as_slice(), right.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
+}
+
+#[test]
+fn test_node_split_update_region_right_derive() {
+    let mut cluster = new_node_cluster(0, 3);
+    // Election timeout and max leader lease is 1s.
+    configure_for_lease_read(&mut cluster, Some(100), Some(10));
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    let origin_leader = cluster.leader_of_region(right.get_id()).unwrap();
+    let new_leader = right
+        .get_peers()
+        .iter()
+        .cloned()
+        .find(|p| p.get_id() != origin_leader.get_id())
+        .unwrap();
+
+    // Make sure split is done in the new_leader.
+    // "k4" belongs to the right.
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(new_leader.get_store_id()), b"k4", b"v4");
+
+    // Transfer leadership to another peer.
+    cluster.must_transfer_leader(right.get_id(), new_leader.clone());
+
+    // Make sure the new_leader is in lease.
+    cluster.must_put(b"k4", b"v5");
+
+    // "k1" is not in the range of right.
+    let get = new_request(
+        right.get_id(),
+        right.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+    debug!("requesting {:?}", get);
+    let resp = cluster
+        .call_command_on_leader(get, Duration::from_secs(5))
+        .unwrap();
+    assert!(resp.get_header().has_error(), "{:?}", resp);
+    assert!(
+        resp.get_header().get_error().has_key_not_in_region(),
+        "{:?}",
+        resp
+    );
 }

@@ -63,6 +63,38 @@ impl RpcClient {
     pub fn get_leader(&self) -> Member {
         self.leader_client.get_leader()
     }
+
+    #[inline]
+    fn call_option() -> CallOption {
+        CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
+    }
+
+    fn get_region_and_leader(&self, key: &[u8]) -> Result<(metapb::Region, Option<metapb::Peer>)> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetRegionRequest::new();
+        req.set_header(self.header());
+        req.set_region_key(key.to_vec());
+
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.get_region_opt(&req, Self::call_option())
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        let region = if resp.has_region() {
+            resp.take_region()
+        } else {
+            return Err(Error::RegionNotFound(key.to_owned()));
+        };
+        let leader = if resp.has_leader() {
+            Some(resp.take_leader())
+        } else {
+            None
+        };
+        Ok((region, leader))
+    }
 }
 
 impl fmt::Debug for RpcClient {
@@ -92,8 +124,7 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.bootstrap_opt(&req, option)
+            client.bootstrap_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
         Ok(())
@@ -108,8 +139,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.is_bootstrapped_opt(&req, option)
+            client.is_bootstrapped_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -125,8 +155,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.alloc_id_opt(&req, option)
+            client.alloc_id_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -143,8 +172,7 @@ impl PdClient for RpcClient {
         req.set_store(store);
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.put_store_opt(&req, option)
+            client.put_store_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -161,8 +189,7 @@ impl PdClient for RpcClient {
         req.set_store_id(store_id);
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.get_store_opt(&req, option)
+            client.get_store_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -178,8 +205,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.get_all_stores_opt(&req, option)
+            client.get_all_stores_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -195,8 +221,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.get_cluster_config_opt(&req, option)
+            client.get_cluster_config_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -204,49 +229,12 @@ impl PdClient for RpcClient {
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_region"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::GetRegionRequest::new();
-        req.set_header(self.header());
-        req.set_region_key(key.to_vec());
-
-        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.get_region_opt(&req, option)
-        })?;
-        check_resp_header(resp.get_header())?;
-
-        Ok(resp.take_region())
+        self.get_region_and_leader(key).map(|x| x.0)
     }
 
     fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_region"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::GetRegionRequest::new();
-        req.set_header(self.header());
-        req.set_region_key(key.to_vec());
-
-        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.get_region_opt(&req, option)
-        })?;
-        check_resp_header(resp.get_header())?;
-
-        let region = if resp.has_region() {
-            resp.take_region()
-        } else {
-            return Err(Error::RegionNotFound(key.to_owned()));
-        };
-        let leader = if resp.has_leader() {
-            Some(resp.take_leader())
-        } else {
-            None
-        };
-        Ok(RegionInfo::new(region, leader))
+        self.get_region_and_leader(key)
+            .map(|x| RegionInfo::new(x.0, x.1))
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
@@ -257,11 +245,10 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
                 .rl()
                 .client
-                .get_region_by_id_async_opt(&req, option)
+                .get_region_by_id_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
                 PD_REQUEST_HISTOGRAM_VEC
@@ -354,6 +341,33 @@ impl PdClient for RpcClient {
         self.leader_client.handle_region_heartbeat_response(f)
     }
 
+    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::AskSplitRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
+            let handler = client
+                .rl()
+                .client
+                .ask_split_async_opt(&req, Self::call_option())
+                .unwrap();
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["ask_split"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(resp)
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
     fn ask_batch_split(
         &self,
         region: metapb::Region,
@@ -367,11 +381,10 @@ impl PdClient for RpcClient {
         req.set_split_count(count as u32);
 
         let executor = move |client: &RwLock<Inner>, req: pdpb::AskBatchSplitRequest| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
                 .rl()
                 .client
-                .ask_batch_split_async_opt(&req, option)
+                .ask_batch_split_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
@@ -395,11 +408,10 @@ impl PdClient for RpcClient {
         stats.mut_interval().set_end_timestamp(time_now_sec());
         req.set_stats(stats);
         let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
                 .rl()
                 .client
-                .store_heartbeat_async_opt(&req, option)
+                .store_heartbeat_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
@@ -423,11 +435,10 @@ impl PdClient for RpcClient {
         req.set_regions(RepeatedField::from_vec(regions));
 
         let executor = move |client: &RwLock<Inner>, req: pdpb::ReportBatchSplitRequest| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
                 .rl()
                 .client
-                .report_batch_split_async_opt(&req, option)
+                .report_batch_split_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
                 PD_REQUEST_HISTOGRAM_VEC
@@ -457,8 +468,7 @@ impl PdClient for RpcClient {
         req.set_region(region.region);
 
         let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
-            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-            client.scatter_region_opt(&req, option)
+            client.scatter_region_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())
     }

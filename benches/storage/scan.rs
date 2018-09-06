@@ -23,6 +23,7 @@ use tikv::util::worker::FutureWorker;
 
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.
+#[ignore]
 #[bench]
 fn bench_tombstone_scan(b: &mut Bencher) {
     let pd_worker = FutureWorker::new("test-pd-worker");
