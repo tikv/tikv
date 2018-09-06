@@ -31,11 +31,11 @@ harness = false
 name = "benches"
 
 [dependencies]
-log = "0.3.9"
-slog = "2.2"
+log = { version = "0.3", features = ["release_max_level_debug"] }
+slog = "2.3"
 slog-async = "2.3"
 slog-scope = "4.0"
-slog-stdlog = "3.0"
+slog-stdlog = "3.0.4-pre"
 slog-term = "2.4"
 byteorder = "1.2"
 rand = "0.3"
