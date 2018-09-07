@@ -53,7 +53,7 @@ use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, 
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::{DestroyPeerJob, Store};
 
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -539,7 +539,9 @@ impl Peer {
         }
         self.mut_store().set_region(region.clone());
         let progress = ReadProgress::region(region);
-        self.maybe_update_read_progress(progress);
+        // Always update read delegate's region to avoid stale region info after a follower
+        // becomeing a leader.
+        self.update_read_progress(progress);
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -803,7 +805,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress = ReadProgress::term(self.term());
-                    self.maybe_update_read_progress(progress);
+                    self.update_read_progress(progress);
                     self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
@@ -1155,9 +1157,10 @@ impl Peer {
         }
         self.pending_reads.gc();
 
-        if progress_to_be_updated {
+        // Only leaders need to update applied_index_term.
+        if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            self.maybe_update_read_progress(progress);
+            self.update_read_progress(progress);
         }
     }
 
@@ -1191,16 +1194,14 @@ impl Peer {
         let term = self.term();
         if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
-            self.maybe_update_read_progress(progress);
+            self.update_read_progress(progress);
         }
     }
 
-    fn maybe_update_read_progress(&self, progress: ReadProgress) {
-        if self.is_leader() {
-            let update = ReadTask::update(self.region_id, progress);
-            debug!("{} update {}", self.tag, update);
-            self.read_scheduler.schedule(update).unwrap();
-        }
+    fn update_read_progress(&self, progress: ReadProgress) {
+        let update = ReadTask::update(self.region_id, progress);
+        debug!("{} update {}", self.tag, update);
+        self.read_scheduler.schedule(update).unwrap();
     }
 
     pub fn maybe_campaign(
@@ -1776,17 +1777,7 @@ impl Peer {
             self.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
-        ).execute(&req, self.region())
-            .unwrap_or_else(|e| {
-                match e {
-                    Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
-                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
-                }
-                ReadResponse {
-                    response: cmd_resp::new_error(e),
-                    snapshot: None,
-                }
-            });
+        ).execute(&req, self.region());
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -1886,16 +1877,11 @@ impl Peer {
         // Heartbeat message for the store of that peer to check whether to create a new peer
         // when receiving these messages, or just to wait for a pending region split to perform
         // later.
-        if self.get_store().is_initialized()
-            && (msg_type == MessageType::MsgRequestVote ||
-            // the peer has not been known to this leader, it may exist or not.
-            (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX))
-        {
+        if self.get_store().is_initialized() && is_initial_msg(&msg) {
             let region = self.region();
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
-
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
@@ -2100,13 +2086,15 @@ impl ReadExecutor {
         Ok(resp)
     }
 
-    pub fn execute(
-        &mut self,
-        msg: &RaftCmdRequest,
-        region: &metapb::Region,
-    ) -> Result<ReadResponse> {
+    pub fn execute(&mut self, msg: &RaftCmdRequest, region: &metapb::Region) -> ReadResponse {
         if self.check_epoch {
-            check_region_epoch(msg, region, true)?;
+            if let Err(e) = check_region_epoch(msg, region, true) {
+                debug!("[region {}] stale epoch err: {:?}", region.get_id(), e);
+                return ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                };
+            }
         }
         self.maybe_update_snapshot();
         let mut need_snapshot = false;
@@ -2115,7 +2103,20 @@ impl ReadExecutor {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => self.do_get(req, region)?,
+                CmdType::Get => match self.do_get(req, region) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(
+                            "[region {}] execute raft command err: {:?}",
+                            region.get_id(),
+                            e
+                        );
+                        return ReadResponse {
+                            response: cmd_resp::new_error(e),
+                            snapshot: None,
+                        };
+                    }
+                },
                 CmdType::Snap => {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
@@ -2141,7 +2142,7 @@ impl ReadExecutor {
         } else {
             None
         };
-        Ok(ReadResponse { response, snapshot })
+        ReadResponse { response, snapshot }
     }
 }
 
