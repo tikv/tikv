@@ -2,6 +2,13 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.7]
+### Improvements
+* Enable dynamic-level-bytes by default to reduce space amplification
+
+### Bug Fixes
+* Update Region's approximate size and approximate keys count after merge
+
 ## [2.0.6]
 ### Improvements
 * Enlarge scheduler’s default slots to reduce false conflicts
