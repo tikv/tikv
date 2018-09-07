@@ -1651,11 +1651,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     {
                         alive_cache_idx = p.matched;
                     }
-                } else {
-                    warn!(
-                        "[region {}] checking last heartbeat time of peer {} for cache gc failed",
-                        region_id, peer_id
-                    );
                 }
             }
             // When an election happened or a new peer is added, replicated_idx can be 0.
