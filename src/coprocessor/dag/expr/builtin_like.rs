@@ -13,8 +13,8 @@
 
 use std::slice::Iter;
 
-use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use super::{Result, ScalarFunc};
+use coprocessor::dag::executor::RowWithEvalContext;
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 const MAX_RECURSE_LEVEL: usize = 1024;
@@ -24,25 +24,25 @@ impl ScalarFunc {
     /// charsets. This behaviour is for keeping compatible with TiDB. But MySQL
     /// compare them as bytes only if any charset of pattern or target is binary,
     /// otherwise MySQL will compare decoded string.
-    pub fn like(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = try_opt!(self.children[0].eval_string(ctx, row));
-        let pattern = try_opt!(self.children[1].eval_string(ctx, row));
-        let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
+    pub fn like(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let target = try_opt!(self.children[0].eval_string(row));
+        let pattern = try_opt!(self.children[1].eval_string(row));
+        let escape = try_opt!(self.children[2].eval_int(row)) as u32;
         Ok(Some(like(&target, &pattern, escape, 0)? as i64))
     }
 
-    pub fn regexp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+    pub fn regexp(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let target = try_opt!(self.children[0].eval_string_and_decode(row));
+        let pattern = try_opt!(self.children[1].eval_string_and_decode(row));
         let pattern = format!("(?i){}", &pattern);
 
         // TODO: cache compiled result
         Ok(Some(Regex::new(&pattern)?.is_match(&target) as i64))
     }
 
-    pub fn regexp_binary(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = try_opt!(self.children[0].eval_string(ctx, row));
-        let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+    pub fn regexp_binary(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let target = try_opt!(self.children[0].eval_string(row));
+        let pattern = try_opt!(self.children[1].eval_string_and_decode(row));
 
         // TODO: cache compiled result
         Ok(Some(BytesRegex::new(&pattern)?.is_match(&target) as i64))

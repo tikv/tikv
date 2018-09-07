@@ -14,24 +14,24 @@
 use hex::FromHex;
 use std::{i64, str};
 
-use super::{EvalContext, Result, ScalarFunc};
+use super::{Result, ScalarFunc};
 use coprocessor::codec::mysql::types;
-use coprocessor::codec::Datum;
+use coprocessor::dag::executor::RowWithEvalContext;
 use std::borrow::Cow;
 
 impl ScalarFunc {
-    pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string(ctx, row));
+    pub fn length(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(row));
         Ok(Some(input.len() as i64))
     }
 
-    pub fn bit_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string(ctx, row));
+    pub fn bit_length(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(row));
         Ok(Some(input.len() as i64 * 8))
     }
 
-    pub fn ascii(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string(ctx, row));
+    pub fn ascii(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(row));
         if input.len() == 0 {
             Ok(Some(0))
         } else {
@@ -40,22 +40,17 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn bin<'a, 'b: 'a>(
-        &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, [u8]>>> {
-        let i = try_opt!(self.children[0].eval_int(ctx, row));
+    pub fn bin<'a, 'b: 'a>(&'b self, row: &'a RowWithEvalContext) -> Result<Option<Cow<'a, [u8]>>> {
+        let i = try_opt!(self.children[0].eval_int(row));
         Ok(Some(Cow::Owned(format!("{:b}", i).into_bytes())))
     }
 
     pub fn left<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let i = try_opt!(self.children[1].eval_int(ctx, row));
+        let s = try_opt!(self.children[0].eval_string_and_decode(row));
+        let i = try_opt!(self.children[1].eval_int(row));
         if i <= 0 {
             return Ok(Some(Cow::Owned(b"".to_vec())));
         }
@@ -71,10 +66,9 @@ impl ScalarFunc {
     #[inline]
     pub fn upper<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[0].eval_string(row));
         if types::is_binary_str(self.children[0].get_tp()) {
             return Ok(Some(s));
         }
@@ -86,10 +80,9 @@ impl ScalarFunc {
     #[inline]
     pub fn lower<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[0].eval_string(row));
         if types::is_binary_str(self.children[0].get_tp()) {
             return Ok(Some(s));
         }
@@ -101,10 +94,9 @@ impl ScalarFunc {
     #[inline]
     pub fn un_hex<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[0].eval_string(row));
         let hex_string = if s.len() % 2 == 1 {
             // Add a '0' to the front, if the length is not the multiple of 2
             let mut vec = vec![b'0'];

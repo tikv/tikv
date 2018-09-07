@@ -33,6 +33,7 @@ pub use coprocessor::codec::{Error, Result};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
+use coprocessor::dag::executor::RowWithEvalContext;
 use std::borrow::Cow;
 use std::str;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
@@ -93,53 +94,50 @@ impl Expression {
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
-    fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    fn eval_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
             Expression::ColumnRef(ref column) => column.eval_int(row),
-            Expression::ScalarFn(ref f) => f.eval_int(ctx, row),
+            Expression::ScalarFn(ref f) => f.eval_int(row),
         }
     }
 
-    fn eval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    fn eval_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
-            Expression::ScalarFn(ref f) => f.eval_real(ctx, row),
+            Expression::ScalarFn(ref f) => f.eval_real(row),
         }
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_decimal(),
             Expression::ColumnRef(ref column) => column.eval_decimal(row),
-            Expression::ScalarFn(ref f) => f.eval_decimal(ctx, row),
+            Expression::ScalarFn(ref f) => f.eval_decimal(row),
         }
     }
 
     fn eval_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
-            Expression::ColumnRef(ref column) => column.eval_string(ctx, row),
-            Expression::ScalarFn(ref f) => f.eval_bytes(ctx, row),
+            Expression::ColumnRef(ref column) => column.eval_string(row),
+            Expression::ScalarFn(ref f) => f.eval_bytes(row),
         }
     }
 
     fn eval_string_and_decode<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, str>>> {
-        let bytes = try_opt!(self.eval_string(ctx, row));
+        let bytes = try_opt!(self.eval_string(row));
         let chrst = self.get_tp().get_charset();
         if charset::UTF8_CHARSETS.contains(&chrst) {
             let s = match bytes {
@@ -153,37 +151,34 @@ impl Expression {
 
     fn eval_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_time(),
             Expression::ColumnRef(ref column) => column.eval_time(row),
-            Expression::ScalarFn(ref f) => f.eval_time(ctx, row),
+            Expression::ScalarFn(ref f) => f.eval_time(row),
         }
     }
 
     fn eval_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_duration(),
             Expression::ColumnRef(ref column) => column.eval_duration(row),
-            Expression::ScalarFn(ref f) => f.eval_duration(ctx, row),
+            Expression::ScalarFn(ref f) => f.eval_duration(row),
         }
     }
 
     fn eval_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_json(),
             Expression::ColumnRef(ref column) => column.eval_json(row),
-            Expression::ScalarFn(ref f) => f.eval_json(ctx, row),
+            Expression::ScalarFn(ref f) => f.eval_json(row),
         }
     }
 
@@ -200,12 +195,20 @@ impl Expression {
 }
 
 impl Expression {
-    pub fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Datum> {
+    pub fn eval(&self, row: &RowWithEvalContext) -> Result<Datum> {
         match *self {
             Expression::Constant(ref constant) => Ok(constant.eval()),
-            Expression::ColumnRef(ref column) => Ok(column.eval(row)),
-            Expression::ScalarFn(ref f) => f.eval(ctx, row),
+            Expression::ColumnRef(ref column) => column.eval(row),
+            Expression::ScalarFn(ref f) => f.eval(row),
         }
+    }
+
+    #[cfg(test)]
+    fn eval_with_datum_vec(&self, ctx: &mut EvalContext, row: Vec<Datum>) -> Result<Datum> {
+        use coprocessor::dag::executor::Row;
+        let row = Row::from_datum_vec(row);
+        let mut row_with_ctx = RowWithEvalContext::new(&row, ctx);
+        self.eval(&mut row_with_ctx)
     }
 
     pub fn batch_build(ctx: &mut EvalContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
@@ -495,7 +498,7 @@ mod test {
             ex.mut_field_type()
                 .set_flen(convert::UNSPECIFIED_LENGTH as i32);
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval(&mut ctx, &cols).unwrap();
+            let res = e.eval_with_datum_vec(&mut ctx, cols).unwrap();
             if let Datum::F64(_) = exp {
                 assert_eq!(format!("{}", res), format!("{}", exp));
             } else {
@@ -519,7 +522,7 @@ mod test {
                 ex.mut_field_type().set_flag(flag.unwrap() as u32);
             }
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval(&mut ctx, &cols).unwrap();
+            let res = e.eval_with_datum_vec(&mut ctx, cols).unwrap();
             assert_eq!(res, exp);
         }
     }

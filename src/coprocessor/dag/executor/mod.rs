@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::UnsafeCell;
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
@@ -20,11 +21,11 @@ use tipb::schema::ColumnInfo;
 
 use storage::{Snapshot, SnapshotStore};
 use util::codec::number;
-use util::collections::HashSet;
+use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 
 use coprocessor::codec::datum::{self, Datum, DatumEncoder};
-use coprocessor::codec::mysql;
 use coprocessor::codec::table::{self, RowColsDict};
+use coprocessor::codec::{mysql, Error as CodecError};
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
 use coprocessor::util;
 use coprocessor::*;
@@ -88,10 +89,6 @@ impl ExprColumnRefVisitor {
         }
         Ok(())
     }
-
-    pub fn column_offsets(self) -> Vec<usize> {
-        self.cols_offset.into_iter().collect()
-    }
 }
 
 #[derive(Debug)]
@@ -149,6 +146,14 @@ impl Row {
             Row::Agg(row) => row.get_binary(), // ignore output offsets for aggregation.
         }
     }
+
+    #[cfg(test)]
+    pub fn from_datum_vec(data: Vec<Datum>) -> Self {
+        Row::Agg(AggCols {
+            suffix: vec![],
+            value: data,
+        })
+    }
 }
 
 impl OriginCols {
@@ -205,43 +210,67 @@ impl OriginCols {
         }
         Ok(values)
     }
+}
 
-    // inflate with the real value(Datum) for each columns in offsets
-    // inflate with Datum::Null for those cols not in offsets.
-    // It's used in expression since column is marked with offset
-    // in expression.
-    pub fn inflate_cols_with_offsets(
-        &self,
-        ctx: &mut EvalContext,
-        offsets: &[usize],
-    ) -> Result<Vec<Datum>> {
-        let mut res = vec![Datum::Null; self.cols.len()];
-        for offset in offsets {
-            let col = &self.cols[*offset];
-            if col.get_pk_handle() {
-                let v = util::get_pk(col, self.handle);
-                res[*offset] = v;
-            } else {
-                let col_id = col.get_column_id();
-                let value = match self.data.get(col_id) {
-                    None if col.has_default_val() => {
-                        // TODO: optimize it to decode default value only once.
-                        box_try!(table::decode_col_value(
-                            &mut col.get_default_val(),
-                            ctx,
-                            col
-                        ))
-                    }
-                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
-                        return Err(box_err!("column {} of {} is missing", col_id, self.handle));
-                    }
-                    None => Datum::Null,
-                    Some(mut bs) => box_try!(table::decode_col_value(&mut bs, ctx, col)),
-                };
-                res[*offset] = value;
-            }
+pub struct RowWithEvalContext<'a, 'b> {
+    row: &'a Row,
+    ctx: UnsafeCell<&'b mut EvalContext>,
+    decoded: UnsafeCell<HashMap<usize, Datum>>,
+}
+
+impl<'a, 'b> RowWithEvalContext<'a, 'b> {
+    pub fn new(row: &'a Row, ctx: &'b mut EvalContext) -> Self {
+        let ctx = UnsafeCell::new(ctx);
+        let decoded = UnsafeCell::new(map![]);
+        RowWithEvalContext { row, ctx, decoded }
+    }
+
+    #[allow(dead_code)]
+    pub fn new_with_buffer(
+        row: &'a Row,
+        ctx: &'b mut EvalContext,
+        mut buffer: HashMap<usize, Datum>,
+    ) -> Self {
+        buffer.clear();
+        let ctx = UnsafeCell::new(ctx);
+        let decoded = UnsafeCell::new(buffer);
+        RowWithEvalContext { row, ctx, decoded }
+    }
+
+    pub fn ctx(&self) -> &'b mut EvalContext {
+        unsafe { *self.ctx.get() }
+    }
+
+    pub fn datum_at(&self, offset: usize) -> ::std::result::Result<&Datum, CodecError> {
+        match *self.row {
+            Row::Agg(ref agg_cols) => Ok(&agg_cols.value[offset]),
+            Row::Origin(ref origin_cols) => match self.decoded().entry(offset) {
+                Entry::Occupied(e) => Ok(e.into_mut()),
+                Entry::Vacant(e) => {
+                    let col = &origin_cols.cols[offset];
+                    let datum = if col.get_pk_handle() {
+                        util::get_pk(col, origin_cols.handle)
+                    } else {
+                        match origin_cols.data.get(col.get_column_id()) {
+                            None if col.has_default_val() => {
+                                let mut def = col.get_default_val();
+                                table::decode_col_value(&mut def, self.ctx(), col)?
+                            }
+                            None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                                return Err(CodecError::InvalidNullColumn);
+                            }
+                            None => Datum::Null,
+                            Some(mut bs) => table::decode_col_value(&mut bs, self.ctx(), col)?,
+                        }
+                    };
+                    Ok(e.insert(datum))
+                }
+            },
         }
-        Ok(res)
+    }
+
+    fn decoded(&self) -> &mut HashMap<usize, Datum> {
+        unsafe { &mut *self.decoded.get() }
     }
 }
 

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
+use coprocessor::dag::executor::RowWithEvalContext;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
 
@@ -22,7 +23,6 @@ use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 pub struct SelectionExecutor {
     conditions: Vec<Expression>,
-    related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
     src: Box<Executor + Send>,
     first_collect: bool,
@@ -40,7 +40,6 @@ impl SelectionExecutor {
         let mut ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
             conditions: Expression::batch_build(&mut ctx, conditions)?,
-            related_cols_offset: visitor.column_offsets(),
             ctx,
             src,
             first_collect: true,
@@ -52,15 +51,16 @@ impl SelectionExecutor {
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
-            let cols = row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)?;
-            for filter in &self.conditions {
-                let val = filter.eval(&mut self.ctx, &cols)?;
-                if !val.into_bool(&mut self.ctx)?.unwrap_or(false) {
-                    continue 'next;
+            {
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut self.ctx);
+                for filter in &self.conditions {
+                    let val = filter.eval(&row_with_ctx)?;
+                    if !val.into_bool(row_with_ctx.ctx())?.unwrap_or(false) {
+                        continue 'next;
+                    }
                 }
             }
-            return Ok(Some(Row::Origin(row)));
+            return Ok(Some(row));
         }
         Ok(None)
     }

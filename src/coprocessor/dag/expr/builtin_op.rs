@@ -14,17 +14,18 @@
 use std::borrow::Cow;
 use std::i64;
 
-use super::{Error, EvalContext, Result, ScalarFunc};
+use super::{Error, Result, ScalarFunc};
+use coprocessor::codec::mysql;
 use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::{mysql, Datum};
+use coprocessor::dag::executor::RowWithEvalContext;
 
 impl ScalarFunc {
-    pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = self.children[0].eval_int(ctx, row)?;
+    pub fn logical_and(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg0 = self.children[0].eval_int(row)?;
         if arg0.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
-        let arg1 = self.children[1].eval_int(ctx, row)?;
+        let arg1 = self.children[1].eval_int(row)?;
         if arg1.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
@@ -34,12 +35,12 @@ impl ScalarFunc {
         Ok(Some(1))
     }
 
-    pub fn logical_or(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = self.children[0].eval_int(ctx, row)?;
+    pub fn logical_or(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg0 = self.children[0].eval_int(row)?;
         if arg0.map_or(false, |v| v != 0) {
             return Ok(Some(1));
         }
-        let arg1 = try_opt!(self.children[1].eval_int(ctx, row));
+        let arg1 = try_opt!(self.children[1].eval_int(row));
         if arg1 != 0 {
             Ok(Some(1))
         } else {
@@ -47,52 +48,52 @@ impl ScalarFunc {
         }
     }
 
-    pub fn logical_xor(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = try_opt!(self.children[0].eval_int(ctx, row));
-        let arg1 = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn logical_xor(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg0 = try_opt!(self.children[0].eval_int(row));
+        let arg1 = try_opt!(self.children[1].eval_int(row));
         Ok(Some(((arg0 == 0) ^ (arg1 == 0)) as i64))
     }
 
-    pub fn int_is_true(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let v = self.children[0].eval_int(ctx, row)?;
+    pub fn int_is_true(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let v = self.children[0].eval_int(row)?;
         let ret = v.map_or(0, |v| (v != 0) as i64);
         Ok(Some(ret))
     }
 
-    pub fn real_is_true(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = self.children[0].eval_real(ctx, row)?;
+    pub fn real_is_true(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = self.children[0].eval_real(row)?;
         Ok(Some(input.map_or(0, |i| (i != 0f64) as i64)))
     }
 
-    pub fn decimal_is_true(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = self.children[0].eval_decimal(ctx, row)?;
+    pub fn decimal_is_true(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = self.children[0].eval_decimal(row)?;
         Ok(Some(input.map_or(0, |dec| !dec.is_zero() as i64)))
     }
 
-    pub fn int_is_false(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = self.children[0].eval_int(ctx, row)?;
+    pub fn int_is_false(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = self.children[0].eval_int(row)?;
         Ok(Some(input.map_or(0, |i| (i == 0) as i64)))
     }
 
-    pub fn real_is_false(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let v = self.children[0].eval_real(ctx, row)?;
+    pub fn real_is_false(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let v = self.children[0].eval_real(row)?;
         let ret = v.map_or(0, |v| (v == 0f64) as i64);
         Ok(Some(ret))
     }
 
-    pub fn decimal_is_false(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let v = self.children[0].eval_decimal(ctx, row)?;
+    pub fn decimal_is_false(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let v = self.children[0].eval_decimal(row)?;
         let ret = v.map_or(0, |v| v.is_zero() as i64);
         Ok(Some(ret))
     }
 
-    pub fn unary_not(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try_opt!(self.children[0].eval_int(ctx, row));
+    pub fn unary_not(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = try_opt!(self.children[0].eval_int(row));
         Ok(Some((arg == 0) as i64))
     }
 
-    pub fn unary_minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try_opt!(self.children[0].eval_int(ctx, row));
+    pub fn unary_minus_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let val = try_opt!(self.children[0].eval_int(row));
         if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
@@ -108,86 +109,85 @@ impl ScalarFunc {
 
     pub fn unary_minus_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let dec = try_opt!(self.children[0].eval_decimal(ctx, row)).into_owned();
+        let dec = try_opt!(self.children[0].eval_decimal(row)).into_owned();
         Ok(Some(Cow::Owned(-dec)))
     }
 
-    pub fn unary_minus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
+    pub fn unary_minus_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_real(row));
         Ok(Some(-val))
     }
 
-    pub fn decimal_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = self.children[0].eval_decimal(ctx, row)?;
+    pub fn decimal_is_null(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = self.children[0].eval_decimal(row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn int_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = self.children[0].eval_int(ctx, row)?;
+    pub fn int_is_null(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = self.children[0].eval_int(row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn real_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = self.children[0].eval_real(ctx, row)?;
+    pub fn real_is_null(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = self.children[0].eval_real(row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn string_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = self.children[0].eval_string(ctx, row)?;
+    pub fn string_is_null(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = self.children[0].eval_string(row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn time_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = self.children[0].eval_time(ctx, row)?;
+    pub fn time_is_null(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = self.children[0].eval_time(row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn duration_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = self.children[0].eval_duration(ctx, row)?;
+    pub fn duration_is_null(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = self.children[0].eval_duration(row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn json_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = self.children[0].eval_json(ctx, row)?;
+    pub fn json_is_null(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let arg = self.children[0].eval_json(row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn bit_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn bit_and(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         Ok(Some(lhs & rhs))
     }
 
-    pub fn bit_or(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn bit_or(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         Ok(Some(lhs | rhs))
     }
 
-    pub fn bit_xor(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn bit_xor(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         Ok(Some(lhs ^ rhs))
     }
 
-    pub fn bit_neg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+    pub fn bit_neg(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
         Ok(Some(!lhs))
     }
 
-    pub fn left_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn left_shift(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         let ret = (lhs as u64).checked_shl(rhs as u32).unwrap_or(0);
         Ok(Some(ret as i64))
     }
 
-    pub fn right_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn right_shift(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         let ret = (lhs as u64).checked_shr(rhs as u32).unwrap_or(0);
         Ok(Some(ret as i64))
     }

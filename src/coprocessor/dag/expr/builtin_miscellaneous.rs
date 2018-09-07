@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use super::{Result, ScalarFunc};
+use coprocessor::dag::executor::RowWithEvalContext;
 use std::borrow::Cow;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 impl ScalarFunc {
-    pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+    pub fn is_ipv4(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(row));
         if Ipv4Addr::from_str(&input).is_ok() {
             Ok(Some(1))
         } else {
@@ -29,18 +29,17 @@ impl ScalarFunc {
 
     pub fn inet6_aton<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let input = try_opt!(self.children[0].eval_string_and_decode(row));
         let ipv6_addr = Ipv6Addr::from_str(&input).map(|t| Some(Cow::Owned(t.octets().to_vec())));
         let ipv4_addr_eval =
             |_t| Ipv4Addr::from_str(&input).map(|t| Some(Cow::Owned(t.octets().to_vec())));
         ipv6_addr.or_else(ipv4_addr_eval).or(Ok(None))
     }
 
-    pub fn is_ipv6(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+    pub fn is_ipv6(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(row));
         if Ipv6Addr::from_str(&input).is_ok() {
             Ok(Some(1))
         } else {

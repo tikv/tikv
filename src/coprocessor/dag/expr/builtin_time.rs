@@ -11,24 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{EvalContext, Result, ScalarFunc};
+use super::{Result, ScalarFunc};
 use coprocessor::codec::error::Error;
 use coprocessor::codec::mysql::{self, Time};
-use coprocessor::codec::Datum;
+use coprocessor::dag::executor::RowWithEvalContext;
 use std::borrow::Cow;
 
 impl ScalarFunc {
     #[inline]
     pub fn date_format<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let t = try_opt!(self.children[0].eval_time(ctx, row));
+        let t = try_opt!(self.children[0].eval_time(row));
         if t.invalid_zero() {
             return Err(box_err!("Incorrect datetime value: '{}'", t));
         }
-        let format_mask = try_opt!(self.children[1].eval_string(ctx, row));
+        let format_mask = try_opt!(self.children[1].eval_string(row));
         let format_mask_str = String::from_utf8(format_mask.into_owned())?;
         let res = t.date_format(format_mask_str)?;
         Ok(Some(Cow::Owned(res.into_bytes())))
@@ -37,14 +36,13 @@ impl ScalarFunc {
     #[inline]
     pub fn date<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err),
+        let mut t = match self.children[0].eval_time(row) {
+            Err(err) => return Error::handle_invalid_time_error(row.ctx(), err),
             Ok(None) => {
                 return Error::handle_invalid_time_error(
-                    ctx,
+                    row.ctx(),
                     Error::incorrect_datetime_value("None"),
                 )
             }
@@ -52,7 +50,7 @@ impl ScalarFunc {
         };
         if t.is_zero() {
             return Error::handle_invalid_time_error(
-                ctx,
+                row.ctx(),
                 Error::incorrect_datetime_value(&format!("{}", t)),
             );
         }
@@ -118,7 +116,7 @@ mod test {
             let arg2 = datum_expr(Datum::Bytes(arg2.to_string().into_bytes()));
             let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
             let op = Expression::build(&mut ctx, f).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
         }
     }
@@ -135,7 +133,7 @@ mod test {
             let exp = Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap());
             let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
             let op = Expression::build(&mut ctx, f).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, exp);
         }
 
@@ -143,7 +141,7 @@ mod test {
         let input = datum_expr(Datum::Null);
         let f = scalar_func_expr(ScalarFuncSig::Date, &[input]);
         let op = Expression::build(&mut ctx, f).unwrap();
-        let got = op.eval(&mut ctx, &[]);
+        let got = op.eval_with_datum_vec(&mut ctx, vec![]);
         match got {
             Ok(_) => assert!(false, "null should be wrong"),
             Err(_) => assert!(true),
@@ -160,7 +158,7 @@ mod test {
         ));
         let f = scalar_func_expr(ScalarFuncSig::Date, &[arg]);
         let op = Expression::build(&mut ctx, f).unwrap();
-        let got = op.eval(&mut ctx, &[]);
+        let got = op.eval_with_datum_vec(&mut ctx, vec![]);
         match got {
             Ok(_) => assert!(false, "zero timestamp should be wrong"),
             Err(_) => assert!(true),

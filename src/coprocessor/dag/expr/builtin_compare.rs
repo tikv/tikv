@@ -15,9 +15,10 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::i64;
 
-use super::{Error, EvalContext, Result, ScalarFunc};
+use super::{Error, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::{datum, mysql, Datum};
+use coprocessor::codec::{datum, mysql};
+use coprocessor::dag::executor::RowWithEvalContext;
 use coprocessor::dag::expr::Expression;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -32,13 +33,8 @@ pub enum CmpOp {
 }
 
 impl ScalarFunc {
-    pub fn compare_int(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-        op: CmpOp,
-    ) -> Result<Option<i64>> {
-        let e = |i: usize| self.children[i].eval_int(ctx, row);
+    pub fn compare_int(&self, row: &RowWithEvalContext, op: CmpOp) -> Result<Option<i64>> {
+        let e = |i: usize| self.children[i].eval_int(row);
         do_compare(e, op, |l, r| {
             let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
             let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
@@ -46,122 +42,87 @@ impl ScalarFunc {
         })
     }
 
-    pub fn compare_real(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-        op: CmpOp,
-    ) -> Result<Option<i64>> {
+    pub fn compare_real(&self, row: &RowWithEvalContext, op: CmpOp) -> Result<Option<i64>> {
         do_compare(
-            |i| self.children[i].eval_real(ctx, row),
+            |i| self.children[i].eval_real(row),
             op,
             |l, r| datum::cmp_f64(l, r).map_err(Error::from),
         )
     }
 
-    pub fn compare_decimal(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-        op: CmpOp,
-    ) -> Result<Option<i64>> {
-        let e = |i: usize| self.children[i].eval_decimal(ctx, row);
+    pub fn compare_decimal(&self, row: &RowWithEvalContext, op: CmpOp) -> Result<Option<i64>> {
+        let e = |i: usize| self.children[i].eval_decimal(row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_string(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-        op: CmpOp,
-    ) -> Result<Option<i64>> {
-        let e = |i: usize| self.children[i].eval_string(ctx, row);
+    pub fn compare_string(&self, row: &RowWithEvalContext, op: CmpOp) -> Result<Option<i64>> {
+        let e = |i: usize| self.children[i].eval_string(row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_time(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-        op: CmpOp,
-    ) -> Result<Option<i64>> {
-        let e = |i: usize| self.children[i].eval_time(ctx, row);
+    pub fn compare_time(&self, row: &RowWithEvalContext, op: CmpOp) -> Result<Option<i64>> {
+        let e = |i: usize| self.children[i].eval_time(row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_duration(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-        op: CmpOp,
-    ) -> Result<Option<i64>> {
-        let e = |i: usize| self.children[i].eval_duration(ctx, row);
+    pub fn compare_duration(&self, row: &RowWithEvalContext, op: CmpOp) -> Result<Option<i64>> {
+        let e = |i: usize| self.children[i].eval_duration(row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
-    pub fn compare_json(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-        op: CmpOp,
-    ) -> Result<Option<i64>> {
-        let e = |i: usize| self.children[i].eval_json(ctx, row);
+    pub fn compare_json(&self, row: &RowWithEvalContext, op: CmpOp) -> Result<Option<i64>> {
+        let e = |i: usize| self.children[i].eval_json(row);
         do_compare(e, op, |l, r| Ok(l.cmp(&r)))
     }
 
     /// See http://dev.mysql.com/doc/refman/5.7/en/comparison-operators.html#function_coalesce
-    pub fn coalesce_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_coalesce(self, |v| v.eval_int(ctx, row))
+    pub fn coalesce_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        do_coalesce(self, |v| v.eval_int(row))
     }
 
-    pub fn coalesce_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        do_coalesce(self, |v| v.eval_real(ctx, row))
+    pub fn coalesce_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        do_coalesce(self, |v| v.eval_real(row))
     }
 
     pub fn coalesce_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        do_coalesce(self, |v| v.eval_decimal(ctx, row))
+        do_coalesce(self, |v| v.eval_decimal(row))
     }
 
     pub fn coalesce_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        do_coalesce(self, |v| v.eval_time(ctx, row))
+        do_coalesce(self, |v| v.eval_time(row))
     }
 
     pub fn coalesce_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        do_coalesce(self, |v| v.eval_duration(ctx, row))
+        do_coalesce(self, |v| v.eval_duration(row))
     }
 
     pub fn coalesce_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        do_coalesce(self, |v| v.eval_string(ctx, row))
+        do_coalesce(self, |v| v.eval_string(row))
     }
 
     pub fn coalesce_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        do_coalesce(self, |v| v.eval_json(ctx, row))
+        do_coalesce(self, |v| v.eval_json(row))
     }
 
-    pub fn in_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
         do_in(
             self,
-            |v| v.eval_int(ctx, row),
+            |v| v.eval_int(row),
             |l, r| {
                 let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
                 let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
@@ -175,36 +136,36 @@ impl ScalarFunc {
         )
     }
 
-    pub fn in_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn in_real(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
         do_in(
             self,
-            |v| v.eval_real(ctx, row),
+            |v| v.eval_real(row),
             |l, r| datum::cmp_f64(*l, *r).map_err(Error::from),
         )
     }
 
-    pub fn in_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_decimal(ctx, row), |l, r| Ok(l.cmp(r)))
+    pub fn in_decimal(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_decimal(row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_time(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_time(ctx, row), |l, r| Ok(l.cmp(r)))
+    pub fn in_time(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_time(row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_duration(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_duration(ctx, row), |l, r| Ok(l.cmp(r)))
+    pub fn in_duration(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_duration(row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_string(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_string(ctx, row), |l, r| Ok(l.cmp(r)))
+    pub fn in_string(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_string(row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn in_json(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        do_in(self, |v| v.eval_json(ctx, row), |l, r| Ok(l.cmp(r)))
+    pub fn in_json(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        do_in(self, |v| v.eval_json(row), |l, r| Ok(l.cmp(r)))
     }
 
-    pub fn interval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = match self.children[0].eval_int(ctx, row)? {
+    pub fn interval_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let target = match self.children[0].eval_int(row)? {
             None => return Ok(Some(-1)),
             Some(v) => v,
         };
@@ -214,7 +175,7 @@ impl ScalarFunc {
         let mut right = self.children.len();
         while left < right {
             let mid = left + (right - left) / 2;
-            let m = self.children[mid].eval_int(ctx, row)?.unwrap_or(target);
+            let m = self.children[mid].eval_int(row)?.unwrap_or(target);
 
             let mus = mysql::has_unsigned_flag(self.children[mid].get_tp().get_flag());
 
@@ -234,8 +195,8 @@ impl ScalarFunc {
         Ok(Some((left - 1) as i64))
     }
 
-    pub fn interval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = match self.children[0].eval_real(ctx, row)? {
+    pub fn interval_real(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let target = match self.children[0].eval_real(row)? {
             None => return Ok(Some(-1)),
             Some(v) => v,
         };
@@ -244,7 +205,7 @@ impl ScalarFunc {
         let mut right = self.children.len();
         while left < right {
             let mid = left + (right - left) / 2;
-            let m = self.children[mid].eval_real(ctx, row)?.unwrap_or(target);
+            let m = self.children[mid].eval_real(row)?.unwrap_or(target);
 
             if target >= m {
                 left = mid + 1

@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, EvalContext, Result, ScalarFunc};
+use super::{Error, Result, RowWithEvalContext, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::Datum;
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
 use std::borrow::Cow;
@@ -21,25 +20,24 @@ use std::{f64, i64};
 
 impl ScalarFunc {
     #[inline]
-    pub fn abs_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let n = try_opt!(self.children[0].eval_real(ctx, row));
+    pub fn abs_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(row));
         Ok(Some(n.abs()))
     }
 
     #[inline]
     pub fn abs_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d = try_opt!(self.children[0].eval_decimal(row));
         let result: Result<Decimal> = d.into_owned().abs().into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
     #[inline]
-    pub fn abs_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let n = try_opt!(self.children[0].eval_int(ctx, row));
+    pub fn abs_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let n = try_opt!(self.children[0].eval_int(row));
         if n == i64::MIN {
             return Err(Error::overflow("BIGINT", &format!("abs({})", n)));
         }
@@ -47,84 +45,89 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn abs_uint(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        self.children[0].eval_int(ctx, row)
+    pub fn abs_uint(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        self.children[0].eval_int(row)
     }
 
     #[inline]
-    pub fn ceil_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let n = try_opt!(self.children[0].eval_real(ctx, row));
+    pub fn ceil_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(row));
         Ok(Some(n.ceil()))
     }
 
     #[inline]
-    pub fn ceil_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let d: Result<Decimal> = d.ceil().into();
-        d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
+    pub fn ceil_dec_to_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let d: Result<Decimal> = try_opt!(self.children[0].eval_decimal(row)).ceil().into();
+        d.and_then(|dec| dec.as_i64_with_ctx(row.ctx())).map(Some)
     }
 
     #[inline]
     pub fn ceil_dec_to_dec<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d = try_opt!(self.children[0].eval_decimal(row));
         let result: Result<Decimal> = d.ceil().into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
     #[inline]
-    pub fn ceil_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        self.children[0].eval_int(ctx, row)
+    pub fn ceil_int_to_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        self.children[0].eval_int(row)
     }
 
     #[inline]
-    pub fn floor_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let n = try_opt!(self.children[0].eval_real(ctx, row));
+    pub fn floor_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(row));
         Ok(Some(n.floor()))
     }
 
     #[inline]
-    pub fn floor_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let d: Result<Decimal> = d.floor().into();
-        d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
+    pub fn floor_dec_to_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let d: Result<Decimal> = try_opt!(self.children[0].eval_decimal(row)).floor().into();
+        d.and_then(|dec| dec.as_i64_with_ctx(row.ctx())).map(Some)
     }
 
     #[inline]
     pub fn floor_dec_to_dec<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let d = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d = try_opt!(self.children[0].eval_decimal(row));
         let result: Result<Decimal> = d.floor().into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
     #[inline]
-    pub fn floor_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        self.children[0].eval_int(ctx, row)
+    pub fn floor_int_to_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        self.children[0].eval_int(row)
     }
 
     #[inline]
-    pub fn pi(&self, _ctx: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
+    pub fn pi(&self, _row: &RowWithEvalContext) -> Result<Option<f64>> {
         Ok(Some(f64::consts::PI))
     }
 
     #[inline]
-    pub fn crc32(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let d = try_opt!(self.children[0].eval_string(ctx, row));
+    pub fn crc32(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let d = try_opt!(self.children[0].eval_string(row));
         let mut digest = crc32::Digest::new(crc32::IEEE);
         digest.write(&d);
         Ok(Some(i64::from(digest.sum32())))
     }
 
     #[inline]
-    pub fn sign(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let f = try_opt!(self.children[0].eval_real(ctx, row));
+    pub fn sqrt(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let f = try_opt!(self.children[0].eval_real(row)) as f64;
+        if f < 0f64 {
+            Ok(None)
+        } else {
+            Ok(Some(f.sqrt()))
+        }
+    }
+
+    pub fn sign(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let f = try_opt!(self.children[0].eval_real(row));
         if f > 0f64 {
             Ok(Some(1))
         } else if f == 0f64 {
@@ -135,49 +138,38 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn sqrt(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let f = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
-        if f < 0f64 {
-            Ok(None)
-        } else {
-            Ok(Some(f.sqrt()))
-        }
-    }
-
-    #[inline]
-    pub fn cos(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let n = try_opt!(self.children[0].eval_real(ctx, row));
-        Ok(Some(n.cos()))
-    }
-
-    #[inline]
-    pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let n = try_opt!(self.children[0].eval_real(ctx, row));
+    pub fn tan(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(row));
         Ok(Some(n.tan()))
     }
 
     #[inline]
-    pub fn atan_1_arg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let f = try_opt!(self.children[0].eval_real(ctx, row));
-        Ok(Some(f.atan()))
+    pub fn cos(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(row));
+        Ok(Some(n.cos()))
     }
 
     #[inline]
-    pub fn atan_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let y = try_opt!(self.children[0].eval_real(ctx, row));
-        let x = try_opt!(self.children[1].eval_real(ctx, row));
-        Ok(Some(y.atan2(x)))
-    }
-
-    #[inline]
-    pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let x = try_opt!(self.children[0].eval_real(ctx, row));
-        let y = try_opt!(self.children[1].eval_real(ctx, row));
+    pub fn pow(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let x = try_opt!(self.children[0].eval_real(row));
+        let y = try_opt!(self.children[1].eval_real(row));
         let pow = x.pow(y);
         if pow.is_infinite() || pow.is_nan() {
             return Err(Error::overflow("DOUBLE", &format!("{}.pow({})", x, y)));
         }
         Ok(Some(pow))
+    }
+
+    pub fn atan_1_arg(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let f = try_opt!(self.children[0].eval_real(row));
+        Ok(Some(f.atan()))
+    }
+
+    #[inline]
+    pub fn atan_2_args(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let y = try_opt!(self.children[0].eval_real(row));
+        let x = try_opt!(self.children[1].eval_real(row));
+        Ok(Some(y.atan2(x)))
     }
 }
 
@@ -218,7 +210,7 @@ mod test {
                 f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
             }
             let op = Expression::build(&mut ctx, f).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -230,7 +222,7 @@ mod test {
         for tt in tests {
             let arg = datum_expr(tt.1);
             let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[arg])).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -299,7 +291,7 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -367,7 +359,7 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -376,7 +368,7 @@ mod test {
     fn test_pi() {
         let mut ctx = EvalContext::default();
         let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::PI, &[])).unwrap();
-        let got = op.eval(&mut ctx, &[]).unwrap();
+        let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
         assert_eq!(got, Datum::F64(f64::consts::PI));
     }
 
@@ -397,7 +389,7 @@ mod test {
             let arg = datum_expr(Datum::Bytes(arg.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::CRC32, &[arg]);
             let op = Expression::build(&mut ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             let exp = Datum::I64(exp);
             assert_eq!(got, exp);
         }
@@ -438,7 +430,7 @@ mod test {
             let arg = datum_expr(arg);
             let op = scalar_func_expr(ScalarFuncSig::Sqrt, &[arg]);
             let op = Expression::build(&mut ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -494,14 +486,14 @@ mod test {
             let arg = datum_expr(arg);
             let f = scalar_func_expr(sig, &[arg]);
             let op = Expression::build(&mut ctx, f).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert!((got.f64() - exp).abs() < f64::EPSILON);
         }
         for (sig, arg) in tests_invalid_f64 {
             let arg = datum_expr(arg);
             let f = scalar_func_expr(sig, &[arg]);
             let op = Expression::build(&mut ctx, f).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert!(got.f64().is_nan());
         }
     }
@@ -599,7 +591,7 @@ mod test {
             let arg1 = datum_expr(arg1);
             let mut f = scalar_func_expr(sig, &[arg0, arg1]);
             let op = Expression::build(&mut ctx, f).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -613,7 +605,7 @@ mod test {
             let arg1 = datum_expr(arg1);
             let mut f = scalar_func_expr(sig, &[arg0, arg1]);
             let op = Expression::build(&mut ctx, f).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }

@@ -15,19 +15,19 @@ use std::borrow::Cow;
 use std::{i64, str, u64};
 
 use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
-use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
-use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::mysql::decimal::{Decimal, RoundMode};
+use coprocessor::codec::mysql::{self, charset, types, Duration, Json, Res, Time};
+use coprocessor::dag::executor::RowWithEvalContext;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 
 impl ScalarFunc {
-    pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        self.children[0].eval_int(ctx, row)
+    pub fn cast_int_as_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        self.children[0].eval_int(row)
     }
 
-    pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
+    pub fn cast_real_as_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let val = try_opt!(self.children[0].eval_real(row));
         if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
             let uval = convert_float_to_uint(val, u64::MAX, types::DOUBLE)?;
             Ok(Some(uval as i64))
@@ -37,8 +37,8 @@ impl ScalarFunc {
         }
     }
 
-    pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+    pub fn cast_decimal_as_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let val = try_opt!(self.children[0].eval_decimal(row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
         let (overflow, res) = if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
             let uint = val.as_u64();
@@ -49,24 +49,26 @@ impl ScalarFunc {
         };
 
         if overflow {
-            if !ctx.cfg.overflow_as_warning {
+            if !row.ctx().cfg.overflow_as_warning {
                 return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
             }
-            ctx.warnings
+            row.ctx()
+                .warnings
                 .append_warning(Error::truncated_wrong_val("DECIMAL", &format!("{}", val)));
         }
         Ok(Some(res))
     }
 
-    pub fn cast_str_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_str_as_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
         if self.children[0].is_hybrid_type() {
-            return self.children[0].eval_int(ctx, row);
+            return self.children[0].eval_int(row);
         }
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let val = try_opt!(self.children[0].eval_string(row));
         let is_negative = match val.iter().skip_while(|x| x.is_ascii_whitespace()).next() {
             Some(&b'-') => true,
             _ => false,
         };
+        let ctx = row.ctx();
         let res = if is_negative {
             convert::bytes_to_int(ctx, &val).map(|v| {
                 ctx.warnings
@@ -96,8 +98,8 @@ impl ScalarFunc {
         }
     }
 
-    pub fn cast_time_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
+    pub fn cast_time_as_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let val = try_opt!(self.children[0].eval_time(row));
         let dec = val.to_decimal()?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
@@ -106,12 +108,8 @@ impl ScalarFunc {
         Ok(Some(res))
     }
 
-    pub fn cast_duration_as_int(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+    pub fn cast_duration_as_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let val = try_opt!(self.children[0].eval_duration(row));
         let dec = val.to_decimal()?;
         let dec = dec
             .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
@@ -120,78 +118,71 @@ impl ScalarFunc {
         Ok(Some(res))
     }
 
-    pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let val = try_opt!(self.children[0].eval_json(ctx, row));
+    pub fn cast_json_as_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let val = try_opt!(self.children[0].eval_json(row));
         let res = val.cast_to_int();
         Ok(Some(res))
     }
 
-    pub fn cast_int_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if !mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
-            Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
+    pub fn cast_int_as_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_int(row));
+        let ctx = row.ctx();
+        let f = if !mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
+            self.produce_float_with_specified_tp(ctx, val as f64)?
         } else {
             let uval = val as u64;
-            Ok(Some(
-                self.produce_float_with_specified_tp(ctx, uval as f64)?,
-            ))
-        }
+            self.produce_float_with_specified_tp(ctx, uval as f64)?
+        };
+        Ok(Some(f))
     }
 
-    pub fn cast_real_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
-        Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
+    pub fn cast_real_as_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_real(row));
+        Ok(Some(self.produce_float_with_specified_tp(row.ctx(), val)?))
     }
 
-    pub fn cast_decimal_as_real(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+    pub fn cast_decimal_as_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_decimal(row));
         let res = val.as_f64()?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
+        Ok(Some(self.produce_float_with_specified_tp(row.ctx(), res)?))
     }
 
-    pub fn cast_str_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_str_as_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
         if self.children[0].is_hybrid_type() {
-            return self.children[0].eval_real(ctx, row);
+            return self.children[0].eval_real(row);
         }
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let val = try_opt!(self.children[0].eval_string(row));
+        let ctx = row.ctx();
         let res = convert::bytes_to_f64(ctx, &val)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_time_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
+    pub fn cast_time_as_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_time(row));
         let val = val.to_decimal()?;
         let res = val.as_f64()?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
+        Ok(Some(self.produce_float_with_specified_tp(row.ctx(), res)?))
     }
 
-    pub fn cast_duration_as_real(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+    pub fn cast_duration_as_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_duration(row));
         let val = val.to_decimal()?;
         let res = val.as_f64()?;
-        Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
+        Ok(Some(self.produce_float_with_specified_tp(row.ctx(), res)?))
     }
 
-    pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let val = try_opt!(self.children[0].eval_json(ctx, row));
+    pub fn cast_json_as_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let val = try_opt!(self.children[0].eval_json(row));
+        let ctx = row.ctx();
         let val = val.cast_to_real(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
     pub fn cast_int_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let val = try_opt!(self.children[0].eval_int(row));
         let field_type = &self.children[0].get_tp();
         let res = if !mysql::has_unsigned_flag(u64::from(field_type.get_flag())) {
             Cow::Owned(Decimal::from(val))
@@ -199,208 +190,190 @@ impl ScalarFunc {
             let uval = val as u64;
             Cow::Owned(Decimal::from(uval))
         };
-        self.produce_dec_with_specified_tp(ctx, res).map(Some)
+        self.produce_dec_with_specified_tp(row.ctx(), res).map(Some)
     }
 
     pub fn cast_real_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let val = try_opt!(self.children[0].eval_real(row));
         let res = Decimal::from_f64(val)?;
-        self.produce_dec_with_specified_tp(ctx, Cow::Owned(res))
+        self.produce_dec_with_specified_tp(row.ctx(), Cow::Owned(res))
             .map(Some)
     }
 
     pub fn cast_decimal_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
-        self.produce_dec_with_specified_tp(ctx, val).map(Some)
+        let val = try_opt!(self.children[0].eval_decimal(row));
+        self.produce_dec_with_specified_tp(row.ctx(), val).map(Some)
     }
 
     pub fn cast_str_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let dec = if self.children[0].is_hybrid_type() {
-            try_opt!(self.children[0].eval_decimal(ctx, row))
+            try_opt!(self.children[0].eval_decimal(row))
         } else {
-            let val = try_opt!(self.children[0].eval_string(ctx, row));
+            let val = try_opt!(self.children[0].eval_string(row));
             match Decimal::from_bytes(&val)? {
                 Res::Ok(d) => Cow::Owned(d),
                 Res::Truncated(d) | Res::Overflow(d) => {
-                    ctx.handle_truncate(true)?;
+                    row.ctx().handle_truncate(true)?;
                     Cow::Owned(d)
                 }
             }
         };
-        self.produce_dec_with_specified_tp(ctx, dec).map(Some)
+        self.produce_dec_with_specified_tp(row.ctx(), dec).map(Some)
     }
 
     pub fn cast_time_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let val = try_opt!(self.children[0].eval_time(row));
         let dec = val.to_decimal()?;
-        self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
+        self.produce_dec_with_specified_tp(row.ctx(), Cow::Owned(dec))
             .map(Some)
     }
 
     pub fn cast_duration_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let val = try_opt!(self.children[0].eval_duration(row));
         let dec = val.to_decimal()?;
-        self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
+        self.produce_dec_with_specified_tp(row.ctx(), Cow::Owned(dec))
             .map(Some)
     }
 
     pub fn cast_json_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real(ctx)?;
+        let val = try_opt!(self.children[0].eval_json(row));
+        let val = val.cast_to_real(row.ctx())?;
         let dec = Decimal::from_f64(val)?;
-        self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
+        self.produce_dec_with_specified_tp(row.ctx(), Cow::Owned(dec))
             .map(Some)
     }
 
     pub fn cast_int_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let val = try_opt!(self.children[0].eval_int(row));
         let s = if mysql::has_unsigned_flag(u64::from(self.children[0].get_tp().get_flag())) {
             let uval = val as u64;
             format!("{}", uval)
         } else {
             format!("{}", val)
         };
-        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+        self.produce_str_with_specified_tp(row.ctx(), Cow::Owned(s.into_bytes()))
             .map(Some)
     }
 
     pub fn cast_real_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let val = try_opt!(self.children[0].eval_real(row));
         let s = format!("{}", val);
-        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+        self.produce_str_with_specified_tp(row.ctx(), Cow::Owned(s.into_bytes()))
             .map(Some)
     }
 
     pub fn cast_decimal_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = try_opt!(self.children[0].eval_decimal(row));
         let s = val.to_string();
-        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+        self.produce_str_with_specified_tp(row.ctx(), Cow::Owned(s.into_bytes()))
             .map(Some)
     }
 
     pub fn cast_str_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
-        self.produce_str_with_specified_tp(ctx, val).map(Some)
+        let val = try_opt!(self.children[0].eval_string(row));
+        self.produce_str_with_specified_tp(row.ctx(), val).map(Some)
     }
 
     pub fn cast_time_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let val = try_opt!(self.children[0].eval_time(row));
         let s = format!("{}", val);
-        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+        self.produce_str_with_specified_tp(row.ctx(), Cow::Owned(s.into_bytes()))
             .map(Some)
     }
 
     pub fn cast_duration_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let val = try_opt!(self.children[0].eval_duration(row));
         let s = format!("{}", val);
-        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+        self.produce_str_with_specified_tp(row.ctx(), Cow::Owned(s.into_bytes()))
             .map(Some)
     }
 
     pub fn cast_json_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = try_opt!(self.children[0].eval_json(row));
         let s = val.to_string();
-        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+        self.produce_str_with_specified_tp(row.ctx(), Cow::Owned(s.into_bytes()))
             .map(Some)
     }
 
     pub fn cast_int_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let val = try_opt!(self.children[0].eval_int(row));
         let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, &s)?))
+        Ok(Some(self.produce_time_with_str(row.ctx(), &s)?))
     }
 
     pub fn cast_real_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let val = try_opt!(self.children[0].eval_real(row));
         let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, &s)?))
+        Ok(Some(self.produce_time_with_str(row.ctx(), &s)?))
     }
 
     pub fn cast_decimal_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = try_opt!(self.children[0].eval_decimal(row));
         let s = val.to_string();
-        Ok(Some(self.produce_time_with_str(ctx, &s)?))
+        Ok(Some(self.produce_time_with_str(row.ctx(), &s)?))
     }
 
     pub fn cast_str_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        Ok(Some(self.produce_time_with_str(ctx, &val)?))
+        let val = try_opt!(self.children[0].eval_string_and_decode(row));
+        Ok(Some(self.produce_time_with_str(row.ctx(), &val)?))
     }
 
     pub fn cast_time_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let val = try_opt!(self.children[0].eval_time(row));
         let mut val = val.into_owned();
         val.round_frac(self.tp.get_decimal() as i8)?;
         // TODO: tidb only update tp when tp is Date
@@ -410,37 +383,34 @@ impl ScalarFunc {
 
     pub fn cast_duration_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = Time::from_duration(ctx.cfg.tz, self.tp.get_tp() as u8, val.as_ref())?;
+        let val = try_opt!(self.children[0].eval_duration(row));
+        let mut val = Time::from_duration(row.ctx().cfg.tz, self.tp.get_tp() as u8, val.as_ref())?;
         val.round_frac(self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
 
     pub fn cast_json_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = try_opt!(self.children[0].eval_json(row));
         let s = val.unquote()?;
-        Ok(Some(self.produce_time_with_str(ctx, &s)?))
+        Ok(Some(self.produce_time_with_str(row.ctx(), &s)?))
     }
 
     pub fn cast_int_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let val = try_opt!(self.children[0].eval_int(row));
         let s = format!("{}", val);
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
             Err(e) => if e.is_overflow() {
-                ctx.handle_overflow(e)?;
+                row.ctx().handle_overflow(e)?;
                 Ok(None)
             } else {
                 Err(e)
@@ -450,10 +420,9 @@ impl ScalarFunc {
 
     pub fn cast_real_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let val = try_opt!(self.children[0].eval_real(row));
         let s = format!("{}", val);
         let dur = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(dur)))
@@ -461,10 +430,9 @@ impl ScalarFunc {
 
     pub fn cast_decimal_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = try_opt!(self.children[0].eval_decimal(row));
         let s = val.to_string();
         let dur = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(dur)))
@@ -472,20 +440,18 @@ impl ScalarFunc {
 
     pub fn cast_str_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
+        let val = try_opt!(self.children[0].eval_string(row));
         let dur = Duration::parse(val.as_ref(), self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(dur)))
     }
 
     pub fn cast_time_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let val = try_opt!(self.children[0].eval_time(row));
         let mut res = val.to_duration()?;
         res.round_frac(self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
@@ -493,10 +459,9 @@ impl ScalarFunc {
 
     pub fn cast_duration_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let val = try_opt!(self.children[0].eval_duration(row));
         let mut res = val.into_owned();
         res.round_frac(self.tp.get_decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
@@ -504,10 +469,9 @@ impl ScalarFunc {
 
     pub fn cast_json_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Duration>>> {
-        let val = try_opt!(self.children[0].eval_json(ctx, row));
+        let val = try_opt!(self.children[0].eval_json(row));
         let s = val.unquote()?;
         // TODO: tidb would handle truncate here
         let d = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
@@ -516,10 +480,9 @@ impl ScalarFunc {
 
     pub fn cast_int_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_int(ctx, row));
+        let val = try_opt!(self.children[0].eval_int(row));
         let flag = self.children[0].get_tp().get_flag();
         let j = if mysql::has_is_boolean_flag(flag) {
             Json::Boolean(val != 0)
@@ -533,20 +496,18 @@ impl ScalarFunc {
 
     pub fn cast_real_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
+        let val = try_opt!(self.children[0].eval_real(row));
         let j = Json::Double(val);
         Ok(Some(Cow::Owned(j)))
     }
 
     pub fn cast_decimal_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let val = try_opt!(self.children[0].eval_decimal(row));
         let val = val.as_f64()?;
         let j = Json::Double(val);
         Ok(Some(Cow::Owned(j)))
@@ -554,10 +515,9 @@ impl ScalarFunc {
 
     pub fn cast_str_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let val = try_opt!(self.children[0].eval_string_and_decode(row));
         if mysql::has_parse_to_json_flag(self.tp.get_flag()) {
             let j: Json = val.parse()?;
             Ok(Some(Cow::Owned(j)))
@@ -568,10 +528,9 @@ impl ScalarFunc {
 
     pub fn cast_time_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_time(ctx, row));
+        let val = try_opt!(self.children[0].eval_time(row));
         let mut val = val.into_owned();
         if val.get_tp() == types::DATETIME || val.get_tp() == types::TIMESTAMP {
             val.set_fsp(mysql::MAX_FSP as u8);
@@ -582,10 +541,9 @@ impl ScalarFunc {
 
     pub fn cast_duration_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_duration(ctx, row));
+        let val = try_opt!(self.children[0].eval_duration(row));
         let mut val = val.into_owned();
         val.fsp = mysql::MAX_FSP as u8;
         let s = format!("{}", val);
@@ -594,10 +552,9 @@ impl ScalarFunc {
 
     pub fn cast_json_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Json>>> {
-        self.children[0].eval_json(ctx, row)
+        self.children[0].eval_json(row)
     }
 
     fn produce_dec_with_specified_tp<'a, 'b: 'a>(
@@ -711,6 +668,7 @@ mod test {
     use coprocessor::codec::error::*;
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time, Tz};
     use coprocessor::codec::{convert, Datum};
+    use coprocessor::dag::executor::{Row, RowWithEvalContext};
     use coprocessor::dag::expr::test::{col_expr as base_col_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
@@ -727,7 +685,6 @@ mod test {
 
     #[test]
     fn test_cast_as_int() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let time_int = 2012_12_12_12_00_23i64;
@@ -805,7 +762,7 @@ mod test {
             ),
         ];
 
-        let null_cols = vec![Datum::Null];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, tp, flag, col, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let mut exp = scalar_func_expr(sig, &[col_expr]);
@@ -813,17 +770,26 @@ mod test {
                 exp.mut_field_type().set_flag(flag.unwrap() as u32);
             }
             let e = Expression::build(&mut ctx, exp).unwrap();
-            let res = e.eval_int(&mut ctx, &col).unwrap();
-            assert_eq!(res.unwrap(), expect);
+
+            {
+                let row = Row::from_datum_vec(col);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_int(&row_with_ctx).unwrap();
+                assert_eq!(res.unwrap(), expect);
+            }
+
             // test None
-            let res = e.eval_int(&mut ctx, &null_cols).unwrap();
-            assert!(res.is_none());
+            {
+                let row = Row::from_datum_vec(vec![Datum::Null]);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_int(&row_with_ctx).unwrap();
+                assert!(res.is_none());
+            }
         }
     }
 
     #[test]
     fn test_cast_as_real() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
         let int_t = 2012_12_12_12_00_23u64;
@@ -943,24 +909,33 @@ mod test {
             ),
         ];
 
-        let null_cols = vec![Datum::Null];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let mut exp = scalar_func_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
             let e = Expression::build(&mut ctx, exp).unwrap();
-            let res = e.eval_real(&mut ctx, &col).unwrap();
-            assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
+
+            {
+                let row = Row::from_datum_vec(col);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_real(&row_with_ctx).unwrap();
+                assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
+            }
+
             // test None
-            let res = e.eval_real(&mut ctx, &null_cols).unwrap();
-            assert!(res.is_none());
+            {
+                let row = Row::from_datum_vec(vec![Datum::Null]);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_real(&row_with_ctx).unwrap();
+                assert!(res.is_none());
+            }
         }
     }
 
     #[test]
     fn test_cast_as_decimal() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         let int_t = 20121212120023u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
@@ -1079,24 +1054,33 @@ mod test {
             ),
         ];
 
-        let null_cols = vec![Datum::Null];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let mut exp = scalar_func_expr(sig, &[col_expr]);
             exp.mut_field_type().set_flen(flen as i32);
             exp.mut_field_type().set_decimal(decimal as i32);
             let e = Expression::build(&mut ctx, exp).unwrap();
-            let res = e.eval_decimal(&mut ctx, &col).unwrap();
-            assert_eq!(res.unwrap().into_owned(), expect);
+
+            {
+                let row = Row::from_datum_vec(col);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_decimal(&row_with_ctx).unwrap();
+                assert_eq!(res.unwrap().into_owned(), expect);
+            }
+
             // test None
-            let res = e.eval_decimal(&mut ctx, &null_cols).unwrap();
-            assert!(res.is_none());
+            {
+                let row = Row::from_datum_vec(vec![Datum::Null]);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_decimal(&row_with_ctx).unwrap();
+                assert!(res.is_none());
+            }
         }
     }
 
     #[test]
     fn test_cast_as_str() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t_str = "2012-12-12 12:00:23";
         let t = Time::parse_utc_datetime(t_str, 0).unwrap();
         let dur_str = b"12:00:23";
@@ -1232,7 +1216,7 @@ mod test {
             ),
         ];
 
-        let null_cols = vec![Datum::Null];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, tp, charset, to_tp, col, flen, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let mut ex = scalar_func_expr(sig, &[col_expr]);
@@ -1243,23 +1227,32 @@ mod test {
             }
             ex.mut_field_type().set_charset(String::from(charset));
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_string(&mut ctx, &col).unwrap();
-            assert_eq!(
-                res.unwrap().into_owned(),
-                exp,
-                "sig: {:?} with flen {} failed",
-                sig,
-                flen
-            );
+
+            {
+                let row = Row::from_datum_vec(col);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_string(&row_with_ctx).unwrap();
+                assert_eq!(
+                    res.unwrap().into_owned(),
+                    exp,
+                    "sig: {:?} with flen {} failed",
+                    sig,
+                    flen
+                );
+            }
+
             // test None
-            let res = e.eval_string(&mut ctx, &null_cols).unwrap();
-            assert!(res.is_none());
+            {
+                let row = Row::from_datum_vec(vec![Datum::Null]);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_string(&row_with_ctx).unwrap();
+                assert!(res.is_none());
+            }
         }
     }
 
     #[test]
     fn test_cast_as_time() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
         let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
@@ -1410,7 +1403,7 @@ mod test {
             ),
         ];
 
-        let null_cols = vec![Datum::Null];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let mut ex = scalar_func_expr(sig, &[col_expr]);
@@ -1418,29 +1411,37 @@ mod test {
             ex.mut_field_type().set_tp(i32::from(to_tp));
             let e = Expression::build(&mut ctx, ex).unwrap();
 
-            let res = e.eval_time(&mut ctx, col).unwrap();
-            let data = res.unwrap().into_owned();
-            let mut expt = exp.clone();
-            if to_fsp != mysql::UN_SPECIFIED_FSP {
-                expt.set_fsp(to_fsp as u8);
+            {
+                let row = Row::from_datum_vec(col.clone());
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_time(&row_with_ctx).unwrap();
+                let data = res.unwrap().into_owned();
+                let mut expt = exp.clone();
+                if to_fsp != mysql::UN_SPECIFIED_FSP {
+                    expt.set_fsp(to_fsp as u8);
+                }
+                assert_eq!(
+                    data.to_string(),
+                    expt.to_string(),
+                    "sig: {:?} with to tp {} and fsp {} failed",
+                    sig,
+                    to_tp,
+                    to_fsp,
+                );
             }
-            assert_eq!(
-                data.to_string(),
-                expt.to_string(),
-                "sig: {:?} with to tp {} and fsp {} failed",
-                sig,
-                to_tp,
-                to_fsp,
-            );
+
             // test None
-            let res = e.eval_time(&mut ctx, &null_cols).unwrap();
-            assert!(res.is_none());
+            {
+                let row = Row::from_datum_vec(vec![Datum::Null]);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_time(&row_with_ctx).unwrap();
+                assert!(res.is_none());
+            }
         }
     }
 
     #[test]
     fn test_cast_as_duration() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
 
@@ -1573,34 +1574,43 @@ mod test {
             ),
         ];
 
-        let null_cols = vec![Datum::Null];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, tp, col, to_fsp, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type().set_decimal(i32::from(to_fsp));
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_duration(&mut ctx, col).unwrap();
-            let data = res.unwrap().into_owned();
-            let mut expt = exp.clone();
-            if to_fsp != mysql::UN_SPECIFIED_FSP {
-                expt.fsp = to_fsp as u8;
+
+            {
+                let row = Row::from_datum_vec(col.clone());
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_duration(&row_with_ctx).unwrap();
+                let data = res.unwrap().into_owned();
+                let mut expt = exp.clone();
+                if to_fsp != mysql::UN_SPECIFIED_FSP {
+                    expt.fsp = to_fsp as u8;
+                }
+                assert_eq!(
+                    data.to_string(),
+                    expt.to_string(),
+                    "sig: {:?} with fsp {} failed",
+                    sig,
+                    to_fsp,
+                );
             }
-            assert_eq!(
-                data.to_string(),
-                expt.to_string(),
-                "sig: {:?} with fsp {} failed",
-                sig,
-                to_fsp,
-            );
+
             // test None
-            let res = e.eval_duration(&mut ctx, &null_cols).unwrap();
-            assert!(res.is_none());
+            {
+                let row = Row::from_datum_vec(vec![Datum::Null]);
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_duration(&row_with_ctx).unwrap();
+                assert!(res.is_none());
+            }
         }
     }
 
     #[test]
     fn test_cast_int_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 Some(types::UNSIGNED_FLAG),
@@ -1620,6 +1630,8 @@ mod test {
             (None, vec![Datum::I64(-1)], Some(Json::I64(-1))),
             (None, vec![Datum::Null], None),
         ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (flag, cols, exp) in cases {
             let mut col_expr = col_expr(0, i32::from(types::LONG_LONG));
             if flag.is_some() {
@@ -1627,7 +1639,10 @@ mod test {
             }
             let ex = scalar_func_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_json(&mut ctx, &cols).unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_json(&row_with_ctx).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1638,16 +1653,19 @@ mod test {
 
     #[test]
     fn test_cast_real_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (vec![Datum::F64(32.0001)], Some(Json::Double(32.0001))),
             (vec![Datum::Null], None),
         ];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::DOUBLE));
             let ex = scalar_func_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_json(&mut ctx, &cols).unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_json(&row_with_ctx).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1658,7 +1676,6 @@ mod test {
 
     #[test]
     fn test_cast_decimal_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
@@ -1666,12 +1683,15 @@ mod test {
             ),
             (vec![Datum::Null], None),
         ];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
             let ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
-
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_json(&mut ctx, &cols).unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_json(&row_with_ctx).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1682,7 +1702,6 @@ mod test {
 
     #[test]
     fn test_cast_str_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 false,
@@ -1697,6 +1716,8 @@ mod test {
             (false, vec![Datum::Null], None),
             (true, vec![Datum::Null], None),
         ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (by_parse, cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
@@ -1706,7 +1727,10 @@ mod test {
                 ex.mut_field_type().set_flag(flag);
             }
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_json(&mut ctx, &cols).unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_json(&row_with_ctx).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1717,8 +1741,6 @@ mod test {
 
     #[test]
     fn test_cast_time_as_json() {
-        let cfg = EvalConfig::default_for_test();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
         let time_str = "2012-12-12 11:11:11";
         let date_str = "2012-12-12";
         let tz = Tz::utc();
@@ -1751,11 +1773,17 @@ mod test {
             ),
             (0, vec![Datum::Null], None),
         ];
+
+        let cfg = EvalConfig::default_for_test();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
         for (tp, cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(tp));
             let ex = scalar_func_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_json(&mut ctx, &cols).unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_json(&row_with_ctx).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1766,7 +1794,6 @@ mod test {
 
     #[test]
     fn test_cast_duration_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let dur_str = "11:12:08";
         let dur_str_expect = "11:12:08.000000";
 
@@ -1777,11 +1804,16 @@ mod test {
             ),
             (vec![Datum::Null], None),
         ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
             let ex = scalar_func_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_json(&mut ctx, &cols).unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_json(&row_with_ctx).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1792,7 +1824,6 @@ mod test {
 
     #[test]
     fn test_cast_json_as_json() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 vec![Datum::Json(Json::Boolean(true))],
@@ -1800,11 +1831,16 @@ mod test {
             ),
             (vec![Datum::Null], None),
         ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (cols, exp) in cases {
             let col_expr = col_expr(0, i32::from(types::STRING));
             let ex = scalar_func_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_json(&mut ctx, &cols).unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_json(&row_with_ctx).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1831,28 +1867,37 @@ mod test {
                 u64::MAX as i64,
             ),
         ];
+
         for (flag, cols, exp) in cases {
             let mut col_expr = col_expr(0, i32::from(types::NEW_DECIMAL));
             let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
             ex.mut_field_type().set_flag(flag as u32);
 
+            let row = Row::from_datum_vec(cols);
+
             // test with overflow as warning
-            let mut ctx =
-                EvalContext::new(Arc::new(EvalConfig::new().set_overflow_as_warning(true)));
+            let cfg = Arc::new(EvalConfig::new().set_overflow_as_warning(true));
+            let mut ctx = EvalContext::new(cfg);
             let e = Expression::build(&mut ctx, ex.clone()).unwrap();
-            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
-            assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, 1);
-            assert_eq!(
-                ctx.warnings.warnings[0].get_code(),
-                ERR_TRUNCATE_WRONG_VALUE
-            );
+            {
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_int(&row_with_ctx).unwrap().unwrap();
+                assert_eq!(res, exp);
+                assert_eq!(row_with_ctx.ctx().warnings.warning_cnt, 1);
+                assert_eq!(
+                    row_with_ctx.ctx().warnings.warnings[0].get_code(),
+                    ERR_TRUNCATE_WRONG_VALUE
+                );
+            }
 
             // test overflow as error
-            ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_int(&mut ctx, &cols);
-            assert!(res.is_err());
+            {
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_int(&row_with_ctx);
+                assert!(res.is_err());
+            }
         }
     }
 
@@ -1874,18 +1919,23 @@ mod test {
             (0, vec![Datum::Bytes(b"-1".to_vec())], -1, 1),
         ];
 
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
         for (flag, cols, exp, warnings_cnt) in cases {
             let mut col_expr = col_expr(0, i32::from(types::STRING));
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             ex.mut_field_type().set_flag(flag as u32);
-
-            let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
             let e = Expression::build(&mut ctx, ex.clone()).unwrap();
-            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
+
+            let row = Row::from_datum_vec(cols);
+            let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+            let res = e.eval_int(&row_with_ctx).unwrap().unwrap();
             assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
+            assert_eq!(row_with_ctx.ctx().warnings.warning_cnt, warnings_cnt);
             if warnings_cnt > 0 {
-                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
+                assert_eq!(
+                    row_with_ctx.ctx().warnings.warnings[0].get_code(),
+                    ERR_UNKNOWN
+                );
             }
         }
 
@@ -1903,26 +1953,35 @@ mod test {
         for (cols, exp) in cases {
             let mut col_expr = col_expr(0, i32::from(types::STRING));
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            let row = Row::from_datum_vec(cols);
+
             // test with overflow as warning && in select stmt
-            let mut ctx = EvalContext::new(Arc::new(
+            let cfg = Arc::new(
                 EvalConfig::new()
                     .set_overflow_as_warning(true)
                     .set_in_select_stmt(true),
-            ));
-            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
-            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
-            assert_eq!(res, exp);
-            assert_eq!(ctx.warnings.warning_cnt, 1);
-            assert_eq!(
-                ctx.warnings.warnings[0].get_code(),
-                ERR_TRUNCATE_WRONG_VALUE
             );
+            let mut ctx = EvalContext::new(cfg);
+            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+            {
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_int(&row_with_ctx).unwrap().unwrap();
+                assert_eq!(res, exp);
+                assert_eq!(row_with_ctx.ctx().warnings.warning_cnt, 1);
+                assert_eq!(
+                    row_with_ctx.ctx().warnings.warnings[0].get_code(),
+                    ERR_TRUNCATE_WRONG_VALUE
+                );
+            }
 
             // test overflow as error
-            ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
             let e = Expression::build(&mut ctx, ex).unwrap();
-            let res = e.eval_int(&mut ctx, &cols);
-            assert!(res.is_err());
+            {
+                let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
+                let res = e.eval_int(&row_with_ctx);
+                assert!(res.is_err());
+            }
         }
     }
 

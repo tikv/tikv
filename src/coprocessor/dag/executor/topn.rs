@@ -20,6 +20,7 @@ use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
 use coprocessor::codec::datum::Datum;
+use coprocessor::dag::executor::RowWithEvalContext;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
 
@@ -43,10 +44,10 @@ impl OrderBy {
         })
     }
 
-    fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Vec<Datum>> {
+    fn eval(&self, row: &RowWithEvalContext) -> Result<Vec<Datum>> {
         let mut res = Vec::with_capacity(self.exprs.len());
         for expr in &self.exprs {
-            res.push(expr.eval(ctx, row)?);
+            res.push(expr.eval(row)?);
         }
         Ok(res)
     }
@@ -54,7 +55,6 @@ impl OrderBy {
 
 pub struct TopNExecutor {
     order_by: OrderBy,
-    related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
     eval_ctx: Option<EvalContext>,
     eval_warnings: Option<EvalWarnings>,
@@ -79,7 +79,6 @@ impl TopNExecutor {
         let order_by = OrderBy::new(&mut eval_ctx, order_by)?;
         Ok(TopNExecutor {
             order_by,
-            related_cols_offset: visitor.column_offsets(),
             iter: None,
             eval_ctx: Some(eval_ctx),
             eval_warnings: None,
@@ -102,10 +101,9 @@ impl TopNExecutor {
         let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
         let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
         while let Some(row) = self.src.next()? {
+            let ctx = &mut ctx.borrow_mut();
+            let ob_values = self.order_by.eval(&RowWithEvalContext::new(&row, ctx))?;
             let row = row.take_origin();
-            let cols =
-                row.inflate_cols_with_offsets(&mut ctx.borrow_mut(), &self.related_cols_offset)?;
-            let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
         }
         let sort_rows = heap.into_sorted_vec()?;

@@ -21,6 +21,7 @@ use tipb::expression::{Expr, ExprType};
 use util::collections::{OrderMap, OrderMapEntry};
 
 use coprocessor::codec::datum::{self, Datum};
+use coprocessor::dag::executor::RowWithEvalContext;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::*;
 
@@ -52,24 +53,19 @@ impl AggFuncExpr {
         })
     }
 
-    fn eval_args(&mut self, ctx: &mut EvalContext, row: &[Datum]) -> Result<()> {
+    fn eval_args(&mut self, row: &RowWithEvalContext) -> Result<()> {
         self.eval_buffer.clear();
         for arg in &self.args {
-            self.eval_buffer.push(arg.eval(ctx, row)?);
+            self.eval_buffer.push(arg.eval(row)?);
         }
         Ok(())
     }
 }
 
 impl AggrFunc {
-    fn update_with_expr(
-        &mut self,
-        ctx: &mut EvalContext,
-        expr: &mut AggFuncExpr,
-        row: &[Datum],
-    ) -> Result<()> {
-        expr.eval_args(ctx, row)?;
-        self.update(ctx, &mut expr.eval_buffer)?;
+    fn update_with_expr(&mut self, expr: &mut AggFuncExpr, row: &RowWithEvalContext) -> Result<()> {
+        expr.eval_args(row)?;
+        self.update(row.ctx(), &mut expr.eval_buffer)?;
         Ok(())
     }
 }
@@ -79,7 +75,6 @@ struct AggExecutor {
     aggr_func: Vec<AggFuncExpr>,
     executed: bool,
     ctx: EvalContext,
-    related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor + Send>,
     first_collect: bool,
 }
@@ -101,29 +96,23 @@ impl AggExecutor {
             aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
             executed: false,
             ctx,
-            related_cols_offset: visitor.column_offsets(),
             src,
             first_collect: true,
         })
     }
 
-    fn next(&mut self) -> Result<Option<Vec<Datum>>> {
-        if let Some(row) = self.src.next()? {
-            let row = row.take_origin();
-            row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)
-                .map(Some)
-        } else {
-            Ok(None)
-        }
+    fn next(&mut self) -> Result<Option<Row>> {
+        self.src.next()
     }
 
-    fn get_group_by_cols(&mut self, row: &[Datum]) -> Result<Vec<Datum>> {
+    fn get_group_by_cols(&mut self, row: &Row) -> Result<Vec<Datum>> {
         if self.group_by.is_empty() {
             return Ok(Vec::default());
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
+        let row_with_ctx = RowWithEvalContext::new(row, &mut self.ctx);
         for expr in &self.group_by {
-            let v = expr.eval(&mut self.ctx, row)?;
+            let v = expr.eval(&row_with_ctx)?;
             vals.push(v);
         }
         Ok(vals)
@@ -179,7 +168,7 @@ impl HashAggExecutor {
         })
     }
 
-    fn get_group_key(&mut self, row: &[Datum]) -> Result<Vec<u8>> {
+    fn get_group_key(&mut self, row: &Row) -> Result<Vec<u8>> {
         let group_by_cols = self.inner.get_group_by_cols(row)?;
         if group_by_cols.is_empty() {
             let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
@@ -192,12 +181,13 @@ impl HashAggExecutor {
     fn aggregate(&mut self) -> Result<()> {
         while let Some(cols) = self.inner.next()? {
             let group_key = self.get_group_key(&cols)?;
+            let cols_with_ctx = RowWithEvalContext::new(&cols, &mut self.inner.ctx);
             match self.group_key_aggrs.entry(group_key) {
                 OrderMapEntry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.inner.aggr_func.len());
                     for expr in &mut self.inner.aggr_func {
                         let mut aggr = aggregate::build_aggr_func(expr.tp)?;
-                        aggr.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
+                        aggr.update_with_expr(expr, &cols_with_ctx)?;
                         aggrs.push(aggr);
                     }
                     e.insert(aggrs);
@@ -205,7 +195,7 @@ impl HashAggExecutor {
                 OrderMapEntry::Occupied(e) => {
                     let aggrs = e.into_mut();
                     for (expr, aggr) in self.inner.aggr_func.iter_mut().zip(aggrs) {
-                        aggr.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
+                        aggr.update_with_expr(expr, &cols_with_ctx)?;
                     }
                 }
             }
@@ -275,8 +265,10 @@ impl Executor for StreamAggExecutor {
             } else {
                 None
             };
+
+            let cols_with_ctx = RowWithEvalContext::new(&cols, &mut self.inner.ctx);
             for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
-                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
+                func.update_with_expr(expr, &cols_with_ctx)?;
             }
             if new_group {
                 return Ok(ret);
@@ -349,7 +341,7 @@ impl StreamAggExecutor {
         })
     }
 
-    fn meet_new_group(&mut self, row: &[Datum]) -> Result<bool> {
+    fn meet_new_group(&mut self, row: &Row) -> Result<bool> {
         let mut cur_group_by_cols = self.inner.get_group_by_cols(row)?;
         if cur_group_by_cols.is_empty() {
             return Ok(false);

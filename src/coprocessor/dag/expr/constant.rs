@@ -128,6 +128,7 @@ impl Constant {
 mod test {
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
+    use coprocessor::dag::executor::{Row, RowWithEvalContext};
     use coprocessor::dag::expr::test::datum_expr;
     use coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
@@ -170,29 +171,32 @@ mod test {
         ];
 
         let mut ctx = EvalContext::default();
-        for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::build(&mut ctx, case).unwrap();
+        let row = Row::from_datum_vec(vec![]);
+        let row_with_ctx = RowWithEvalContext::new(&row, &mut ctx);
 
-            let i = e.eval_int(&mut ctx, &[]).unwrap_or(None);
-            let r = e.eval_real(&mut ctx, &[]).unwrap_or(None);
+        for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
+            let e = Expression::build(row_with_ctx.ctx(), case).unwrap();
+
+            let i = e.eval_int(&row_with_ctx).unwrap_or(None);
+            let r = e.eval_real(&row_with_ctx).unwrap_or(None);
             let dec = e
-                .eval_decimal(&mut ctx, &[])
+                .eval_decimal(&row_with_ctx)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
             let s = e
-                .eval_string(&mut ctx, &[])
+                .eval_string(&row_with_ctx)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
             let t = e
-                .eval_time(&mut ctx, &[])
+                .eval_time(&row_with_ctx)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
             let dur = e
-                .eval_duration(&mut ctx, &[])
+                .eval_duration(&row_with_ctx)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
             let j = e
-                .eval_json(&mut ctx, &[])
+                .eval_json(&row_with_ctx)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
 

@@ -10,14 +10,14 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
+#![allow(unused_imports)] // TODO: remove it.
 use std::borrow::Cow;
 use std::usize;
 
 use tipb::expression::ScalarFuncSig;
 
 use super::builtin_compare::CmpOp;
-use super::{Error, EvalContext, Result, ScalarFunc};
+use super::{Error, EvalContext, Result, RowWithEvalContext, ScalarFunc};
 use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Time};
 use coprocessor::codec::Datum;
 
@@ -538,78 +538,74 @@ macro_rules! dispatch_call {
         JSON_CALLS {$($j_sig:ident => $j_func:ident $($j_arg:expr)*,)*}
     ) => {
         impl ScalarFunc {
-            pub fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+            pub fn eval_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
                 match self.sig {
-                    $(ScalarFuncSig::$i_sig => self.$i_func(ctx, row, $($i_arg),*)),*,
+                    $(ScalarFuncSig::$i_sig => self.$i_func(row, $($i_arg),*)),*,
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
-            pub fn eval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+            pub fn eval_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
                 match self.sig {
-                    $(ScalarFuncSig::$r_sig => self.$r_func(ctx, row, $($r_arg),*),)*
+                    $(ScalarFuncSig::$r_sig => self.$r_func(row, $($r_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
             pub fn eval_decimal<'a, 'b: 'a>(
-                &'b self, ctx: &mut EvalContext,
-                row: &'a [Datum]
+                &'b self,
+                row: &'a RowWithEvalContext,
             ) -> Result<Option<Cow<'a, Decimal>>> {
                 match self.sig {
-                    $(ScalarFuncSig::$d_sig => self.$d_func(ctx, row, $($d_arg),*),)*
+                    $(ScalarFuncSig::$d_sig => self.$d_func(row, $($d_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
             pub fn eval_bytes<'a, 'b: 'a>(
                 &'b self,
-                ctx: &mut EvalContext,
-                row: &'a [Datum]
+                row: &'a RowWithEvalContext,
             ) -> Result<Option<Cow<'a, [u8]>>> {
                 match self.sig {
-                    $(ScalarFuncSig::$b_sig => self.$b_func(ctx, row, $($b_arg),*),)*
+                    $(ScalarFuncSig::$b_sig => self.$b_func(row, $($b_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
             pub fn eval_time<'a, 'b: 'a>(
                 &'b self,
-                ctx: &mut EvalContext,
-                row: &'a [Datum]
+                row: &'a RowWithEvalContext,
             ) -> Result<Option<Cow<'a, Time>>> {
                 match self.sig {
-                    $(ScalarFuncSig::$t_sig => self.$t_func(ctx, row, $($t_arg),*),)*
+                    $(ScalarFuncSig::$t_sig => self.$t_func(row, $($t_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
             pub fn eval_duration<'a, 'b: 'a>(
                 &'b self,
-                ctx: &mut EvalContext,
-                row: &'a [Datum]
+                row: &'a RowWithEvalContext,
             ) -> Result<Option<Cow<'a, Duration>>> {
                 match self.sig {
-                    $(ScalarFuncSig::$u_sig => self.$u_func(ctx, row, $($u_arg),*),)*
+                    $(ScalarFuncSig::$u_sig => self.$u_func(row, $($u_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
             pub fn eval_json<'a, 'b: 'a>(
                 &'b self,
-                ctx: &mut EvalContext,
-                row: &'a [Datum]
+                row: &'a RowWithEvalContext,
             ) -> Result<Option<Cow<'a, Json>>> {
                 match self.sig {
-                    $(ScalarFuncSig::$j_sig => self.$j_func(ctx, row, $($j_arg),*),)*
+                    $(ScalarFuncSig::$j_sig => self.$j_func(row, $($j_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
             }
 
-            pub fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Datum> {
+            pub fn eval(&self, row: &RowWithEvalContext) -> Result<Datum> {
                 match self.sig {
                     $(ScalarFuncSig::$i_sig => {
-                        match self.$i_func(ctx, row, $($i_arg)*) {
+                        match self.$i_func(row, $($i_arg)*) {
                             Ok(Some(i)) => {
                                 if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
                                     Ok(Datum::U64(i as u64))
@@ -622,22 +618,22 @@ macro_rules! dispatch_call {
                         }
                     },)*
                     $(ScalarFuncSig::$r_sig => {
-                        self.$r_func(ctx, row, $($r_arg)*).map(Datum::from)
+                        self.$r_func(row, $($r_arg)*).map(Datum::from)
                     })*
                     $(ScalarFuncSig::$d_sig => {
-                        self.$d_func(ctx, row, $($d_arg)*).map(Datum::from)
+                        self.$d_func(row, $($d_arg)*).map(Datum::from)
                     })*
                     $(ScalarFuncSig::$b_sig => {
-                        self.$b_func(ctx, row, $($b_arg)*).map(Datum::from)
+                        self.$b_func(row, $($b_arg)*).map(Datum::from)
                     })*
                     $(ScalarFuncSig::$t_sig => {
-                        self.$t_func(ctx, row, $($t_arg)*).map(Datum::from)
+                        self.$t_func(row, $($t_arg)*).map(Datum::from)
                     })*
                     $(ScalarFuncSig::$u_sig => {
-                        self.$u_func(ctx, row, $($u_arg)*).map(Datum::from)
+                        self.$u_func(row, $($u_arg)*).map(Datum::from)
                     })*
                     $(ScalarFuncSig::$j_sig => {
-                        self.$j_func(ctx, row, $($j_arg)*).map(Datum::from)
+                        self.$j_func(row, $($j_arg)*).map(Datum::from)
                     })*
                     _ => unimplemented!(),
                 }
@@ -1470,5 +1466,4 @@ mod test {
             );
         }
     }
-
 }

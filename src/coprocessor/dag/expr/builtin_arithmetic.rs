@@ -11,17 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, EvalContext, Result, ScalarFunc};
+use super::{Error, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Res};
-use coprocessor::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, mysql, Datum};
+use coprocessor::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, mysql};
+use coprocessor::dag::executor::RowWithEvalContext;
 use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use std::{f64, i64, u64};
 
 impl ScalarFunc {
-    pub fn plus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+    pub fn plus_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let lhs = try_opt!(self.children[0].eval_real(row));
+        let rhs = try_opt!(self.children[1].eval_real(row));
         let res = lhs + rhs;
         if !res.is_finite() {
             return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)));
@@ -31,18 +32,17 @@ impl ScalarFunc {
 
     pub fn plus_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_decimal(row));
+        let rhs = try_opt!(self.children[1].eval_decimal(row));
         let result: Result<Decimal> = lhs.add(&rhs).into();
         result.map(|t| Some(Cow::Owned(t)))
     }
 
-    pub fn plus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn plus_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
         let res = match (lus, rus) {
@@ -72,9 +72,9 @@ impl ScalarFunc {
             .map(Some)
     }
 
-    pub fn minus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+    pub fn minus_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let lhs = try_opt!(self.children[0].eval_real(row));
+        let rhs = try_opt!(self.children[1].eval_real(row));
         let res = lhs - rhs;
         if !res.is_finite() {
             return Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)));
@@ -84,18 +84,17 @@ impl ScalarFunc {
 
     pub fn minus_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_decimal(row));
+        let rhs = try_opt!(self.children[1].eval_decimal(row));
         let result: Result<Decimal> = lhs.sub(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
-    pub fn minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn minus_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
         let data_type = if lus | rus {
@@ -123,9 +122,9 @@ impl ScalarFunc {
             .map(Some)
     }
 
-    pub fn multiply_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+    pub fn multiply_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let lhs = try_opt!(self.children[0].eval_real(row));
+        let rhs = try_opt!(self.children[1].eval_real(row));
         let res = lhs * rhs;
         if !res.is_finite() {
             return Err(Error::overflow("DOUBLE", &format!("({} * {})", lhs, rhs)));
@@ -135,18 +134,17 @@ impl ScalarFunc {
 
     pub fn multiply_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_decimal(row));
+        let rhs = try_opt!(self.children[1].eval_decimal(row));
         let result: Result<Decimal> = lhs.mul(&rhs).into();
         result.map(Cow::Owned).map(Some)
     }
 
-    pub fn multiply_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn multiply_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
         let u64_mul_i64 = |u, s| {
@@ -166,24 +164,20 @@ impl ScalarFunc {
             .map(Some)
     }
 
-    pub fn multiply_int_unsigned(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn multiply_int_unsigned(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(row));
+        let rhs = try_opt!(self.children[1].eval_int(row));
         let res = (lhs as u64).checked_mul(rhs as u64).map(|t| t as i64);
         // TODO: output expression in error when column's name pushed down.
         res.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)))
             .map(Some)
     }
 
-    pub fn divide_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+    pub fn divide_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let lhs = try_opt!(self.children[0].eval_real(row));
+        let rhs = try_opt!(self.children[1].eval_real(row));
         if rhs == 0f64 {
-            return ctx.handle_division_by_zero().map(|()| None);
+            return row.ctx().handle_division_by_zero().map(|()| None);
         }
         let res = lhs / rhs;
         if res.is_infinite() {
@@ -195,11 +189,10 @@ impl ScalarFunc {
 
     pub fn divide_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
-        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_decimal(row));
+        let rhs = try_opt!(self.children[1].eval_decimal(row));
         let overflow = Error::overflow("DECIMAL", &format!("({} / {})", lhs, rhs));
         match lhs.into_owned() / rhs.into_owned() {
             Some(v) => match v {
@@ -207,18 +200,18 @@ impl ScalarFunc {
                 Res::Truncated(_) => Err(Error::truncated()),
                 Res::Overflow(_) => Err(overflow),
             },
-            None => ctx.handle_division_by_zero().map(|()| None),
+            None => row.ctx().handle_division_by_zero().map(|()| None),
         }
     }
 
-    pub fn int_divide_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn int_divide_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let rhs = try_opt!(self.children[1].eval_int(row));
         if rhs == 0 {
             return Ok(None);
         }
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
 
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_int(row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
 
         let res = match (lus, rus) {
@@ -230,8 +223,8 @@ impl ScalarFunc {
         res.map(Some)
     }
 
-    pub fn int_divide_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        match self.divide_decimal(ctx, row) {
+    pub fn int_divide_decimal(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        match self.divide_decimal(row) {
             Ok(Some(v)) => match v.as_i64() {
                 Res::Ok(v_i64) => Ok(Some(v_i64)),
                 Res::Truncated(v_i64) => Ok(Some(v_i64)),
@@ -242,12 +235,12 @@ impl ScalarFunc {
         }
     }
 
-    pub fn mod_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        let rhs = try_opt!(self.children[1].eval_real(ctx, row));
+    pub fn mod_real(&self, row: &RowWithEvalContext) -> Result<Option<f64>> {
+        let rhs = try_opt!(self.children[1].eval_real(row));
         if rhs == 0f64 {
             return Ok(None);
         }
-        let lhs = try_opt!(self.children[0].eval_real(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_real(row));
 
         let res = lhs % rhs;
         Ok(Some(res))
@@ -255,11 +248,10 @@ impl ScalarFunc {
 
     pub fn mod_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
+        row: &'a RowWithEvalContext,
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let rhs = try_opt!(self.children[1].eval_decimal(ctx, row));
-        let lhs = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_decimal(row));
+        let lhs = try_opt!(self.children[0].eval_decimal(row));
         let overflow = Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs));
         match lhs.into_owned() % rhs.into_owned() {
             Some(v) => match v {
@@ -271,14 +263,14 @@ impl ScalarFunc {
         }
     }
 
-    pub fn mod_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+    pub fn mod_int(&self, row: &RowWithEvalContext) -> Result<Option<i64>> {
+        let rhs = try_opt!(self.children[1].eval_int(row));
         if rhs == 0 {
             return Ok(None);
         }
         let rus = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
 
-        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let lhs = try_opt!(self.children[0].eval_int(row));
         let lus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
 
         let res = match (lus, rus) {
@@ -545,7 +537,7 @@ mod test {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, tt.3);
         }
     }
@@ -644,7 +636,7 @@ mod test {
             let rhs = datum_expr(tt.2);
 
             let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, tt.3);
         }
     }
@@ -869,7 +861,7 @@ mod test {
             let rhs = datum_expr(tt.2);
 
             let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, tt.3);
         }
     }
@@ -951,7 +943,7 @@ mod test {
                 op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
             }
 
-            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -984,7 +976,7 @@ mod test {
             ).unwrap();
             op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
 
-            let got = op.eval(&mut ctx, &[]).unwrap();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap();
             assert_eq!(got, exp);
         }
 
@@ -1005,7 +997,7 @@ mod test {
             ).unwrap();
             op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
 
-            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -1040,7 +1032,7 @@ mod test {
             let rhs = datum_expr(tt.2);
 
             let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            let got = op.eval_with_datum_vec(&mut ctx, vec![]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -1100,7 +1092,7 @@ mod test {
                     .set_strict_sql_mode(*strict_sql_mode);
                 let mut ctx = EvalContext::new(Arc::new(cfg));
                 let op = Expression::build(&mut ctx, scalar_func.clone()).unwrap();
-                let got = op.eval(&mut ctx, &[]);
+                let got = op.eval_with_datum_vec(&mut ctx, vec![]);
                 if *is_ok {
                     assert_eq!(got.unwrap(), Datum::Null);
                 } else {
