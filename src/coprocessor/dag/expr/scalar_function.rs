@@ -104,12 +104,12 @@ impl ScalarFunc {
             | ScalarFuncSig::BitAndSig
             | ScalarFuncSig::BitOrSig
             | ScalarFuncSig::BitXorSig
-            | ScalarFuncSig::RegexpSig
-            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::LeftShift
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
             | ScalarFuncSig::Atan2Args
+            | ScalarFuncSig::RegexpSig
+            | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -268,6 +268,16 @@ impl ScalarFunc {
             | ScalarFuncSig::InTime
             | ScalarFuncSig::InDuration
             | ScalarFuncSig::InJson
+            | ScalarFuncSig::GreatestInt
+            | ScalarFuncSig::GreatestReal
+            | ScalarFuncSig::GreatestDecimal
+            | ScalarFuncSig::GreatestString
+            | ScalarFuncSig::GreatestTime
+            | ScalarFuncSig::LeastInt
+            | ScalarFuncSig::LeastReal
+            | ScalarFuncSig::LeastDecimal
+            | ScalarFuncSig::LeastString
+            | ScalarFuncSig::LeastTime
             | ScalarFuncSig::IntervalInt
             | ScalarFuncSig::Elt
             | ScalarFuncSig::IntervalReal => (2, usize::MAX),
@@ -342,11 +352,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetFormat
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
-            | ScalarFuncSig::GreatestDecimal
-            | ScalarFuncSig::GreatestInt
-            | ScalarFuncSig::GreatestReal
-            | ScalarFuncSig::GreatestString
-            | ScalarFuncSig::GreatestTime
             | ScalarFuncSig::Hour
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -360,11 +365,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
-            | ScalarFuncSig::LeastDecimal
-            | ScalarFuncSig::LeastInt
-            | ScalarFuncSig::LeastReal
-            | ScalarFuncSig::LeastString
-            | ScalarFuncSig::LeastTime
             | ScalarFuncSig::LeftBinary
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::Locate3Args
@@ -766,6 +766,8 @@ dispatch_call! {
 
         CoalesceInt => coalesce_int,
         CaseWhenInt => case_when_int,
+        GreatestInt => greatest_int,
+        LeastInt => least_int,
 
         LikeSig => like,
         RegexpSig => regexp,
@@ -814,7 +816,8 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
-
+        GreatestReal => greatest_real,
+        LeastReal => least_real,
         Sqrt => sqrt,
         Atan1Arg => atan_1_arg,
         Atan2Args => atan_2_args,
@@ -854,6 +857,8 @@ dispatch_call! {
 
         CoalesceDecimal => coalesce_decimal,
         CaseWhenDecimal => case_when_decimal,
+        GreatestDecimal => greatest_decimal,
+        LeastDecimal => least_decimal,
     }
     BYTES_CALLS {
         CastIntAsString => cast_int_as_str,
@@ -869,6 +874,10 @@ dispatch_call! {
 
         CoalesceString => coalesce_string,
         CaseWhenString => case_when_string,
+        GreatestString => greatest_string,
+        LeastString => least_string,
+        GreatestTime => greatest_time,
+        LeastTime => least_time,
         JsonTypeSig => json_type,
         JsonUnquoteSig => json_unquote,
 
@@ -1221,6 +1230,16 @@ mod test {
                     ScalarFuncSig::IntervalInt,
                     ScalarFuncSig::IntervalReal,
                     ScalarFuncSig::Elt,
+                    ScalarFuncSig::GreatestInt,
+                    ScalarFuncSig::GreatestReal,
+                    ScalarFuncSig::GreatestDecimal,
+                    ScalarFuncSig::GreatestString,
+                    ScalarFuncSig::GreatestTime,
+                    ScalarFuncSig::LeastInt,
+                    ScalarFuncSig::LeastReal,
+                    ScalarFuncSig::LeastDecimal,
+                    ScalarFuncSig::LeastString,
+                    ScalarFuncSig::LeastTime,
                 ],
                 2,
                 usize::MAX,
@@ -1318,11 +1337,6 @@ mod test {
             ScalarFuncSig::GetFormat,
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
-            ScalarFuncSig::GreatestDecimal,
-            ScalarFuncSig::GreatestInt,
-            ScalarFuncSig::GreatestReal,
-            ScalarFuncSig::GreatestString,
-            ScalarFuncSig::GreatestTime,
             ScalarFuncSig::Hour,
             ScalarFuncSig::InetAton,
             ScalarFuncSig::InetNtoa,
@@ -1336,11 +1350,6 @@ mod test {
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
-            ScalarFuncSig::LeastDecimal,
-            ScalarFuncSig::LeastInt,
-            ScalarFuncSig::LeastReal,
-            ScalarFuncSig::LeastString,
-            ScalarFuncSig::LeastTime,
             ScalarFuncSig::LeftBinary,
             ScalarFuncSig::Locate2Args,
             ScalarFuncSig::Locate3Args,
