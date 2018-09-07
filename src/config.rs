@@ -431,7 +431,7 @@ impl Default for DbConfig {
             rate_bytes_per_sec: ReadableSize::kb(0),
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
-            max_sub_compactions: 1,
+            max_sub_compactions: 2,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
