@@ -117,6 +117,8 @@ pub struct Config {
     pub merge_check_tick_interval: ReadableDuration,
 
     pub use_delete_range: bool,
+    pub disable_raft_wal: bool,
+    pub disable_apply_wal: bool,
 
     pub cleanup_import_sst_interval: ReadableDuration,
 
@@ -186,6 +188,8 @@ impl Default for Config {
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
+            disable_raft_wal: false,
+            disable_apply_wal: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
 

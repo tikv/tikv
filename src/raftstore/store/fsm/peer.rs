@@ -696,7 +696,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let _perf = WritePerfContext::new("raft");
             // RaftLocalState, Raft Log Entry
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log || sync_log);
+            if self.cfg.disable_raft_wal {
+                write_opts.disable_wal(true);
+            } else {
+                write_opts.set_sync(self.cfg.sync_log || sync_log);
+            }
             self.engines
                 .raft
                 .write_opt(raft_wb, &write_opts)

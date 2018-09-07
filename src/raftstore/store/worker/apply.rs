@@ -252,6 +252,7 @@ struct ApplyContextCore<'a> {
     sync_log_hint: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
+    disable_wal: bool,
 }
 
 impl<'a> ApplyContextCore<'a> {
@@ -271,6 +272,7 @@ impl<'a> ApplyContextCore<'a> {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: false,
+            disable_wal: false,
         }
     }
 
@@ -286,6 +288,11 @@ impl<'a> ApplyContextCore<'a> {
 
     pub fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContextCore<'a> {
         self.use_delete_range = use_delete_range;
+        self
+    }
+
+    pub fn disable_wal(mut self, disable_wal: bool) -> ApplyContextCore<'a> {
+        self.disable_wal = disable_wal;
         self
     }
 
@@ -332,7 +339,11 @@ impl<'a> ApplyContextCore<'a> {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let _perf = WritePerfContext::new("apply");
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            if self.disable_wal {
+                write_opts.disable_wal(true);
+            } else {
+                write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            }
             engine
                 .write_opt(self.wb.take().unwrap(), &write_opts)
                 .unwrap_or_else(|e| {
@@ -2049,6 +2060,7 @@ pub struct Runner {
     notifier: Sender<TaskRes>,
     sync_log: bool,
     use_delete_range: bool,
+    disable_wal: bool,
     tag: String,
 }
 
@@ -2058,6 +2070,7 @@ impl Runner {
         notifier: Sender<TaskRes>,
         sync_log: bool,
         use_delete_range: bool,
+        disable_wal: bool,
     ) -> Runner {
         let mut delegates =
             HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
@@ -2072,6 +2085,7 @@ impl Runner {
             notifier,
             sync_log,
             use_delete_range,
+            disable_wal,
             tag: format!("[store {}]", store.store_id()),
         }
     }
@@ -2082,7 +2096,8 @@ impl Runner {
         let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
             .apply_res_capacity(applys.len())
             .use_delete_range(self.use_delete_range)
-            .enable_sync_log(self.sync_log);
+            .enable_sync_log(self.sync_log)
+            .disable_wal(self.disable_wal);
         for apply in applys {
             if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
                 continue;

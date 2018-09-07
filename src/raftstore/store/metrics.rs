@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::{Duration, Instant};
+
 use prometheus::*;
 use rocksdb::{set_perf_level, PerfContext, PerfLevel};
 
@@ -231,6 +233,7 @@ lazy_static! {
 
 pub struct WritePerfContext {
     tag: &'static str,
+    start_time: Instant,
     wal_time: u64,
     memtable_time: u64,
     delay_time: u64,
@@ -244,6 +247,7 @@ impl WritePerfContext {
         let ctx = PerfContext::get();
         WritePerfContext {
             tag,
+            start_time: Instant::now(),
             wal_time: ctx.write_wal_time(),
             memtable_time: ctx.write_memtable_time(),
             delay_time: ctx.write_delay_time(),
@@ -257,22 +261,28 @@ impl Drop for WritePerfContext {
     fn drop(&mut self) {
         let end = PerfContext::get();
         let wal_time = end.write_wal_time() - self.wal_time;
+        let memtable_time = end.write_memtable_time() - self.memtable_time;
+        let delay_time = end.write_delay_time() - self.delay_time;
+        let process_time = end.write_pre_and_post_process_time() - self.pre_and_post_process_time;
+        let lock_time = end.db_mutex_lock_nanos() - self.db_mutex_lock_time;
+        if self.start_time.elapsed() > Duration::from_millis(5) {
+            info!(
+                "[WritePerfContext] {} wal {} memtable {} delay {} process {} lock {}",
+                self.tag, wal_time, memtable_time, delay_time, process_time, lock_time
+            );
+        }
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "wal"])
             .observe(wal_time as f64 / 1000.0);
-        let memtable_time = end.write_memtable_time() - self.memtable_time;
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "memtable"])
             .observe(memtable_time as f64 / 1000.0);
-        let delay_time = end.write_delay_time() - self.delay_time;
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "delay"])
             .observe(delay_time as f64 / 1000.0);
-        let process_time = end.write_pre_and_post_process_time() - self.pre_and_post_process_time;
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "process"])
             .observe(process_time as f64 / 1000.0);
-        let lock_time = end.db_mutex_lock_nanos() - self.db_mutex_lock_time;
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "lock"])
             .observe(lock_time as f64 / 1000.0);
