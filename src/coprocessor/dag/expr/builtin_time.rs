@@ -26,25 +26,18 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let t = direct_try!(
-            self.children[0]
-                .eval_time(ctx, row)
-                .and_then(|some_time| match some_time {
-                    None => Err(Error::incorrect_datetime_value("None")),
-                    Some(res) => Ok(res),
-                })
-                .map_err(|e| Error::handle_invalid_time_error(ctx, e).and_then(|()| Ok(None)))
-        );
-        if t.invalid_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("Incorrect datetime value: '{}'", t)),
-            ).and_then(|()| Ok(None));
-        }
-        let format_mask = try_opt!(self.children[1].eval_string(ctx, row));
-        let format_mask_str = String::from_utf8(format_mask.into_owned())?;
-        let res = t.date_format(format_mask_str)?;
-        Ok(Some(Cow::Owned(res.into_bytes())))
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(res) => if !res.invalid_zero() {
+                let format_mask = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+                let res = res.date_format(format_mask.into_owned())?;
+                return Ok(Some(Cow::Owned(res.into_bytes())));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", res))
+            },
+            None => Error::incorrect_datetime_value("None"),
+        };
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 
     #[inline]
@@ -53,24 +46,18 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = direct_try!(
-            self.children[0]
-                .eval_time(ctx, row)
-                .and_then(|some_time| match some_time {
-                    None => Err(Error::incorrect_datetime_value("None")),
-                    Some(res) => Ok(res),
-                })
-                .map_err(|e| Error::handle_invalid_time_error(ctx, e).and_then(|()| Ok(None)))
-        );
-        if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).and_then(|()| Ok(None));
-        }
-        let mut res = t.to_mut().clone();
-        res.set_tp(mysql::types::DATE).unwrap();
-        Ok(Some(Cow::Owned(res)))
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                let mut res = t.to_mut().clone();
+                res.set_tp(mysql::types::DATE).unwrap();
+                return Ok(Some(Cow::Owned(res)));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
+        };
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 
     #[inline]
@@ -79,31 +66,24 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = direct_try!(
-            self.children[0]
-                .eval_time(ctx, row)
-                .and_then(|some_time| match some_time {
-                    None => Err(Error::incorrect_datetime_value("None")),
-                    Some(res) => Ok(res),
-                })
-                .map_err(|e| Error::handle_invalid_time_error(ctx, e).and_then(|()| Ok(None)))
-        );
-        if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).and_then(|()| Ok(None));
-        }
-        let mut res = t.to_mut().clone();
-
-        let time = t.get_time();
-        res.set_time(
-            time.timezone()
-                .ymd_opt(time.year(), time.month(), t.last_day_of_month())
-                .and_hms_opt(0, 0, 0)
-                .unwrap(),
-        );
-        Ok(Some(Cow::Owned(res)))
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                let mut res = t.to_mut().clone();
+                let time = t.get_time();
+                res.set_time(
+                    time.timezone()
+                        .ymd_opt(time.year(), time.month(), t.last_day_of_month())
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap(),
+                );
+                return Ok(Some(Cow::Owned(res)));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
+        };
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 }
 
