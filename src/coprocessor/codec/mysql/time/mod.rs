@@ -15,7 +15,7 @@ mod extension;
 mod tz;
 mod weekmode;
 
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::{mem, str};
@@ -40,6 +40,11 @@ const ZERO_DATE_STR: &str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
 /// `-0001-11-30 00:00:00 +0000 UTC`, whose timestamp is -62169984000.
 const ZERO_TIMESTAMP: i64 = -62169984000;
+
+/// In go, `time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)` will be adjusted to
+/// `9999-12-31 23:59:59 +0000 UTC`, whose timestamp is 253402300799.
+pub const MAX_TIMESTAMP: i64 = 253402300799;
+pub const MAX_TIME_NANOSECONDS: u32 = 999999000;
 
 const MONTH_NAMES: &[&str] = &[
     "January",
@@ -66,7 +71,7 @@ fn zero_time(tz: Tz) -> DateTime<Tz> {
 }
 
 #[inline]
-fn zero_datetime(tz: Tz) -> Time {
+pub fn zero_datetime(tz: Tz) -> Time {
     Time::new(zero_time(tz), mysql::types::DATETIME, mysql::DEFAULT_FSP).unwrap()
 }
 
@@ -182,6 +187,14 @@ impl Time {
 
     pub fn set_fsp(&mut self, fsp: u8) {
         self.fsp = fsp;
+    }
+
+    pub fn get_time(&self) -> DateTime<Tz> {
+        self.time
+    }
+
+    pub fn set_time(&mut self, time: DateTime<Tz>) {
+        self.time = time
     }
 
     fn to_numeric_str(&self) -> String {
@@ -312,6 +325,12 @@ impl Time {
             frac * TEN_POW[9 - fsp as usize],
         )?;
         Time::new(time, mysql::types::DATETIME as u8, fsp as i8)
+    }
+
+    pub fn parse_fsp(s: &str) -> i8 {
+        s.rfind('.').map_or(super::DEFAULT_FSP, |idx| {
+            min((s.len() - idx - 1) as i8, super::MAX_FSP)
+        })
     }
 
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
@@ -576,6 +595,22 @@ impl Time {
             }
         }
         Ok(ret)
+    }
+
+    pub fn is_leap_year(&self) -> bool {
+        self.time.year() % 4 == 0 && (self.time.year() % 100 != 0 || self.time.year() % 400 == 0)
+    }
+
+    pub fn last_day_of_month(&self) -> u32 {
+        match self.time.month() {
+            4 | 6 | 9 | 11 => 30,
+            2 => if self.is_leap_year() {
+                29
+            } else {
+                28
+            },
+            _ => 31,
+        }
     }
 }
 
@@ -1269,6 +1304,23 @@ mod test {
             buf.encode_time(&t).unwrap();
             let got = Time::decode(&mut buf.as_slice()).unwrap();
             assert_eq!(got, t);
+        }
+    }
+
+    #[test]
+    fn test_parse_fsp() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.1234", 4),
+            ("2012-12-31 11:30:45.123456", 6),
+            ("2012-12-31 11:30:45", 0),
+            ("2012-12-31 11:30:45.", 0),
+            ("2017-01-05 08:40:59.5756014372987", 6),
+            ("2017-01-05 23:59:59....432", 3),
+            (".1.2.3.4.5.6", 1),
+        ];
+        for (s, fsp) in cases {
+            let t = Time::parse_fsp(s);
+            assert_eq!(fsp, t);
         }
     }
 }

@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use coprocessor::dag::expr::EvalContext;
+use regex::Error as RegexpError;
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
 use std::str::Utf8Error;
@@ -19,9 +21,6 @@ use std::string::FromUtf8Error;
 use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
-
-use regex::Error as RegexpError;
-
 use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;

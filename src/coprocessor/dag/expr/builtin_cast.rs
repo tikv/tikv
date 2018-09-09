@@ -701,6 +701,7 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::{i64, u64};
 
@@ -818,6 +819,35 @@ mod test {
             // test None
             let res = e.eval_int(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
+        }
+
+        let mut ctx = EvalContext::new(Arc::new(
+            EvalConfig::default_for_test().set_overflow_as_warning(true),
+        ));
+        let cases = vec![
+            (
+                ScalarFuncSig::CastDecimalAsInt,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(
+                    Decimal::from_str("1111111111111111111111111").unwrap(),
+                )],
+                9223372036854775807,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsInt,
+                types::NEW_DECIMAL,
+                vec![Datum::Dec(
+                    Decimal::from_str("-1111111111111111111111111").unwrap(),
+                )],
+                -9223372036854775808,
+            ),
+        ];
+        for (sig, tp, col, expect) in cases {
+            let col_expr = col_expr(0, i32::from(tp));
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
+            let e = Expression::build(&mut ctx, exp).unwrap();
+            let res = e.eval_int(&mut ctx, &col).unwrap();
+            assert_eq!(res.unwrap(), expect);
         }
     }
 
