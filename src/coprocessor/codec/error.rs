@@ -13,7 +13,6 @@
 
 use coprocessor::dag::expr::EvalContext;
 use regex::Error as RegexpError;
-use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
 use std::str::Utf8Error;

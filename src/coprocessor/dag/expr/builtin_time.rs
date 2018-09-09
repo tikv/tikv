@@ -79,21 +79,20 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                );
-            }
-            Ok(Some(res)) => res,
-        };
+        let mut t = direct_try!(
+            self.children[0]
+                .eval_time(ctx, row)
+                .and_then(|some_time| match some_time {
+                    None => Err(Error::incorrect_datetime_value("None")),
+                    Some(res) => Ok(res),
+                })
+                .map_err(|e| Error::handle_invalid_time_error(ctx, e).and_then(|()| Ok(None)))
+        );
         if t.is_zero() {
             return Error::handle_invalid_time_error(
                 ctx,
                 Error::incorrect_datetime_value(&format!("{}", t)),
-            );
+            ).and_then(|()| Ok(None));
         }
         let mut res = t.to_mut().clone();
 
