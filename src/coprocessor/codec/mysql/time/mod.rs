@@ -127,11 +127,45 @@ fn split_ymd_hms(mut s: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
         0
     };
     let secs: u32 = if s.len() > 8 {
-        box_try!(from_bytes(&s[8..10]).parse())
+        let i = if s.len() > 9 { 10 } else { 9 };
+        box_try!(from_bytes(&s[8..i]).parse())
     } else {
         0
     };
     Ok((year, month, day, hour, minute, secs))
+}
+
+fn split_ymd_hms_with_frac(mut s: &[u8], frac: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
+    let year: i32;
+    if s.len() == 8 {
+        year = box_try!(from_bytes(&s[..4]).parse());
+        s = &s[4..];
+    } else {
+        year = box_try!(from_bytes(&s[..2]).parse());
+        s = &s[2..];
+    };
+    let month: u32 = box_try!(from_bytes(&s[..2]).parse());
+    let day: u32 = box_try!(from_bytes(&s[2..4]).parse());
+    let (hour, minute, sec): (u32, u32, u32) = match frac.len() {
+        0 => (0, 0, 0),
+        1 | 2 => (box_try!(from_bytes(&frac[0..frac.len()]).parse()), 0, 0),
+        3 | 4 => (
+            box_try!(from_bytes(&frac[0..2]).parse()),
+            box_try!(from_bytes(&frac[2..frac.len()]).parse()),
+            0,
+        ),
+        5 => (
+            box_try!(from_bytes(&frac[0..2]).parse()),
+            box_try!(from_bytes(&frac[2..4]).parse()),
+            box_try!(from_bytes(&frac[4..5]).parse()),
+        ),
+        _ => (
+            box_try!(from_bytes(&frac[0..2]).parse()),
+            box_try!(from_bytes(&frac[2..4]).parse()),
+            box_try!(from_bytes(&frac[4..6]).parse()),
+        ),
+    };
+    Ok((year, month, day, hour, minute, sec))
 }
 
 /// `Time` is the struct for handling datetime, timestamp and date.
@@ -237,30 +271,44 @@ impl Time {
         }
     }
 
+    fn split_datetime(s: &str) -> (Vec<&str>, &str) {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return (vec![], "");
+        }
+        let (parts, fracs) = if let Some(i) = trimmed.rfind('.') {
+            (&trimmed[..i], &trimmed[i + 1..])
+        } else {
+            (trimmed, "")
+        };
+        (Time::parse_datetime_format(parts), fracs)
+    }
+
     pub fn parse_utc_datetime(s: &str, fsp: i8) -> Result<Time> {
         Time::parse_datetime(s, fsp, Tz::utc())
     }
 
     pub fn parse_datetime(s: &str, fsp: i8, tz: Tz) -> Result<Time> {
         let fsp = mysql::check_fsp(fsp)?;
-        let mut frac_str = "";
         let mut need_adjust = false;
-        let parts = Time::parse_datetime_format(s);
+        let mut has_hhmmss = false;
+        let (parts, frac_str) = Time::split_datetime(s);
         let (mut year, month, day, hour, minute, sec): (i32, u32, u32, u32, u32, u32) =
             match *parts.as_slice() {
                 [s1] => {
-                    need_adjust = s1.len() == 12 || s1.len() == 6;
+                    need_adjust = s1.len() == 12 || s1.len() == 11 || s1.len() == 6;
+                    has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
                     match s1.len() {
-                        14 | 12 | 8 | 6 => split_ymd_hms(s1.as_bytes())?,
-                        _ => return Err(box_err!("invalid datetime: {}", s)),
-                    }
-                }
-                [s1, frac] => {
-                    frac_str = frac;
-                    need_adjust = s1.len() == 12;
-                    match s1.len() {
-                        14 | 12 => split_ymd_hms(s1.as_bytes())?,
-                        _ => return Err(box_err!("invalid datetime: {}", s)),
+                        14 | 12 | 11 => split_ymd_hms(s1.as_bytes())?,
+                        8 | 6 => split_ymd_hms_with_frac(s1.as_bytes(), frac_str.as_bytes())?,
+                        _ => {
+                            return Err(box_err!(
+                                "invalid datetime: {}, s1: {}, len: {}",
+                                s,
+                                s1,
+                                s1.len()
+                            ))
+                        }
                     }
                 }
                 [year, month, day] => (
@@ -271,16 +319,16 @@ impl Time {
                     0,
                     0,
                 ),
-                [year, month, day, hour, min, sec] => (
+                [year, month, day, hour, min] => (
                     box_try!(year.parse()),
                     box_try!(month.parse()),
                     box_try!(day.parse()),
                     box_try!(hour.parse()),
                     box_try!(min.parse()),
-                    box_try!(sec.parse()),
+                    0,
                 ),
-                [year, month, day, hour, min, sec, frac] => {
-                    frac_str = frac;
+                [year, month, day, hour, min, sec] => {
+                    has_hhmmss = true;
                     (
                         box_try!(year.parse()),
                         box_try!(month.parse()),
@@ -301,7 +349,11 @@ impl Time {
             }
         }
 
-        let frac = mysql::parse_frac(frac_str.as_bytes(), fsp)?;
+        let frac = if has_hhmmss {
+            mysql::parse_frac(frac_str.as_bytes(), fsp)?
+        } else {
+            0
+        };
         if year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && sec == 0 {
             return Ok(zero_datetime(tz));
         }
@@ -808,6 +860,21 @@ mod test {
             ("121231113045.9999999", 6, "2012-12-31 11:30:46.000000"),
             ("121231113045.999999", 6, "2012-12-31 11:30:45.999999"),
             ("121231113045.999999", 5, "2012-12-31 11:30:46.00000"),
+            ("17011801101", UN_SPECIFIED_FSP, "2017-01-18 01:10:01"),
+            ("20170118.1", UN_SPECIFIED_FSP, "2017-01-18 01:00:00"),
+            ("20170118.1", UN_SPECIFIED_FSP, "2017-01-18 01:00:00"),
+            ("20170118.11", UN_SPECIFIED_FSP, "2017-01-18 11:00:00"),
+            ("20170118.111", UN_SPECIFIED_FSP, "2017-01-18 11:01:00"),
+            ("20170118.1111", UN_SPECIFIED_FSP, "2017-01-18 11:11:00"),
+            ("20170118.11111", UN_SPECIFIED_FSP, "2017-01-18 11:11:01"),
+            ("20170118.111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
+            ("20170118.1111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
+            ("20170118.11111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
+            (
+                "17011801101.111111",
+                UN_SPECIFIED_FSP,
+                "2017-01-18 01:10:01",
+            ),
         ];
 
         for (input, fsp, exp) in ok_tables {
@@ -836,6 +903,7 @@ mod test {
             "10000-01-01 00:00:00",
             "1000-09-31 00:00:00",
             "1001-02-29 00:00:00",
+            "20170118.999",
         ];
 
         for t in fail_tbl {
