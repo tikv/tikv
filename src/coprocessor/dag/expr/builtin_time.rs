@@ -64,6 +64,31 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn month<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
+            Ok(None) => {
+                return Error::handle_invalid_time_error(
+                    ctx,
+                    Error::incorrect_datetime_value("None"),
+                ).map(|_| None)
+            }
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ).map(|_| None);
+        }
+        Ok(Some(i64::from(t.get_time().month())))
+    }
+
+    #[inline]
     pub fn last_day<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -203,6 +228,53 @@ mod test {
             Err(_) => assert!(true),
         }
     }
+
+    #[test]
+    fn test_month() {
+        let tests = vec![
+            ("2018-01-01 01:01:01", 1i64),
+            ("2018-02-01 01:01:01", 2i64),
+            ("2018-03-01 01:01:01", 3i64),
+            ("2018-04-01 01:01:01", 4i64),
+            ("2018-05-01 01:01:01", 5i64),
+            ("2018-06-01 01:01:01", 6i64),
+            ("2018-07-01 01:01:01", 7i64),
+            ("2018-08-01 01:01:01", 8i64),
+            ("2018-09-01 01:01:01", 9i64),
+            ("2018-10-01 01:01:01", 10i64),
+            ("2018-11-01 01:01:01", 11i64),
+            ("2018-12-01 01:01:01", 12i64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let exp = Datum::I64(exp);
+            let f = scalar_func_expr(ScalarFuncSig::Month, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::Month, &[input]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        op.eval(&mut ctx, &[]).unwrap_err();
+
+        // test zero case
+        let cfg = EvalConfig::new()
+            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg = datum_expr(Datum::Time(
+            Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
+        ));
+        let f = scalar_func_expr(ScalarFuncSig::Month, &[arg]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        op.eval(&mut ctx, &[]).unwrap_err();
+    }
+
     #[test]
     fn test_last_day() {
         let tests = vec![
