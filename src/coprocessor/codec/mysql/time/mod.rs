@@ -105,9 +105,12 @@ fn from_bytes(bs: &[u8]) -> &str {
     unsafe { str::from_utf8_unchecked(bs) }
 }
 
-fn split_ymd_hms(mut s: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
+fn split_ymd_hms_with_frac_as_s(
+    mut s: &[u8],
+    frac: &[u8],
+) -> Result<(i32, u32, u32, u32, u32, u32)> {
     let year: i32;
-    if s.len() == 14 || s.len() == 8 {
+    if s.len() == 14 {
         year = box_try!(from_bytes(&s[..4]).parse());
         s = &s[4..];
     } else {
@@ -116,26 +119,30 @@ fn split_ymd_hms(mut s: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
     };
     let month: u32 = box_try!(from_bytes(&s[..2]).parse());
     let day: u32 = box_try!(from_bytes(&s[2..4]).parse());
-    let hour: u32 = if s.len() > 4 {
-        box_try!(from_bytes(&s[4..6]).parse())
+    let hour: u32 = box_try!(from_bytes(&s[4..6]).parse());
+    let minute: u32 = if s.len() == 7 {
+        box_try!(from_bytes(&s[6..7]).parse())
     } else {
-        0
-    };
-    let minute: u32 = if s.len() > 6 {
         box_try!(from_bytes(&s[6..8]).parse())
-    } else {
-        0
     };
     let secs: u32 = if s.len() > 8 {
         let i = if s.len() > 9 { 10 } else { 9 };
         box_try!(from_bytes(&s[8..i]).parse())
     } else {
-        0
+        match frac.len() {
+            0 => 0,
+            1 => box_try!(from_bytes(&frac[..1]).parse()),
+            _ => box_try!(from_bytes(&frac[..2]).parse()),
+        }
     };
     Ok((year, month, day, hour, minute, secs))
 }
 
-fn split_ymd_hms_with_frac(mut s: &[u8], frac: &[u8]) -> Result<(i32, u32, u32, u32, u32, u32)> {
+fn split_ymd_with_frac_as_hms(
+    mut s: &[u8],
+    frac: &[u8],
+    is_float: bool,
+) -> Result<(i32, u32, u32, u32, u32, u32)> {
     let year: i32;
     if s.len() == 8 {
         year = box_try!(from_bytes(&s[..4]).parse());
@@ -146,24 +153,28 @@ fn split_ymd_hms_with_frac(mut s: &[u8], frac: &[u8]) -> Result<(i32, u32, u32, 
     };
     let month: u32 = box_try!(from_bytes(&s[..2]).parse());
     let day: u32 = box_try!(from_bytes(&s[2..4]).parse());
-    let (hour, minute, sec): (u32, u32, u32) = match frac.len() {
-        0 => (0, 0, 0),
-        1 | 2 => (box_try!(from_bytes(&frac[0..frac.len()]).parse()), 0, 0),
-        3 | 4 => (
-            box_try!(from_bytes(&frac[0..2]).parse()),
-            box_try!(from_bytes(&frac[2..frac.len()]).parse()),
-            0,
-        ),
-        5 => (
-            box_try!(from_bytes(&frac[0..2]).parse()),
-            box_try!(from_bytes(&frac[2..4]).parse()),
-            box_try!(from_bytes(&frac[4..5]).parse()),
-        ),
-        _ => (
-            box_try!(from_bytes(&frac[0..2]).parse()),
-            box_try!(from_bytes(&frac[2..4]).parse()),
-            box_try!(from_bytes(&frac[4..6]).parse()),
-        ),
+    let (hour, minute, sec): (u32, u32, u32) = if is_float {
+        (0, 0, 0)
+    } else {
+        match frac.len() {
+            0 => (0, 0, 0),
+            1 | 2 => (box_try!(from_bytes(&frac[0..frac.len()]).parse()), 0, 0),
+            3 | 4 => (
+                box_try!(from_bytes(&frac[0..2]).parse()),
+                box_try!(from_bytes(&frac[2..frac.len()]).parse()),
+                0,
+            ),
+            5 => (
+                box_try!(from_bytes(&frac[0..2]).parse()),
+                box_try!(from_bytes(&frac[2..4]).parse()),
+                box_try!(from_bytes(&frac[4..5]).parse()),
+            ),
+            _ => (
+                box_try!(from_bytes(&frac[0..2]).parse()),
+                box_try!(from_bytes(&frac[2..4]).parse()),
+                box_try!(from_bytes(&frac[4..6]).parse()),
+            ),
+        }
     };
     Ok((year, month, day, hour, minute, sec))
 }
@@ -288,58 +299,75 @@ impl Time {
         Time::parse_datetime(s, fsp, Tz::utc())
     }
 
+    pub fn parse_utc_datetime_from_float_string(s: &str, fsp: i8) -> Result<Time> {
+        Time::parse_datetime_from_float_string(s, fsp, Tz::utc())
+    }
+
     pub fn parse_datetime(s: &str, fsp: i8, tz: Tz) -> Result<Time> {
+        Time::parse_datetime_internal(s, fsp, tz, false)
+    }
+
+    pub fn parse_datetime_from_float_string(s: &str, fsp: i8, tz: Tz) -> Result<Time> {
+        Time::parse_datetime_internal(s, fsp, tz, true)
+    }
+
+    fn parse_datetime_internal(s: &str, fsp: i8, tz: Tz, is_float: bool) -> Result<Time> {
         let fsp = mysql::check_fsp(fsp)?;
         let mut need_adjust = false;
         let mut has_hhmmss = false;
         let (parts, frac_str) = Time::split_datetime(s);
-        let (mut year, month, day, hour, minute, sec): (i32, u32, u32, u32, u32, u32) =
-            match *parts.as_slice() {
-                [s1] => {
-                    need_adjust = s1.len() == 12 || s1.len() == 11 || s1.len() == 6;
-                    has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
-                    match s1.len() {
-                        14 | 12 | 11 => split_ymd_hms(s1.as_bytes())?,
-                        8 | 6 => split_ymd_hms_with_frac(s1.as_bytes(), frac_str.as_bytes())?,
-                        _ => {
-                            return Err(box_err!(
-                                "invalid datetime: {}, s1: {}, len: {}",
-                                s,
-                                s1,
-                                s1.len()
-                            ))
-                        }
+        let (mut year, month, day, hour, minute, sec): (i32, u32, u32, u32, u32, u32) = match *parts
+            .as_slice()
+        {
+            [s1] => {
+                need_adjust = s1.len() != 14 && s1.len() != 8;
+                has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
+                match s1.len() {
+                    14 | 12 | 11 | 10 | 9 => {
+                        split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
+                    }
+                    8 | 6 => {
+                        split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
+                    }
+                    _ => {
+                        return Err(box_err!(
+                            "invalid datetime: {}, s1: {}, len: {}",
+                            s,
+                            s1,
+                            s1.len()
+                        ))
                     }
                 }
-                [year, month, day] => (
-                    box_try!(year.parse()),
-                    box_try!(month.parse()),
-                    box_try!(day.parse()),
-                    0,
-                    0,
-                    0,
-                ),
-                [year, month, day, hour, min] => (
+            }
+            [year, month, day] => (
+                box_try!(year.parse()),
+                box_try!(month.parse()),
+                box_try!(day.parse()),
+                0,
+                0,
+                0,
+            ),
+            [year, month, day, hour, min] => (
+                box_try!(year.parse()),
+                box_try!(month.parse()),
+                box_try!(day.parse()),
+                box_try!(hour.parse()),
+                box_try!(min.parse()),
+                0,
+            ),
+            [year, month, day, hour, min, sec] => {
+                has_hhmmss = true;
+                (
                     box_try!(year.parse()),
                     box_try!(month.parse()),
                     box_try!(day.parse()),
                     box_try!(hour.parse()),
                     box_try!(min.parse()),
-                    0,
-                ),
-                [year, month, day, hour, min, sec] => {
-                    has_hhmmss = true;
-                    (
-                        box_try!(year.parse()),
-                        box_try!(month.parse()),
-                        box_try!(day.parse()),
-                        box_try!(hour.parse()),
-                        box_try!(min.parse()),
-                        box_try!(sec.parse()),
-                    )
-                }
-                _ => return Err(box_err!("invalid datetime: {}", s)),
-            };
+                    box_try!(sec.parse()),
+                )
+            }
+            _ => return Err(box_err!("invalid datetime: {}", s)),
+        };
 
         if need_adjust || parts[0].len() == 2 {
             if year >= 0 && year <= 69 {
@@ -840,6 +868,7 @@ mod test {
             ("2012-12-31", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
             ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
             ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
             (
                 "2012^12^31 11+30+45",
                 UN_SPECIFIED_FSP,
@@ -870,6 +899,12 @@ mod test {
             ("20170118.111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
             ("20170118.1111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
             ("20170118.11111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
+            ("1701020301.", UN_SPECIFIED_FSP, "2017-01-02 03:01:00"),
+            ("1701020304.1", UN_SPECIFIED_FSP, "2017-01-02 03:04:01"),
+            ("1701020302.11", UN_SPECIFIED_FSP, "2017-01-02 03:02:11"),
+            ("170102036", UN_SPECIFIED_FSP, "2017-01-02 03:06:00"),
+            ("170102039.", UN_SPECIFIED_FSP, "2017-01-02 03:09:00"),
+            ("170102037.11", UN_SPECIFIED_FSP, "2017-01-02 03:07:11"),
             (
                 "17011801101.111111",
                 UN_SPECIFIED_FSP,
@@ -894,6 +929,41 @@ mod test {
                     assert_eq!(exp_t, t);
                 }
             });
+        }
+
+        // Test parse datetime from float string vs non-float string
+        let ok_tables = vec![
+            (
+                "121231.0101",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 00:00:00",
+                "2012-12-31 01:01:00",
+            ),
+            (
+                "121231.1",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 00:00:00",
+                "2012-12-31 01:00:00",
+            ),
+            (
+                "19991231.111",
+                UN_SPECIFIED_FSP,
+                "1999-12-31 00:00:00",
+                "1999-12-31 11:01:00",
+            ),
+            (
+                "20121231.1",
+                UN_SPECIFIED_FSP,
+                "2012-12-31 00:00:00",
+                "2012-12-31 01:00:00",
+            ),
+        ];
+
+        for (input, fsp, exp_float, exp_non_float) in ok_tables {
+            let utc_t = Time::parse_utc_datetime_from_float_string(input, fsp).unwrap();
+            assert_eq!(format!("{}", utc_t), exp_float);
+            let utc_t = Time::parse_utc_datetime(input, fsp).unwrap();
+            assert_eq!(format!("{}", utc_t), exp_non_float);
         }
 
         let fail_tbl = vec![
