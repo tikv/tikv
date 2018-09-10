@@ -112,6 +112,20 @@ pub struct Task {
     pub slow_timer: Option<SlowTimer>,
 }
 
+impl Drop for Task {
+    fn drop(&mut self) {
+        if let Some(ref mut timer) = self.slow_timer {
+            slow_log!(
+                timer,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                self.region_id,
+                self.tag,
+                self.ts
+            );
+        }
+    }
+}
+
 impl Task {
     /// Creates a task for a running command.
     pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> Task {
@@ -137,20 +151,6 @@ impl Task {
                 .with_label_values(&[tag])
                 .start_coarse_timer(),
             slow_timer: None,
-        }
-    }
-}
-
-impl Drop for Task {
-    fn drop(&mut self) {
-        if let Some(ref mut timer) = self.slow_timer {
-            slow_log!(
-                timer,
-                "[region {}] scheduler handle command: {}, ts: {}",
-                self.region_id,
-                self.tag,
-                self.ts
-            );
         }
     }
 }
@@ -253,6 +253,29 @@ fn process_read<E: Engine>(
     if let Err(e) = scheduler.schedule(Msg::ReadFinished { cid, pr }) {
         // Todo: if this happens we need to clean up command's context
         panic!("schedule ReadFinished msg failed, cid={}, err={:?}", cid, e);
+    }
+    statistics
+}
+
+/// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
+/// message if successful or a `WritePrepareFailed` message back to the event loop.
+fn process_write<E: Engine>(
+    cid: u64,
+    cmd: Command,
+    scheduler: worker::Scheduler<Msg<E>>,
+    snapshot: E::Snap,
+) -> Statistics {
+    fail_point!("txn_before_process_write");
+    debug!("process write cmd(cid={} {}) in worker pool", cid, cmd);
+    let mut statistics = Statistics::default();
+    if let Err(e) = process_write_impl(cid, cmd, scheduler.clone(), snapshot, &mut statistics) {
+        if let Err(err) = scheduler.schedule(Msg::WritePrepareFailed { cid, err: e }) {
+            // Todo: if this happens, lock will hold for ever
+            panic!(
+                "schedule WritePrepareFailed msg failed. cid={}, err={:?}",
+                cid, err
+            );
+        }
     }
     statistics
 }
@@ -397,29 +420,6 @@ fn process_read_impl<E: Engine>(
         }
         _ => panic!("unsupported read command"),
     }
-}
-
-/// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
-/// message if successful or a `WritePrepareFailed` message back to the event loop.
-fn process_write<E: Engine>(
-    cid: u64,
-    cmd: Command,
-    scheduler: worker::Scheduler<Msg<E>>,
-    snapshot: E::Snap,
-) -> Statistics {
-    fail_point!("txn_before_process_write");
-    debug!("process write cmd(cid={} {}) in worker pool", cid, cmd);
-    let mut statistics = Statistics::default();
-    if let Err(e) = process_write_impl(cid, cmd, scheduler.clone(), snapshot, &mut statistics) {
-        if let Err(err) = scheduler.schedule(Msg::WritePrepareFailed { cid, err: e }) {
-            // Todo: if this happens, lock will hold for ever
-            panic!(
-                "schedule WritePrepareFailed msg failed. cid={}, err={:?}",
-                cid, err
-            );
-        }
-    }
-    statistics
 }
 
 fn process_write_impl<E: Engine>(

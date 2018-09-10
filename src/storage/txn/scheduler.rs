@@ -245,23 +245,6 @@ impl<E: Engine> Scheduler<E> {
         }
     }
 
-    /// Calls the callback with an error.
-    pub fn finish_with_err(&mut self, cid: u64, err: Error) {
-        debug!("command cid={}, finished with error", cid);
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "error"])
-            .inc();
-
-        let mut ctx = self.remove_ctx(cid);
-        let cb = ctx.callback.take().unwrap();
-        let pr = ProcessResult::Failed {
-            err: StorageError::from(err),
-        };
-        execute_callback(cb, pr);
-
-        self.release_lock(&ctx.lock, cid);
-    }
-
     /// Extracts the context of a command.
     fn extract_context(&self, cid: u64) -> &Context {
         let ctx = &self.cmd_ctxs[&cid];
@@ -288,10 +271,18 @@ impl<E: Engine> Scheduler<E> {
             .inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
-        let lock = gen_command_lock(&self.latches, &cmd);
+        let lock = self.gen_lock(&cmd);
         let ctx = Task::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
         self.lock_and_get_snapshot(cid);
+    }
+
+    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
+    /// the method initiates a get snapshot operation for furthur processing.
+    fn lock_and_get_snapshot(&mut self, cid: u64) {
+        if self.acquire_lock(cid) {
+            self.get_snapshot(cid);
+        }
     }
 
     fn too_busy(&self) -> bool {
@@ -314,20 +305,6 @@ impl<E: Engine> Scheduler<E> {
             return;
         }
         self.schedule_command(cmd, callback);
-    }
-
-    /// Tries to acquire all the required latches for a command.
-    ///
-    /// Returns true if successful; returns false otherwise.
-    fn acquire_lock(&mut self, cid: u64) -> bool {
-        let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
-        assert_eq!(ctx.cid, cid);
-        let ok = self.latches.acquire(&mut ctx.lock, cid);
-        if ok {
-            ctx.latch_timer.take();
-            ctx.slow_timer = Some(SlowTimer::new());
-        }
-        ok
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
@@ -353,6 +330,23 @@ impl<E: Engine> Scheduler<E> {
                 .inc();
             self.finish_with_err(cid, Error::from(e));
         }
+    }
+
+    /// Calls the callback with an error.
+    pub fn finish_with_err(&mut self, cid: u64, err: Error) {
+        debug!("command cid={}, finished with error", cid);
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "error"])
+            .inc();
+
+        let mut ctx = self.remove_ctx(cid);
+        let cb = ctx.callback.take().unwrap();
+        let pr = ProcessResult::Failed {
+            err: StorageError::from(err),
+        };
+        execute_callback(cb, pr);
+
+        self.release_lock(&ctx.lock, cid);
     }
 
     /// Event handler for the success of read.
@@ -444,19 +438,33 @@ impl<E: Engine> Scheduler<E> {
         self.release_lock(&ctx.lock, cid);
     }
 
+    /// Generates the lock for a command.
+    ///
+    /// Basically, read-only commands require no latches, write commands require latches hashed
+    /// by the referenced keys.
+    fn gen_lock(&self, cmd: &Command) -> Lock {
+        gen_command_lock(&self.latches, cmd)
+    }
+
+    /// Tries to acquire all the required latches for a command.
+    ///
+    /// Returns true if successful; returns false otherwise.
+    fn acquire_lock(&mut self, cid: u64) -> bool {
+        let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
+        assert_eq!(ctx.cid, cid);
+        let ok = self.latches.acquire(&mut ctx.lock, cid);
+        if ok {
+            ctx.latch_timer.take();
+            ctx.slow_timer = Some(SlowTimer::new());
+        }
+        ok
+    }
+
     /// Releases all the latches held by a command.
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
             self.lock_and_get_snapshot(wcid);
-        }
-    }
-
-    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
-    /// the method initiates a get snapshot operation for furthur processing.
-    fn lock_and_get_snapshot(&mut self, cid: u64) {
-        if self.acquire_lock(cid) {
-            self.get_snapshot(cid);
         }
     }
 }
@@ -511,7 +519,7 @@ impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
 ///
 /// Basically, read-only commands require no latches, write commands require latches hashed
 /// by the referenced keys.
-pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
+fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
     match *cmd {
         Command::Prewrite { ref mutations, .. } => {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
