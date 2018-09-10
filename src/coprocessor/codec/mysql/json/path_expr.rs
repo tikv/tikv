@@ -34,9 +34,6 @@
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[*]') -> [1, "2"]
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
 
-// FIXME: remove following later
-#![allow(dead_code)]
-
 use super::json_unquote::unquote_string;
 use coprocessor::codec::Result;
 use regex::Regex;

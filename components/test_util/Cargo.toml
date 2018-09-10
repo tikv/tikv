@@ -10,4 +10,4 @@ path = "lib.rs"
 tikv = { path = "../../" }
 time = "0.1"
 rand = "0.3"
-slog = "2.2"
+slog = "2.3"
