@@ -1,12 +1,12 @@
 ---
 title: Scale a TiKV Cluster
-summary: Learn how to add or delete a PD/TiKV node.
+summary: Learn how to scale out or scale in a TiKV cluster.
 category: operations
 ---
 
 # Scale a TiKV Cluster
 
-You can increase or decrease the capacity of a TiKV cluster without affecting online services. This document describes how to add or delete a PD or TiKV node.
+You can scale out a TiKV cluster by adding nodes to increase the capacity without affecting online services. You can also scale in a TiKV cluster by deleting nodes to decrease the capacity without affecting online services.
 
 > **Note:** If your TiKV cluster is deployed using Ansible, see [Scale the TiKV Cluster Using TiDB-Ansible](ansible-deployment-scale.md).
 
