@@ -19,9 +19,9 @@ use std::{fmt, u64};
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
-use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
+use raft::INVALID_INDEX;
 use raftstore::store::keys;
 use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
@@ -107,10 +107,42 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     }
 }
 
+/// `is_first_vote_msg` checks `msg` is the first vote (or prevote) message or not. It's used for
+/// when the message is received but there is no such region in `Store::region_peers` and the
+/// region overlaps with others. In this case we should put `msg` into `pending_votes` instead of
+/// create the peer.
 #[inline]
-pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
-    msg.get_message().get_msg_type() == MessageType::MsgRequestVote
-        && msg.get_message().get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
+pub fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
+    match msg.get_msg_type() {
+        MessageType::MsgRequestVote | MessageType::MsgRequestPreVote => {
+            msg.get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
+        }
+        _ => false,
+    }
+}
+
+#[inline]
+pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
+    let msg_type = msg.get_msg_type();
+    msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote
+}
+
+/// `is_initial_msg` checks whether the `msg` can be used to initialize a new peer or not.
+// There could be two cases:
+// 1. Target peer already exists but has not established communication with leader yet
+// 2. Target peer is added newly due to member change or region split, but it's not
+//    created yet
+// For both cases the region start key and end key are attached in RequestVote and
+// Heartbeat message for the store of that peer to check whether to create a new peer
+// when receiving these messages, or just to wait for a pending region split to perform
+// later.
+#[inline]
+pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
+    let msg_type = msg.get_msg_type();
+    msg_type == MessageType::MsgRequestVote
+        || msg_type == MessageType::MsgRequestPreVote
+        // the peer has not been known to this leader, it may exist or not.
+        || (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)
 }
 
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
@@ -910,7 +942,6 @@ mod tests {
 
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::AdminRequest;
-    use kvproto::raft_serverpb::RaftMessage;
     use raft::eraftpb::{ConfChangeType, Message, MessageType};
     use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use tempdir::TempDir;
@@ -1128,7 +1159,17 @@ mod tests {
                 true,
             ),
             (
+                MessageType::MsgRequestPreVote,
+                peer_storage::RAFT_INIT_LOG_TERM + 1,
+                true,
+            ),
+            (
                 MessageType::MsgRequestVote,
+                peer_storage::RAFT_INIT_LOG_TERM,
+                false,
+            ),
+            (
+                MessageType::MsgRequestPreVote,
                 peer_storage::RAFT_INIT_LOG_TERM,
                 false,
             ),
@@ -1143,10 +1184,25 @@ mod tests {
             let mut msg = Message::new();
             msg.set_msg_type(msg_type);
             msg.set_term(term);
+            assert_eq!(is_first_vote_msg(&msg), is_vote);
+        }
+    }
 
-            let mut m = RaftMessage::new();
-            m.set_message(msg);
-            assert_eq!(is_first_vote_msg(&m), is_vote);
+    #[test]
+    fn test_is_initial_msg() {
+        let tbl = vec![
+            (MessageType::MsgRequestVote, INVALID_INDEX, true),
+            (MessageType::MsgRequestPreVote, INVALID_INDEX, true),
+            (MessageType::MsgHeartbeat, INVALID_INDEX, true),
+            (MessageType::MsgHeartbeat, 100, false),
+            (MessageType::MsgAppend, 100, false),
+        ];
+
+        for (msg_type, commit, can_create) in tbl {
+            let mut msg = Message::new();
+            msg.set_msg_type(msg_type);
+            msg.set_commit(commit);
+            assert_eq!(is_initial_msg(&msg), can_create);
         }
     }
 

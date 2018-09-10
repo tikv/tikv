@@ -165,7 +165,7 @@ fn check_and_open(
 
     let cf_descs = if !existed.is_empty() {
         // panic if OPTIONS not found for existing instance?
-        let (_, tmp) = load_latest_options(path, &Env::default(), false)
+        let (_, tmp) = load_latest_options(path, &Env::default(), true)
             .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
             .unwrap_or_else(|| panic!("couldn't find the OPTIONS file"));
         tmp
