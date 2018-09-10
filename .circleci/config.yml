@@ -71,12 +71,7 @@ jobs:
       - run:
           name: Installing tarpaulin
           command: |
-            CURRENT_TARPAULIN_VERSION=`(cargo tarpaulin --version || echo "0") | awk '{ print $3 }'`
-            echo "Tarpaulin version is now: ${CURRENT_TARPAULIN_VERSION}"
-            echo "Tarpaulin version should be: ${TARPAULIN_VERSION}"
-            if [[ "${CURRENT_TARPAULIN_VERSION}" != "${TARPAULIN_VERSION}" ]]; then
-                RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin  --version ${TARPAULIN_VERSION} --force
-            fi
+            RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.3 --force
       - restore_cache:
           # Actually master does not need to download the cache. However we cannot make conditions here.
           name: Downloading ./target Cache from master
