@@ -175,14 +175,22 @@ impl<Ctx> Scheduler<Ctx> {
     }
 }
 
+impl<Ctx> Clone for Scheduler<Ctx> {
+    fn clone(&self) -> Self {
+        Scheduler {
+            state: self.state.clone(),
+            task_count: self.task_count.clone(),
+        }
+    }
+}
+
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
 pub struct ThreadPool<Ctx> {
-    state: Arc<(Mutex<ScheduleState<Ctx>>, Condvar)>,
     threads: Vec<JoinHandle<()>>,
-    task_count: Arc<AtomicUsize>,
+    scheduler: Scheduler<Ctx>,
 }
 
 impl<Ctx> ThreadPool<Ctx>
@@ -222,17 +230,13 @@ where
         }
 
         ThreadPool {
-            state,
             threads,
-            task_count,
+            scheduler: Scheduler { state, task_count },
         }
     }
 
     pub fn scheduler(&self) -> Scheduler<Ctx> {
-        Scheduler {
-            state: self.state.clone(),
-            task_count: self.task_count.clone(),
-        }
+        self.scheduler.clone()
     }
 
     pub fn execute<F>(&self, job: F)
@@ -240,26 +244,16 @@ where
         F: FnOnce(&mut Ctx) + Send + 'static,
         Ctx: Context,
     {
-        let task = Task::new(job);
-        let &(ref lock, ref cvar) = &*self.state;
-        {
-            let mut state = lock.lock().unwrap();
-            if state.stopped {
-                return;
-            }
-            state.queue.push(task);
-            cvar.notify_one();
-        }
-        self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
+        self.scheduler.schedule(job)
     }
 
     #[inline]
     pub fn get_task_count(&self) -> usize {
-        self.task_count.load(AtomicOrdering::SeqCst)
+        self.scheduler.task_count.load(AtomicOrdering::SeqCst)
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        let &(ref lock, ref cvar) = &*self.state;
+        let &(ref lock, ref cvar) = &*self.scheduler.state;
         {
             let mut state = lock.lock().unwrap();
             state.stopped = true;
