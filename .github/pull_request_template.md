@@ -1,5 +1,5 @@
 <!--
-Thank you for contributing to TiKV! Please read TiKV's [CONTRIBUTING](https://github.com/pingcap/tikv/blob/master/CONTRIBUTING.md) document **BEFORE** filing this PR.
+Thank you for contributing to TiKV! Please read TiKV's [CONTRIBUTING](https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md) document **BEFORE** filing this PR.
 -->
 
 ## What have you changed? (mandatory)

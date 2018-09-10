@@ -746,8 +746,7 @@ impl DebugExecutor for Debugger {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        #[allow(deprecated)]
-        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        let stream = stream::iter_result(iter).map_err(|e| e.to_string());
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
@@ -1522,6 +1521,11 @@ fn main() {
         );
 
     let matches = app.clone().get_matches();
+    if matches.args.is_empty() {
+        let _ = app.print_help();
+        println!();
+        return;
+    }
 
     // Deal with arguments about key utils.
     if let Some(hex) = matches.value_of("hex-to-escaped") {
