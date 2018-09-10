@@ -31,11 +31,11 @@ harness = false
 name = "benches"
 
 [dependencies]
-log = "0.3.9"
-slog = "2.2"
+log = { version = "0.3", features = ["release_max_level_debug"] }
+slog = "2.3"
 slog-async = "2.3"
 slog-scope = "4.0"
-slog-stdlog = "3.0"
+slog-stdlog = "3.0.4-pre"
 slog-term = "2.4"
 byteorder = "1.2"
 rand = "0.3"
@@ -80,6 +80,7 @@ fxhash = "0.2"
 derive_more = "0.11.0"
 num = "0.2.0"
 hex = "0.3"
+rust-crypto = "^0.2"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -111,6 +112,7 @@ optional = true
 test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
+test_coprocessor = { path = "components/test_coprocessor" }
 criterion = "0.2"
 arrow = "0.10.0"
 
@@ -122,6 +124,7 @@ members = [
   "fuzz",
   "components/test_raftstore",
   "components/test_storage",
+  "components/test_coprocessor",
   "components/test_util"
 ]
 

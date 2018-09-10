@@ -294,6 +294,19 @@ impl EvalContext {
         Ok(())
     }
 
+    pub fn handle_invalid_time_error(&mut self, err: Error) -> Result<()> {
+        if err.code() != super::codec::error::ERR_TRUNCATE_WRONG_VALUE {
+            return Err(err);
+        }
+        let cfg = &self.cfg;
+        if cfg.strict_sql_mode && (cfg.in_insert_stmt || cfg.in_update_or_delete_stmt) {
+            Err(err)
+        } else {
+            self.warnings.append_warning(err);
+            Ok(())
+        }
+    }
+
     pub fn overflow_from_cast_str_as_int(
         &mut self,
         bytes: &[u8],
@@ -323,6 +336,7 @@ impl EvalContext {
 
 #[cfg(test)]
 mod test {
+    use super::super::Error;
     use super::*;
     use std::sync::Arc;
 
@@ -364,7 +378,7 @@ mod test {
     #[test]
     fn test_handle_division_by_zero() {
         let cases = vec![
-            //(flag,sql_mode,strict_sql_mode=>is_ok,is_empty)
+            //(flag,sql_mode,strict_sql_mode,is_ok,is_empty)
             (0, 0, false, true, false), //warning
             (
                 FLAG_IN_INSERT_STMT,
@@ -403,6 +417,28 @@ mod test {
                 .set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_division_by_zero().is_ok(), is_ok);
+            assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
+        }
+    }
+
+    #[test]
+    fn test_handle_invalid_time_error() {
+        let cases = vec![
+            //(flags,strict_sql_mode,is_ok,is_empty)
+            (0, false, true, false),                             //warning
+            (0, true, true, false),                              //warning
+            (FLAG_IN_INSERT_STMT, false, true, false),           //warning
+            (FLAG_IN_UPDATE_OR_DELETE_STMT, false, true, false), //warning
+            (FLAG_IN_UPDATE_OR_DELETE_STMT, true, false, true),  //error
+            (FLAG_IN_INSERT_STMT, true, false, true),            //error
+        ];
+        for (flags, strict_sql_mode, is_ok, is_empty) in cases {
+            let err = Error::invalid_time_format("");
+            let cfg = EvalConfig::new()
+                .set_by_flags(flags)
+                .set_strict_sql_mode(strict_sql_mode);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            assert_eq!(ctx.handle_invalid_time_error(err).is_ok(), is_ok);
             assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
         }
     }
