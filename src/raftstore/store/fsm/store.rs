@@ -27,14 +27,13 @@ use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use raft::eraftpb::MessageType;
-use raft::INVALID_INDEX;
 use rocksdb::{CompactionJobInfo, WriteBatch, DB};
 use tokio_timer::timer::Handle;
 
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::store::util::is_initial_msg;
 use raftstore::Result;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::future::CountDownLatch;
@@ -590,12 +589,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(true);
         }
 
-        let message = msg.get_message();
-        let msg_type = message.get_msg_type();
-        if msg_type != MessageType::MsgRequestVote
-            && msg_type != MessageType::MsgRequestPreVote
-            && (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX)
-        {
+        if !is_initial_msg(msg.get_message()) {
+            let msg_type = msg.get_message().get_msg_type();
             debug!(
                 "target peer {:?} doesn't exist, stale message {:?}.",
                 target, msg_type
@@ -613,7 +608,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let exist_region = &meta.regions[&exist_region_id];
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
-                if util::is_first_vote_msg(msg) {
+                if util::is_first_vote_msg(msg.get_message()) {
                     meta.pending_votes.push(msg.to_owned());
                 }
                 self.raft_metrics.message_dropped.region_overlap += 1;
@@ -1054,8 +1049,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg =
-            msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote;
+        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -1087,7 +1081,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
                 self.raft_metrics.message_dropped.region_nonexistent += 1;
-                if util::is_first_vote_msg(msg) {
+                if util::is_first_vote_msg(msg.get_message()) {
                     info!(
                         "[region {}] doesn't exist yet, wait for it to be split",
                         region_id

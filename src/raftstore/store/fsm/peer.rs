@@ -31,7 +31,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::ConfChangeType;
 use raft::{self, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::DB;
@@ -539,9 +539,7 @@ impl<T: Transport> Peer<T> {
 
     fn check_msg(&mut self, msg: &RaftMessage) -> bool {
         let from_epoch = msg.get_region_epoch();
-        let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg =
-            msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote;
+        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -1174,6 +1172,7 @@ impl<T: Transport> Peer<T> {
                 error!("{} failed to notify pd: {}", self.peer.tag, e);
             }
         }
+
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{} original region should exists", self.peer.tag);
@@ -1187,20 +1186,36 @@ impl<T: Transport> Peer<T> {
                 .region_ranges
                 .insert(enc_end_key(&new_region), new_region_id)
                 .is_none();
-            assert!(
-                not_exist,
-                "[region {}] should not exists",
-                new_region.get_id()
-            );
+            assert!(not_exist, "[region {}] should not exists", new_region_id);
+
             if new_region_id == region_id {
                 continue;
             }
+
             // Insert new regions and validation
             info!(
                 "[region {}] insert new region {:?}",
-                new_region.get_id(),
-                new_region
+                new_region_id, new_region
             );
+
+            if let Some(r) = meta.regions.remove(&new_region_id) {
+                // Suppose a new node is added by conf change and the snapshot comes slowly.
+                // Then, the region splits and the first vote message comes to the new node
+                // before the old snapshot, which will create an uninitialized peer on the
+                // store. After that, the old snapshot comes, followed with the last split
+                // proposal. After it's applied, the uninitialized peer will be met.
+                // We can remove this uninitialized peer directly.
+                if !r.get_peers().is_empty() {
+                    panic!(
+                        "[region {}] duplicated region {:?} for split region {:?}",
+                        new_region_id, r, new_region
+                    );
+                }
+                self.router
+                    .unregister_mailbox(new_region_id)
+                    .unwrap()
+                    .close();
+            }
 
             let mut new_peer = match Peer::create(self, &new_region) {
                 Ok(new_peer) => new_peer,
@@ -1213,6 +1228,7 @@ impl<T: Transport> Peer<T> {
                     );
                 }
             };
+
             for peer in new_region.get_peers() {
                 // Add this peer to cache.
                 new_peer.peer.insert_peer_cache(peer.clone());
@@ -1231,23 +1247,7 @@ impl<T: Transport> Peer<T> {
             }
 
             new_peer.peer.register_delegates();
-            if let Some(r) = meta.regions.insert(new_region_id, new_region) {
-                // If the store received a raft msg with the new region raft group
-                // before splitting, it will creates a uninitialized peer.
-                // We can remove this uninitialized peer directly.
-                if !r.get_peers().is_empty() {
-                    panic!(
-                        "{} duplicated region {:?} for split region {:?}",
-                        new_peer.peer.tag,
-                        r,
-                        new_peer.peer.region()
-                    )
-                }
-                self.router
-                    .unregister_mailbox(new_region_id)
-                    .unwrap()
-                    .close();
-            }
+            meta.regions.insert(new_region_id, new_region);
 
             if !campaigned {
                 if let Some(msg) = meta
