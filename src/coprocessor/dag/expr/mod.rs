@@ -35,7 +35,9 @@ pub use coprocessor::codec::{Error, Result};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
+use rand::XorShiftRng;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::str;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use util::codec::number;
@@ -65,6 +67,24 @@ pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     tp: FieldType,
+    cus_rng: CusRng,
+}
+
+#[derive(Clone)]
+struct CusRng {
+    rng: RefCell<Option<XorShiftRng>>,
+}
+
+impl ::std::fmt::Debug for CusRng {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        write!(f, "()")
+    }
+}
+
+impl PartialEq for CusRng {
+    fn eq(&self, other: &CusRng) -> bool {
+        self == other
+    }
 }
 
 impl Expression {
@@ -94,7 +114,6 @@ impl Expression {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
     fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
@@ -111,7 +130,6 @@ impl Expression {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -271,6 +289,9 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             tp,
+                            cus_rng: CusRng {
+                                rng: RefCell::new(None),
+                            },
                         })
                     })
             }

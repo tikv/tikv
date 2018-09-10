@@ -30,7 +30,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::ConfChangeType;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use pd::{PdClient, PdTask};
@@ -292,8 +292,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let msg_type = msg.get_message().get_msg_type();
-        let is_vote_msg =
-            msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote;
+        let is_vote_msg = util::is_vote_msg(msg.get_message());
         let from_store_id = msg.get_from_peer().get_store_id();
 
         // Let's consider following cases with three nodes [1, 2, 3] and 1 is leader:
@@ -341,7 +340,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
                 raft_metrics.message_dropped.region_nonexistent += 1;
-                if util::is_first_vote_msg(msg) {
+                if util::is_first_vote_msg(msg.get_message()) {
                     self.pending_votes.push(msg.to_owned());
                     info!(
                         "[region {}] doesn't exist yet, wait for it to be split",
@@ -823,6 +822,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
         self.pending_cross_snap.remove(&region_id);
+        // Destroy read delegates.
+        self.local_reader
+            .schedule(ReadTask::destroy(region_id))
+            .unwrap();
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -967,12 +970,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 (peer.peer_stat.clone(), peer.is_leader())
             }
         };
+
         if is_leader {
             // Notify pd immediately to let it update the region meta.
             if let Err(e) = report_split_pd(&regions, &self.pd_worker) {
                 error!("{} failed to notify pd: {}", self.tag, e);
             }
         }
+
         let last_key = enc_end_key(regions.last().unwrap());
         self.region_ranges
             .remove(&last_key)
@@ -980,27 +985,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
+
             let not_exist = self
                 .region_ranges
                 .insert(enc_end_key(&new_region), new_region_id)
                 .is_none();
-            assert!(
-                not_exist,
-                "[region {}] should not exists",
-                new_region.get_id()
-            );
+            assert!(not_exist, "[region {}] should not exists", new_region_id);
+
             if new_region_id == region_id {
                 continue;
             }
+
             // Insert new regions and validation
             info!(
                 "[region {}] insert new region {:?}",
-                new_region.get_id(),
-                new_region
+                new_region_id, new_region
             );
             if let Some(peer) = self.region_peers.get(&new_region_id) {
-                // If the store received a raft msg with the new region raft group
-                // before splitting, it will creates a uninitialized peer.
+                // Suppose a new node is added by conf change and the snapshot comes slowly.
+                // Then, the region splits and the first vote message comes to the new node
+                // before the old snapshot, which will create an uninitialized peer on the
+                // store. After that, the old snapshot comes, followed with the last split
+                // proposal. After it's applied, the uninitialized peer will be met.
                 // We can remove this uninitialized peer directly.
                 if peer.get_store().is_initialized() {
                     panic!(
@@ -1018,14 +1024,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("create new split region {:?} err {:?}", new_region, e);
                 }
             };
+            let peer = new_peer.peer.clone();
+
             for peer in new_region.get_peers() {
                 // Add this peer to cache.
                 new_peer.insert_peer_cache(peer.clone());
             }
-            let peer = new_peer.peer.clone();
+
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
             new_peer.peer_stat = peer_stat.clone();
+
             let campaigned = new_peer.maybe_campaign(is_leader, &mut self.pending_raft_groups);
 
             if is_leader {
