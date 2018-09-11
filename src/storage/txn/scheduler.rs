@@ -1081,7 +1081,7 @@ impl<E: Engine> Scheduler<E> {
 
 impl<E: Engine> Runnable<Msg<E>> for Scheduler<E> {
     fn run(&mut self, _: Msg<E>) {
-        unimplemented!()
+        panic!("Shouldn't call Scheduler::run directly");
     }
 
     fn run_batch(&mut self, msgs: &mut Vec<Msg<E>>) {
