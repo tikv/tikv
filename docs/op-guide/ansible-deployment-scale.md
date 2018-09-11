@@ -1,14 +1,14 @@
 ---
-title: Scale the TiKV Cluster Using TiDB-Ansible
-summary: Use TiDB-Ansible to add or delete a PD/TiKV node.
+title: Scale a TiKV Cluster Using TiDB-Ansible
+summary: Use TiDB-Ansible to scale out or scale in a TiKV cluster.
 category: operations
 ---
 
-# Scale the TiKV Cluster Using TiDB-Ansible
+# Scale a TiKV Cluster Using TiDB-Ansible
 
-This document describes how to use TiDB-Ansible to increase or decrease the capacity of a TiKV cluster without affecting the online services. It applies to the TiKV deployment using Ansible. If your TiKV cluster is deployed in other ways, see [Scale a TiKV Cluster](horizontal-scale.md).
+This document describes how to use TiDB-Ansible to scale out or scale in a TiKV cluster without affecting the online services.
 
-> **Warning:** In decreasing the capacity, if your cluster has a mixed deployment of other services, do not perform the following procedures. The following examples assume that the removed nodes have no mixed deployment of other services.
+> **Note:** This document applies to the TiKV deployment using Ansible. If your TiKV cluster is deployed in other ways, see [Scale a TiKV Cluster](horizontal-scale.md).
 
 Assume that the topology is as follows:
 
@@ -21,9 +21,13 @@ Assume that the topology is as follows:
 | node5 | 172.16.10.5 | TiKV2 |
 | node6 | 172.16.10.6 | TiKV3 |
 
-## Add a TiKV node
+## Scale out a TiKV cluster
 
-For example, if you want to add a TiKV node (node101) with the IP addresses `172.16.10.101`, take the following steps:
+This section describes how to increase the capacity of a TiKV cluster by adding a TiKV or PD node.
+
+### Add a TiKV node
+
+For example, if you want to add a TiKV node (node101) with the IP address `172.16.10.101`, take the following steps:
 
 1. Edit the `inventory.ini` file and append the node information:
 
@@ -89,7 +93,7 @@ For example, if you want to add a TiKV node (node101) with the IP addresses `172
     ansible-playbook start.yml -l 172.16.10.101
     ```
 
-5. Update the Prometheus configuration and restart the cluster:
+5. Update the Prometheus configuration and restart:
 
     ```
     ansible-playbook rolling_update_monitor.yml --tags=prometheus
@@ -97,7 +101,7 @@ For example, if you want to add a TiKV node (node101) with the IP addresses `172
 
 6. Monitor the status of the entire cluster and the newly added nodes by opening a browser to access the monitoring platform: `http://172.16.10.1:3000`.
 
-## Add a PD node
+### Add a PD node
 
 To add a PD node (node102) with the IP address `172.16.10.102`, take the following steps:
 
@@ -164,7 +168,7 @@ To add a PD node (node102) with the IP address `172.16.10.102`, take the followi
     ```
 
     1. Remove the `--initial-cluster="xxxx" \` configuration.
-    2. Add `--join="http://172.16.10.1:2379" \`. The IP address (`172.16.10.1`) can be any of the existing PD IP address in the cluster.
+    2. Add `--join="http://172.16.10.1:2379" \`. The IP address (`172.16.10.1`) can be any of the existing PD IP addresses in the cluster.
     3. Manually start the PD service in the newly added PD node:
       
         ```
@@ -185,7 +189,7 @@ To add a PD node (node102) with the IP address `172.16.10.102`, take the followi
     ansible-playbook rolling_update.yml
     ```
    
-6. Update the Prometheus configuration and restart the cluster:
+6. Update the Prometheus configuration and restart:
 
     ```
     ansible-playbook rolling_update_monitor.yml --tags=prometheus
@@ -193,7 +197,13 @@ To add a PD node (node102) with the IP address `172.16.10.102`, take the followi
 
 7. Monitor the status of the entire cluster and the newly added node by opening a browser to access the monitoring platform: `http://172.16.10.1:3000`.
 
-## Remove a TiKV node
+## Scale in a TiKV cluster
+
+This section describes how to decrease the capacity of a TiKV cluster by removing a TiKV or PD node.
+
+> **Warning:** In decreasing the capacity, if your cluster has a mixed deployment of other services, do not perform the following procedures. The following examples assume that the removed nodes have no mixed deployment of other services.
+
+### Remove a TiKV node
 
 To remove a TiKV node (node6) with the IP address `172.16.10.6`, take the following steps:
 
@@ -266,7 +276,7 @@ To remove a TiKV node (node6) with the IP address `172.16.10.6`, take the follow
     | node5 | 172.16.10.5 | TiKV2 |
     | **node6** | **172.16.10.6** | **TiKV3 removed** |
 
-5. Update the Prometheus configuration and restart the cluster:
+5. Update the Prometheus configuration and restart:
 
     ```
     ansible-playbook rolling_update_monitor.yml --tags=prometheus
@@ -274,7 +284,7 @@ To remove a TiKV node (node6) with the IP address `172.16.10.6`, take the follow
 
 6. Monitor the status of the entire cluster by opening a browser to access the monitoring platform: `http://172.16.10.1:3000`.
 
-## Remove a PD node
+### Remove a PD node
 
 To remove a PD node (node2) with the IP address `172.16.10.2`, take the following steps:
 
@@ -351,7 +361,7 @@ To remove a PD node (node2) with the IP address `172.16.10.2`, take the followin
     ansible-playbook rolling_update.yml
     ```
 
-6. Update the Prometheus configuration and restart the cluster:
+6. Update the Prometheus configuration and restart:
 
     ```
     ansible-playbook rolling_update_monitor.yml --tags=prometheus

@@ -72,7 +72,7 @@ To reduce the pressure of the existing TiKV nodes, PD loads balance automaticall
 
 ### Delete a TiKV node dynamically
 
-To delete (make it offline) a TiKV node safely, you need to inform PD in advance. After that, PD is able to migrate the data on this TiKV node to other TiKV nodes, ensuring that data have enough replicas.
+To delete a TiKV node safely, you need to inform PD in advance. After that, PD is able to migrate the data on this TiKV node to other TiKV nodes, ensuring that data have enough replicas.
 
 For example, to delete the TiKV node with the store id 1, you can complete this using `pd-ctl`:
 
