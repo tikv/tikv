@@ -482,7 +482,7 @@ mod tests {
     use server::readpool::{self, ReadPool};
     use std::collections::BTreeMap;
     use storage::engine::{new_local_engine, TEMP_DIR};
-    use storage::{Config, Mutation, Options, ReadPoolContext, Storage};
+    use storage::{Config, Mutation, Options, ReadPoolContext, Storage, ALL_CFS};
     use util::worker::FutureWorker;
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
