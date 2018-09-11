@@ -605,10 +605,6 @@ impl Display for RequestTask {
 
 impl<E: Engine> Runnable<Task<E>> for Host<E> {
     // TODO: limit pending reqs
-    fn run(&mut self, _: Task<E>) {
-        panic!("Shouldn't call Host::run directly");
-    }
-
     #[cfg_attr(feature = "cargo-clippy", allow(for_kv_map))]
     fn run_batch(&mut self, tasks: &mut Vec<Task<E>>) {
         let mut grouped_reqs = map![];

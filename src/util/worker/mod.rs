@@ -84,7 +84,9 @@ impl<T> Debug for ScheduleError<T> {
 
 pub trait Runnable<T: Display> {
     /// Run a task.
-    fn run(&mut self, t: T);
+    fn run(&mut self, _: T) {
+        unimplemented!()
+    }
 
     /// Run a batch of tasks.
     ///
