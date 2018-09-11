@@ -41,7 +41,7 @@ RUN go get golang.org/x/tools/go/gcexportdata \
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
 
-RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
+RUN curl -L https://github.com/tikv/tikv/archive/master.tar.gz -o /root/master.tar.gz \
 	&& cd /root && tar xf master.tar.gz \
 	&& cd /root && rm -rf master.tar.gz
 
