@@ -15,9 +15,11 @@ mod builtin_arithmetic;
 mod builtin_cast;
 mod builtin_compare;
 mod builtin_control;
+mod builtin_encryption;
 mod builtin_json;
 mod builtin_like;
 mod builtin_math;
+mod builtin_miscellaneous;
 mod builtin_op;
 mod builtin_string;
 mod builtin_time;
@@ -299,7 +301,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+    use super::{Error, EvalConfig, EvalContext, Expression};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{
@@ -356,6 +358,31 @@ mod test {
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(col_id).unwrap();
         expr.set_val(buf);
+        expr
+    }
+
+    pub fn string_datum_expr_with_tp(
+        datum: Datum,
+        tp: u8,
+        flag: u64,
+        flen: i32,
+        charset: String,
+        collate: i32,
+    ) -> Expr {
+        let mut expr = Expr::new();
+        match datum {
+            Datum::Bytes(bs) => {
+                expr.set_tp(ExprType::Bytes);
+                expr.set_val(bs);
+                expr.mut_field_type().set_tp(i32::from(tp));
+                expr.mut_field_type().set_flag(flag as u32);
+                expr.mut_field_type().set_flen(flen);
+                expr.mut_field_type().set_charset(charset);
+                expr.mut_field_type().set_collate(collate);
+            }
+            Datum::Null => expr.set_tp(ExprType::Null),
+            d => panic!("unsupport datum: {:?}", d),
+        }
         expr
     }
 
@@ -425,7 +452,7 @@ mod test {
 
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
@@ -459,7 +486,10 @@ mod test {
             ),
         ];
         for (sig, cols, exp) in cases {
-            let col_expr = col_expr(0);
+            let mut col_expr = col_expr(0);
+            col_expr
+                .mut_field_type()
+                .set_charset(charset::CHARSET_UTF8.to_owned());
             let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);

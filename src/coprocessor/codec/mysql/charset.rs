@@ -34,3 +34,6 @@ pub const COLLATION_LATIN1: &str = "latin1_bin";
 
 // All utf8 charsets.
 pub const UTF8_CHARSETS: &[&str] = &[CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_ASCII];
+
+// `COLLATION_BIN_ID` is the collate id for `COLLATE_BIN`.
+pub const COLLATION_BIN_ID: i32 = 63;

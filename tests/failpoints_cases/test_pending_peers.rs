@@ -16,10 +16,9 @@ use std::thread::*;
 use std::time::*;
 
 use fail;
-use tikv::util::config::*;
 
-use raftstore::node::new_node_cluster;
-use raftstore::util::*;
+use test_raftstore::*;
+use tikv::util::config::*;
 
 #[test]
 fn test_pending_peers() {

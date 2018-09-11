@@ -18,6 +18,8 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::u64;
 
+use byteorder::{ByteOrder, NativeEndian};
+
 use util::codec::bytes;
 use util::codec::number::{self, NumberEncoder};
 use util::{codec, escape};
@@ -44,21 +46,6 @@ pub struct MvccInfo {
     pub values: Vec<(u64, Value)>,
 }
 
-/// The caller should ensure the key is a timestamped key.
-pub fn truncate_ts(key: &[u8]) -> &[u8] {
-    &key[..key.len() - number::U64_SIZE]
-}
-
-/// The caller should ensure the key is a timestamped key.
-pub fn decode_ts(key: &[u8]) -> Result<u64, codec::Error> {
-    let len = key.len();
-    if len < number::U64_SIZE {
-        return Err(codec::Error::KeyLength);
-    }
-    let mut ts = &key[len - number::U64_SIZE..];
-    number::decode_u64_desc(&mut ts)
-}
-
 /// Key type.
 ///
 /// Keys have 2 types of binary representation - raw and encoded. The raw
@@ -75,31 +62,53 @@ pub struct Key(Vec<u8>);
 /// Core functions for `Key`.
 impl Key {
     /// Creates a key from raw bytes.
+    #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
         Key(codec::bytes::encode_bytes(key))
     }
 
+    /// Gets and moves the raw representation of this key.
+    #[inline]
+    pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
+        let mut k = self.0;
+        bytes::decode_bytes_in_place(&mut k, false)?;
+        Ok(k)
+    }
+
     /// Gets the raw representation of this key.
-    pub fn raw(&self) -> Result<Vec<u8>, codec::Error> {
+    #[inline]
+    pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
         bytes::decode_bytes(&mut self.0.as_slice(), false)
     }
 
-    /// Creates a key from encoded bytes.
+    /// Creates a key from encoded bytes vector.
+    #[inline]
     pub fn from_encoded(encoded_key: Vec<u8>) -> Key {
         Key(encoded_key)
     }
 
+    /// Creates a key with reserved capacity for timestamp from encoded bytes slice.
+    #[inline]
+    pub fn from_encoded_slice(encoded_key: &[u8]) -> Key {
+        let mut k = Vec::with_capacity(encoded_key.len() + number::U64_SIZE);
+        k.extend_from_slice(encoded_key);
+        Key(k)
+    }
+
     /// Gets the encoded representation of this key.
-    pub fn encoded(&self) -> &Vec<u8> {
+    #[inline]
+    pub fn as_encoded(&self) -> &Vec<u8> {
         &self.0
     }
 
     /// Gets and moves the encoded representation of this key.
-    pub fn take_encoded(self) -> Vec<u8> {
+    #[inline]
+    pub fn into_encoded(self) -> Vec<u8> {
         self.0
     }
 
     /// Creates a new key by appending a `u64` timestamp to this key.
+    #[inline]
     pub fn append_ts(self, ts: u64) -> Key {
         let mut encoded = self.0;
         encoded.encode_u64_desc(ts).unwrap();
@@ -110,13 +119,15 @@ impl Key {
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
+    #[inline]
     pub fn decode_ts(&self) -> Result<u64, codec::Error> {
-        Ok(decode_ts(&self.0)?)
+        Ok(Self::decode_ts_from(&self.0)?)
     }
 
     /// Creates a new key by truncating the timestamp from this key.
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped key.
+    #[inline]
     pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
         if len < number::U64_SIZE {
@@ -132,7 +143,71 @@ impl Key {
             Err(codec::Error::KeyLength)
         } else {
             self.0.truncate(len - number::U64_SIZE);
-            Ok(Key(self.0))
+            Ok(self)
+        }
+    }
+
+    /// Split a ts encoded key, return the user key and timestamp.
+    #[inline]
+    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+        if key.len() < number::U64_SIZE {
+            Err(codec::Error::KeyLength)
+        } else {
+            let pos = key.len() - number::U64_SIZE;
+            let k = &key[..pos];
+            let mut ts = &key[pos..];
+            Ok((k, number::decode_u64_desc(&mut ts)?))
+        }
+    }
+
+    /// Extract the user key from a ts encoded key.
+    #[inline]
+    pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(&key[..key.len() - number::U64_SIZE])
+    }
+
+    /// Decode the timestamp from a ts encoded key.
+    #[inline]
+    pub fn decode_ts_from(key: &[u8]) -> Result<u64, codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        let mut ts = &key[len - number::U64_SIZE..];
+        number::decode_u64_desc(&mut ts)
+    }
+
+    /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
+    /// user key `user_key`.
+    ///
+    /// There is an optimziation in this function, which is to compare the last 8 encoded bytes
+    /// first before comparing the rest. It is because in TiDB many records are ended with an 8
+    /// byte row id and in many situations only this part is different when calling this function.
+    //
+    // TODO: If the last 8 byte is memory aligned, it would be better.
+    #[inline]
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
+    pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
+        let user_key_len = user_key.len();
+        if ts_encoded_key.len() != user_key_len + number::U64_SIZE {
+            return false;
+        }
+        if user_key_len >= number::U64_SIZE {
+            // We compare last 8 bytes as u64 first, then compare the rest.
+            // TODO: Can we just use == to check the left part and right part? `memcmp` might
+            //       be smart enough.
+            let left = NativeEndian::read_u64(&ts_encoded_key[user_key_len - 8..]);
+            let right = NativeEndian::read_u64(&user_key[user_key_len - 8..]);
+            if left != right {
+                return false;
+            }
+            ts_encoded_key[..user_key_len - 8] == user_key[..user_key_len - 8]
+        } else {
+            ts_encoded_key[..user_key_len] == user_key[..]
         }
     }
 }
@@ -150,7 +225,7 @@ impl Clone for Key {
 /// Hash for `Key`.
 impl Hash for Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.encoded().hash(state)
+        self.as_encoded().hash(state)
     }
 }
 
@@ -174,24 +249,6 @@ impl PartialOrd for Key {
     }
 }
 
-/// Creates a new key from raw bytes.
-pub fn make_key(k: &[u8]) -> Key {
-    Key::from_raw(k)
-}
-
-/// Splits encoded key on timestamp.
-/// Returns the split key and timestamp.
-pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
-    if key.len() < number::U64_SIZE {
-        Err(codec::Error::KeyLength)
-    } else {
-        let pos = key.len() - number::U64_SIZE;
-        let k = &key[..pos];
-        let mut ts = &key[pos..];
-        Ok((k, number::decode_u64_desc(&mut ts)?))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,9 +257,64 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = 123;
-        assert!(split_encoded_key_on_ts(k).is_err());
-        let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
-        let res = split_encoded_key_on_ts(enc.encoded()).unwrap();
+        assert!(Key::split_on_ts_for(k).is_err());
+        let enc = Key::from_encoded_slice(k).append_ts(ts);
+        let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
+    }
+
+    #[test]
+    fn test_is_user_key_eq() {
+        // make a short name to keep format for the test.
+        fn eq(a: &[u8], b: &[u8]) -> bool {
+            Key::is_user_key_eq(a, b)
+        }
+        assert_eq!(false, eq(b"", b""));
+        assert_eq!(false, eq(b"12345", b""));
+        assert_eq!(true, eq(b"12345678", b""));
+        assert_eq!(true, eq(b"x12345678", b"x"));
+        assert_eq!(false, eq(b"x12345", b"x"));
+        // user key len == 3
+        assert_eq!(true, eq(b"xyz12345678", b"xyz"));
+        assert_eq!(true, eq(b"xyz________", b"xyz"));
+        assert_eq!(false, eq(b"xyy12345678", b"xyz"));
+        assert_eq!(false, eq(b"yyz12345678", b"xyz"));
+        assert_eq!(false, eq(b"xyz12345678", b"xy"));
+        assert_eq!(false, eq(b"xyy12345678", b"xy"));
+        assert_eq!(false, eq(b"yyz12345678", b"xy"));
+        // user key len == 7
+        assert_eq!(true, eq(b"abcdefg12345678", b"abcdefg"));
+        assert_eq!(true, eq(b"abcdefgzzzzzzzz", b"abcdefg"));
+        assert_eq!(false, eq(b"abcdefg12345678", b"abcdef"));
+        assert_eq!(false, eq(b"abcdefg12345678", b"bcdefg"));
+        assert_eq!(false, eq(b"abcdefv12345678", b"abcdefg"));
+        assert_eq!(false, eq(b"vbcdefg12345678", b"abcdefg"));
+        assert_eq!(false, eq(b"abccefg12345678", b"abcdefg"));
+        // user key len == 8
+        assert_eq!(true, eq(b"abcdefgh12345678", b"abcdefgh"));
+        assert_eq!(true, eq(b"abcdefghyyyyyyyy", b"abcdefgh"));
+        assert_eq!(false, eq(b"abcdefgh12345678", b"abcdefg"));
+        assert_eq!(false, eq(b"abcdefgh12345678", b"bcdefgh"));
+        assert_eq!(false, eq(b"abcdefgz12345678", b"abcdefgh"));
+        assert_eq!(false, eq(b"zbcdefgh12345678", b"abcdefgh"));
+        assert_eq!(false, eq(b"abcddfgh12345678", b"abcdefgh"));
+        // user key len == 9
+        assert_eq!(true, eq(b"abcdefghi12345678", b"abcdefghi"));
+        assert_eq!(true, eq(b"abcdefghixxxxxxxx", b"abcdefghi"));
+        assert_eq!(false, eq(b"abcdefghi12345678", b"abcdefgh"));
+        assert_eq!(false, eq(b"abcdefghi12345678", b"bcdefghi"));
+        assert_eq!(false, eq(b"abcdefghy12345678", b"abcdefghi"));
+        assert_eq!(false, eq(b"ybcdefghi12345678", b"abcdefghi"));
+        assert_eq!(false, eq(b"abcddfghi12345678", b"abcdefghi"));
+        // user key len == 11
+        assert_eq!(true, eq(b"abcdefghijk87654321", b"abcdefghijk"));
+        assert_eq!(true, eq(b"abcdefghijkabcdefgh", b"abcdefghijk"));
+        assert_eq!(false, eq(b"abcdefghijk87654321", b"abcdefghij"));
+        assert_eq!(false, eq(b"abcdefghijk87654321", b"bcdefghijk"));
+        assert_eq!(false, eq(b"abcdefghijx87654321", b"abcdefghijk"));
+        assert_eq!(false, eq(b"xbcdefghijk87654321", b"abcdefghijk"));
+        assert_eq!(false, eq(b"abxdefghijk87654321", b"abcdefghijk"));
+        assert_eq!(false, eq(b"axcdefghijk87654321", b"abcdefghijk"));
+        assert_eq!(false, eq(b"abcdeffhijk87654321", b"abcdefghijk"));
     }
 }

@@ -1,9 +1,22 @@
+// Copyright 2016 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::mpsc::channel;
 use std::thread;
 
 use kvproto::kvrpcpb::Context;
-use raftstore::server::new_server_cluster;
-use raftstore::transport_simulate::IsolationFilterFactory;
+
+use test_raftstore::*;
 use tikv::raftstore::store::engine::IterOption;
 use tikv::storage::engine::*;
 use tikv::storage::{CFStatistics, CfName, Key, CF_DEFAULT};
@@ -76,6 +89,9 @@ fn test_read_leader_in_lease() {
 fn test_batch_snapshot() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
+    // Set election timeout and max leader lease to 3s.
+    // Large max leader lease stabilizes the test.
+    let election_timeout = configure_for_lease_read(&mut cluster, Some(300), Some(10));
     cluster.run();
 
     let key = b"key";
@@ -99,17 +115,13 @@ fn test_batch_snapshot() {
         assert!(s.is_some());
     }
     // sleep util leader lease is expired.
-    thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
+    thread::sleep(election_timeout);
     let batch = vec![ctx; size];
     let snapshots = must_batch_snapshot(batch, &storage);
     assert_eq!(size, snapshots.len());
     for s in snapshots {
         assert!(s.is_none());
     }
-}
-
-pub fn make_key(k: &[u8]) -> Key {
-    Key::from_raw(k)
 }
 
 fn must_batch_snapshot<E: Engine>(batch: Vec<Context>, engine: &E) -> BatchResults<E::Snap> {
@@ -122,31 +134,31 @@ fn must_batch_snapshot<E: Engine>(batch: Vec<Context>, engine: &E) -> BatchResul
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
-    engine.put(ctx, make_key(key), value.to_vec()).unwrap();
+    engine.put(ctx, Key::from_raw(key), value.to_vec()).unwrap();
 }
 
 fn must_put_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
     engine
-        .put_cf(ctx, cf, make_key(key), value.to_vec())
+        .put_cf(ctx, cf, Key::from_raw(key), value.to_vec())
         .unwrap();
 }
 
 fn must_delete<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
-    engine.delete(ctx, make_key(key)).unwrap();
+    engine.delete(ctx, Key::from_raw(key)).unwrap();
 }
 
 fn must_delete_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) {
-    engine.delete_cf(ctx, cf, make_key(key)).unwrap();
+    engine.delete_cf(ctx, cf, Key::from_raw(key)).unwrap();
 }
 
 fn assert_has<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
+    assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
 }
 
 fn can_read<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) -> bool {
     if let Ok(s) = engine.snapshot(ctx) {
-        assert_eq!(s.get(&make_key(key)).unwrap().unwrap(), value);
+        assert_eq!(s.get(&Key::from_raw(key)).unwrap().unwrap(), value);
         return true;
     }
     false
@@ -154,30 +166,31 @@ fn can_read<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) -> b
 
 fn assert_has_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap().unwrap(), value);
+    assert_eq!(
+        snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
+        value
+    );
 }
 
 fn assert_none<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get(&make_key(key)).unwrap(), None);
+    assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
 }
 
 fn assert_none_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get_cf(cf, &make_key(key)).unwrap(), None);
+    assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
 }
 
 fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot
+    let mut cursor = snapshot
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    iter.seek(&make_key(key), &mut statistics).unwrap();
-    assert_eq!(
-        (iter.key(), iter.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn assert_seek_cf<E: Engine>(
@@ -188,41 +201,37 @@ fn assert_seek_cf<E: Engine>(
     pair: (&[u8], &[u8]),
 ) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot
+    let mut cursor = snapshot
         .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    iter.seek(&make_key(key), &mut statistics).unwrap();
-    assert_eq!(
-        (iter.key(), iter.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
     let mut statistics = CFStatistics::default();
     assert!(
-        cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
+        cursor
+            .near_seek(&Key::from_raw(key), &mut statistics)
+            .unwrap(),
         escape(key)
     );
-    assert_eq!(
-        (cursor.key(), cursor.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
     let mut statistics = CFStatistics::default();
     assert!(
         cursor
-            .near_reverse_seek(&make_key(key), &mut statistics)
+            .near_reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap(),
         escape(key)
     );
-    assert_eq!(
-        (cursor.key(), cursor.value()),
-        (&*bytes::encode_bytes(pair.0), pair.1)
-    );
+    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn get_put<E: Engine>(ctx: &Context, engine: &E) {
@@ -238,8 +247,8 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
         .write(
             ctx,
             vec![
-                Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
-                Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec()),
+                Modify::Put(CF_DEFAULT, Key::from_raw(b"x"), b"1".to_vec()),
+                Modify::Put(CF_DEFAULT, Key::from_raw(b"y"), b"2".to_vec()),
             ],
         )
         .unwrap();
@@ -250,8 +259,8 @@ fn batch<E: Engine>(ctx: &Context, engine: &E) {
         .write(
             ctx,
             vec![
-                Modify::Delete(CF_DEFAULT, make_key(b"x")),
-                Modify::Delete(CF_DEFAULT, make_key(b"y")),
+                Modify::Delete(CF_DEFAULT, Key::from_raw(b"x")),
+                Modify::Delete(CF_DEFAULT, Key::from_raw(b"y")),
             ],
         )
         .unwrap();
@@ -271,7 +280,11 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
+    assert!(
+        !iter
+            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap()
+    );
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
 }
@@ -292,7 +305,7 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     let mut statistics = CFStatistics::default();
     assert!(
         !cursor
-            .near_seek(&make_key(b"z\x00"), &mut statistics)
+            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
             .unwrap()
     );
     must_delete(ctx, engine, b"x");

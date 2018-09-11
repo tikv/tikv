@@ -11,32 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+use futures::Future;
 
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
+
+use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::storage::CF_RAFT;
 use tikv::util::config::ReadableDuration;
 use tikv::util::HandyRwLock;
-
-use futures::Future;
-
-use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
-use super::pd::TestPdClient;
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -634,9 +627,16 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&engine_4, b"k3", b"v3");
 
-    // Transfer leader to (4, 12) and check pd heartbeats from it.
+    // Transfer leader to (4, 12) and check pd heartbeats from it to ensure
+    // that `Peer::peer` has be updated correctly after the peer is promoted.
     pd_client.transfer_leader(r1, new_peer(4, 12));
     pd_client.region_leader_must_be(r1, new_peer(4, 12));
+
+    // Transfer leader to (1, 1) to avoid "region not found".
+    pd_client.transfer_leader(r1, new_peer(1, 1));
+    pd_client.region_leader_must_be(r1, new_peer(1, 1));
+    // To avoid using stale leader.
+    cluster.reset_leader_of_region(r1);
 
     let mut add_peer = |peer: metapb::Peer| {
         let conf_type = if peer.get_is_learner() {
@@ -656,10 +656,6 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Add peer with different id on store which already has learner.
     pd_client.must_remove_peer(r1, new_peer(4, 12));
     pd_client.must_add_peer(r1, new_learner_peer(4, 13));
-
-    // Transfer leader to (1, 1) to avoid "region not found".
-    pd_client.transfer_leader(r1, new_peer(1, 1));
-    pd_client.region_leader_must_be(r1, new_peer(1, 1));
 
     let resp = add_peer(new_learner_peer(4, 14));
     let err_msg = resp.get_header().get_error().get_message();
