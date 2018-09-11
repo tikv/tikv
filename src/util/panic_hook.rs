@@ -99,7 +99,7 @@ pub fn set_exit_hook(panic_abort: bool) {
                 "thread '{}' panicked '{}' at {:?}\n{:?}",
                 name,
                 msg,
-                loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                loc.clone().unwrap_or_else(|| "<unknown>".to_owned()),
                 bt
             );
             error!(
