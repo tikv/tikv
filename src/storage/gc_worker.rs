@@ -14,7 +14,7 @@
 use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
-use super::{Callback, Error, Key, Result, ALL_CFS};
+use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use raftstore::store::keys;
 use raftstore::store::util::delete_all_in_range_cf;
@@ -275,9 +275,11 @@ impl<E: Engine> GCRunner<E> {
         let start_data_key = keys::data_key(start_key.as_encoded());
         let end_data_key = keys::data_end_key(end_key.as_encoded());
 
+        let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+
         // First, call delete_files_in_range to free as much disk space as possible
         // TODO: Will LOCK_CF cause problem here?
-        for cf in ALL_CFS {
+        for cf in cfs {
             let cf_handle = get_cf_handle(local_storage, cf).unwrap();
             local_storage
                 .delete_files_in_range_cf(cf_handle, &start_data_key, &end_data_key, false)
@@ -294,7 +296,7 @@ impl<E: Engine> GCRunner<E> {
         );
 
         // Then, delete all remaining keys in the range.
-        for cf in ALL_CFS {
+        for cf in cfs {
             // TODO: set use_delete_range with config here.
             delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
