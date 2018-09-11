@@ -13,13 +13,130 @@ resources to make it easier to get your contribution accepted.
 
 This is a rough outline of what a contributor's workflow looks like:
 
-- Create a topic branch from where you want to base your work. This is usually master.
-- Make commits of logical units and add test case if the change fixes a bug or adds new functionality.
+### Step 1: Fork in the cloud
+
+1. Visit [https://github.com/pingcap/tikv](https://github.com/pingcap/tikv)
+2. Click Fork button (top right) to establish a cloud-based fork.
+
+### Step 2: Clone fork to local storage
+
+Define a local working directory:
+
+```sh
+$ WORKING_DIR=/.../src/github.com/pingcap
+$ user={your github profile name}
+```
+
+Create your clone:
+
+```sh
+$ mkdir -p $WORKING_DIR
+$ cd $WORKING_DIR
+$ git clone https://github.com/$user/tikv.git
+$ cd $WORKING_DIR/tikv
+```
+
+View the remote info:
+
+```sh
+$ git remote -v
+origin	https://github.com/$user/tikv.git (fetch)
+origin	https://github.com/$user/tikv.git (push)
+```
+
+Add remote upstream and set `set-url` info:
+
+```sh
+$ git remote add upstream https://github.com/pingcap/tikv.git
+$ git remote -v
+origin	https://github.com/$user/tikv.git (fetch)
+origin	https://github.com/$user/tikv.git (push)
+upstream	https://github.com/pingcap/tikv.git (fetch)
+upstream	https://github.com/pingcap/tikv.git (push)
+
+# Never push to upstream master since you do not have write access.
+$ git remote set-url --push upstream no_push
+$ git remote -v
+origin	https://github.com/$user/tikv.git (fetch)
+origin	https://github.com/$user/tikv.git (push)
+upstream	https://github.com/pingcap/tikv.git (fetch)
+upstream	no_push (push)
+```
+
+### Step 3: Branch
+
+Get your local master up to date:
+
+```sh
+cd $WORKING_DIR/tikv
+git fetch upstream
+git checkout master
+git rebase upstream/master
+```
+
+Branch from master:
+
+```sh
+git checkout -b myfeature
+```
+
+### Step 4: Develop
+
+#### Edit the code
+
+You can now edit the code on the `myfeature` branch.
+
+#### Run Test
+
+When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with clippy enabled, and run tests. This should run without failure before you create a PR.
+
+```sh
+$ make dev
+```
+
 - Run tests and make sure all the tests are passed.
-- Make sure your commit messages are in the proper format (see below).
-- Push your changes to a topic branch in your fork of the repository.
-- Submit a pull request.
-- Your PR must receive LGTMs from two maintainers.
+- Make sure your commit messages are in the proper format.
+
+### Step 5: Keep your branch in sync
+
+While on your `myfeature` branch:
+
+```sh
+cd $WORKING_DIR/tikv
+git fetch upstream
+git rebase upstream/master
+```
+
+### Step 6: Commit
+
+Commit your changes.
+
+```sh
+git commit
+```
+
+### Step 7: Push
+
+When ready to review (or just to establish an offsite backup or your work), push your branch to your fork on github.com:
+
+```sh
+git push -f origin myfeature
+```
+
+### Step 8: Create a pull request
+
+1. Visit your fork at [https://github.com/$user/tikv](https://github.com/$user/tikv) (replace $user obviously).
+2. Click the Compare & pull request button next to your `myfeature` branch.
+
+### Step 9: Get a code review
+
+Once your pull request has been opened, it will be assigned to at least two reviewers. Those reviewers will do a thorough code review, looking for correctness, bugs, opportunities for improvement, documentation and comments, and style.
+
+Commit changes made in response to review comments to the same branch on your fork.
+
+Very small PRs are easy to review. Very large PRs are very difficult to review.
+
+If you notice your feature is fixing multiple things, or the feature can be broken now, please try to split it into multiple PRs
 
 Thanks for your contributions!
 
