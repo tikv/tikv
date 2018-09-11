@@ -250,6 +250,7 @@ pub struct Peer {
     // Index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     pub last_compacted_idx: u64,
+    // The index of the latest urgent proposal index.
     last_urgent_proposal_idx: u64,
     // The index of the latest committed split command.
     last_committed_split_idx: u64,
@@ -1065,6 +1066,7 @@ impl Peer {
             if !committed_entries.is_empty() {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
                 if self.last_applying_idx >= self.last_urgent_proposal_idx {
+                    // Urgent requests are flushed, make it lazy again.
                     self.raft_group.skip_bcast_commit(true);
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
@@ -1287,6 +1289,8 @@ impl Peer {
             Ok(idx) => {
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;
+                    // Eager flush to make urgent proposal be applied on all nodes as soon as
+                    // possible.
                     self.raft_group.skip_bcast_commit(false);
                 }
                 let meta = ProposalMeta {
