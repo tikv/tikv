@@ -38,5 +38,7 @@ pub fn setup_for_ci() {
         // Panics as aborts, it's helpful for debugging,
         // but also stops tests immediately.
         tikv::util::panic_hook::set_exit_hook(true, guard);
+    } else if let Some(guard) = guard {
+        guard.cancel_reset();
     }
 }
