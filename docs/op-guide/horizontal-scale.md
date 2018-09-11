@@ -10,9 +10,9 @@ You can scale out a TiKV cluster by adding nodes to increase the capacity withou
 
 > **Note:** If your TiKV cluster is deployed using Ansible, see [Scale the TiKV Cluster Using TiDB-Ansible](ansible-deployment-scale.md).
 
-## Scale PD
+## Scale out or scale in PD
 
-Before scaling the capacity of PD, you can view details of the current PD cluster. Assume you have three PD servers with the following details:
+Before increasing or decreasing the capacity of PD, you can view details of the current PD cluster. Assume you have three PD servers with the following details:
 
 | Name | ClientUrls        | PeerUrls          |
 |:-----|:------------------|:------------------|
@@ -40,24 +40,29 @@ You can add a new PD node to the current PD cluster using the `join` parameter. 
                 --join="http://host1:2379"
 ```
 
-### Delete a PD node dynamically
+### Remove a PD node dynamically
 
-You can delete `pd4` using `pd-ctl`:
+You can remove `pd4` using `pd-ctl`:
 
 ```bash
 ./pd-ctl -u http://host1:2379
 >> member delete pd4
 ```
 
-### Migrate a PD node dynamically
+### Replace a PD node dynamically
 
-If you want to migrate a node to a new machine, first add a node on the new machine, and then delete the node on the old machine.
+You might want to replace a PD node in the following scenarios:
 
-You can only migrate one node at a time. If you want to migrate multiple nodes, repeat the above steps until you have migrated all nodes. After completing each step, you can verify the process by checking the information of all nodes.
+- You need to replace a faulty PD node with a healthy PD node.
+- You need to replace a healthy PD node with a different PD node.
 
-## Scale TiKV
+To replace a PD node, first add a new node to the cluster, migrate all the data from the node you want to remove, and then remove the node.
 
-Get the information about the existing TiKV nodes through `pd-ctl`:
+You can only replace one PD node at a time. If you want to replace multiple nodes, repeat the above steps until you have replaced all nodes. After completing each step, you can verify the process by checking the information of all nodes.
+
+## Scale out or scale in TiKV
+
+Before increasing or decreasing the capacity of TiKV, you can view details of the current TiKV cluster. Get the information about the existing TiKV nodes through `pd-ctl`:
 
 ```bash
 ./pd-ctl -u http://host1:2379
@@ -70,11 +75,11 @@ To add a new TiKV node dynamically, start a TiKV node on a new machine. The newl
 
 To reduce the pressure of the existing TiKV nodes, PD loads balance automatically, which means PD gradually migrates some data to the new TiKV node.
 
-### Delete a TiKV node dynamically
+### Remove a TiKV node dynamically
 
-To delete a TiKV node safely, you need to inform PD in advance. After that, PD is able to migrate the data on this TiKV node to other TiKV nodes, ensuring that data have enough replicas.
+To remove a TiKV node safely, you need to inform PD in advance. After that, PD is able to migrate the data on this TiKV node to other TiKV nodes, ensuring that data have enough replicas.
 
-For example, to delete the TiKV node with the store id 1, you can complete this using `pd-ctl`:
+For example, to remove the TiKV node with the store id 1, you can complete this using `pd-ctl`:
 
 ```bash
 ./pd-ctl -u http://host1:2379
@@ -105,12 +110,15 @@ You can verify the state of this store using `state_name`:
   - `state_name=Disconnected`: The heartbeats of this store cannot be detected currently, which might be caused by a failure or network interruption.
   - `state_name=Down`: PD does not receive heartbeats from the TiKV store for more than an hour (the time can be configured using `max-down-time`). At this time, PD adds a replica for the data on this store.
   - `state_name=Offline`: This store is shutting down, but the store is still in service.
-  - `state_name=Tombstone`: This store is shut down and has no data on it, so the instance can be deleted.
+  - `state_name=Tombstone`: This store is shut down and has no data on it, so the instance can be removed.
 
-### Migrate a TiKV node dynamically
+### Replace a TiKV node dynamically
 
-To migrate a TiKV node to a new machine, first add a node on the new machine, and then make all nodes on the old machine offline.
+You might want to replace a TiKV node in the following scenarios:
 
-In the process of migration, you can add all machines in the new cluster to the existing cluster, and then make old nodes offline one by one.
+- You need to replace a faulty TiKV node with a healthy TiKV node.
+- You need to replace a healthy TiKV node with a different TiKV node.
 
-To verify whether a node has been made offline, you can check the state information of the node in process. After verifying, you can make the next node offline.
+To replace a TiKV node, first add a new node to the cluster, migrate all the data from the node you want to remove, and then remove the node.
+
+You can only replace one TiKV node at a time. To verify whether a node has been made offline, you can check the state information of the node in process. After verifying, you can make the next node offline.
