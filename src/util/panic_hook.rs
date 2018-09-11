@@ -81,10 +81,7 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
         .unwrap();
 
     // Hold the guard.
-    lazy_static! {
-        pub static ref LOG_GUARD: Mutex<Option<GlobalLoggerGuard>> = Mutex::new(None);
-    }
-    *LOG_GUARD.lock().unwrap() = guard;
+    let log_guard = Mutex::new(guard);
 
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &PanicInfo| {
@@ -113,8 +110,8 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
             orig_hook(info);
         }
 
-        // To collect remaining logs, drop guard before exit.
-        drop(LOG_GUARD.lock().unwrap().take());
+        // To collect remaining logs, drop the guard before exit.
+        drop(log_guard.lock().unwrap().take());
 
         if panic_abort {
             process::abort();

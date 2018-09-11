@@ -39,6 +39,7 @@ pub fn setup_for_ci() {
         // but also stops tests immediately.
         tikv::util::panic_hook::set_exit_hook(true, guard);
     } else if let Some(guard) = guard {
+        // Do not reset the global logger.
         guard.cancel_reset();
     }
 }
