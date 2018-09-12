@@ -2066,14 +2066,14 @@ impl Runner {
         }
     }
 
-    fn handle_applies(&mut self, applys: Vec<Apply>) {
+    fn handle_applies(&mut self, applys: &mut Vec<Vec<Apply>>) {
         let t = SlowTimer::new();
 
         let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
-            .apply_res_capacity(applys.len())
+            .apply_res_capacity(applys.iter().map(|s| s.len()).sum())
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
-        for apply in applys {
+        for apply in applys.drain(..).flatten() {
             if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
                 continue;
             }
@@ -2127,9 +2127,9 @@ impl Runner {
         );
     }
 
-    fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
+    fn handle_proposals(&mut self, proposals: &mut Vec<Vec<RegionProposal>>) {
         let mut propose_num = 0;
-        for region_proposal in proposals {
+        for region_proposal in proposals.drain(..).flatten() {
             propose_num += region_proposal.props.len();
             let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
                 Some(d) => d.as_mut().unwrap(),
@@ -2194,20 +2194,61 @@ impl Runner {
             p.as_mut().unwrap().clear_pending_commands();
         }
     }
+
+    #[inline]
+    fn flush_batch_messages(
+        &mut self,
+        props: &mut Vec<Vec<RegionProposal>>,
+        applies: &mut Vec<Vec<Apply>>,
+    ) {
+        if !props.is_empty() {
+            self.handle_proposals(props);
+        }
+        if !applies.is_empty() {
+            self.handle_applies(applies);
+        }
+    }
 }
 
 impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
-        match task {
-            Task::Applies(a) => {
-                let elapsed = duration_to_sec(a.start.elapsed());
-                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
-                self.handle_applies(a.vec);
+    fn run(&mut self, _: Task) {
+        unimplemented!()
+    }
+
+    fn run_batch(&mut self, task: &mut Vec<Task>) {
+        let mut applies = vec![];
+        let mut props = vec![];
+        let mut drain = task.drain(..);
+        while let Some(task) = drain.next() {
+            match task {
+                Task::Applies(a) => {
+                    let elapsed = duration_to_sec(a.start.elapsed());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+                    if applies.capacity() == 0 {
+                        applies = Vec::with_capacity(drain.size_hint().0 + 1);
+                    }
+                    applies.push(a.vec);
+                }
+                Task::Proposals(p) => {
+                    if props.capacity() == 0 {
+                        props = Vec::with_capacity(drain.size_hint().0 + 1);
+                    }
+                    props.push(p);
+                }
+                Task::Registration(s) => {
+                    // Technically, flush is not necessary as long as s is not related to
+                    // pending messages. However, registration is a rare event, force flush
+                    // to make it simple.
+                    self.flush_batch_messages(&mut props, &mut applies);
+                    self.handle_registration(s)
+                }
+                Task::Destroy(d) => {
+                    self.flush_batch_messages(&mut props, &mut applies);
+                    self.handle_destroy(d)
+                }
             }
-            Task::Proposals(props) => self.handle_proposals(props),
-            Task::Registration(s) => self.handle_registration(s),
-            Task::Destroy(d) => self.handle_destroy(d),
         }
+        self.flush_batch_messages(&mut props, &mut applies);
     }
 
     fn shutdown(&mut self) {
@@ -2337,7 +2378,7 @@ mod tests {
         reg.apply_state.set_applied_index(3);
         reg.term = 4;
         reg.applied_index_term = 5;
-        runner.run(Task::Registration(reg.clone()));
+        runner.run_batch(&mut vec![Task::Registration(reg.clone())]);
         assert!(runner.delegates.get(&2).is_some());
         {
             let delegate = &runner.delegates[&2].as_ref().unwrap();
@@ -2360,7 +2401,7 @@ mod tests {
             }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run_batch(&mut vec![Task::Proposals(vec![region_proposal])]);
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
@@ -2379,7 +2420,7 @@ mod tests {
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run_batch(&mut vec![Task::Proposals(vec![region_proposal])]);
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].as_ref().unwrap().pending_cmds.normals;
@@ -2397,7 +2438,7 @@ mod tests {
 
         let p = Proposal::new(true, 4, 0, Callback::None);
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run_batch(&mut vec![Task::Proposals(vec![region_proposal])]);
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2]
@@ -2411,26 +2452,26 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::applies(vec![Apply::new(
+        runner.run_batch(&mut vec![Task::applies(vec![Apply::new(
             1,
             1,
             vec![new_entry(2, 3, None)],
-        )]));
+        )])]);
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
-        runner.run(Task::applies(vec![Apply::new(2, 11, vec![])]));
+        runner.run_batch(&mut vec![Task::applies(vec![Apply::new(2, 11, vec![])])]);
         // empty entries should be ignored.
         assert!(rx.try_recv().is_err());
         assert_eq!(runner.delegates[&2].as_ref().unwrap().term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(engines.kv.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::applies(vec![Apply::new(
+        runner.run_batch(&mut vec![Task::applies(vec![Apply::new(
             2,
             11,
             vec![new_entry(5, 4, None)],
-        )]));
+        )])]);
         let res = match rx.try_recv() {
             Ok(TaskRes::Applys(res)) => res,
             e => panic!("unexpected apply result: {:?}", e),
@@ -2456,7 +2497,7 @@ mod tests {
             assert_eq!(apply_state, delegate.apply_state);
         }
 
-        runner.run(Task::destroy(2));
+        runner.run_batch(&mut vec![Task::destroy(2)]);
         let destroy_res = match rx.try_recv() {
             Ok(TaskRes::Destroy(d)) => d,
             e => panic!("expected destroy result, but got {:?}", e),
