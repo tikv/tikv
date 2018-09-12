@@ -526,7 +526,7 @@ impl RequestTask {
             make_tag(table_scan),
             req.take_context(),
             req.get_ranges(),
-            Some(peer.clone()), // TODO: Reduce clone
+            Some(peer),
             is_desc_scan,
             Some(start_ts),
         );
