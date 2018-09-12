@@ -72,7 +72,6 @@ impl DAGContext {
             req.get_collect_range_counts(),
         )?;
         Ok(Self {
-            _phantom: Default::default(),
             req_ctx,
             exec: dag_executor,
             output_offsets: req.take_output_offsets(),
