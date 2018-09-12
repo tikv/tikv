@@ -532,7 +532,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                     if let Some(delegate) = self.delegates.get_mut(&region_id) {
                         delegate.update(progress);
                     } else {
-                        panic!(
+                        warn!(
                             "unregistered ReadDelegate, region_id: {}, {:?}",
                             region_id, progress
                         );
