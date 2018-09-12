@@ -780,13 +780,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.apply_worker
                 .schedule(ApplyTask::destroy(job.region_id))
                 .unwrap();
-            self.local_reader
-                .schedule(ReadTask::destroy(job.region_id))
-                .unwrap();
         }
         if job.async_remove {
             info!(
-                "[region {}] {} is destroyed asychroniously",
+                "[region {}] {} is destroyed asynchronously",
                 job.region_id,
                 job.peer.get_id()
             );
