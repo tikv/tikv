@@ -1471,9 +1471,11 @@ impl<T: Transport> Peer<T> {
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(region, &mut self.peer);
+        // make approximate size and keys updated in time.
+        // the reason why follower need to update is that there is a issue that after merge
+        // and then transfer leader, the new leader may have stale size and keys.
+        self.peer.size_diff_hint = self.peer.cfg.region_split_check_diff.0;
         if self.peer.is_leader() {
-            // make approximate size and keys updated in time.
-            self.peer.size_diff_hint = self.peer.cfg.region_split_check_diff.0;
             info!(
                 "{} notify pd with merge {:?} into {:?}",
                 self.peer.tag,

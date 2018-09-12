@@ -25,7 +25,7 @@ mod security;
 use std::env;
 
 pub use kv_generator::*;
-pub use logging::init_log;
+pub use logging::*;
 pub use security::*;
 
 pub fn setup_for_ci() {
