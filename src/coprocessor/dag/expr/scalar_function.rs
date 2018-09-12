@@ -1161,7 +1161,6 @@ mod test {
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
-                    ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::Log10,
                     ScalarFuncSig::Log2,
                     ScalarFuncSig::BitCount,
