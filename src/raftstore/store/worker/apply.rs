@@ -54,6 +54,8 @@ use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
 
+use super::metrics::*;
+
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
@@ -2065,21 +2067,21 @@ impl Runner {
         }
     }
 
-    fn handle_apply(&mut self, apply: Apply) {
+    fn handle_applies(&mut self, applys: &mut Vec<Apply>) {
         let t = SlowTimer::new();
 
         let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
-            .apply_res_capacity(1)
+            .apply_res_capacity(applys.len())
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
-        'handle_apply: {
+        for apply in applys.drain(..) {
             if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
-                break 'handle_apply;
+                continue;
             }
             let mut delegate = match self.delegates.get_mut(&apply.region_id) {
                 None => {
                     error!("[region {}] is missing", apply.region_id);
-                    break 'handle_apply;
+                    continue;
                 }
                 Some(e) => e.take().unwrap(),
             };
@@ -2135,33 +2137,38 @@ impl Runner {
         );
     }
 
-    fn handle_proposals(&mut self, region_proposal: RegionProposal) {
-        let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
-            Some(d) => d.as_mut().unwrap(),
-            None => {
-                for p in region_proposal.props {
-                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                    notify_region_removed(region_proposal.region_id, region_proposal.id, cmd);
+    fn handle_proposals(&mut self, proposals: &mut Vec<RegionProposal>) {
+        let mut propose_num = 0;
+        for region_proposal in proposals.drain(..) {
+            propose_num += region_proposal.props.len();
+            let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
+                Some(d) => d.as_mut().unwrap(),
+                None => {
+                    for p in region_proposal.props {
+                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                        notify_region_removed(region_proposal.region_id, region_proposal.id, cmd);
+                    }
+                    continue;
                 }
-                return;
-            }
-        };
-        assert_eq!(delegate.id, region_proposal.id);
-        for p in region_proposal.props {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
-            if p.is_conf_change {
-                if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                    // if it loses leadership before conf change is replicated, there may be
-                    // a stale pending conf change before next conf change is applied. If it
-                    // becomes leader again with the stale pending conf change, will enter
-                    // this block, so we notify leadership may have been changed.
-                    notify_stale_command(&delegate.tag, delegate.term, cmd);
+            };
+            assert_eq!(delegate.id, region_proposal.id);
+            for p in region_proposal.props {
+                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                if p.is_conf_change {
+                    if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
+                        // if it loses leadership before conf change is replicated, there may be
+                        // a stale pending conf change before next conf change is applied. If it
+                        // becomes leader again with the stale pending conf change, will enter
+                        // this block, so we notify leadership may have been changed.
+                        notify_stale_command(&delegate.tag, delegate.term, cmd);
+                    }
+                    delegate.pending_cmds.set_conf_change(cmd);
+                } else {
+                    delegate.pending_cmds.append_normal(cmd);
                 }
-                delegate.pending_cmds.set_conf_change(cmd);
-            } else {
-                delegate.pending_cmds.append_normal(cmd);
             }
         }
+        APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
     fn handle_registration(&mut self, s: Registration) {
@@ -2202,20 +2209,57 @@ impl Runner {
             p.as_mut().unwrap().clear_pending_commands();
         }
     }
+
+    #[inline]
+    fn flush_batch_messages(&mut self, props: &mut Vec<RegionProposal>, applies: &mut Vec<Apply>) {
+        if !props.is_empty() {
+            self.handle_proposals(props);
+        }
+        if !applies.is_empty() {
+            self.handle_applies(applies);
+        }
+    }
 }
 
 impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
-        match task {
-            Task::Apply(a) => {
-                let elapsed = duration_to_sec(a.start.elapsed());
-                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
-                self.handle_apply(a.apply);
+    fn run(&mut self, _: Task) {
+        unimplemented!()
+    }
+
+    fn run_batch(&mut self, task: &mut Vec<Task>) {
+        let mut applies = vec![];
+        let mut props = vec![];
+        let mut drain = task.drain(..);
+        while let Some(task) = drain.next() {
+            match task {
+                Task::Apply(a) => {
+                    let elapsed = duration_to_sec(a.start.elapsed());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+                    if applies.capacity() == 0 {
+                        applies = Vec::with_capacity(drain.size_hint().0 + 1);
+                    }
+                    applies.push(a.apply);
+                }
+                Task::Proposals(p) => {
+                    if props.capacity() == 0 {
+                        props = Vec::with_capacity(drain.size_hint().0 + 1);
+                    }
+                    props.push(p);
+                }
+                Task::Registration(s) => {
+                    // Technically, flush is not necessary as long as s is not related to
+                    // pending messages. However, registration is a rare event, force flush
+                    // to make it simple.
+                    self.flush_batch_messages(&mut props, &mut applies);
+                    self.handle_registration(s)
+                }
+                Task::Destroy(d) => {
+                    self.flush_batch_messages(&mut props, &mut applies);
+                    self.handle_destroy(d)
+                }
             }
-            Task::Proposals(props) => self.handle_proposals(props),
-            Task::Registration(s) => self.handle_registration(s),
-            Task::Destroy(d) => self.handle_destroy(d),
         }
+        self.flush_batch_messages(&mut props, &mut applies);
     }
 
     fn shutdown(&mut self) {
@@ -2349,7 +2393,7 @@ mod tests {
         reg.apply_state.set_applied_index(3);
         reg.term = 4;
         reg.applied_index_term = 5;
-        runner.run(Task::Registration(reg.clone()));
+        runner.run_batch(&mut vec![Task::Registration(reg.clone())]);
         assert!(runner.delegates.get(&2).is_some());
         {
             let delegate = &runner.delegates[&2].as_ref().unwrap();
@@ -2372,7 +2416,7 @@ mod tests {
             }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
-        runner.run(Task::Proposals(region_proposal));
+        runner.run_batch(&mut vec![Task::Proposals(region_proposal)]);
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
@@ -2391,7 +2435,7 @@ mod tests {
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
-        runner.run(Task::Proposals(region_proposal));
+        runner.run_batch(&mut vec![Task::Proposals(region_proposal)]);
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].as_ref().unwrap().pending_cmds.normals;
@@ -2409,7 +2453,7 @@ mod tests {
 
         let p = Proposal::new(true, 4, 0, Callback::None);
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        runner.run(Task::Proposals(region_proposal));
+        runner.run_batch(&mut vec![Task::Proposals(region_proposal)]);
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2]
@@ -2423,18 +2467,26 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::apply(Apply::new(1, 1, vec![new_entry(2, 3, None)])));
+        runner.run_batch(&mut vec![Task::apply(Apply::new(
+            1,
+            1,
+            vec![new_entry(2, 3, None)],
+        ))]);
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
-        runner.run(Task::apply(Apply::new(2, 11, vec![])));
+        runner.run_batch(&mut vec![Task::apply(Apply::new(2, 11, vec![]))]);
         // empty entries should be ignored.
         assert!(rx2.try_recv().is_err());
         assert_eq!(runner.delegates[&2].as_ref().unwrap().term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(engines.kv.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])));
+        runner.run_batch(&mut vec![Task::apply(Apply::new(
+            2,
+            11,
+            vec![new_entry(5, 4, None)],
+        ))]);
         let apply_res = match rx2.try_recv() {
             Ok(PeerMsg::ApplyRes(TaskRes::Apply(res))) => res,
             e => panic!("unexpected apply result: {:?}", e),
@@ -2458,7 +2510,7 @@ mod tests {
             assert_eq!(apply_state, delegate.apply_state);
         }
 
-        runner.run(Task::destroy(2));
+        runner.run_batch(&mut vec![Task::destroy(2)]);
         let destroy_res = match rx2.try_recv() {
             Ok(PeerMsg::ApplyRes(TaskRes::Destroy(d))) => d,
             e => panic!("expected destroy result, but got {:?}", e),

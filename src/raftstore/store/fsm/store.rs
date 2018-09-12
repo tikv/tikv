@@ -42,7 +42,7 @@ use util::rocksdb;
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
 use util::timer::{Timer, GLOBAL_TIMER_HANDLE};
-use util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use util::worker::{Builder as WorkerBuilder, FutureScheduler, FutureWorker, Scheduler, Worker};
 
 use import::SSTImporter;
 use raftstore::store::config::Config;
@@ -259,7 +259,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_worker,
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
-            apply_worker: Worker::new("apply-worker"),
+            apply_worker: WorkerBuilder::new("apply-worker").batch_size(4096).create(),
             local_reader,
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             trans,
