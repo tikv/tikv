@@ -297,7 +297,7 @@ impl<E: Engine> GCRunner<E> {
             start_key, end_key
         );
 
-        thread::sleep(Duration::from_secs(60));
+        thread::sleep(Duration::from_secs(60 * 5));
 
         // Then, delete all remaining keys in the range.
         for cf in cfs {
