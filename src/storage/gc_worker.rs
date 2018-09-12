@@ -22,10 +22,12 @@ use rocksdb::rocksdb::DB;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 use util::rocksdb::get_cf_handle;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
+
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 
@@ -294,6 +296,8 @@ impl<E: Engine> GCRunner<E> {
             "destroy range start_key: {}, end_key: {} finished deleting files in range",
             start_key, end_key
         );
+
+        thread::sleep(Duration::from_secs(60));
 
         // Then, delete all remaining keys in the range.
         for cf in cfs {
