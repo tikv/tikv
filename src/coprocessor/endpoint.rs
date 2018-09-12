@@ -131,11 +131,10 @@ impl<E: Engine> Host<E> {
             return;
         }
 
-        let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
+        let (ranges, cop_req, on_resp) = (t.ranges, t.cop_req, t.on_resp);
         let mut tracker = t.tracker;
-        let ranges = req.take_ranges().into_vec();
 
-        let priority = readpool::Priority::from(req.get_context().get_priority());
+        let priority = readpool::Priority::from(tracker.req_ctx.context.get_priority());
         let pool = self.pool.get_pool_by_priority(priority);
         let ctxd = pool.get_context_delegators();
         tracker.ctx_pool(ctxd);
@@ -150,13 +149,14 @@ impl<E: Engine> Host<E> {
 
         match cop_req {
             CopRequest::DAG(dag) => {
-                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit) {
-                    Ok(ctx) => ctx,
-                    Err(e) => {
-                        on_resp.respond(err_resp(e, metrics));
-                        return;
-                    }
-                };
+                let mut ctx =
+                    match DAGContext::new(dag, ranges, snap, &tracker.req_ctx, batch_row_limit) {
+                        Ok(ctx) => ctx,
+                        Err(e) => {
+                            on_resp.respond(err_resp(e, metrics));
+                            return;
+                        }
+                    };
                 if !on_resp.is_streaming() {
                     let do_request = move |_| {
                         tracker.on_handle_start();
@@ -193,7 +193,7 @@ impl<E: Engine> Host<E> {
                 pool.spawn(move |_| on_resp.respond_stream(s)).forget();
             }
             CopRequest::Analyze(analyze) => {
-                let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx).unwrap();
+                let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &tracker.req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
@@ -209,7 +209,8 @@ impl<E: Engine> Host<E> {
                 pool.spawn(do_request).forget();
             }
             CopRequest::Checksum(checksum) => {
-                let mut ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx).unwrap();
+                let mut ctx =
+                    ChecksumContext::new(checksum, ranges, snap, &tracker.req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
@@ -263,8 +264,6 @@ enum CopRequest {
 struct RequestTracker {
     running_task_count: Option<Arc<AtomicUsize>>,
     ctx_pool: Option<futurepool::ContextDelegators<ReadPoolContext>>,
-    record_handle_time: bool,
-    record_scan_detail: bool,
 
     exec_metrics: ExecutorMetrics,
     perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
@@ -278,14 +277,8 @@ struct RequestTracker {
     wait_time: Option<f64>,
     handle_time: Option<f64>,
 
-    region_id: u64,
-    txn_start_ts: u64,
-    ranges_len: usize,
-    first_range: Option<KeyRange>,
-    scan_tag: &'static str,
-    pri_str: &'static str,
-    desc_scan: Option<bool>, // only applicable to DAG requests
-    peer: String,
+    req_ctx: ReqContext,
+    pri_str: &'static str, // TODO: Remove this metrics.
 }
 
 impl RequestTracker {
@@ -317,7 +310,7 @@ impl RequestTracker {
 
         if stop_first_wait {
             COPR_PENDING_REQS
-                .with_label_values(&[self.scan_tag, self.pri_str])
+                .with_label_values(&[self.req_ctx.tag, self.pri_str])
                 .dec();
 
             let ctx_pool = self.ctx_pool.as_ref().unwrap();
@@ -325,7 +318,7 @@ impl RequestTracker {
             cop_ctx
                 .basic_local_metrics
                 .wait_time
-                .with_label_values(&[self.scan_tag])
+                .with_label_values(&[self.req_ctx.tag])
                 .observe(self.wait_time.unwrap());
         }
 
@@ -348,8 +341,8 @@ impl RequestTracker {
 
         self.exec_metrics.merge(&mut exec_metrics);
 
-        let mut record_handle_time = self.record_handle_time;
-        let mut record_scan_detail = self.record_scan_detail;
+        let mut record_handle_time = self.req_ctx.context.get_handle_time();
+        let mut record_scan_detail = self.req_ctx.context.get_scan_detail();
         if self.handle_time.unwrap() > SLOW_QUERY_LOWER_BOUND {
             record_handle_time = true;
             record_scan_detail = true;
@@ -376,7 +369,7 @@ impl Drop for RequestTracker {
         }
 
         if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {
-            let table_id = if let Some(ref range) = self.first_range {
+            let table_id = if let Some(ref range) = self.req_ctx.first_range {
                 table::decode_table_id(range.get_start()).unwrap_or_default()
             } else {
                 0
@@ -387,18 +380,18 @@ impl Drop for RequestTracker {
                  peer: {:?}, start_ts: {:?}, table_id: {:?}, \
                  scan_type: {} (desc: {:?}) \
                  [keys: {}, hit: {}, ranges: {} ({:?}), perf: {:?}]",
-                self.region_id,
+                self.req_ctx.context.get_region_id(),
                 self.total_handle_time,
                 self.wait_time,
-                self.peer,
-                self.txn_start_ts,
+                self.req_ctx.peer,
+                self.req_ctx.txn_start_ts,
                 table_id,
-                self.scan_tag,
-                self.desc_scan,
+                self.req_ctx.tag,
+                self.req_ctx.is_desc_scan,
                 self.exec_metrics.cf_stats.total_op_count(),
                 self.exec_metrics.cf_stats.total_processed(),
-                self.ranges_len,
-                self.first_range,
+                self.req_ctx.ranges_len,
+                self.req_ctx.first_range,
                 self.total_perf_statistics,
             );
         }
@@ -406,7 +399,7 @@ impl Drop for RequestTracker {
         // `wait_time` is none means the request has not entered thread pool.
         if self.wait_time.is_none() {
             COPR_PENDING_REQS
-                .with_label_values(&[self.scan_tag, self.pri_str])
+                .with_label_values(&[self.req_ctx.tag, self.pri_str])
                 .dec();
 
             // For the request is failed before enter into thread pool.
@@ -415,7 +408,7 @@ impl Drop for RequestTracker {
             let wait_time = duration_to_sec(now - wait_start);
             BasicLocalMetrics::default()
                 .wait_time
-                .with_label_values(&[self.scan_tag])
+                .with_label_values(&[self.req_ctx.tag])
                 .observe(wait_time);
             return;
         }
@@ -426,55 +419,58 @@ impl Drop for RequestTracker {
         cop_ctx
             .basic_local_metrics
             .req_time
-            .with_label_values(&[self.scan_tag])
+            .with_label_values(&[self.req_ctx.tag])
             .observe(duration_to_sec(self.start.elapsed()));
         cop_ctx
             .basic_local_metrics
             .handle_time
-            .with_label_values(&[self.scan_tag])
+            .with_label_values(&[self.req_ctx.tag])
             .observe(self.total_handle_time);
         cop_ctx
             .basic_local_metrics
             .scan_keys
-            .with_label_values(&[self.scan_tag])
+            .with_label_values(&[self.req_ctx.tag])
             .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
 
         cop_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "internal_key_skipped_count"])
+            .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
             .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
         cop_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "internal_delete_skipped_count"])
+            .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
             .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
         cop_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "block_cache_hit_count"])
+            .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
             .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
         cop_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "block_read_count"])
+            .with_label_values(&[self.req_ctx.tag, "block_read_count"])
             .inc_by(self.total_perf_statistics.block_read_count as i64);
         cop_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "block_read_byte"])
+            .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
             .inc_by(self.total_perf_statistics.block_read_byte as i64);
 
         let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
-        cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
+        cop_ctx.collect(
+            self.req_ctx.context.get_region_id(),
+            self.req_ctx.tag,
+            exec_metrics,
+        );
     }
 }
 
 #[derive(Debug)]
 pub struct RequestTask {
-    req: Request,
     cop_req: CopRequest,
-    ctx: ReqContext,
+    ranges: Vec<KeyRange>,
     on_resp: OnResponse<Response>,
     tracker: RequestTracker,
 }
@@ -482,7 +478,7 @@ pub struct RequestTask {
 impl RequestTask {
     pub fn new(
         peer: String,
-        req: Request,
+        mut req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
     ) -> Result<RequestTask> {
@@ -526,13 +522,18 @@ impl RequestTask {
 
         let start_time = Instant::now_coarse();
 
-        let req_ctx = ReqContext::new(req.get_context(), start_ts, table_scan);
+        let req_ctx = ReqContext::new(
+            make_tag(table_scan),
+            req.take_context(),
+            req.get_ranges(),
+            Some(peer.clone()), // TODO: Reduce clone
+            is_desc_scan,
+            Some(start_ts),
+        );
 
         let request_tracker = RequestTracker {
             running_task_count: None,
             ctx_pool: None,
-            record_handle_time: req.get_context().get_handle_time(),
-            record_scan_detail: req.get_context().get_scan_detail(),
 
             start: start_time,
             total_handle_time: 0f64,
@@ -544,24 +545,17 @@ impl RequestTask {
             perf_statistics_start: None,
             total_perf_statistics: PerfStatisticsDelta::default(),
 
-            region_id: req.get_context().get_region_id(),
-            txn_start_ts: start_ts,
-            ranges_len: req.get_ranges().len(),
-            first_range: req.get_ranges().get(0).cloned(),
-            scan_tag: req_ctx.get_scan_tag(),
-            pri_str: get_req_pri_str(req.get_context().get_priority()),
-            desc_scan: is_desc_scan,
-            peer,
+            pri_str: get_req_pri_str(req_ctx.context.get_priority()),
+            req_ctx,
         };
 
         COPR_PENDING_REQS
-            .with_label_values(&[request_tracker.scan_tag, request_tracker.pri_str])
+            .with_label_values(&[request_tracker.req_ctx.tag, request_tracker.pri_str])
             .inc();
 
         Ok(RequestTask {
-            req,
             cop_req,
-            ctx: req_ctx,
+            ranges: req.take_ranges().into_vec(),
             on_resp,
             tracker: request_tracker,
         })
@@ -569,20 +563,21 @@ impl RequestTask {
 
     #[inline]
     fn check_outdated(&self) -> Result<()> {
-        self.ctx.check_if_outdated()
+        self.tracker.req_ctx.deadline.check_if_exceeded()
     }
 
     pub fn priority(&self) -> CommandPri {
-        self.req.get_context().get_priority()
+        self.tracker.req_ctx.context.get_priority()
     }
 
     pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.ctx
+        self.tracker
+            .req_ctx
             .set_max_handle_duration(request_max_handle_duration);
     }
 
     fn get_request_key(&self) -> (u64, u64, u64) {
-        let ctx = self.req.get_context();
+        let ctx = &self.tracker.req_ctx.context;
         let region_id = ctx.get_region_id();
         let version = ctx.get_region_epoch().get_version();
         let peer_id = ctx.get_peer().get_id();
@@ -592,14 +587,9 @@ impl RequestTask {
 
 impl Display for RequestTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "request [context {:?}, tp: {}, ranges: {} ({:?})]",
-            self.req.get_context(),
-            self.req.get_tp(),
-            self.req.get_ranges().len(),
-            self.req.get_ranges().get(0)
-        )
+        f.debug_struct("RequestTask")
+            .field("req_ctx", &self.tracker.req_ctx)
+            .finish()
     }
 }
 
@@ -646,7 +636,7 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
             let sched = self.sched.clone();
             if let Err(e) = self
                 .engine
-                .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
+                .async_snapshot(&reqs[0].tracker.req_ctx.context, box move |(_, res)| {
                     sched.schedule(Task::SnapRes(id, res)).unwrap()
                 }) {
                 self.notify_failed(e, reqs);
@@ -656,6 +646,14 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
         }
 
         self.basic_local_metrics.flush();
+    }
+}
+
+fn make_tag(is_table_scan: bool) -> &'static str {
+    if is_table_scan {
+        "select"
+    } else {
+        "index"
     }
 }
 
@@ -731,15 +729,6 @@ mod tests {
 
     use util::config::ReadableDuration;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
-
-    #[test]
-    fn test_get_reg_scan_tag() {
-        let context = kvrpcpb::Context::new();
-        let mut ctx = ReqContext::new(&context, 0, true);
-        assert_eq!(ctx.get_scan_tag(), "select");
-        ctx.table_scan = false;
-        assert_eq!(ctx.get_scan_tag(), "index");
-    }
 
     #[test]
     fn test_req_outdated() {
