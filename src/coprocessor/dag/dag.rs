@@ -24,16 +24,15 @@ use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics};
 
-pub struct DAGContext<S: Snapshot + 'static> {
-    _phantom: PhantomData<S>,
+pub struct DAGContext {
     req_ctx: ReqContext,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
 
-impl<S: Snapshot + 'static> DAGContext<S> {
-    pub fn new(
+impl DAGContext {
+    pub fn new<S: Snapshot + 'static>(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: S,
@@ -101,7 +100,7 @@ impl<S: Snapshot + 'static> DAGContext<S> {
     }
 }
 
-impl<S: Snapshot> RequestHandler for DAGContext<S> {
+impl RequestHandler for DAGContext {
     fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
