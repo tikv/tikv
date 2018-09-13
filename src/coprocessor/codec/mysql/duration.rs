@@ -83,7 +83,7 @@ impl Duration {
     }
 
     pub fn micro_secs(&self) -> u32 {
-        self.dur.subsec_nanos()
+        self.dur.subsec_micros()
     }
 
     pub fn to_secs(&self) -> f64 {
@@ -209,7 +209,7 @@ impl Duration {
         )?;
         if self.fsp > 0 {
             write!(buf, ".")?;
-            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
+            let nanos = self.dur.subsec_nanos() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
             write!(buf, "{:01$}", nanos, self.fsp as usize)?;
         }
         let d = unsafe { str::from_utf8_unchecked(&buf).parse()? };
@@ -245,7 +245,7 @@ impl Display for Duration {
         )?;
         if self.fsp > 0 {
             write!(formatter, ".")?;
-            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
+            let nanos = self.dur.subsec_nanos() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
             write!(formatter, "{:01$}", nanos, self.fsp as usize)?;
         }
         Ok(())
