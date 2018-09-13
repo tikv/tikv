@@ -17,7 +17,7 @@ use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use raftstore::store::keys;
-use raftstore::store::util::delete_all_in_range_cf;
+use raftstore::store::util::delete_all_in_range_cf_with_batch_size;
 use rocksdb::rocksdb::DB;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
@@ -30,6 +30,7 @@ use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
+const UNSAFE_DESTROY_RANGE_BATCH_SIZE: usize = 256 * 1024;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -302,12 +303,22 @@ impl<E: Engine> GCRunner<E> {
         // Then, delete all remaining keys in the range.
         for cf in cfs {
             // TODO: set use_delete_range with config here.
-            delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("destroy range failed at delete_all_in_range_cf: {:?}", e);
-                    e
-                })?;
+            let (count, size) = delete_all_in_range_cf_with_batch_size(
+                local_storage,
+                cf,
+                &start_data_key,
+                &end_data_key,
+                false,
+                UNSAFE_DESTROY_RANGE_BATCH_SIZE,
+            ).map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("destroy range failed at delete_all_in_range_cf: {:?}", e);
+                e
+            })?;
+            info!(
+                "destroy range: deleted {} remaining keys in {} cf, {} bytes wrote",
+                count, cf, size
+            );
         }
 
         info!(
