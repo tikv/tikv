@@ -22,7 +22,6 @@ use rocksdb::rocksdb::DB;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 use util::rocksdb::get_cf_handle;
 use util::time::{duration_to_sec, SlowTimer};
