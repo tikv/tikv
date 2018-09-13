@@ -218,6 +218,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
+            | ScalarFuncSig::OctInt
             | ScalarFuncSig::LTrim
             | ScalarFuncSig::RTrim
             | ScalarFuncSig::BitCount
@@ -387,7 +388,6 @@ impl ScalarFunc {
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
-            | ScalarFuncSig::OctInt
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
@@ -890,6 +890,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        OctInt => oct_int,
         LTrim => ltrim,
         RTrim => rtrim,
         Reverse => reverse,
@@ -1161,6 +1162,7 @@ mod test {
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
+                    ScalarFuncSig::OctInt,
                     ScalarFuncSig::Log10,
                     ScalarFuncSig::Log2,
                     ScalarFuncSig::BitCount,
@@ -1376,7 +1378,6 @@ mod test {
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
-            ScalarFuncSig::OctInt,
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,

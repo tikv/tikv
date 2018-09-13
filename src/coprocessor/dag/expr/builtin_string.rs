@@ -46,6 +46,16 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn oct_int<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_int(ctx, row));
+        Ok(Some(Cow::Owned(format!("{:o}", input).into_bytes())))
+    }
+
+    #[inline]
     pub fn char_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         if types::is_binary_str(self.children[0].get_tp()) {
             let input = try_opt!(self.children[0].eval_string(ctx, row));
@@ -295,6 +305,60 @@ mod test {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "bit_length(NULL)");
+    }
+
+    #[test]
+    #[allow(overflowing_literals)]
+    fn test_oct_int() {
+        let cases = vec![
+            (Datum::I64(12), Datum::Bytes(b"14".to_vec())),
+            (Datum::I64(8), Datum::Bytes(b"10".to_vec())),
+            (Datum::I64(42), Datum::Bytes(b"52".to_vec())),
+            (Datum::I64(365), Datum::Bytes(b"555".to_vec())),
+            (Datum::I64(1024), Datum::Bytes(b"2000".to_vec())),
+            (Datum::Null, Datum::Null),
+            (
+                Datum::I64(i64::max_value()),
+                Datum::Bytes(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::I64(i64::min_value()),
+                Datum::Bytes(b"1000000000000000000000".to_vec()),
+            ),
+            (
+                Datum::I64(-1),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::I64(-365),
+                Datum::Bytes(b"1777777777777777777223".to_vec()),
+            ),
+            (
+                Datum::I64(-9223372036854775809 as i64),
+                Datum::Bytes(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::I64(18446744073709551614 as i64),
+                Datum::Bytes(b"1777777777777777777776".to_vec()),
+            ),
+            (
+                Datum::I64(18446744073709551615 as i64),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::I64(18446744073709551616 as i64),
+                Datum::Bytes(b"0".to_vec()),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::OctInt, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
