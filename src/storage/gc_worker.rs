@@ -17,8 +17,10 @@ use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use raftstore::store::keys;
+use raftstore::store::msg::Msg as RaftStoreMsg;
 use raftstore::store::util::delete_all_in_range_cf;
 use rocksdb::rocksdb::DB;
+use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
@@ -100,6 +102,7 @@ impl Display for GCTask {
 struct GCRunner<E: Engine> {
     engine: E,
     local_storage: Option<Arc<DB>>,
+    raft_store_router: Option<ServerRaftStoreRouter>,
 
     ratio_threshold: f64,
 
@@ -107,10 +110,16 @@ struct GCRunner<E: Engine> {
 }
 
 impl<E: Engine> GCRunner<E> {
-    pub fn new(engine: E, local_storage: Option<Arc<DB>>, ratio_threshold: f64) -> GCRunner<E> {
-        GCRunner {
+    pub fn new(
+        engine: E,
+        local_storage: Option<Arc<DB>>,
+        raft_store_router: Option<ServerRaftStoreRouter>,
+        ratio_threshold: f64,
+    ) -> Self {
+        Self {
             engine,
             local_storage,
+            raft_store_router,
             ratio_threshold,
             stats: StatisticsSummary::default(),
         }
@@ -314,6 +323,20 @@ impl<E: Engine> GCRunner<E> {
                 })?;
         }
 
+        if let Some(router) = self.raft_store_router.as_ref() {
+            router
+                .try_send(RaftStoreMsg::ClearRegionSizeInRange {
+                    start_key: start_key.as_encoded().to_vec(),
+                    end_key: end_key.as_encoded().to_vec(),
+                })
+                .unwrap_or_else(|e| {
+                    // Warn and ignore it.
+                    warn!("failed sending ClearRegionSizeInRange: {:?}", e);
+                });
+        } else {
+            warn!("destroy range: can't clear region size information: raft_store_router not set");
+        }
+
         info!(
             "unsafe destroy range start_key: {}, end_key: {} finished cleaning up all, cost time {:?}",
             start_key, end_key, cleanup_all_start_time.elapsed(),
@@ -384,6 +407,8 @@ pub struct GCWorker<E: Engine> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
     local_storage: Option<Arc<DB>>,
+    /// `raft_store_router` is useful to signal raftstore clean region size informations.
+    raft_store_router: Option<ServerRaftStoreRouter>,
 
     ratio_threshold: f64,
 
@@ -402,6 +427,7 @@ impl<E: Engine> GCWorker<E> {
         GCWorker {
             engine,
             local_storage: None,
+            raft_store_router: None,
             ratio_threshold,
             worker,
             worker_scheduler,
@@ -417,10 +443,15 @@ impl<E: Engine> GCWorker<E> {
         self.local_storage = Some(local_storage);
     }
 
+    pub fn set_raft_store_router(&mut self, router: ServerRaftStoreRouter) {
+        self.raft_store_router = Some(router);
+    }
+
     pub fn start(&mut self) -> Result<()> {
         let runner = GCRunner::new(
             self.engine.clone(),
             self.local_storage.take(),
+            self.raft_store_router.take(),
             self.ratio_threshold,
         );
         self.worker
