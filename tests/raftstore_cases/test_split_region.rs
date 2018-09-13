@@ -17,6 +17,7 @@ use std::time::Duration;
 use std::{fs, thread};
 
 use kvproto::metapb;
+use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
@@ -24,6 +25,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
+use tikv::raftstore::Result;
 use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
 
@@ -92,20 +94,6 @@ where
             resp
         );
     }
-}
-
-#[test]
-fn test_node_base_split_region_left_derive() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_base_split_region(&mut cluster, Cluster::must_split, false);
-}
-
-#[test]
-fn test_node_base_split_region_right_derive() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_base_split_region(&mut cluster, Cluster::must_split, true);
 }
 
 #[test]
@@ -265,7 +253,44 @@ fn test_incompatible_server_auto_split_region() {
     test_auto_split_region(&mut cluster);
 }
 
-fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+// A filter that disable commitment by heartbeat.
+#[derive(Clone)]
+struct EraseHeartbeatCommit;
+
+impl Filter<RaftMessage> for EraseHeartbeatCommit {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
+                msg.mut_message().set_commit(0);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
+    let region = cluster.pd_client.get_region(k).unwrap();
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    for i in 1..region.get_peers().len() as u64 + 1 {
+        let engine = cluster.get_engine(i);
+        if all_committed || i == leader.get_store_id() {
+            must_get_equal(&engine, k, v);
+        } else {
+            must_get_none(&engine, k);
+        }
+    }
+}
+
+/// TiKV enables lazy broadcast commit optimization, which can delay split
+/// on follower node. So election of new region will delay. We need to make
+/// sure broadcast commit is disabled when split.
+#[test]
+fn test_delay_split_region() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 500;
+    cluster.cfg.raft_store.merge_max_log_gap = 100;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 500;
+
     // We use three nodes for this test.
     cluster.run();
 
@@ -273,56 +298,41 @@ fn test_delay_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let region = pd_client.get_region(b"").unwrap();
 
-    let k1 = b"k1";
-    cluster.must_put(k1, b"v1");
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
 
-    let k3 = b"k3";
-    cluster.must_put(k3, b"v3");
+    // Although skip bcast is enabled, but heartbeat will commit the log in period.
+    check_cluster(&mut cluster, b"k1", b"v1", true);
+    check_cluster(&mut cluster, b"k3", b"v3", true);
+    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
 
-    // check all nodes apply the logs.
-    for i in 0..3 {
-        let engine = cluster.get_engine(i + 1);
-        must_get_equal(&engine, k1, b"v1");
-        must_get_equal(&engine, k3, b"v3");
-    }
+    cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
 
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    cluster.must_put(b"k4", b"v4");
+    sleep_ms(100);
+    // skip bcast is enabled by default, so all followers should not commit
+    // the log.
+    check_cluster(&mut cluster, b"k4", b"v4", false);
 
-    // Stop a not leader peer
-    let index = (1..4).find(|&x| x != leader.get_store_id()).unwrap();
-    cluster.stop_node(index);
+    cluster.stop_node(1);
+    // New leader should flush old committed entries eagerly.
+    check_cluster(&mut cluster, b"k4", b"v4", true);
+    cluster.run_node(1);
+    cluster.must_put(b"k5", b"v5");
+    // New committed entries should be broadcast lazily.
+    check_cluster(&mut cluster, b"k5", b"v5", false);
+    cluster.add_send_filter(CloneFilterFactory(EraseHeartbeatCommit));
 
     let k2 = b"k2";
+    // Split should be bcast eagerly, otherwise following must_put will fail
+    // as no leader is available.
     cluster.must_split(&region, k2);
+    cluster.must_put(b"k0", b"v0");
 
-    // When the node starts, the region will try to join the raft group first,
-    // so most of case, the new leader's heartbeat for split region may arrive
-    // before applying the log.
-    cluster.run_node(index);
-
-    // Wait a long time to guarantee node joined.
-    // TODO: we should think a better to check instead of sleep.
-    sleep_ms(3000);
-
-    let k4 = b"k4";
-    cluster.must_put(k4, b"v4");
-
-    assert_eq!(cluster.get(k4).unwrap(), b"v4".to_vec());
-
-    let engine = cluster.get_engine(index);
-    must_get_equal(&engine, k4, b"v4");
-}
-
-#[test]
-fn test_node_delay_split_region() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_delay_split_region(&mut cluster);
-}
-
-#[test]
-fn test_server_delay_split_region() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_delay_split_region(&mut cluster);
+    sleep_ms(100);
+    // After split, skip bcast is enabled again, so all followers should not
+    // commit the log.
+    check_cluster(&mut cluster, b"k0", b"v0", false);
 }
 
 fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
