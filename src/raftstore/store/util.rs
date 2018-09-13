@@ -157,9 +157,8 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
     }
 }
 
-const MAX_WRITE_BATCH_SIZE: usize = 4 * 1024 * 1024;
+const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
-#[inline]
 pub fn delete_all_in_range(
     db: &DB,
     start_key: &[u8],
@@ -177,7 +176,6 @@ pub fn delete_all_in_range(
     Ok(())
 }
 
-#[inline]
 pub fn delete_all_in_range_cf(
     db: &DB,
     cf: &str,
@@ -185,29 +183,6 @@ pub fn delete_all_in_range_cf(
     end_key: &[u8],
     use_delete_range: bool,
 ) -> Result<()> {
-    delete_all_in_range_cf_with_batch_size(
-        db,
-        cf,
-        start_key,
-        end_key,
-        use_delete_range,
-        MAX_WRITE_BATCH_SIZE,
-    )?;
-    Ok(())
-}
-
-/// Scan and delete all keys in the range, and return amount of total keys and total write size.
-pub fn delete_all_in_range_cf_with_batch_size(
-    db: &DB,
-    cf: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-    use_delete_range: bool,
-    batch_size: usize,
-) -> Result<(usize, usize)> {
-    let mut total_count = 0;
-    let mut total_size = 0;
-
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
     let mut wb = WriteBatch::new();
     // Since CF_RAFT and CF_LOCK is usually small, so using
@@ -225,10 +200,7 @@ pub fn delete_all_in_range_cf_with_batch_size(
         it.seek(start_key.into());
         while it.valid() {
             wb.delete_cf(handle, it.key())?;
-            if wb.data_size() >= batch_size {
-                total_count += wb.count();
-                total_size += wb.data_size();
-
+            if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
                 db.write(wb)?;
@@ -242,12 +214,10 @@ pub fn delete_all_in_range_cf_with_batch_size(
     }
 
     if wb.count() > 0 {
-        total_count += wb.count();
-        total_size += wb.data_size();
         db.write(wb)?;
     }
 
-    Ok((total_count, total_size))
+    Ok(())
 }
 
 pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
