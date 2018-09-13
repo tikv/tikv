@@ -102,13 +102,6 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
             let bt = Backtrace::new();
-            eprintln!(
-                "thread '{}' panicked '{}' at {:?}\n{:?}",
-                name,
-                msg,
-                loc.clone().unwrap_or_else(|| "<unknown>".to_owned()),
-                bt
-            );
             error!(
                 "thread '{}' panicked '{}' at {:?}\n{:?}",
                 name,

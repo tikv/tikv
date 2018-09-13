@@ -363,30 +363,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     region_id, region_epoch, msg_type
                 );
 
-                info!(
-                    "*********[region {}] region: {:?}, msg: {:?}",
-                    region_id, region, msg
-                );
-
                 let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
-                    info!("*********[region {}] found peer {:?}", region_id, peer);
                     assert_eq!(peer, msg.get_from_peer());
-                    info!(
-                        "*********[region {}] assert_eq!(peer, msg.get_from_peer()) passed",
-                        region_id
-                    );
                     // Let stale peer decides whether it should wait for merging or just remove
                     // itself.
                     Some(local_state.get_merge_state().get_target().to_owned())
                 } else {
-                    info!("*********[region {}] didn't find peer", region_id);
                     // If a peer is isolated before prepare_merge and conf remove, it should just
                     // remove itself.
                     None
                 };
-                info!("*********[region {}] handle_stale_msg...", region_id);
                 Self::handle_stale_msg(trans, msg, region_epoch, true, merge_target, raft_metrics);
-
                 return Ok(true);
             }
             // The region in this peer is already destroyed
@@ -432,7 +419,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         target_region: Option<metapb::Region>,
         raft_metrics: &mut RaftMetrics,
     ) {
-        info!("*********function handle_stale_msg");
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
