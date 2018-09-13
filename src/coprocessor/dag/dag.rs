@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use kvproto::coprocessor::{KeyRange, Response};
@@ -24,16 +23,15 @@ use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics};
 
-pub struct DAGContext<S: Snapshot + 'static> {
-    _phantom: PhantomData<S>,
+pub struct DAGContext {
     req_ctx: ReqContext,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
 
-impl<S: Snapshot + 'static> DAGContext<S> {
-    pub fn new(
+impl DAGContext {
+    pub fn new<S: Snapshot + 'static>(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: S,
@@ -74,7 +72,6 @@ impl<S: Snapshot + 'static> DAGContext<S> {
             req.get_collect_range_counts(),
         )?;
         Ok(Self {
-            _phantom: Default::default(),
             req_ctx,
             exec: dag_executor,
             output_offsets: req.take_output_offsets(),
@@ -101,7 +98,7 @@ impl<S: Snapshot + 'static> DAGContext<S> {
     }
 }
 
-impl<S: Snapshot> RequestHandler for DAGContext<S> {
+impl RequestHandler for DAGContext {
     fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
