@@ -36,7 +36,6 @@ extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
-#[macro_use]
 extern crate tikv;
 extern crate toml;
 
@@ -382,11 +381,12 @@ fn main() {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
-    let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    init_log(&config);
 
     // Print version information.
     util::print_tikv_info();
+
+    panic_hook::set_exit_hook(false);
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {

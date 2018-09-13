@@ -13,12 +13,11 @@
 
 use std::cell::RefCell;
 use std::panic::{self, PanicInfo};
-use std::sync::{Mutex, Once, ONCE_INIT};
+use std::sync::{Once, ONCE_INIT};
 use std::{process, thread};
 
 use backtrace::Backtrace;
 use log::LogLevel;
-use slog_scope::GlobalLoggerGuard;
 
 /// A simple panic hook that allows skiping printing stacktrace conditionaly.
 
@@ -64,7 +63,7 @@ fn track_hook(p: &PanicInfo) {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
+pub fn set_exit_hook(panic_abort: bool) {
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
     // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
@@ -79,12 +78,6 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
         .name(thd_name!("backtrace-loader"))
         .spawn(Backtrace::new)
         .unwrap();
-
-    // Hold the guard.
-    lazy_static! {
-        pub static ref LOG_GUARD: Mutex<Option<GlobalLoggerGuard>> = Mutex::new(None);
-    }
-    *LOG_GUARD.lock().unwrap() = guard;
 
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &PanicInfo| {
@@ -112,10 +105,6 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
         } else {
             orig_hook(info);
         }
-
-        // To collect remaining logs, drop guard before exit.
-        drop(LOG_GUARD.lock().unwrap().take());
-
         if panic_abort {
             process::abort();
         } else {
