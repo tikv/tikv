@@ -24,7 +24,7 @@ use storage::{Snapshot, SnapshotStore};
 use super::executor::{build_exec, Executor, ExecutorMetrics};
 
 pub struct DAGContext {
-    req_ctx: ReqContext,
+    deadline: Deadline,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
@@ -35,7 +35,7 @@ impl DAGContext {
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: S,
-        req_ctx: ReqContext,
+        req_ctx: &ReqContext,
         batch_row_limit: usize,
     ) -> Result<Self> {
         let mut eval_cfg = EvalConfig::new().set_by_flags(req.get_flags());
@@ -72,7 +72,7 @@ impl DAGContext {
             req.get_collect_range_counts(),
         )?;
         Ok(Self {
-            req_ctx,
+            deadline: req_ctx.deadline,
             exec: dag_executor,
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
@@ -105,7 +105,7 @@ impl RequestHandler for DAGContext {
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.req_ctx.check_if_outdated()?;
+                    self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
@@ -151,6 +151,7 @@ impl RequestHandler for DAGContext {
         while record_cnt < self.batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
+                    self.deadline.check_if_exceeded()?;
                     record_cnt += 1;
                     let value = row.get_binary(&self.output_offsets)?;
                     chunk.mut_rows_data().extend_from_slice(&value);
