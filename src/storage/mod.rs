@@ -395,8 +395,8 @@ pub struct Storage<E: Engine> {
     engine: E,
 
     // to schedule the execution of storage commands
-    worker: Arc<Mutex<Worker<Msg<E>>>>,
-    worker_scheduler: worker::Scheduler<Msg<E>>,
+    worker: Arc<Mutex<Worker<Msg>>>,
+    worker_scheduler: worker::Scheduler<Msg>,
 
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker<E>,
