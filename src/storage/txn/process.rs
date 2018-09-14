@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,9 +16,8 @@ use std::thread;
 use std::time::Duration;
 use std::u64;
 
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use prometheus::local::LocalHistogramVec;
-use prometheus::HistogramTimer;
 
 use storage::engine::{CbContext, Modify, Result as EngineResult};
 use storage::mvcc::{
@@ -30,13 +29,12 @@ use storage::{
 };
 use storage::{Key, KvPair, MvccInfo, Value};
 use util::collections::HashMap;
-use util::threadpool::Context as ThreadContext;
+use util::threadpool::{self, Context as ThreadContext, ContextFactory as ThreadContextFactory};
 use util::time::SlowTimer;
-use util::worker;
+use util::worker::{self, ScheduleError};
 
 use super::super::metrics::*;
-use super::latch::Lock;
-use super::scheduler::{Msg, Scheduler};
+use super::scheduler::Msg;
 use super::{Error, Result};
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
@@ -100,188 +98,238 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 /// Task is a running command.
 pub struct Task {
     pub cid: u64,
-    pub cmd: Option<Command>,
-    pub write_bytes: usize,
-    pub lock: Lock,
-    pub callback: Option<StorageCb>,
     pub tag: &'static str,
-    pub ts: u64,
-    pub region_id: u64,
-    pub latch_timer: Option<HistogramTimer>,
-    pub _timer: HistogramTimer,
-    pub slow_timer: Option<SlowTimer>,
-}
 
-impl Drop for Task {
-    fn drop(&mut self) {
-        if let Some(ref mut timer) = self.slow_timer {
-            slow_log!(
-                timer,
-                "[region {}] scheduler handle command: {}, ts: {}",
-                self.region_id,
-                self.tag,
-                self.ts
-            );
-        }
-    }
+    cmd: Command,
+    ts: u64,
+    region_id: u64,
 }
 
 impl Task {
     /// Creates a task for a running command.
-    pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> Task {
-        let tag = cmd.tag();
-        let ts = cmd.ts();
-        let region_id = cmd.get_context().get_region_id();
-        let write_bytes = cmd.write_bytes();
+    pub fn new(cid: u64, cmd: Command) -> Task {
         Task {
             cid,
-            cmd: Some(cmd),
-            write_bytes,
-            lock,
-            callback: Some(cb),
-            tag,
-            ts,
-            region_id,
-            latch_timer: Some(
-                SCHED_LATCH_HISTOGRAM_VEC
-                    .with_label_values(&[tag])
-                    .start_coarse_timer(),
-            ),
-            _timer: SCHED_HISTOGRAM_VEC
-                .with_label_values(&[tag])
-                .start_coarse_timer(),
-            slow_timer: None,
+            tag: cmd.tag(),
+            region_id: cmd.get_context().get_region_id(),
+            ts: cmd.ts(),
+            cmd,
         }
+    }
+
+    pub fn cmd(&self) -> &Command {
+        &self.cmd
+    }
+
+    pub fn priority(&self) -> CommandPri {
+        self.cmd.priority()
+    }
+
+    pub fn context(&self) -> &Context {
+        self.cmd.get_context()
     }
 }
 
-impl<E: Engine> Scheduler<E> {
-    /// Event handler for the completion of get snapshot.
-    ///
-    /// Delivers the command along with the snapshot to a worker thread to execute.
-    pub fn on_snapshot_finished(
-        &mut self,
-        cid: u64,
-        cb_ctx: CbContext,
-        snapshot: EngineResult<E::Snap>,
-    ) {
-        fail_point!("scheduler_async_snapshot_finish");
+pub struct Executor<E: Engine> {
+    // We put time consuming tasks to the thread pool.
+    pool: Option<threadpool::Scheduler<SchedContext<E>>>,
+    // And the tasks completes we post a completion to the `Scheduler`.
+    scheduler: Option<worker::Scheduler<Msg>>,
+}
+
+impl<E: Engine> Executor<E> {
+    pub fn new(
+        scheduler: worker::Scheduler<Msg>,
+        pool: threadpool::Scheduler<SchedContext<E>>,
+    ) -> Self {
+        Executor {
+            scheduler: Some(scheduler),
+            pool: Some(pool),
+        }
+    }
+
+    fn take_scheduler(&mut self) -> worker::Scheduler<Msg> {
+        self.scheduler.take().unwrap()
+    }
+
+    fn take_pool(&mut self) -> threadpool::Scheduler<SchedContext<E>> {
+        self.pool.take().unwrap()
+    }
+
+    /// Start the execution of the task.
+    pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
         debug!(
             "receive snapshot finish msg for cid={}, cb_ctx={:?}",
-            cid, cb_ctx
+            task.cid, cb_ctx
         );
 
         match snapshot {
             Ok(snapshot) => {
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
-                    .inc();
-                self.process_by_worker(cid, cb_ctx, snapshot);
-            }
-            Err(e) => {
-                error!("get snapshot failed for cid={}, error {:?}", cid, e);
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
+                    .with_label_values(&[task.tag, "snapshot_ok"])
                     .inc();
 
-                self.finish_with_err(cid, Error::from(e));
+                self.process_by_worker(cb_ctx, snapshot, task);
+            }
+            Err(err) => {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[task.tag, "snapshot_err"])
+                    .inc();
+
+                error!("get snapshot failed for cid={}, error {:?}", task.cid, err);
+                notify_scheduler(
+                    self.take_scheduler(),
+                    Msg::FinishedWithErr {
+                        cid: task.cid,
+                        err: Error::from(err),
+                        tag: task.tag,
+                    },
+                );
             }
         }
     }
 
     /// Delivers a command to a worker thread for processing.
-    pub fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: E::Snap) {
+    fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "process"])
+            .with_label_values(&[task.tag, "process"])
             .inc();
         debug!(
             "process cmd with snapshot, cid={}, cb_ctx={:?}",
-            cid, cb_ctx
+            task.cid, cb_ctx
         );
-        let mut cmd = {
-            let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
-            assert_eq!(ctx.cid, cid);
-            ctx.cmd.take().unwrap()
-        };
+        let tag = task.tag;
         if let Some(term) = cb_ctx.term {
-            cmd.mut_context().set_term(term);
+            task.cmd.mut_context().set_term(term);
         }
-        let readcmd = cmd.readonly();
-        let worker_pool = self.fetch_worker_pool(cmd.priority());
-        let tag = cmd.tag();
-        let scheduler = self.scheduler.clone();
-        if readcmd {
-            worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_read_timer = ctx
-                    .processing_read_duration
-                    .with_label_values(&[tag])
-                    .start_coarse_timer();
+        let pool = self.take_pool();
+        let readonly = task.cmd.readonly();
+        pool.schedule(move |ctx: &mut SchedContext<E>| {
+            fail_point!("scheduler_async_snapshot_finish");
 
-                let s = process_read(ctx, cid, cmd, scheduler, snapshot);
-                ctx.add_statistics(tag, &s);
-            });
-        } else {
-            worker_pool.execute(move |ctx: &mut SchedContext| {
-                let _processing_write_timer = ctx
-                    .processing_write_duration
-                    .with_label_values(&[tag])
-                    .start_coarse_timer();
+            let _processing_read_timer = ctx
+                .processing_read_duration
+                .with_label_values(&[tag])
+                .start_coarse_timer();
 
-                let s = process_write(cid, cmd, scheduler, snapshot);
-                ctx.add_statistics(tag, &s);
-            });
-        }
-    }
-}
+            let region_id = task.region_id;
+            let ts = task.ts;
+            let timer = SlowTimer::new();
 
-/// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
-/// event loop.
-fn process_read<E: Engine>(
-    sched_ctx: &mut SchedContext,
-    cid: u64,
-    cmd: Command,
-    scheduler: worker::Scheduler<Msg<E>>,
-    snapshot: E::Snap,
-) -> Statistics {
-    fail_point!("txn_before_process_read");
-    debug!("process read cmd(cid={}, {}) in worker pool.", cid, cmd);
-    let mut statistics = Statistics::default();
-    let pr = match process_read_impl::<E>(sched_ctx, cmd, snapshot, &mut statistics) {
-        Err(e) => ProcessResult::Failed { err: e.into() },
-        Ok(pr) => pr,
-    };
-    if let Err(e) = scheduler.schedule(Msg::ReadFinished { cid, pr }) {
-        // Todo: if this happens we need to clean up command's context
-        panic!("schedule ReadFinished msg failed, cid={}, err={:?}", cid, e);
-    }
-    statistics
-}
-
-/// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
-/// message if successful or a `WritePrepareFailed` message back to the event loop.
-fn process_write<E: Engine>(
-    cid: u64,
-    cmd: Command,
-    scheduler: worker::Scheduler<Msg<E>>,
-    snapshot: E::Snap,
-) -> Statistics {
-    fail_point!("txn_before_process_write");
-    debug!("process write cmd(cid={} {}) in worker pool", cid, cmd);
-    let mut statistics = Statistics::default();
-    if let Err(e) = process_write_impl(cid, cmd, scheduler.clone(), snapshot, &mut statistics) {
-        if let Err(err) = scheduler.schedule(Msg::WritePrepareFailed { cid, err: e }) {
-            // Todo: if this happens, lock will hold for ever
-            panic!(
-                "schedule WritePrepareFailed msg failed. cid={}, err={:?}",
-                cid, err
+            let statistics = if readonly {
+                self.process_read(ctx, snapshot, task)
+            } else {
+                self.process_write(ctx, snapshot, task)
+            };
+            ctx.add_statistics(tag, &statistics);
+            slow_log!(
+                timer,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                region_id,
+                tag,
+                ts
             );
-        }
+        });
     }
-    statistics
+
+    /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
+    /// `Scheduler`.
+    fn process_read(
+        mut self,
+        sched_ctx: &mut SchedContext<E>,
+        snapshot: E::Snap,
+        task: Task,
+    ) -> Statistics {
+        fail_point!("txn_before_process_read");
+        debug!("process read cmd(cid={}) in worker pool", task.cid);
+        let tag = task.tag;
+        let cid = task.cid;
+        let mut statistics = Statistics::default();
+        let pr = match process_read_impl(sched_ctx, task.cmd, snapshot, &mut statistics) {
+            Err(e) => ProcessResult::Failed { err: e.into() },
+            Ok(pr) => pr,
+        };
+        notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
+        statistics
+    }
+
+    /// Processes a write command within a worker thread, then posts either a `WriteFinished`
+    /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
+    fn process_write(
+        mut self,
+        sched_ctx: &SchedContext<E>,
+        snapshot: E::Snap,
+        task: Task,
+    ) -> Statistics {
+        fail_point!("txn_before_process_write");
+        let tag = task.tag;
+        let cid = task.cid;
+        let mut statistics = Statistics::default();
+        let scheduler = self.take_scheduler();
+        let msg = match process_write_impl(task.cmd, snapshot, &mut statistics) {
+            // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
+            // message when it finishes.
+            Ok((ctx, pr, to_be_write, rows)) => {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[tag, "write"])
+                    .inc();
+                if to_be_write.is_empty() {
+                    Msg::WriteFinished {
+                        cid,
+                        pr,
+                        result: Ok(()),
+                        tag,
+                    }
+                } else {
+                    let sched = scheduler.clone();
+                    // The callback to receive async results of write prepare from the storage engine.
+                    let engine_cb = Box::new(move |(_, result)| {
+                        if notify_scheduler(
+                            sched,
+                            Msg::WriteFinished {
+                                cid,
+                                pr,
+                                result,
+                                tag,
+                            },
+                        ) {
+                            KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                .with_label_values(&[tag])
+                                .observe(rows as f64);
+                        }
+                    });
+
+                    if let Err(e) = sched_ctx.engine.async_write(&ctx, to_be_write, engine_cb) {
+                        SCHED_STAGE_COUNTER_VEC
+                            .with_label_values(&[tag, "async_write_err"])
+                            .inc();
+
+                        error!("engine async_write failed, cid={}, err={:?}", cid, e);
+                        let err = e.into();
+                        Msg::FinishedWithErr { cid, err, tag }
+                    } else {
+                        return statistics;
+                    }
+                }
+            }
+            // Write prepare failure typically means conflicting transactions are detected. Delivers the
+            // error to the callback, and releases the latches.
+            Err(err) => {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[tag, "prepare_write_err"])
+                    .inc();
+
+                debug!("write command(cid={}) failed at prewrite.", cid);
+                Msg::FinishedWithErr { cid, err, tag }
+            }
+        };
+        notify_scheduler(scheduler, msg);
+        statistics
+    }
 }
 
 fn process_read_impl<E: Engine>(
-    sched_ctx: &mut SchedContext,
+    sched_ctx: &mut SchedContext<E>,
     mut cmd: Command,
     snapshot: E::Snap,
     statistics: &mut Statistics,
@@ -422,14 +470,11 @@ fn process_read_impl<E: Engine>(
     }
 }
 
-fn process_write_impl<E: Engine>(
-    cid: u64,
+fn process_write_impl<S: Snapshot>(
     cmd: Command,
-    scheduler: worker::Scheduler<Msg<E>>,
-    snapshot: E::Snap,
+    snapshot: S,
     statistics: &mut Statistics,
-) -> Result<()> {
-    let tag = cmd.tag();
+) -> Result<(Context, ProcessResult, Vec<Modify>, usize)> {
     let (pr, modifies, rows, ctx) = match cmd {
         Command::Prewrite {
             ctx,
@@ -565,44 +610,61 @@ fn process_write_impl<E: Engine>(
         _ => panic!("unsupported write command"),
     };
 
-    box_try!(scheduler.schedule(Msg::WritePrepareFinished {
-        cid,
-        ctx,
-        tag,
-        pr,
-        to_be_write: modifies,
-        rows,
-    }));
-
-    Ok(())
+    Ok((ctx, pr, modifies, rows))
 }
 
-pub struct SchedContext {
-    stats: HashMap<&'static str, StatisticsSummary>,
-    processing_read_duration: LocalHistogramVec,
-    processing_write_duration: LocalHistogramVec,
-    command_keyread_duration: LocalHistogramVec,
+fn notify_scheduler(scheduler: worker::Scheduler<Msg>, msg: Msg) -> bool {
+    match scheduler.schedule(msg) {
+        Ok(_) => true,
+        e @ Err(ScheduleError::Stopped(_)) => {
+            info!("scheduler stopped, {:?}", e);
+            false
+        }
+        Err(e) => {
+            panic!("schedule msg failed, err:{:?}", e);
+        }
+    }
 }
 
-impl Default for SchedContext {
-    fn default() -> SchedContext {
+#[derive(Clone)]
+pub struct SchedContextFactory<E: Clone> {
+    engine: E,
+}
+
+impl<E: Clone> SchedContextFactory<E> {
+    pub fn new(engine: E) -> SchedContextFactory<E> {
+        SchedContextFactory { engine }
+    }
+}
+
+impl<E: Engine + Clone> ThreadContextFactory<SchedContext<E>> for SchedContextFactory<E> {
+    fn create(&self) -> SchedContext<E> {
         SchedContext {
             stats: HashMap::default(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_duration: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
+            engine: self.engine.clone(),
         }
     }
 }
 
-impl SchedContext {
+pub struct SchedContext<E: Engine> {
+    stats: HashMap<&'static str, StatisticsSummary>,
+    processing_read_duration: LocalHistogramVec,
+    processing_write_duration: LocalHistogramVec,
+    command_keyread_duration: LocalHistogramVec,
+    engine: E,
+}
+
+impl<E: Engine> SchedContext<E> {
     fn add_statistics(&mut self, cmd_tag: &'static str, stat: &Statistics) {
         let entry = self.stats.entry(cmd_tag).or_insert_with(Default::default);
         entry.add_statistics(stat);
     }
 }
 
-impl ThreadContext for SchedContext {
+impl<E: Engine> ThreadContext for SchedContext<E> {
     fn on_tick(&mut self) {
         for (cmd, stat) in self.stats.drain() {
             for (cf, details) in stat.stat.details() {
