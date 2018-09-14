@@ -100,18 +100,21 @@ lazy_static! {
         "tikv_storage_gc_skipped_counter",
         "Total number of gc command skipped owing to optimization"
     ).unwrap();
-    pub static ref GC_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_gcworker_gc_task_duration",
+    pub static ref GC_TASK_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_gcworker_gc_task_duration_vec",
         "Duration of gc tasks execution",
+        &["task"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref GC_GCTASK_COUNTER: IntCounter = register_int_counter!(
-        "tikv_gcworker_gc_tasks",
-        "Counter of gc tasks processed by gc_worker"
+    pub static ref GC_GCTASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_gcworker_gc_tasks_vec",
+        "Counter of gc tasks processed by gc_worker",
+        &["task"]
     ).unwrap();
-    pub static ref GC_GCTASK_FAIL_COUNTER: IntCounter = register_int_counter!(
-        "tikv_gcworker_gc_task_fail",
-        "Counter of gc tasks that is failed"
+    pub static ref GC_GCTASK_FAIL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_gcworker_gc_task_fail_vec",
+        "Counter of gc tasks that is failed",
+        &["task"]
     ).unwrap();
     pub static ref GC_TOO_BUSY_COUNTER: IntCounter = register_int_counter!(
         "tikv_gc_worker_too_busy",
