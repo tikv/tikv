@@ -77,15 +77,6 @@ lazy_static! {
         "Bucketed counter of kv keys scan details for each cf",
         &["req", "cf", "tag"]
     ).unwrap();
-    pub static ref BATCH_COMMANDS: HistogramVec = register_histogram_vec!(
-        "tikv_storage_batch_commands_total",
-        "Bucketed histogram of total number of a batch of commands",
-        &["type"],
-        vec![
-            1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 48.0,
-            64.0, 96.0, 128.0, 192.0, 256.0,
-        ]
-    ).unwrap();
     pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_kv_command_key_write",
         "Bucketed histogram of keys write of a kv command",
