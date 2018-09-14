@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use slog::{Drain, Logger};
-use slog_async::{Async, OverflowStrategy};
-use slog_term::{PlainDecorator, TermDecorator};
 use std::env;
 use std::io::BufWriter;
 use std::process;
@@ -21,6 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
 use chrono;
 use clap::ArgMatches;
+use slog::{Drain, Logger};
+use slog_async::{Async, OverflowStrategy};
+use slog_scope::GlobalLoggerGuard;
+use slog_term::{PlainDecorator, TermDecorator};
 
 use tikv::config::{MetricConfig, TiKvConfig};
 use tikv::util;
@@ -48,22 +49,23 @@ macro_rules! fatal {
     })
 }
 
-pub fn init_log(config: &TiKvConfig) {
+pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
     let log_rotation_timespan = chrono::Duration::from_std(
         config.log_rotation_timespan.clone().into(),
     ).expect("config.log_rotation_timespan is an invalid duration.");
-    if config.log_file.is_empty() {
+    let guard = if config.log_file.is_empty() {
         let decorator = TermDecorator::new().build();
         let drain = logger::TikvFormat::new(decorator).fuse();
         let drain = Async::new(drain)
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
+            .thread_name(thd_name!("term-slogger"))
             .build()
             .fuse();
         let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
-        });
+        })
     } else {
         let logger = BufWriter::new(
             RotatingFileLogger::new(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
@@ -76,13 +78,17 @@ pub fn init_log(config: &TiKvConfig) {
         );
         let decorator = PlainDecorator::new(logger);
         let drain = logger::TikvFormat::new(decorator).fuse();
-        let drain = Async::new(drain).build().fuse();
+        let drain = Async::new(drain)
+            .thread_name(thd_name!("file-slogger"))
+            .build()
+            .fuse();
         let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
-        });
-    }
+        })
+    };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
+    guard
 }
 
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
