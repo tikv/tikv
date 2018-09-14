@@ -325,7 +325,7 @@ impl<E: Engine> GCRunner<E> {
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
-                .try_send(RaftStoreMsg::ClearRegionSizeInRange {
+                .send(RaftStoreMsg::ClearRegionSizeInRange {
                     start_key: start_key.as_encoded().to_vec(),
                     end_key: end_key.as_encoded().to_vec(),
                 })
