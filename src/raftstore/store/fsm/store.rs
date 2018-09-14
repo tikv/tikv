@@ -58,7 +58,7 @@ use raftstore::store::transport::Transport;
 use raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask,
-    SplitCheckRunner, STALE_PEER_CHECK_INTERVAL, PENDING_APPLY_CHECK_INTERVAL,
+    SplitCheckRunner, PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_INTERVAL,
 };
 use raftstore::store::{
     util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
