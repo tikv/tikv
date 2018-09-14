@@ -220,6 +220,13 @@ pub enum Msg {
         limit: u32,
         callback: SeekRegionCallback,
     },
+
+    // Clear region size and keys for all regions in the range, so we can force them to re-calculate
+    // their size later.
+    ClearRegionSizeInRange {
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -270,6 +277,14 @@ impl fmt::Debug for Msg {
             Msg::SeekRegion { ref from_key, .. } => {
                 write!(fmt, "Seek Region from_key {:?}", from_key)
             }
+            Msg::ClearRegionSizeInRange {
+                ref start_key,
+                ref end_key,
+            } => write!(
+                fmt,
+                "Clear Region size in range {:?} to {:?}",
+                start_key, end_key
+            ),
         }
     }
 }

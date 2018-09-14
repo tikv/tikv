@@ -154,6 +154,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         });
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
+    storage
+        .mut_gc_worker()
+        .set_local_storage(Arc::clone(&kv_engine));
+    storage
+        .mut_gc_worker()
+        .set_raft_store_router(raft_router.clone());
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
