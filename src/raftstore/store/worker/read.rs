@@ -499,10 +499,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
         for task in tasks.drain(..) {
             match task {
                 Task::Register(delegate) => {
-                    debug!(
-                        "{} register ReadDelegate for {:?}",
-                        delegate.tag, delegate.peer_id
-                    );
+                    info!("{} register ReadDelegate", delegate.tag);
                     self.delegates.insert(delegate.region.get_id(), delegate);
                 }
                 Task::Read(StoreMsg::RaftCmd {
@@ -532,14 +529,16 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                     if let Some(delegate) = self.delegates.get_mut(&region_id) {
                         delegate.update(progress);
                     } else {
-                        panic!(
-                            "unregistered ReadDelegate, region_id: {}, {:?}",
+                        warn!(
+                            "update unregistered ReadDelegate, region_id: {}, {:?}",
                             region_id, progress
                         );
                     }
                 }
                 Task::Destroy(region_id) => {
-                    self.delegates.remove(&region_id);
+                    if let Some(delegate) = self.delegates.remove(&region_id) {
+                        info!("{} destroy ReadDelegate", delegate.tag);
+                    }
                 }
             }
         }
