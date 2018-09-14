@@ -242,7 +242,7 @@ impl Debug for Command {
 }
 
 pub const CMD_TAG_GC: &str = "gc";
-pub const CMD_TAG_DESTROY_RANGE: &str = "destroy_range";
+pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
 
 impl Command {
     pub fn readonly(&self) -> bool {
@@ -879,7 +879,7 @@ impl<E: Engine> Storage<E> {
         self.gc_worker
             .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
         KV_COMMAND_COUNTER_VEC
-            .with_label_values(&[CMD_TAG_DESTROY_RANGE])
+            .with_label_values(&[CMD_TAG_UNSAFE_DESTROY_RANGE])
             .inc();
         Ok(())
     }

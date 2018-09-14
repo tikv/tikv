@@ -258,15 +258,15 @@ impl<E: Engine> GCRunner<E> {
 
     fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
         info!(
-            "destroying range start_key: {}, end_key: {}",
+            "unsafe destroy range start_key: {}, end_key: {} started.",
             start_key, end_key
         );
 
         // TODO: Refine usage of errors
 
         let local_storage = self.local_storage.as_ref().ok_or_else(|| {
-            let e: Error = box_err!("destroy range not supported: local_storage not set");
-            warn!("destroy range failed: {:?}", &e);
+            let e: Error = box_err!("unsafe destroy range not supported: local_storage not set");
+            warn!("unsafe destroy range failed: {:?}", &e);
             e
         })?;
 
@@ -279,20 +279,22 @@ impl<E: Engine> GCRunner<E> {
         let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
         // First, call delete_files_in_range to free as much disk space as possible
-        // TODO: Will LOCK_CF cause problem here?
         for cf in cfs {
             let cf_handle = get_cf_handle(local_storage, cf).unwrap();
             local_storage
                 .delete_files_in_range_cf(cf_handle, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
-                    warn!("destroy range failed at delete_files_in_range_cf: {:?}", e);
+                    warn!(
+                        "unsafe destroy range failed at delete_files_in_range_cf: {:?}",
+                        e
+                    );
                     e
                 })?;
         }
 
         info!(
-            "destroy range start_key: {}, end_key: {} finished deleting files in range",
+            "unsafe destroy range start_key: {}, end_key: {} finished deleting files in range",
             start_key, end_key
         );
 
@@ -302,13 +304,16 @@ impl<E: Engine> GCRunner<E> {
             delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
                 .map_err(|e| {
                     let e: Error = box_err!(e);
-                    warn!("destroy range failed at delete_all_in_range_cf: {:?}", e);
+                    warn!(
+                        "unsafe destroy range failed at delete_all_in_range_cf: {:?}",
+                        e
+                    );
                     e
                 })?;
         }
 
         info!(
-            "destroy range start_key: {}, end_key: {} finished cleaning up all",
+            "unsafe destroy range start_key: {}, end_key: {} finished cleaning up all",
             start_key, end_key
         );
         Ok(())
@@ -580,7 +585,7 @@ mod tests {
             .filter(|(k, _)| k < start_key.as_encoded() || k >= end_key.as_encoded())
             .collect();
 
-        // Invoke destroy range.
+        // Invoke unsafe destroy range.
         wait_op!(|cb| storage.async_unsafe_destroy_range(
             Context::default(),
             start_key,

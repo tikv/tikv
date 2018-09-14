@@ -845,7 +845,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             })
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("{} failed: {:?}", "destroy_range", e);
+                debug!("{} failed: {:?}", "unsafe_destroy_range", e);
                 GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
             });
 
