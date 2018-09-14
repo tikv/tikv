@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, slice};
+use std::{cmp, mem, slice, u64};
 
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -250,6 +250,8 @@ pub struct Peer {
     // Index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     pub last_compacted_idx: u64,
+    // The index of the latest urgent proposal index.
+    last_urgent_proposal_idx: u64,
     // The index of the latest committed split command.
     last_committed_split_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
@@ -393,6 +395,7 @@ impl Peer {
             tag,
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
+            last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
@@ -541,7 +544,7 @@ impl Peer {
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a follower
         // becomeing a leader.
-        self.update_read_progress(progress);
+        self.maybe_update_read_progress(progress);
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -805,7 +808,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress = ReadProgress::term(self.term());
-                    self.update_read_progress(progress);
+                    self.maybe_update_read_progress(progress);
                     self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
@@ -1062,6 +1065,11 @@ impl Peer {
             }
             if !committed_entries.is_empty() {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
+                if self.last_applying_idx >= self.last_urgent_proposal_idx {
+                    // Urgent requests are flushed, make it lazy again.
+                    self.raft_group.skip_bcast_commit(true);
+                    self.last_urgent_proposal_idx = u64::MAX;
+                }
                 apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
@@ -1160,7 +1168,7 @@ impl Peer {
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            self.update_read_progress(progress);
+            self.maybe_update_read_progress(progress);
         }
     }
 
@@ -1194,11 +1202,14 @@ impl Peer {
         let term = self.term();
         if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
-            self.update_read_progress(progress);
+            self.maybe_update_read_progress(progress);
         }
     }
 
-    fn update_read_progress(&self, progress: ReadProgress) {
+    fn maybe_update_read_progress(&self, progress: ReadProgress) {
+        if self.pending_remove {
+            return;
+        }
         let update = ReadTask::update(self.region_id, progress);
         debug!("{} update {}", self.tag, update);
         self.read_scheduler.schedule(update).unwrap();
@@ -1252,6 +1263,7 @@ impl Peer {
         metrics.all += 1;
 
         let mut is_conf_change = false;
+        let is_urgent = is_request_urgent(&req);
 
         let policy = self.inspect(&req);
         let res = match policy {
@@ -1278,6 +1290,12 @@ impl Peer {
                 false
             }
             Ok(idx) => {
+                if is_urgent {
+                    self.last_urgent_proposal_idx = idx;
+                    // Eager flush to make urgent proposal be applied on all nodes as soon as
+                    // possible.
+                    self.raft_group.skip_bcast_commit(false);
+                }
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
@@ -2175,6 +2193,28 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     msg.get_header().get_sync_log()
 }
 
+/// We enable follower lazy commit to get a better performance.
+/// But it may not be appropriate for some requests. This function
+/// checks whether the request should be committed on all followers
+/// as soon as possible.
+fn is_request_urgent(req: &RaftCmdRequest) -> bool {
+    if !req.has_admin_request() {
+        return false;
+    }
+
+    match req.get_admin_request().get_cmd_type() {
+        AdminCmdType::Split
+        | AdminCmdType::BatchSplit
+        | AdminCmdType::ChangePeer
+        | AdminCmdType::ComputeHash
+        | AdminCmdType::VerifyHash
+        | AdminCmdType::PrepareMerge
+        | AdminCmdType::CommitMerge
+        | AdminCmdType::RollbackMerge => true,
+        _ => false,
+    }
+}
+
 fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut response = AdminResponse::new();
     response.set_cmd_type(AdminCmdType::TransferLeader);
@@ -2209,6 +2249,31 @@ mod tests {
                 tp
             );
         }
+    }
+
+    #[test]
+    fn test_urgent() {
+        let urgent_types = [
+            AdminCmdType::Split,
+            AdminCmdType::BatchSplit,
+            AdminCmdType::ChangePeer,
+            AdminCmdType::ComputeHash,
+            AdminCmdType::VerifyHash,
+            AdminCmdType::PrepareMerge,
+            AdminCmdType::CommitMerge,
+            AdminCmdType::RollbackMerge,
+        ];
+        for tp in AdminCmdType::values() {
+            let mut req = RaftCmdRequest::new();
+            req.mut_admin_request().set_cmd_type(*tp);
+            assert_eq!(
+                is_request_urgent(&req),
+                urgent_types.contains(tp),
+                "{:?}",
+                tp
+            );
+        }
+        assert!(!is_request_urgent(&RaftCmdRequest::new()));
     }
 
     #[test]
