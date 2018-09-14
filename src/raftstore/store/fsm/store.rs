@@ -983,6 +983,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         callback(SeekRegionResult::Ended);
     }
+
+    fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
+        let start_key = data_key(start_key);
+        let end_key = data_end_key(end_key);
+
+        for (_, region_id) in self
+            .region_ranges
+            .range((Excluded(start_key), Included(end_key)))
+        {
+            let peer = self.region_peers.get_mut(region_id).unwrap();
+
+            peer.approximate_size = None;
+            peer.approximate_keys = None;
+        }
+    }
 }
 
 pub fn register_timer<T: Transport, C: PdClient>(
@@ -1084,6 +1099,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 limit,
                 callback,
             } => self.seek_region(&from_key, filter, limit, callback),
+            Msg::ClearRegionSizeInRange { start_key, end_key } => {
+                self.clear_region_size_in_range(&start_key, &end_key)
+            }
         }
     }
 
