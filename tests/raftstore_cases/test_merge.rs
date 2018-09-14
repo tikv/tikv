@@ -478,31 +478,35 @@ fn test_merge_approximate_size_and_keys() {
     thread::sleep(Duration::from_millis(100));
 
     let region = pd_client.get_region(b"").unwrap();
-    let new_size = pd_client
-        .get_region_approximate_size(region.get_id())
-        .unwrap();
-    let new_keys = pd_client
-        .get_region_approximate_keys(region.get_id())
-        .unwrap();
     // size and keys should be updated.
-    assert_ne!(new_size, size);
-    assert_ne!(new_keys, keys);
+    assert_ne!(
+        pd_client
+            .get_region_approximate_size(region.get_id())
+            .unwrap(),
+        size
+    );
+    assert_ne!(
+        pd_client
+            .get_region_approximate_keys(region.get_id())
+            .unwrap(),
+        keys
+    );
 
     // after merge and then transfer leader, if not update new leader's approximate size, it maybe be stale.
     cluster.must_transfer_leader(region.get_id(), region.get_peers()[0].clone());
     // make sure split check is invoked
     thread::sleep(Duration::from_millis(100));
-    assert_eq!(
+    assert_ne!(
         pd_client
             .get_region_approximate_size(region.get_id())
             .unwrap(),
-        new_size
+        size
     );
-    assert_eq!(
+    assert_ne!(
         pd_client
             .get_region_approximate_keys(region.get_id())
             .unwrap(),
-        new_keys
+        keys
     );
 }
 
