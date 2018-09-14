@@ -22,7 +22,7 @@ use rocksdb::rocksdb::DB;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use util::rocksdb::get_cf_handle;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
@@ -279,6 +279,7 @@ impl<E: Engine> GCRunner<E> {
         let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
         // First, call delete_files_in_range to free as much disk space as possible
+        let delete_files_start_time = Instant::now();
         for cf in cfs {
             let cf_handle = get_cf_handle(local_storage, cf).unwrap();
             local_storage
@@ -294,11 +295,12 @@ impl<E: Engine> GCRunner<E> {
         }
 
         info!(
-            "unsafe destroy range start_key: {}, end_key: {} finished deleting files in range",
-            start_key, end_key
+            "unsafe destroy range start_key: {}, end_key: {} finished deleting files in range, cost time: {:?}",
+            start_key, end_key, delete_files_start_time.elapsed(),
         );
 
         // Then, delete all remaining keys in the range.
+        let cleanup_all_start_time = Instant::now();
         for cf in cfs {
             // TODO: set use_delete_range with config here.
             delete_all_in_range_cf(local_storage, cf, &start_data_key, &end_data_key, false)
@@ -313,8 +315,8 @@ impl<E: Engine> GCRunner<E> {
         }
 
         info!(
-            "unsafe destroy range start_key: {}, end_key: {} finished cleaning up all",
-            start_key, end_key
+            "unsafe destroy range start_key: {}, end_key: {} finished cleaning up all, cost time {:?}",
+            start_key, end_key, cleanup_all_start_time.elapsed(),
         );
         Ok(())
     }
