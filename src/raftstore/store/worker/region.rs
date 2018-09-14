@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeMap;
+use std::cmp;
+use std::u64;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -27,17 +29,18 @@ use raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
-use raftstore::store::snap::{Error, Result};
+use raftstore::store::snap::{Error, Result, SNAPSHOT_CFS};
 use raftstore::store::util::Engines;
 use raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
 use storage::CF_RAFT;
+use util::rocksdb::get_cf_num_files_at_level;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use util::time;
 use util::timer::Timer;
 use util::worker::{Runnable, RunnableWithTimer};
 use util::{escape, rocksdb};
+use util::{time, Either};
 
 use super::super::util;
 use super::metrics::*;
@@ -48,6 +51,9 @@ const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
+                                                   // used to periodically check whether schedule pending applies in region runner
+pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // milliseconds
+
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
 /// region related task.
@@ -333,6 +339,32 @@ impl SnapContext {
         Ok(())
     }
 
+    // check the number of files at level 0 to avoid write stall after ingesting sst,
+    // and return the number of files can to be ingested.
+    fn check_level_0_num_files(&self) -> u64 {
+        let mut min = u64::MAX;
+        for cf in SNAPSHOT_CFS {
+            let handle = match rocksdb::get_cf_handle(&self.engines.kv, cf) {
+                Ok(handle) => handle,
+                Err(_) => {
+                    // when having trouble in getting cf handle, just return 1 here
+                    // then apply_snap() will return error which can be handled in handle_apply()
+                    return 1;
+                }
+            };
+
+            if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
+                let options = self.engines.kv.get_options_cf(handle);
+                let diff = options.get_level_zero_slowdown_writes_trigger() as u64 - 1 - n;
+                if diff == 0 {
+                    return 0;
+                }
+                min = cmp::min(diff, min);
+            }
+        }
+        min
+    }
+
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
@@ -476,6 +508,10 @@ impl SnapContext {
 pub struct Runner {
     pool: ThreadPool<DefaultContext>,
     ctx: SnapContext,
+
+    // we may delay some apply tasks if level 0 files to write stall threshold,
+    // pending_applies records all delayed apply task, and will check again later
+    pending_applies: VecDeque<Task>,
 }
 
 impl Runner {
@@ -498,6 +534,7 @@ impl Runner {
                 clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
             },
+            pending_applies: VecDeque::new(),
         }
     }
 }
@@ -515,7 +552,18 @@ impl Runnable<Task> for Runner {
                 self.pool
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
-            Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
+            Task::Apply { region_id, status } => {
+                if self.ctx.check_level_0_num_files() != 0 {
+                    self.ctx.handle_apply(region_id, status)
+                } else {
+                    // delay the apply and retry later
+                    self.pending_applies
+                        .push_back(Task::Apply { region_id, status });
+                    SNAP_COUNTER_VEC
+                        .with_label_values(&["apply", "delay"])
+                        .inc();
+                }
+            }
             Task::Destroy {
                 region_id,
                 start_key,
@@ -542,10 +590,41 @@ impl Runnable<Task> for Runner {
     }
 }
 
-impl RunnableWithTimer<Task, ()> for Runner {
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
-        self.ctx.clean_timeout_ranges();
-        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
+impl RunnableWithTimer<Task, Either<(), ()>> for Runner {
+    fn on_timeout(&mut self, timer: &mut Timer<Either<(), ()>>, event: Either<(), ()>) {
+        match event {
+            Either::Left(_) => {
+                let len = self.pending_applies.len() as u64;
+                if len != 0 {
+                    let n = self.ctx.check_level_0_num_files();
+                    if n != 0 {
+                        // should not handle too many applies than the number of files that can be ingested
+                        for _ in 0..cmp::min(len, n) {
+                            if let Some(Task::Apply { region_id, status }) =
+                                self.pending_applies.pop_front()
+                            {
+                                self.ctx.handle_apply(region_id, status);
+                            }
+                        }
+                    } else {
+                        SNAP_COUNTER_VEC
+                            .with_label_values(&["apply", "delay"])
+                            .inc_by(len as i64);
+                    }
+                }
+                timer.add_task(
+                    Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+                    Either::Left(()),
+                );
+            }
+            Either::Right(_) => {
+                self.ctx.clean_timeout_ranges();
+                timer.add_task(
+                    Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
+                    Either::Right(()),
+                );
+            }
+        }
     }
 }
 
