@@ -323,6 +323,8 @@ impl<E: Engine> GCRunner<E> {
                 })?;
         }
 
+        let cleanup_all_time_cost = cleanup_all_start_time.elapsed();
+
         if let Some(router) = self.raft_store_router.as_ref() {
             router
                 .send(RaftStoreMsg::ClearRegionSizeInRange {
@@ -331,15 +333,18 @@ impl<E: Engine> GCRunner<E> {
                 })
                 .unwrap_or_else(|e| {
                     // Warn and ignore it.
-                    warn!("failed sending ClearRegionSizeInRange: {:?}", e);
+                    warn!(
+                        "unsafe destroy range: failed sending ClearRegionSizeInRange: {:?}",
+                        e
+                    );
                 });
         } else {
-            warn!("destroy range: can't clear region size information: raft_store_router not set");
+            warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
         }
 
         info!(
             "unsafe destroy range start_key: {}, end_key: {} finished cleaning up all, cost time {:?}",
-            start_key, end_key, cleanup_all_start_time.elapsed(),
+            start_key, end_key, cleanup_all_time_cost,
         );
         Ok(())
     }
