@@ -16,7 +16,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 * Fix the leader election issue caused by discarding the `PreVote` message of the newly split Region [#3557](https://github.com/tikv/tikv/pull/3557)
 * Fix follower related statistics after merging Regions [#3573](https://github.com/tikv/tikv/pull/3573)
 * Fix the issue that the local reader uses obsolete Region information [#3565](https://github.com/tikv/tikv/pull/3565)
-* Support UnsafeDestroyRange API to speedup garbage data cleaning [#3560](https://github.com/tikv/tikv/pull/3560)
+* Support UnsafeDestroyRange API to speedup garbage data cleaning after table/index has been truncated/dropped [#3560](https://github.com/tikv/tikv/pull/3560)
 
 ## [2.1.0-rc.1]
 ### Features
