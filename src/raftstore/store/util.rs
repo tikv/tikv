@@ -157,9 +157,8 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
     }
 }
 
-// In our test, we found that if the batch size if too large, running delete_all_in_range will
-// reduce OLTP QPS by 30% ~ 60%. Believing the problem also exists in other cases where
-// `delete_all_in_range_cf` is used, we think 32K is a better choice.
+// In our tests, we found that if the batch size is too large, running delete_all_in_range will
+// reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
 const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 pub fn delete_all_in_range(
