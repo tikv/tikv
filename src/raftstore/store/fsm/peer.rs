@@ -364,7 +364,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
 
                 let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
-                    assert_eq!(peer, msg.get_from_peer());
+                    // Maybe the target is promoted from learner to voter, but the follower
+                    // doesn't know it. So we only compare peer id.
+                    assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
                     // Let stale peer decides whether it should wait for merging or just remove
                     // itself.
                     Some(local_state.get_merge_state().get_target().to_owned())
