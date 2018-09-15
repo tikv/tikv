@@ -51,8 +51,53 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let input = try_opt!(self.children[0].eval_int(ctx, row));
-        Ok(Some(Cow::Owned(format!("{:o}", input).into_bytes())))
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let mut num: u64 = 0;
+        let mut i: usize = 1;
+        let mut overflow = false;
+        let neg = match input[0] {
+            b'-' => true,
+            b'+' => false,
+            _ => {
+                i -= 1;
+                false
+            }
+        };
+
+        while i < input.len() {
+            let c = input[i] - b'0';
+            match num.checked_mul(10) {
+                Some(n) => num = n,
+                None => {
+                    overflow = true;
+                    break;
+                }
+            };
+            match num.checked_add(u64::from(c)) {
+                Some(n) => num = n,
+                None => {
+                    overflow = true;
+                    break;
+                }
+            };
+
+            i += 1;
+        }
+
+        if overflow {
+            if neg {
+                Ok(Some(Cow::Owned(
+                    format!("{:o}", u64::min_value() as i64).into_bytes(),
+                )))
+            } else {
+                Ok(Some(Cow::Owned(
+                    format!("{:o}", u64::max_value() as i64).into_bytes(),
+                )))
+            }
+        } else {
+            let ret = if neg { -(num as i64) } else { num as i64 };
+            Ok(Some(Cow::Owned(format!("{:o}", ret).into_bytes())))
+        }
     }
 
     #[inline]
@@ -308,47 +353,46 @@ mod test {
     }
 
     #[test]
-    #[allow(overflowing_literals)]
     fn test_oct_int() {
         let cases = vec![
-            (Datum::I64(12), Datum::Bytes(b"14".to_vec())),
-            (Datum::I64(8), Datum::Bytes(b"10".to_vec())),
-            (Datum::I64(42), Datum::Bytes(b"52".to_vec())),
-            (Datum::I64(365), Datum::Bytes(b"555".to_vec())),
-            (Datum::I64(1024), Datum::Bytes(b"2000".to_vec())),
-            (Datum::Null, Datum::Null),
+            (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
+            (Datum::Bytes(b"8".to_vec()), Datum::Bytes(b"10".to_vec())),
+            (Datum::Bytes(b"365".to_vec()), Datum::Bytes(b"555".to_vec())),
             (
-                Datum::I64(i64::max_value()),
-                Datum::Bytes(b"777777777777777777777".to_vec()),
+                Datum::Bytes(b"1024".to_vec()),
+                Datum::Bytes(b"2000".to_vec()),
             ),
             (
-                Datum::I64(i64::min_value()),
-                Datum::Bytes(b"1000000000000000000000".to_vec()),
-            ),
-            (
-                Datum::I64(-1),
+                Datum::Bytes(b"-1".to_vec()),
                 Datum::Bytes(b"1777777777777777777777".to_vec()),
             ),
             (
-                Datum::I64(-365),
+                Datum::Bytes(b"-365".to_vec()),
                 Datum::Bytes(b"1777777777777777777223".to_vec()),
             ),
             (
-                Datum::I64(-9223372036854775809 as i64),
+                Datum::Bytes(b"-9223372036854775809".to_vec()),
                 Datum::Bytes(b"777777777777777777777".to_vec()),
             ),
             (
-                Datum::I64(18446744073709551614 as i64),
+                Datum::Bytes(b"18446744073709551614".to_vec()),
                 Datum::Bytes(b"1777777777777777777776".to_vec()),
             ),
             (
-                Datum::I64(18446744073709551615 as i64),
+                Datum::Bytes(b"18446744073709551615".to_vec()),
                 Datum::Bytes(b"1777777777777777777777".to_vec()),
             ),
             (
-                Datum::I64(18446744073709551616 as i64),
-                Datum::Bytes(b"0".to_vec()),
+                Datum::Bytes(b"18446744073709551616".to_vec()),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
             ),
+            (
+                Datum::Bytes(
+                    b"111111111111111111111111111111111111111111111111111111111111111".to_vec(),
+                ),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
         ];
 
         let mut ctx = EvalContext::default();
