@@ -25,6 +25,7 @@ use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
 use tikv::storage::{CF_RAFT, CF_WRITE};
 use tikv::util::config::*;
+use tikv::util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -586,4 +587,37 @@ fn test_node_merge_update_region() {
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v3");
+}
+
+#[test]
+fn test_merge_with_slow_promote() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    pd_client.must_add_peer(left.get_id(), new_peer(3, left.get_id() + 3));
+    pd_client.must_add_peer(right.get_id(), new_learner_peer(3, right.get_id() + 3));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+
+    let delay_filter = box DelayFilter::new(Duration::from_millis(20));
+    cluster.sim.wl().add_send_filter(3, delay_filter);
+
+    pd_client.must_add_peer(right.get_id(), new_peer(3, right.get_id() + 3));
+    pd_client.must_merge(right.get_id(), left.get_id());
+    cluster.sim.wl().clear_send_filters(3);
+    cluster.must_transfer_leader(left.get_id(), new_peer(3, left.get_id() + 3));
 }
