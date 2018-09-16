@@ -20,6 +20,7 @@ pub mod local_metrics;
 mod metrics;
 mod readpool_context;
 mod statistics;
+mod tracker;
 mod util;
 
 pub use self::endpoint::err_resp;
