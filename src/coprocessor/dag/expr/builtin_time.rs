@@ -66,23 +66,16 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
-        let t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                ).map(|_| None)
-            }
-            Ok(Some(res)) => res,
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                return Ok(Some(i64::from(t.get_time().month())));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
         };
-        if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
-        }
-        Ok(Some(i64::from(t.get_time().month())))
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 
     #[inline]
