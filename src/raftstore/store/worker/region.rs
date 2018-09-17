@@ -362,7 +362,7 @@ impl SnapContext {
             if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
                 let diff = u64::from(options.get_level_zero_slowdown_writes_trigger()) - 1 - n;
-                if diff == 0 {
+                if diff <= 0 {
                     return 0;
                 }
                 min = cmp::min(diff, min);
