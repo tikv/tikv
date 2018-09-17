@@ -29,7 +29,7 @@ use raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
-use raftstore::store::snap::{Error, Result, SNAPSHOT_CFS};
+use raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
 use raftstore::store::util::Engines;
 use raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
@@ -51,7 +51,8 @@ const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
-                                                   // used to periodically check whether schedule pending applies in region runner
+
+// used to periodically check whether schedule pending applies in region runner
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // milliseconds
 
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
@@ -344,6 +345,11 @@ impl SnapContext {
     fn check_level_0_num_files(&self) -> u64 {
         let mut min = u64::MAX;
         for cf in SNAPSHOT_CFS {
+            // no need to check lock cf
+            if plain_file_used(cf) {
+                continue;
+            }
+
             let handle = match rocksdb::get_cf_handle(&self.engines.kv, cf) {
                 Ok(handle) => handle,
                 Err(_) => {
@@ -355,7 +361,7 @@ impl SnapContext {
 
             if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
-                let diff = options.get_level_zero_slowdown_writes_trigger() as u64 - 1 - n;
+                let diff = u64::from(options.get_level_zero_slowdown_writes_trigger()) - 1 - n;
                 if diff == 0 {
                     return 0;
                 }
@@ -537,6 +543,16 @@ impl Runner {
             pending_applies: VecDeque::new(),
         }
     }
+
+    fn handle_pending_applies(&mut self, n: u64) {
+        let len = self.pending_applies.len() as u64;
+        // should not handle too many applies than the number of files that can be ingested
+        for _ in 0..cmp::min(len, n) {
+            if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
+                self.ctx.handle_apply(region_id, status);
+            }
+        }
+    }
 }
 
 impl Runnable<Task> for Runner {
@@ -553,15 +569,22 @@ impl Runnable<Task> for Runner {
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
             Task::Apply { region_id, status } => {
-                if self.ctx.check_level_0_num_files() != 0 {
-                    self.ctx.handle_apply(region_id, status)
-                } else {
-                    // delay the apply and retry later
-                    self.pending_applies
-                        .push_back(Task::Apply { region_id, status });
-                    SNAP_COUNTER_VEC
-                        .with_label_values(&["apply", "delay"])
-                        .inc();
+                match self.ctx.check_level_0_num_files() {
+                    0 => {
+                        // delay the apply and retry later
+                        self.pending_applies
+                            .push_back(Task::Apply { region_id, status });
+                        SNAP_COUNTER_VEC
+                            .with_label_values(&["apply", "delay"])
+                            .inc();
+                    }
+                    n => if self.pending_applies.is_empty() {
+                        self.ctx.handle_apply(region_id, status)
+                    } else {
+                        self.pending_applies
+                            .push_back(Task::Apply { region_id, status });
+                        self.handle_pending_applies(n)
+                    },
                 }
             }
             Task::Destroy {
@@ -594,22 +617,14 @@ impl RunnableWithTimer<Task, Either<(), ()>> for Runner {
     fn on_timeout(&mut self, timer: &mut Timer<Either<(), ()>>, event: Either<(), ()>) {
         match event {
             Either::Left(_) => {
-                let len = self.pending_applies.len() as u64;
-                if len != 0 {
-                    let n = self.ctx.check_level_0_num_files();
-                    if n != 0 {
-                        // should not handle too many applies than the number of files that can be ingested
-                        for _ in 0..cmp::min(len, n) {
-                            if let Some(Task::Apply { region_id, status }) =
-                                self.pending_applies.pop_front()
-                            {
-                                self.ctx.handle_apply(region_id, status);
-                            }
+                if !self.pending_applies.is_empty() {
+                    match self.ctx.check_level_0_num_files() {
+                        0 => {
+                            SNAP_COUNTER_VEC
+                                .with_label_values(&["apply", "delay"])
+                                .inc_by(self.pending_applies.len() as i64);
                         }
-                    } else {
-                        SNAP_COUNTER_VEC
-                            .with_label_values(&["apply", "delay"])
-                            .inc_by(len as i64);
+                        n => self.handle_pending_applies(n),
                     }
                 }
                 timer.add_task(

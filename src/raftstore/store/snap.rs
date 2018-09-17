@@ -85,7 +85,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
-fn plain_file_used(cf: &str) -> bool {
+pub fn plain_file_used(cf: &str) -> bool {
     cf == CF_LOCK
 }
 
