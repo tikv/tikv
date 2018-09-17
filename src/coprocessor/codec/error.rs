@@ -11,10 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use coprocessor::codec::mysql::Time;
 use coprocessor::dag::expr::EvalContext;
 use regex::Error as RegexpError;
-use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
 use std::str::Utf8Error;
@@ -67,10 +65,7 @@ quick_error! {
 }
 
 impl Error {
-    pub fn handle_invalid_time_error<'a>(
-        ctx: &mut EvalContext,
-        err: Error,
-    ) -> Result<Option<Cow<'a, Time>>> {
+    pub fn handle_invalid_time_error(ctx: &mut EvalContext, err: Error) -> Result<()> {
         if err.code() == ERR_TRUNCATE_WRONG_VALUE {
             return Err(err);
         }
@@ -78,7 +73,7 @@ impl Error {
             return Err(err);
         }
         ctx.warnings.append_warning(err);
-        Ok(None)
+        Ok(())
     }
 
     pub fn overflow(data: &str, expr: &str) -> Error {

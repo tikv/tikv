@@ -601,7 +601,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#279515615485b0f2d12f1421cc412fe2784e0190"
+source = "git+https://github.com/pingcap/kvproto.git#529c652955d8fa74faf56f91b2f428d5779fd7d5"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1432,7 +1432,7 @@ dependencies = [
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "test_storage 0.0.1",
- "tikv 2.1.0-rc.1",
+ "tikv 2.1.0-rc.2",
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
 ]
 
@@ -1449,7 +1449,7 @@ dependencies = [
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "tikv 2.1.0-rc.1",
+ "tikv 2.1.0-rc.2",
  "tokio-timer 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1460,7 +1460,7 @@ dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "test_raftstore 0.0.1",
- "tikv 2.1.0-rc.1",
+ "tikv 2.1.0-rc.2",
 ]
 
 [[package]]
@@ -1469,7 +1469,8 @@ version = "0.0.1"
 dependencies = [
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "tikv 2.1.0-rc.1",
+ "slog-scope 4.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tikv 2.1.0-rc.2",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1497,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "2.1.0-rc.1"
+version = "2.1.0-rc.2"
 dependencies = [
  "arrow 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1570,7 +1571,7 @@ name = "tikv_fuzz"
 version = "0.0.1"
 dependencies = [
  "libfuzzer-sys 0.1.0 (git+https://github.com/rust-fuzz/libfuzzer-sys.git)",
- "tikv 2.1.0-rc.1",
+ "tikv 2.1.0-rc.2",
 ]
 
 [[package]]

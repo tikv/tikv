@@ -36,6 +36,7 @@ extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
+#[macro_use]
 extern crate tikv;
 extern crate toml;
 
@@ -153,6 +154,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         });
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
+    storage
+        .mut_gc_worker()
+        .set_local_storage(Arc::clone(&kv_engine));
+    storage
+        .mut_gc_worker()
+        .set_raft_store_router(raft_router.clone());
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -378,12 +385,11 @@ fn main() {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
-    init_log(&config);
+    let guard = init_log(&config);
+    panic_hook::set_exit_hook(false, Some(guard));
 
     // Print version information.
     util::print_tikv_info();
-
-    panic_hook::set_exit_hook(false);
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {

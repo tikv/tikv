@@ -11,3 +11,4 @@ tikv = { path = "../../" }
 time = "0.1"
 rand = "0.3"
 slog = "2.3"
+slog-scope = "4.0"
