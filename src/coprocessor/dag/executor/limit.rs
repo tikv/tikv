@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// remove later
-#![allow(dead_code)]
-
 use tipb::executor::Limit;
 
 use super::ExecutorMetrics;

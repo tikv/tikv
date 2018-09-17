@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use kvproto::coprocessor::{KeyRange, Response};
@@ -24,20 +23,19 @@ use storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics};
 
-pub struct DAGContext<S: Snapshot + 'static> {
-    _phantom: PhantomData<S>,
-    req_ctx: ReqContext,
+pub struct DAGContext {
+    deadline: Deadline,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
 
-impl<S: Snapshot + 'static> DAGContext<S> {
-    pub fn new(
+impl DAGContext {
+    pub fn new<S: Snapshot + 'static>(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: S,
-        req_ctx: ReqContext,
+        req_ctx: &ReqContext,
         batch_row_limit: usize,
     ) -> Result<Self> {
         let mut eval_cfg = EvalConfig::new().set_by_flags(req.get_flags());
@@ -74,8 +72,7 @@ impl<S: Snapshot + 'static> DAGContext<S> {
             req.get_collect_range_counts(),
         )?;
         Ok(Self {
-            _phantom: Default::default(),
-            req_ctx,
+            deadline: req_ctx.deadline,
             exec: dag_executor,
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
@@ -101,14 +98,14 @@ impl<S: Snapshot + 'static> DAGContext<S> {
     }
 }
 
-impl<S: Snapshot> RequestHandler for DAGContext<S> {
+impl RequestHandler for DAGContext {
     fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.req_ctx.check_if_outdated()?;
+                    self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
@@ -154,6 +151,7 @@ impl<S: Snapshot> RequestHandler for DAGContext<S> {
         while record_cnt < self.batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
+                    self.deadline.check_if_exceeded()?;
                     record_cnt += 1;
                     let value = row.get_binary(&self.output_offsets)?;
                     chunk.mut_rows_data().extend_from_slice(&value);

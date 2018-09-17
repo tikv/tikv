@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
-
 use std::cmp;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -963,6 +961,15 @@ impl ApplyDelegate {
 
         match change_type {
             ConfChangeType::AddNode => {
+                let add_ndoe_fp = || {
+                    fail_point!(
+                        "apply_on_add_node_1_2",
+                        { self.id == 2 && self.region_id() == 1 },
+                        |_| {}
+                    )
+                };
+                add_ndoe_fp();
+
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "all"])
                     .inc();

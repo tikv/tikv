@@ -52,6 +52,8 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: ReadableSize,
+    // When a peer is not responding for this time, leader will not keep entry cache for it.
+    pub raft_entry_cache_life_time: ReadableDuration,
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
@@ -91,6 +93,8 @@ pub struct Config {
     /// try to alert monitoring systems, if there is any.
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
+
+    pub leader_transfer_max_log_lag: u64,
 
     pub snap_apply_batch_size: ReadableSize,
 
@@ -150,6 +154,7 @@ impl Default for Config {
             // Assume the average size of entries is 1k.
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
             raft_log_gc_size_limit: split_size * 3 / 4,
+            raft_entry_cache_life_time: ReadableDuration::secs(30),
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
             clean_stale_peer_delay: ReadableDuration::minutes(10),
@@ -167,6 +172,7 @@ impl Default for Config {
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
+            leader_transfer_max_log_lag: 10,
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -280,6 +286,12 @@ impl Config {
                 "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
                 stale_state_check,
                 election_timeout * 2
+            ));
+        }
+
+        if self.leader_transfer_max_log_lag < 10 {
+            return Err(box_err!(
+                "raftstore.leader-transfer-max-log-lag should be >= 10."
             ));
         }
 
