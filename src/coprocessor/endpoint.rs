@@ -11,12 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefMut;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use std::{mem, usize};
+use std::usize;
 
 use futures::sync::mpsc as futures_mpsc;
 use futures::{future, stream};
@@ -24,7 +23,7 @@ use protobuf::{CodedInputStream, Message as PbMsg};
 
 use kvproto::coprocessor::{KeyRange, Request, Response};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::{CommandPri, HandleTime};
+use kvproto::kvrpcpb::CommandPri;
 use tipb::analyze::{AnalyzeReq, AnalyzeType};
 use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
@@ -32,27 +31,22 @@ use tipb::select::DAGRequest;
 
 use server::readpool::{self, ReadPool};
 use server::{Config, OnResponse};
-use storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
 use storage::{self, engine, Engine};
 use util::collections::HashMap;
-use util::futurepool;
-use util::time::{duration_to_sec, Instant};
 use util::worker::{Runnable, Scheduler};
 
 use super::checksum::ChecksumContext;
-use super::codec::table;
 use super::dag::executor::ExecutorMetrics;
 use super::dag::DAGContext;
 use super::local_metrics::BasicLocalMetrics;
 use super::metrics::*;
 use super::statistics::analyze::AnalyzeContext;
+use super::tracker::Tracker;
 use super::*;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
 pub const DEFAULT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
-// If handle time is larger than the lower bound, the query is considered as slow query.
-const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 
@@ -131,11 +125,10 @@ impl<E: Engine> Host<E> {
             return;
         }
 
-        let (mut req, cop_req, req_ctx, on_resp) = (t.req, t.cop_req, t.ctx, t.on_resp);
+        let (ranges, cop_req, on_resp) = (t.ranges, t.cop_req, t.on_resp);
         let mut tracker = t.tracker;
-        let ranges = req.take_ranges().into_vec();
 
-        let priority = readpool::Priority::from(req.get_context().get_priority());
+        let priority = readpool::Priority::from(tracker.req_ctx.context.get_priority());
         let pool = self.pool.get_pool_by_priority(priority);
         let ctxd = pool.get_context_delegators();
         tracker.ctx_pool(ctxd);
@@ -150,13 +143,14 @@ impl<E: Engine> Host<E> {
 
         match cop_req {
             CopRequest::DAG(dag) => {
-                let mut ctx = match DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit) {
-                    Ok(ctx) => ctx,
-                    Err(e) => {
-                        on_resp.respond(err_resp(e, metrics));
-                        return;
-                    }
-                };
+                let mut ctx =
+                    match DAGContext::new(dag, ranges, snap, &tracker.req_ctx, batch_row_limit) {
+                        Ok(ctx) => ctx,
+                        Err(e) => {
+                            on_resp.respond(err_resp(e, metrics));
+                            return;
+                        }
+                    };
                 if !on_resp.is_streaming() {
                     let do_request = move |_| {
                         tracker.on_handle_start();
@@ -193,7 +187,7 @@ impl<E: Engine> Host<E> {
                 pool.spawn(move |_| on_resp.respond_stream(s)).forget();
             }
             CopRequest::Analyze(analyze) => {
-                let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &req_ctx).unwrap();
+                let mut ctx = AnalyzeContext::new(analyze, ranges, snap, &tracker.req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
@@ -209,7 +203,8 @@ impl<E: Engine> Host<E> {
                 pool.spawn(do_request).forget();
             }
             CopRequest::Checksum(checksum) => {
-                let mut ctx = ChecksumContext::new(checksum, ranges, snap, &req_ctx).unwrap();
+                let mut ctx =
+                    ChecksumContext::new(checksum, ranges, snap, &tracker.req_ctx).unwrap();
                 let do_request = move |_| {
                     tracker.on_handle_start();
                     let mut resp = ctx.handle_request().unwrap_or_else(|e| {
@@ -260,229 +255,17 @@ enum CopRequest {
 }
 
 #[derive(Debug)]
-struct RequestTracker {
-    running_task_count: Option<Arc<AtomicUsize>>,
-    ctx_pool: Option<futurepool::ContextDelegators<ReadPoolContext>>,
-    record_handle_time: bool,
-    record_scan_detail: bool,
-
-    exec_metrics: ExecutorMetrics,
-    perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
-    start: Instant,                                       // The request start time.
-    total_handle_time: f64,
-    total_perf_statistics: PerfStatisticsDelta, // Accumulated perf statistics
-
-    // These 4 fields are for ExecDetails.
-    wait_start: Option<Instant>,
-    handle_start: Option<Instant>,
-    wait_time: Option<f64>,
-    handle_time: Option<f64>,
-
-    region_id: u64,
-    txn_start_ts: u64,
-    ranges_len: usize,
-    first_range: Option<KeyRange>,
-    scan_tag: &'static str,
-    pri_str: &'static str,
-    desc_scan: Option<bool>, // only applicable to DAG requests
-    peer: String,
-}
-
-impl RequestTracker {
-    fn task_count(&mut self, running_task_count: Arc<AtomicUsize>) {
-        running_task_count.fetch_add(1, Ordering::Release);
-        self.running_task_count = Some(running_task_count);
-    }
-
-    fn ctx_pool(&mut self, ctx_pool: futurepool::ContextDelegators<ReadPoolContext>) {
-        self.ctx_pool = Some(ctx_pool);
-    }
-
-    // This function will be only called in thread pool.
-    fn get_basic_metrics(&self) -> RefMut<BasicLocalMetrics> {
-        let ctx_pool = self.ctx_pool.as_ref().unwrap();
-        let ctx = ctx_pool.current_thread_context_mut();
-        RefMut::map(ctx, |c| &mut c.basic_local_metrics)
-    }
-
-    /// This function will be only called in thread pool.
-    /// In this function, we record the wait time, which is the time elapsed until this call.
-    /// We also record the initial perf_statistics.
-    fn on_handle_start(&mut self) {
-        let stop_first_wait = self.wait_time.is_none();
-        let wait_start = self.wait_start.take().unwrap();
-        let now = Instant::now_coarse();
-        self.wait_time = Some(duration_to_sec(now - wait_start));
-        self.handle_start = Some(now);
-
-        if stop_first_wait {
-            COPR_PENDING_REQS
-                .with_label_values(&[self.scan_tag, self.pri_str])
-                .dec();
-
-            let ctx_pool = self.ctx_pool.as_ref().unwrap();
-            let mut cop_ctx = ctx_pool.current_thread_context_mut();
-            cop_ctx
-                .basic_local_metrics
-                .wait_time
-                .with_label_values(&[self.scan_tag])
-                .observe(self.wait_time.unwrap());
-        }
-
-        self.perf_statistics_start = Some(PerfStatisticsInstant::new());
-    }
-
-    /// Must pair with `on_handle_start` previously.
-    #[cfg_attr(feature = "cargo-clippy", allow(useless_let_if_seq))]
-    fn on_handle_finish(&mut self, resp: Option<&mut Response>, mut exec_metrics: ExecutorMetrics) {
-        // Record delta perf statistics
-        if let Some(perf_stats) = self.perf_statistics_start.take() {
-            self.total_perf_statistics += perf_stats.delta();
-        }
-
-        let handle_start = self.handle_start.take().unwrap();
-        let now = Instant::now_coarse();
-        self.handle_time = Some(duration_to_sec(now - handle_start));
-        self.wait_start = Some(now);
-        self.total_handle_time += self.handle_time.unwrap();
-
-        self.exec_metrics.merge(&mut exec_metrics);
-
-        let mut record_handle_time = self.record_handle_time;
-        let mut record_scan_detail = self.record_scan_detail;
-        if self.handle_time.unwrap() > SLOW_QUERY_LOWER_BOUND {
-            record_handle_time = true;
-            record_scan_detail = true;
-        }
-        if let Some(resp) = resp {
-            if record_handle_time {
-                let mut handle = HandleTime::new();
-                handle.set_process_ms((self.handle_time.unwrap() * 1000f64) as i64);
-                handle.set_wait_ms((self.wait_time.unwrap() * 1000f64) as i64);
-                resp.mut_exec_details().set_handle_time(handle);
-            }
-            if record_scan_detail {
-                let detail = self.exec_metrics.cf_stats.scan_detail();
-                resp.mut_exec_details().set_scan_detail(detail);
-            }
-        }
-    }
-}
-
-impl Drop for RequestTracker {
-    fn drop(&mut self) {
-        if let Some(task_count) = self.running_task_count.take() {
-            task_count.fetch_sub(1, Ordering::Release);
-        }
-
-        if self.total_handle_time > SLOW_QUERY_LOWER_BOUND {
-            let table_id = if let Some(ref range) = self.first_range {
-                table::decode_table_id(range.get_start()).unwrap_or_default()
-            } else {
-                0
-            };
-
-            info!(
-                "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
-                 peer: {:?}, start_ts: {:?}, table_id: {:?}, \
-                 scan_type: {} (desc: {:?}) \
-                 [keys: {}, hit: {}, ranges: {} ({:?}), perf: {:?}]",
-                self.region_id,
-                self.total_handle_time,
-                self.wait_time,
-                self.peer,
-                self.txn_start_ts,
-                table_id,
-                self.scan_tag,
-                self.desc_scan,
-                self.exec_metrics.cf_stats.total_op_count(),
-                self.exec_metrics.cf_stats.total_processed(),
-                self.ranges_len,
-                self.first_range,
-                self.total_perf_statistics,
-            );
-        }
-
-        // `wait_time` is none means the request has not entered thread pool.
-        if self.wait_time.is_none() {
-            COPR_PENDING_REQS
-                .with_label_values(&[self.scan_tag, self.pri_str])
-                .dec();
-
-            // For the request is failed before enter into thread pool.
-            let wait_start = self.wait_start.take().unwrap();
-            let now = Instant::now_coarse();
-            let wait_time = duration_to_sec(now - wait_start);
-            BasicLocalMetrics::default()
-                .wait_time
-                .with_label_values(&[self.scan_tag])
-                .observe(wait_time);
-            return;
-        }
-
-        let ctx_pool = self.ctx_pool.take().unwrap();
-        let mut cop_ctx = ctx_pool.current_thread_context_mut();
-
-        cop_ctx
-            .basic_local_metrics
-            .req_time
-            .with_label_values(&[self.scan_tag])
-            .observe(duration_to_sec(self.start.elapsed()));
-        cop_ctx
-            .basic_local_metrics
-            .handle_time
-            .with_label_values(&[self.scan_tag])
-            .observe(self.total_handle_time);
-        cop_ctx
-            .basic_local_metrics
-            .scan_keys
-            .with_label_values(&[self.scan_tag])
-            .observe(self.exec_metrics.cf_stats.total_op_count() as f64);
-
-        cop_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "internal_key_skipped_count"])
-            .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
-        cop_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "internal_delete_skipped_count"])
-            .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
-        cop_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "block_cache_hit_count"])
-            .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
-        cop_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "block_read_count"])
-            .inc_by(self.total_perf_statistics.block_read_count as i64);
-        cop_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.scan_tag, "block_read_byte"])
-            .inc_by(self.total_perf_statistics.block_read_byte as i64);
-
-        let exec_metrics = mem::replace(&mut self.exec_metrics, ExecutorMetrics::default());
-        cop_ctx.collect(self.region_id, self.scan_tag, exec_metrics);
-    }
-}
-
-#[derive(Debug)]
 pub struct RequestTask {
-    req: Request,
     cop_req: CopRequest,
-    ctx: ReqContext,
+    ranges: Vec<KeyRange>,
     on_resp: OnResponse<Response>,
-    tracker: RequestTracker,
+    tracker: Tracker,
 }
 
 impl RequestTask {
     pub fn new(
         peer: String,
-        req: Request,
+        mut req: Request,
         on_resp: OnResponse<Response>,
         recursion_limit: u32,
     ) -> Result<RequestTask> {
@@ -524,44 +307,24 @@ impl RequestTask {
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
 
-        let start_time = Instant::now_coarse();
+        let req_ctx = ReqContext::new(
+            make_tag(table_scan),
+            req.take_context(),
+            req.get_ranges(),
+            Some(peer),
+            is_desc_scan,
+            Some(start_ts),
+        );
 
-        let req_ctx = ReqContext::new(req.get_context(), start_ts, table_scan);
-
-        let request_tracker = RequestTracker {
-            running_task_count: None,
-            ctx_pool: None,
-            record_handle_time: req.get_context().get_handle_time(),
-            record_scan_detail: req.get_context().get_scan_detail(),
-
-            start: start_time,
-            total_handle_time: 0f64,
-            wait_start: Some(start_time),
-            handle_start: None,
-            wait_time: None,
-            handle_time: None,
-            exec_metrics: ExecutorMetrics::default(),
-            perf_statistics_start: None,
-            total_perf_statistics: PerfStatisticsDelta::default(),
-
-            region_id: req.get_context().get_region_id(),
-            txn_start_ts: start_ts,
-            ranges_len: req.get_ranges().len(),
-            first_range: req.get_ranges().get(0).cloned(),
-            scan_tag: req_ctx.get_scan_tag(),
-            pri_str: get_req_pri_str(req.get_context().get_priority()),
-            desc_scan: is_desc_scan,
-            peer,
-        };
+        let request_tracker = Tracker::new(req_ctx);
 
         COPR_PENDING_REQS
-            .with_label_values(&[request_tracker.scan_tag, request_tracker.pri_str])
+            .with_label_values(&[request_tracker.req_ctx.tag, request_tracker.pri_str])
             .inc();
 
         Ok(RequestTask {
-            req,
             cop_req,
-            ctx: req_ctx,
+            ranges: req.take_ranges().into_vec(),
             on_resp,
             tracker: request_tracker,
         })
@@ -569,20 +332,21 @@ impl RequestTask {
 
     #[inline]
     fn check_outdated(&self) -> Result<()> {
-        self.ctx.check_if_outdated()
+        self.tracker.req_ctx.deadline.check_if_exceeded()
     }
 
     pub fn priority(&self) -> CommandPri {
-        self.req.get_context().get_priority()
+        self.tracker.req_ctx.context.get_priority()
     }
 
     pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.ctx
+        self.tracker
+            .req_ctx
             .set_max_handle_duration(request_max_handle_duration);
     }
 
     fn get_request_key(&self) -> (u64, u64, u64) {
-        let ctx = self.req.get_context();
+        let ctx = &self.tracker.req_ctx.context;
         let region_id = ctx.get_region_id();
         let version = ctx.get_region_epoch().get_version();
         let peer_id = ctx.get_peer().get_id();
@@ -592,14 +356,9 @@ impl RequestTask {
 
 impl Display for RequestTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "request [context {:?}, tp: {}, ranges: {} ({:?})]",
-            self.req.get_context(),
-            self.req.get_tp(),
-            self.req.get_ranges().len(),
-            self.req.get_ranges().get(0)
-        )
+        f.debug_struct("RequestTask")
+            .field("req_ctx", &self.tracker.req_ctx)
+            .finish()
     }
 }
 
@@ -646,7 +405,7 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
             let sched = self.sched.clone();
             if let Err(e) = self
                 .engine
-                .async_snapshot(reqs[0].req.get_context(), box move |(_, res)| {
+                .async_snapshot(&reqs[0].tracker.req_ctx.context, box move |(_, res)| {
                     sched.schedule(Task::SnapRes(id, res)).unwrap()
                 }) {
                 self.notify_failed(e, reqs);
@@ -656,6 +415,14 @@ impl<E: Engine> Runnable<Task<E>> for Host<E> {
         }
 
         self.basic_local_metrics.flush();
+    }
+}
+
+fn make_tag(is_table_scan: bool) -> &'static str {
+    if is_table_scan {
+        "select"
+    } else {
+        "index"
     }
 }
 
@@ -704,19 +471,6 @@ pub fn err_resp(e: Error, metrics: &mut BasicLocalMetrics) -> Response {
     err_multi_resp(e, 1, metrics)
 }
 
-pub const STR_REQ_PRI_LOW: &str = "low";
-pub const STR_REQ_PRI_NORMAL: &str = "normal";
-pub const STR_REQ_PRI_HIGH: &str = "high";
-
-#[inline]
-pub fn get_req_pri_str(pri: CommandPri) -> &'static str {
-    match pri {
-        CommandPri::Low => STR_REQ_PRI_LOW,
-        CommandPri::Normal => STR_REQ_PRI_NORMAL,
-        CommandPri::High => STR_REQ_PRI_HIGH,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,15 +485,6 @@ mod tests {
 
     use util::config::ReadableDuration;
     use util::worker::{Builder as WorkerBuilder, FutureWorker};
-
-    #[test]
-    fn test_get_reg_scan_tag() {
-        let context = kvrpcpb::Context::new();
-        let mut ctx = ReqContext::new(&context, 0, true);
-        assert_eq!(ctx.get_scan_tag(), "select");
-        ctx.table_scan = false;
-        assert_eq!(ctx.get_scan_tag(), "index");
-    }
 
     #[test]
     fn test_req_outdated() {

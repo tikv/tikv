@@ -157,7 +157,9 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
     }
 }
 
-const MAX_WRITE_BATCH_SIZE: usize = 4 * 1024 * 1024;
+// In our tests, we found that if the batch size is too large, running delete_all_in_range will
+// reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
+const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 pub fn delete_all_in_range(
     db: &DB,
@@ -200,7 +202,7 @@ pub fn delete_all_in_range_cf(
         it.seek(start_key.into());
         while it.valid() {
             wb.delete_cf(handle, it.key())?;
-            if wb.data_size() >= MAX_WRITE_BATCH_SIZE {
+            if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
                 db.write(wb)?;
