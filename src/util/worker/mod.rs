@@ -417,10 +417,6 @@ mod test {
     }
 
     impl Runnable<u64> for BatchRunner {
-        fn run(&mut self, _: u64) {
-            panic!("should call run_batch");
-        }
-
         fn run_batch(&mut self, ms: &mut Vec<u64>) {
             self.ch.send(ms.to_vec()).unwrap();
         }
