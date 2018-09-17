@@ -99,7 +99,7 @@ impl Read for SnapshotSender {
         }
         let base = &mut self.base;
         while self.cur_cf_pos < base.snapshot_meta.get_cf_files().len() {
-            if stale_for_generate(base.key, self.snap_stale_checker.as_ref()) {
+            if self.snap_stale_checker.stale_for_generate(base.key) {
                 let err = io::Error::new(io::ErrorKind::Other, "stale snapshot".to_owned());
                 return Err(err);
             }
@@ -207,7 +207,7 @@ impl SnapshotApplyer {
         let mut wb = WriteBatch::new();
         let mut finished = false;
         while !finished {
-            if stale_for_apply(self.base.key, self.snap_stale_checker.as_ref()) {
+            if self.snap_stale_checker.stale_for_apply(self.base.key) {
                 return Err(Error::Abort);
             }
 

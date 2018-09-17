@@ -67,7 +67,7 @@ impl CfFile {
         snap_stale_checker: &SnapStaleChecker,
     ) -> Result<usize> {
         let (mut cf_key_count, mut cf_size) = (0, 0);
-        let mut stale = stale_for_generate(snap_key, snap_stale_checker);
+        let mut stale = snap_stale_checker.stale_for_generate(snap_key);
         match self.tmp_cf_file {
             Either::Left(ref mut file) => {
                 box_try!(
@@ -76,7 +76,7 @@ impl CfFile {
                         cf_size += key.len() + value.len();
                         file.encode_compact_bytes(key)?;
                         file.encode_compact_bytes(value)?;
-                        stale = stale_for_generate(snap_key, snap_stale_checker);
+                        stale = snap_stale_checker.stale_for_generate(snap_key);
                         Ok(!stale)
                     })
                 );
@@ -100,7 +100,7 @@ impl CfFile {
                             bytes += l as i64;
                         }
                         writer.put(key, value)?;
-                        stale = stale_for_generate(snap_key, snap_stale_checker);
+                        stale = snap_stale_checker.stale_for_generate(snap_key);
                         Ok(!stale)
                     })
                 );
@@ -226,7 +226,7 @@ impl SnapshotGenerator {
 
         // Scan every cf, write data into the tmp file respectively.
         let inner = &mut self.inner;
-        for cf in SNAPSHOT_CFS.iter() {
+        for cf in SNAPSHOT_CFS {
             let path = gen_cf_tmp_file_path(&inner.dir, inner.for_send, inner.key, cf);
             let file = if plain_file_used(cf) {
                 Either::Left(create_new_file_at(&path)?)
@@ -346,7 +346,7 @@ impl Write for SnapshotReceiver {
                 let cf = &SNAPSHOT_CFS[self.cur_cf_pos];
                 let (dir, for_send, key) = (&inner.dir, inner.for_send, inner.key);
                 let path = gen_cf_tmp_file_path(dir, for_send, key, cf);
-                let file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+                let file = create_new_file_at(&path)?;
                 let cf_file = CfFile::new(cf, path, Either::Left(file));
                 inner.tmp_cf_files.push(cf_file);
             }

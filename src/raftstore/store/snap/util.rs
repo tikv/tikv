@@ -119,26 +119,26 @@ pub struct SnapStaleChecker {
     pub apply_canceled: AtomicBool,
 }
 
+impl SnapStaleChecker {
+    /// Return true if the snapshot is stale when generating or sending.
+    pub fn stale_for_generate(&self, key: SnapKey) -> bool {
+        key.term < self.compacted_term.load(Ordering::SeqCst)
+            || key.idx < self.compacted_idx.load(Ordering::SeqCst)
+    }
+
+    /// Return true if the snapshot is stale when receiving or applying.
+    pub fn stale_for_apply(&self, key: SnapKey) -> bool {
+        key.term < self.compacted_term.load(Ordering::SeqCst)
+            || key.idx < self.compacted_idx.load(Ordering::SeqCst)
+            || self.apply_canceled.load(Ordering::SeqCst)
+    }
+}
+
 /// `ApplyOptions` is used for applying snapshots.
 pub struct ApplyOptions {
     pub db: Arc<DB>,
     pub region_state: RegionLocalState,
     pub write_batch_size: usize,
-}
-
-/// Return true if the snapshot is stale when generating or sending.
-pub fn stale_for_generate(key: SnapKey, snap_stale_checker: &SnapStaleChecker) -> bool {
-    let compacted_term = snap_stale_checker.compacted_term.load(Ordering::SeqCst);
-    let compacted_idx = snap_stale_checker.compacted_idx.load(Ordering::SeqCst);
-    key.term < compacted_term || key.idx < compacted_idx
-}
-
-/// Return true if the snapshot is stale when receiving or applying.
-pub fn stale_for_apply(key: SnapKey, snap_stale_checker: &SnapStaleChecker) -> bool {
-    let compacted_term = snap_stale_checker.compacted_term.load(Ordering::SeqCst);
-    let compacted_idx = snap_stale_checker.compacted_idx.load(Ordering::SeqCst);
-    let apply_canceled = snap_stale_checker.apply_canceled.load(Ordering::SeqCst);
-    key.term < compacted_term || key.idx < compacted_idx || apply_canceled
 }
 
 /// Generate a directory path. Snapshot files after building will be stored in the path.
@@ -276,7 +276,9 @@ pub mod tests {
             apply_canceled: AtomicBool::new(false),
         };
         let key = SnapKey::new(10, 10, 10);
-        b.iter(|| stale_for_generate(key, &notifier));
+        let mut is_stale = false;
+        b.iter(|| is_stale = notifier.stale_for_generate(key));
+        assert!(!is_stale);
     }
 
     #[bench]
@@ -287,6 +289,8 @@ pub mod tests {
             apply_canceled: AtomicBool::new(false),
         });
         let key = SnapKey::new(10, 10, 10);
-        b.iter(|| stale_for_apply(key, notifier.as_ref()));
+        let mut is_stale = false;
+        b.iter(|| is_stale = notifier.stale_for_generate(key));
+        assert!(!is_stale);
     }
 }
