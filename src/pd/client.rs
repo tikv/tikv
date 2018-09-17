@@ -476,4 +476,31 @@ impl PdClient for RpcClient {
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
         self.leader_client.on_reconnect(Box::new(f))
     }
+
+    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetGCSafePointRequest::new();
+        req.set_header(self.header());
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetGCSafePointRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client
+                .rl()
+                .client
+                .get_gc_safe_point_async_opt(&req, option)
+                .unwrap();
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_gc_safe_point"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(resp.get_safe_point())
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
 }

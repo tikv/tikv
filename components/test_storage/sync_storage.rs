@@ -20,7 +20,10 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::{
+    self, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider, Result,
+    Storage, Value,
+};
 use tikv::util::collections::HashMap;
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
@@ -38,6 +41,18 @@ impl SyncStorage<RocksEngine> {
         };
         s.start(config);
         s
+    }
+}
+
+impl<E: Engine + RegionInfoProvider> SyncStorage<E> {
+    pub fn start_test_auto_gc<S: GCSafePointProvider>(
+        &mut self,
+        safe_point_provider: S,
+        on_finished: Option<Box<Fn() + Send>>,
+    ) {
+        self.store
+            .start_test_auto_gc(safe_point_provider, on_finished)
+            .unwrap();
     }
 }
 

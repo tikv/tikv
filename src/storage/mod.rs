@@ -26,6 +26,7 @@ use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::u64;
 use util;
 use util::collections::HashMap;
@@ -44,9 +45,10 @@ pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
     new_local_engine, CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
-    FlowStatistics, Iterator, Modify, RocksEngine, ScanMode, Snapshot, Statistics,
-    StatisticsSummary, TEMP_DIR,
+    FlowStatistics, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
+    Statistics, StatisticsSummary, TEMP_DIR,
 };
+pub use self::gc_worker::GCSafePointProvider;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -410,6 +412,26 @@ impl Storage<RocksEngine> {
     pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Self> {
         let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
         Storage::from_engine(engine, config, read_pool)
+    }
+}
+
+impl<E: Engine + RegionInfoProvider> Storage<E> {
+    pub fn start_auto_gc<S: GCSafePointProvider>(&self, safe_point_provider: S) -> Result<()> {
+        self.gc_worker
+            .start_auto_gc(safe_point_provider, self.engine.clone())
+    }
+
+    pub fn start_test_auto_gc<S: GCSafePointProvider>(
+        &self,
+        safe_point_provider: S,
+        on_gc_finished: Option<Box<Fn() + Send>>,
+    ) -> Result<()> {
+        self.gc_worker.start_auto_gc_with(
+            safe_point_provider,
+            self.engine.clone(),
+            Duration::from_millis(100),
+            on_gc_finished,
+        )
     }
 }
 

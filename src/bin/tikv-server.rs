@@ -210,7 +210,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let trans = server.transport();
 
     // Create node.
-    let mut node = Node::new(&mut event_loop, &server_cfg, &cfg.raft_store, pd_client);
+    let mut node = Node::new(
+        &mut event_loop,
+        &server_cfg,
+        &cfg.raft_store,
+        pd_client.clone(),
+    );
 
     // Create CoprocessorHost.
     let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
@@ -232,6 +237,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     info!("start storage");
     if let Err(e) = storage.start(&cfg.storage) {
         fatal!("failed to start storage, error: {:?}", e);
+    }
+
+    // Start auto gc
+    // TODO: call `start_auto_gc` only when it's enabled in configs.
+    if let Err(e) = storage.start_auto_gc(pd_client) {
+        fatal!("failed to start auto_gc on storage, error: {:?}", e);
     }
 
     let mut metrics_flusher = MetricsFlusher::new(

@@ -119,4 +119,18 @@ pub trait PdMocker {
     }
 
     fn set_endpoints(&self, _: Vec<String>) {}
+
+    fn update_gc_safe_point(
+        &self,
+        _: &UpdateGCSafePointRequest,
+    ) -> Option<Result<UpdateGCSafePointResponse>> {
+        None
+    }
+
+    fn get_gc_safe_point(
+        &self,
+        _: &GetGCSafePointRequest,
+    ) -> Option<Result<GetGCSafePointResponse>> {
+        None
+    }
 }

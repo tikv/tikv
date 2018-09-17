@@ -116,4 +116,13 @@ lazy_static! {
         "Counter of keys affected during gc",
         &["cf", "tag"]
     ).unwrap();
+    pub static ref AUTO_GC_STATUS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_gcworker_autogc_status",
+        "State of the auto gc manager",
+        &["state"]
+    ).unwrap();
+    pub static ref AUTO_GC_PROGRESS: IntGauge = register_int_gauge!(
+        "tikv_gcworker_autogc_progress",
+        "Progress of the auto gc manager"
+    ).unwrap();
 }
