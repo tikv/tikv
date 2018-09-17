@@ -42,7 +42,7 @@ use util::time::{duration_to_sec, SlowTimer};
 use util::timer::Timer;
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Scheduler, Worker};
-use util::{rocksdb, sys as util_sys, Either, RingQueue};
+use util::{rocksdb, sys as util_sys, RingQueue};
 
 use import::SSTImporter;
 use raftstore::store::config::Config;
@@ -57,8 +57,8 @@ use raftstore::store::peer_storage::{self, CacheQueryStats};
 use raftstore::store::transport::Transport;
 use raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask,
-    SplitCheckRunner, PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_INTERVAL,
+    ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionEvent, RegionRunner,
+    RegionTask, SplitCheckRunner, PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_INTERVAL,
 };
 use raftstore::store::{
     util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
@@ -424,11 +424,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut timer = Timer::new(2);
         timer.add_task(
             Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-            Either::Left(()),
+            RegionEvent::CheckApply,
         );
         timer.add_task(
             Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-            Either::Right(()),
+            RegionEvent::CheckPeer,
         );
         box_try!(self.region_worker.start_with_timer(region_runner, timer));
 

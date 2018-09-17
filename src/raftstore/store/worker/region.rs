@@ -37,10 +37,10 @@ use raftstore::store::{
 use storage::CF_RAFT;
 use util::rocksdb::get_cf_num_files_at_level;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use util::time;
 use util::timer::Timer;
 use util::worker::{Runnable, RunnableWithTimer};
 use util::{escape, rocksdb};
-use util::{time, Either};
 
 use super::super::util;
 use super::metrics::*;
@@ -545,11 +545,12 @@ impl Runner {
     }
 
     fn handle_pending_applies(&mut self, n: u64) {
-        let len = self.pending_applies.len() as u64;
         // should not handle too many applies than the number of files that can be ingested
-        for _ in 0..cmp::min(len, n) {
+        for _ in 0..n {
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
+            } else {
+                break;
             }
         }
     }
@@ -581,6 +582,8 @@ impl Runnable<Task> for Runner {
                     n => if self.pending_applies.is_empty() {
                         self.ctx.handle_apply(region_id, status)
                     } else {
+                        // if there is any pending apply, do not directly handle this apply.
+                        // which makes sure appling snapshots in order
                         self.pending_applies
                             .push_back(Task::Apply { region_id, status });
                         self.handle_pending_applies(n)
@@ -613,13 +616,20 @@ impl Runnable<Task> for Runner {
     }
 }
 
-impl RunnableWithTimer<Task, Either<(), ()>> for Runner {
-    fn on_timeout(&mut self, timer: &mut Timer<Either<(), ()>>, event: Either<(), ()>) {
+/// region related timeout event.
+pub enum Event {
+    CheckPeer,
+    CheckApply,
+}
+
+impl RunnableWithTimer<Task, Event> for Runner {
+    fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
-            Either::Left(_) => {
+            Event::CheckApply => {
                 if !self.pending_applies.is_empty() {
                     match self.ctx.check_level_0_num_files() {
                         0 => {
+                            // delay again
                             SNAP_COUNTER_VEC
                                 .with_label_values(&["apply", "delay"])
                                 .inc_by(self.pending_applies.len() as i64);
@@ -629,14 +639,14 @@ impl RunnableWithTimer<Task, Either<(), ()>> for Runner {
                 }
                 timer.add_task(
                     Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-                    Either::Left(()),
+                    Event::CheckApply,
                 );
             }
-            Either::Right(_) => {
+            Event::CheckPeer => {
                 self.ctx.clean_timeout_ranges();
                 timer.add_task(
                     Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-                    Either::Right(()),
+                    Event::CheckPeer,
                 );
             }
         }

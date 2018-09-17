@@ -64,7 +64,7 @@ pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as Cons
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::read::{LocalReader, Progress as ReadProgress, Task as ReadTask};
 pub use self::region::{
-    Runner as RegionRunner, Task as RegionTask, PENDING_APPLY_CHECK_INTERVAL,
+    Event as RegionEvent, Runner as RegionRunner, Task as RegionTask, PENDING_APPLY_CHECK_INTERVAL,
     STALE_PEER_CHECK_INTERVAL,
 };
 pub use self::split_check::{KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask};
