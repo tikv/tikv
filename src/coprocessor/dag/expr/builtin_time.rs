@@ -26,14 +26,18 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let t = try_opt!(self.children[0].eval_time(ctx, row));
-        if t.invalid_zero() {
-            return Err(box_err!("Incorrect datetime value: '{}'", t));
-        }
-        let format_mask = try_opt!(self.children[1].eval_string(ctx, row));
-        let format_mask_str = String::from_utf8(format_mask.into_owned())?;
-        let res = t.date_format(format_mask_str)?;
-        Ok(Some(Cow::Owned(res.into_bytes())))
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(res) => if !res.invalid_zero() {
+                let format_mask = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+                let res = res.date_format(format_mask.into_owned())?;
+                return Ok(Some(Cow::Owned(res.into_bytes())));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", res))
+            },
+            None => Error::incorrect_datetime_value("None"),
+        };
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 
     #[inline]
@@ -42,25 +46,18 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                )
-            }
-            Ok(Some(res)) => res,
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                let mut res = t.to_mut().clone();
+                res.set_tp(mysql::types::DATE).unwrap();
+                return Ok(Some(Cow::Owned(res)));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
         };
-        if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            );
-        }
-        let mut res = t.to_mut().clone();
-        res.set_tp(mysql::types::DATE).unwrap();
-        Ok(Some(Cow::Owned(res)))
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 
     #[inline]
@@ -94,32 +91,24 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                let mut res = t.to_mut().clone();
+                let time = t.get_time();
+                res.set_time(
+                    time.timezone()
+                        .ymd_opt(time.year(), time.month(), t.last_day_of_month())
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap(),
                 );
-            }
-            Ok(Some(res)) => res,
+                return Ok(Some(Cow::Owned(res)));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
         };
-        if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            );
-        }
-        let mut res = t.to_mut().clone();
-
-        let time = t.get_time();
-        res.set_time(
-            time.timezone()
-                .ymd_opt(time.year(), time.month(), t.last_day_of_month())
-                .and_hms_opt(0, 0, 0)
-                .unwrap(),
-        );
-        Ok(Some(Cow::Owned(res)))
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 }
 
@@ -182,6 +171,33 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
+        }
+
+        // test NULL case
+        let arg1 = datum_expr(Datum::Null);
+        let arg2 = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "null should be wrong"),
+            Err(_) => assert!(true),
+        }
+
+        // test zero case
+        let cfg = EvalConfig::new()
+            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg1 = datum_expr(Datum::Null);
+        let arg2 = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "null should be wrong"),
+            Err(_) => assert!(true),
         }
     }
 
