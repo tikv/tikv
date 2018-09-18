@@ -157,7 +157,7 @@ fn split_ymd_with_frac_as_hms(
         s = &s[2..];
     };
     let month: u32 = box_try!(from_bytes(&s[..2]).parse());
-    let day: u32 = box_try!(from_bytes(&s[2..4]).parse());
+    let day: u32 = box_try!(from_bytes(&s[2..]).parse());
     let (hour, minute, sec): (u32, u32, u32) = if is_float {
         (0, 0, 0)
     } else {
@@ -331,7 +331,7 @@ impl Time {
                     14 | 12 | 11 | 10 | 9 => {
                         split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
                     }
-                    8 | 6 => {
+                    8 | 6 | 5 => {
                         split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
                     }
                     _ => {
@@ -880,6 +880,7 @@ mod test {
             ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
             ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
             ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("12121", UN_SPECIFIED_FSP, "2012-12-01 00:00:00"),
             (
                 "2012^12^31 11+30+45",
                 UN_SPECIFIED_FSP,
