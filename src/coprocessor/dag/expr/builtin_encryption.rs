@@ -38,7 +38,8 @@ impl ScalarFunc {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         let mut hasher = Sha1::new();
         hasher.input(input.as_ref());
-        let sha1 = hasher.result_str().into_bytes();
+        let mut sha1 = vec![0u8; 20];
+        hasher.result(&mut sha1);
         Ok(Some(Cow::Owned(sha1)))
     }
 }
