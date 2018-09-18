@@ -140,7 +140,6 @@ jobs:
               bash <(curl -s https://codecov.io/bash)
             fi
           no_output_timeout: 1800s
-
 workflows:
   version: 2
   ci-test:
