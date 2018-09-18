@@ -112,7 +112,8 @@ impl ScalarFunc {
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig
-            | ScalarFuncSig::TruncateInt => (2, 2),
+            | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateReal => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -473,7 +474,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::TruncateDecimal
-            | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
@@ -814,6 +814,7 @@ dispatch_call! {
         PI => pi,
         Rand => rand,
         RandWithSeed => rand_with_seed,
+        TruncateReal => truncate_real,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -1062,6 +1063,7 @@ mod test {
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::TruncateInt,
+                    ScalarFuncSig::TruncateReal,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
                 ],
@@ -1467,7 +1469,6 @@ mod test {
             ScalarFuncSig::Trim2Args,
             ScalarFuncSig::Trim3Args,
             ScalarFuncSig::TruncateDecimal,
-            ScalarFuncSig::TruncateReal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,
