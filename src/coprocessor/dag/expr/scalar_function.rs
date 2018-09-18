@@ -108,6 +108,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
             | ScalarFuncSig::Atan2Args
+            | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
@@ -208,6 +209,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Sin
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
+            | ScalarFuncSig::Log10
+            | ScalarFuncSig::Log1Arg
+            | ScalarFuncSig::Log2
             | ScalarFuncSig::ASCII
             | ScalarFuncSig::CharLength
             | ScalarFuncSig::Reverse
@@ -372,10 +376,6 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary2Args
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
-            | ScalarFuncSig::Log10
-            | ScalarFuncSig::Log1Arg
-            | ScalarFuncSig::Log2
-            | ScalarFuncSig::Log2Args
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::MakeDate
@@ -818,6 +818,10 @@ dispatch_call! {
 
         CoalesceReal => coalesce_real,
         CaseWhenReal => case_when_real,
+        Log2 => log2,
+        Log10 => log10,
+        Log1Arg => log_1_arg,
+        Log2Args => log_2_args,
         GreatestReal => greatest_real,
         LeastReal => least_real,
         Sqrt => sqrt,
@@ -1055,6 +1059,7 @@ mod test {
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::Atan2Args,
+                    ScalarFuncSig::Log2Args,
                 ],
                 2,
                 2,
@@ -1159,6 +1164,9 @@ mod test {
                     ScalarFuncSig::JsonUnquoteSig,
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
+                    ScalarFuncSig::Log10,
+                    ScalarFuncSig::Log1Arg,
+                    ScalarFuncSig::Log2,
                     ScalarFuncSig::BitCount,
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::BitNegSig,
@@ -1359,10 +1367,6 @@ mod test {
             ScalarFuncSig::LocateBinary2Args,
             ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
-            ScalarFuncSig::Log10,
-            ScalarFuncSig::Log1Arg,
-            ScalarFuncSig::Log2,
-            ScalarFuncSig::Log2Args,
             ScalarFuncSig::Lpad,
             ScalarFuncSig::LpadBinary,
             ScalarFuncSig::MakeDate,

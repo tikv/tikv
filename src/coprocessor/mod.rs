@@ -20,6 +20,7 @@ pub mod local_metrics;
 mod metrics;
 mod readpool_context;
 mod statistics;
+mod tracker;
 mod util;
 
 pub use self::endpoint::err_resp;
@@ -61,47 +62,101 @@ trait RequestHandler: Send {
     }
 }
 
-#[derive(Debug)]
-pub struct ReqContext {
-    pub context: kvrpcpb::Context,
-    pub table_scan: bool, // Whether is a table scan request.
-    pub txn_start_ts: u64,
-    pub start_time: Instant,
-    pub deadline: Instant,
+#[derive(Debug, Clone, Copy)]
+pub struct Deadline {
+    /// Used to construct the Error when deadline exceeded
+    tag: &'static str,
+
+    start_time: Instant,
+    deadline: Instant,
 }
 
-impl ReqContext {
-    pub fn new(ctx: &kvrpcpb::Context, txn_start_ts: u64, table_scan: bool) -> ReqContext {
+impl Deadline {
+    /// Initialize a deadline that counting from current.
+    pub fn from_now(tag: &'static str, after_duration: Duration) -> Self {
         let start_time = Instant::now_coarse();
-        ReqContext {
-            context: ctx.clone(),
-            table_scan,
-            txn_start_ts,
+        let deadline = start_time + after_duration;
+        Self {
+            tag,
             start_time,
-            deadline: start_time,
+            deadline,
         }
     }
 
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.start_time + request_max_handle_duration;
+    /// Reset deadline according to the newly specified duration.
+    // TODO: Remove it in read pool PR. Since we can construct a precise deadline.
+    pub fn reset(&mut self, after_duration: Duration) {
+        self.deadline = self.start_time + after_duration;
     }
 
-    #[inline]
-    pub fn get_scan_tag(&self) -> &'static str {
-        if self.table_scan {
-            "select"
-        } else {
-            "index"
-        }
-    }
-
-    pub fn check_if_outdated(&self) -> Result<()> {
+    /// Returns error if the deadline is exceeded.
+    pub fn check_if_exceeded(&self) -> Result<()> {
         let now = Instant::now_coarse();
         if self.deadline <= now {
             let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
+            return Err(Error::Outdated(elapsed, self.tag));
         }
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ReqContext {
+    /// The tag of the request
+    pub tag: &'static str,
+
+    /// The rpc context carried in the request
+    pub context: kvrpcpb::Context,
+
+    /// The first range of the request
+    pub first_range: Option<coppb::KeyRange>,
+
+    /// The length of the range
+    pub ranges_len: usize,
+
+    /// The deadline of the request
+    pub deadline: Deadline,
+
+    /// The peer address of the request
+    pub peer: Option<String>,
+
+    /// Whether the request is a descending scan (only applicable to DAG)
+    pub is_desc_scan: Option<bool>,
+
+    /// The transaction start_ts of the request
+    pub txn_start_ts: Option<u64>,
+}
+
+impl ReqContext {
+    pub fn new(
+        tag: &'static str,
+        context: kvrpcpb::Context,
+        ranges: &[coppb::KeyRange],
+        peer: Option<String>,
+        is_desc_scan: Option<bool>,
+        txn_start_ts: Option<u64>,
+    ) -> Self {
+        let deadline = Deadline::from_now(tag, Duration::from_secs(0));
+        Self {
+            tag,
+            context,
+            deadline,
+            peer,
+            is_desc_scan,
+            txn_start_ts,
+            first_range: ranges.first().cloned(),
+            ranges_len: ranges.len(),
+        }
+    }
+
+    // TODO: Remove it in read pool PR. Since we can construct a precise deadline.
+    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
+        self.deadline.reset(request_max_handle_duration)
+    }
+
+    #[cfg(test)]
+    pub fn default_for_test() -> Self {
+        Self::new("test", kvrpcpb::Context::new(), &[], None, None, None)
     }
 }
 
