@@ -15,11 +15,10 @@ use std::sync::{atomic::AtomicBool, mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use super::cluster::{Cluster, Simulator};
-use super::server::new_server_cluster;
-use super::transport_simulate::*;
-use super::util::*;
 use raft::eraftpb::MessageType;
+use tikv::util::HandyRwLock;
+
+use test_raftstore::*;
 
 enum FailureType<'a> {
     Partition(&'a [u64], &'a [u64]),
@@ -40,16 +39,8 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
         Arc::from(AtomicBool::new(true)),
     ));
 
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(peer, response_notifier);
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_send_filter(peer, request_notifier);
+    cluster.sim.wl().add_send_filter(peer, response_notifier);
+    cluster.sim.wl().add_send_filter(peer, request_notifier);
 
     rx
 }
@@ -59,12 +50,14 @@ fn test_prevote<T: Simulator>(
     cluster: &mut Cluster<T>,
     failure_type: FailureType,
     leader_after_failure_id: impl Into<Option<u64>>,
-    detect_during_failure: (u64, bool),
-    detect_during_recovery: (u64, bool),
+    detect_during_failure: impl Into<Option<(u64, bool)>>,
+    detect_during_recovery: impl Into<Option<(u64, bool)>>,
 ) {
     cluster.cfg.raft_store.prevote = true;
 
     let leader_id = 1;
+    let detect_during_failure = detect_during_failure.into();
+    let detect_during_recovery = detect_during_recovery.into();
 
     // We must start the cluster before adding send filters, otherwise it panics.
     cluster.run();
@@ -73,23 +66,33 @@ fn test_prevote<T: Simulator>(
     cluster.must_put(b"k1", b"v1");
 
     // Determine how to fail.
-    let rx = attach_prevote_notifiers(cluster, detect_during_failure.0);
+    let rx = if let Some((id, _)) = detect_during_failure {
+        let rx = attach_prevote_notifiers(cluster, id);
+        debug!("Attached failure prevote notifier.");
+        Some(rx)
+    } else {
+        None
+    };
+
     match failure_type {
         FailureType::Partition(majority, minority) => {
-            cluster.partition(majority.clone().to_vec(), minority.clone().to_vec());
+            cluster.partition(majority.to_vec(), minority.to_vec());
         }
         FailureType::Reboot(peers) => {
             peers.iter().for_each(|&peer| cluster.stop_node(peer));
         }
     };
 
-    // Once we see a response on the wire we know a prevote round is happening.
-    let received = rx.recv_timeout(Duration::from_secs(5));
-    assert_eq!(
-        received.is_ok(),
-        detect_during_failure.1,
-        "Sends a PreVote or PreVoteResponse during failure.",
-    );
+    if let (Some(rx), Some((_, should_detect))) = (rx, detect_during_failure) {
+        // Once we see a response on the wire we know a prevote round is happening.
+        let received = rx.recv_timeout(Duration::from_secs(5));
+        debug!("Done with failure prevote notifier, got {:?}", received);
+        assert_eq!(
+            received.is_ok(),
+            should_detect,
+            "Sends a PreVote or PreVoteResponse during failure.",
+        );
+    }
 
     // Let the cluster recover.
     match failure_type {
@@ -103,23 +106,32 @@ fn test_prevote<T: Simulator>(
     };
 
     // Prepare to listen.
-    let rx = attach_prevote_notifiers(cluster, detect_during_recovery.0);
+    let rx = if let Some((id, _)) = detect_during_recovery {
+        let rx = attach_prevote_notifiers(cluster, id);
+        debug!("Attached recovery prevote notifier.");
+        Some(rx)
+    } else {
+        None
+    };
 
     if let Some(leader_id) = leader_after_failure_id.into() {
         cluster.must_transfer_leader(1, new_peer(leader_id, 1));
-    }
+    };
 
     // Once we see a response on the wire we know a prevote round is happening.
-    let received = rx.recv_timeout(Duration::from_secs(5));
+    if let (Some(rx), Some((_, should_detect))) = (rx, detect_during_failure) {
+        let received = rx.recv_timeout(Duration::from_secs(5));
+        debug!("Done with recovery prevote notifier, got {:?}", received);
+
+        assert_eq!(
+            received.is_ok(),
+            should_detect,
+            "Sends a PreVote or PreVoteResponse during recovery.",
+        );
+    };
 
     cluster.must_put(b"k3", b"v3");
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
-
-    assert_eq!(
-        received.is_ok(),
-        detect_during_recovery.1,
-        "Sends a PreVote or PreVoteResponse during recovery.",
-    );
 }
 
 #[test]
@@ -135,6 +147,7 @@ fn test_prevote_partition_leader_in_majority_detect_in_majority() {
     );
 }
 
+// TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_majority_detect_in_minority() {
     let mut cluster = new_server_cluster(0, 5);
@@ -145,10 +158,11 @@ fn test_prevote_partition_leader_in_majority_detect_in_minority() {
         FailureType::Partition(&[1, 2, 3], &[4, 5]),
         None,
         (4, true),
-        (4, false),
+        None,
     );
 }
 
+// TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_majority() {
     let mut cluster = new_server_cluster(0, 5);
@@ -159,10 +173,11 @@ fn test_prevote_partition_leader_in_minority_detect_in_majority() {
         FailureType::Partition(&[1, 2], &[3, 4, 5]),
         None,
         (4, true),
-        (4, false),
+        None,
     );
 }
 
+// TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_minority() {
     let mut cluster = new_server_cluster(0, 5);
@@ -173,7 +188,7 @@ fn test_prevote_partition_leader_in_minority_detect_in_minority() {
         FailureType::Partition(&[1, 2, 3], &[3, 4, 5]),
         None,
         (4, true),
-        (4, false),
+        None,
     );
 }
 
@@ -186,7 +201,7 @@ fn test_prevote_reboot_majority_followers() {
         FailureType::Reboot(&[3, 4, 5]),
         1,
         (1, true),
-        (1, false),
+        None,
     );
 }
 
@@ -263,4 +278,31 @@ fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Clu
 fn test_server_isolated_follower_leader_does_not_change() {
     let mut cluster = new_server_cluster(0, 5);
     test_isolated_follower_leader_does_not_change(&mut cluster);
+}
+
+fn test_create_peer_from_pre_vote<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+
+    let rx = attach_prevote_notifiers(cluster, 1);
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    if rx.recv_timeout(Duration::from_secs(3)).is_err() {
+        panic!("peer 1 should send pre vote");
+    }
+
+    // The peer 2 should be created.
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+}
+
+#[test]
+fn test_node_create_peer_from_pre_vote() {
+    let mut cluster = new_node_cluster(0, 2);
+    cluster.cfg.raft_store.prevote = true;
+    test_create_peer_from_pre_vote(&mut cluster);
 }

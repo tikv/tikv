@@ -1,7 +1,8 @@
 [package]
 name = "tikv"
-version = "2.1.0-beta"
+version = "2.1.0-rc.2"
 keywords = ["KV", "distributed-systems", "raft"]
+publish = false
 
 [features]
 default = []
@@ -17,41 +18,44 @@ name = "tikv"
 name = "tikv-server"
 
 [[bin]]
-name = "bench-tikv"
-path = "benches/bin/bench-tikv.rs"
-
-[[bin]]
 name = "tikv-ctl"
 
 [[bin]]
 name = "tikv-importer"
 
+[[bench]]
+name = "raftstore"
+harness = false
+
+[[bench]]
+name = "benches"
+
 [dependencies]
-log = "0.3.9"
-slog = "2.2"
+log = { version = "0.3", features = ["release_max_level_debug"] }
+slog = "2.3"
 slog-async = "2.3"
 slog-scope = "4.0"
-slog-stdlog = "3.0"
+slog-stdlog = "3.0.4-pre"
 slog-term = "2.4"
-byteorder = "0.5"
+byteorder = "1.2"
 rand = "0.3"
-quick-error = "0.2"
+quick-error = "1.2.2"
 tempdir = "0.3"
 time = "0.1"
 toml = "0.4"
 libc = "0.2"
-crc = "1.2"
+crc = "1.8"
 fs2 = "0.4"
 protobuf = "~2.0"
-nix = "0.9.0"
+nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
 chrono-tz = "0.5"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
-clap = "2"
+clap = "2.32"
 url = "1.5"
-regex = "0.1"
+regex = "1.0"
 fnv = "1.0"
 sys-info = "0.5.1"
 indexmap = { version = "1.0", features = ["serde-1"] }
@@ -75,9 +79,11 @@ crossbeam = "0.2"
 fxhash = "0.2"
 derive_more = "0.11.0"
 num = "0.2.0"
+hex = "0.3"
+rust-crypto = "^0.2"
 
-[target.'cfg(unix)'.dependencies]
-signal = "0.4"
+[replace]
+"raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -105,9 +111,24 @@ branch = "dev"
 features = ["profiling"]
 optional = true
 
+[dev-dependencies]
+test_util = { path = "components/test_util" }
+test_raftstore = { path = "components/test_raftstore" }
+test_storage = { path = "components/test_storage" }
+test_coprocessor = { path = "components/test_coprocessor" }
+criterion = "0.2"
+arrow = "0.10.0"
+
+[target.'cfg(unix)'.dependencies]
+signal = "0.6"
+
 [workspace]
 members = [
-  "fuzz"
+  "fuzz",
+  "components/test_raftstore",
+  "components/test_storage",
+  "components/test_coprocessor",
+  "components/test_util"
 ]
 
 [profile.dev]

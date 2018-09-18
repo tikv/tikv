@@ -22,12 +22,12 @@ use grpc::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
+use test_util;
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
-use util;
 
 fn new_config(eps: Vec<(String, u16)>) -> Config {
     let mut cfg = Config::default();
@@ -123,9 +123,12 @@ fn test_rpc_client() {
         .store_heartbeat(pdpb::StoreStats::new())
         .wait()
         .unwrap();
-    client.ask_split(metapb::Region::new()).wait().unwrap();
     client
-        .report_split(metapb::Region::new(), metapb::Region::new())
+        .ask_batch_split(metapb::Region::new(), 1)
+        .wait()
+        .unwrap();
+    client
+        .report_batch_split(vec![metapb::Region::new(), metapb::Region::new()])
         .wait()
         .unwrap();
 
@@ -197,6 +200,50 @@ fn test_retry_sync() {
     test_retry(sync)
 }
 
+fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
+    let eps_count = 1;
+    // NotRetry mocker returns Ok() with error header first, and next returns Ok() without any error header.
+    let not_retry = Arc::new(NotRetry::new());
+    let server = MockServer::with_case(eps_count, not_retry);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+
+    func(&client);
+}
+
+#[test]
+fn test_not_retry_async() {
+    let async = |client: &RpcClient| {
+        let region = client.get_region_by_id(1);
+        region.wait().unwrap_err();
+    };
+    test_not_retry(async);
+}
+
+#[test]
+fn test_not_retry_sync() {
+    let sync = |client: &RpcClient| {
+        client.get_store(1).unwrap_err();
+    };
+    test_not_retry(sync);
+}
+
+#[test]
+fn test_incompatible_version() {
+    let incompatible = Arc::new(Incompatible);
+    let server = MockServer::with_case(1, incompatible);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+
+    let resp = client.ask_batch_split(metapb::Region::new(), 2);
+    assert_eq!(
+        resp.wait().unwrap_err().to_string(),
+        PdError::Incompatible.to_string()
+    );
+}
+
 fn restart_leader(mgr: SecurityManager) {
     let mgr = Arc::new(mgr);
     // Service has only one GetMembersResponse, so the leader never changes.
@@ -248,7 +295,7 @@ fn test_restart_leader_insecure() {
 
 #[test]
 fn test_restart_leader_secure() {
-    let security_cfg = util::new_security_cfg();
+    let security_cfg = test_util::new_security_cfg();
     let mgr = SecurityManager::new(&security_cfg).unwrap();
     restart_leader(mgr)
 }

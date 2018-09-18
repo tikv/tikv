@@ -12,6 +12,8 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
+#![feature(use_extern_macros)]
+#![feature(proc_macro_non_items)]
 
 extern crate chrono;
 extern crate clap;
@@ -34,6 +36,7 @@ extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
+#[macro_use]
 extern crate tikv;
 extern crate toml;
 
@@ -69,7 +72,7 @@ use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
-use tikv::util::worker::FutureWorker;
+use tikv::util::worker::{Builder, FutureWorker};
 use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -87,11 +90,11 @@ fn check_system_config(config: &TiKvConfig) {
 
     // check rocksdb data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!("{:?}", e);
+        warn!("rockdsb check data dir: {:?}", e);
     }
     // check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!("{:?}", e);
+        warn!("raft check data dir: {:?}", e);
     }
 }
 
@@ -117,7 +120,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
     let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
     let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
-    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender);
+
+    // Create Local Reader.
+    let local_reader = Builder::new("local-reader")
+        .batch_size(cfg.raft_store.local_read_batch_size as usize)
+        .create();
+    let local_ch = local_reader.scheduler();
+
+    // Create router.
+    let raft_router =
+        ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender, local_ch);
     let compaction_listener = new_compaction_listener(store_sendch.clone());
 
     // Create pd client and pd worker
@@ -142,6 +154,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         });
     let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
         .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
+    storage
+        .mut_gc_worker()
+        .set_local_storage(Arc::clone(&kv_engine));
+    storage
+        .mut_gc_worker()
+        .set_raft_store_router(raft_router.clone());
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -181,7 +199,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
-        cfg.coprocessor.region_split_size.0 as usize,
         storage.clone(),
         cop_read_pool,
         raft_router,
@@ -205,6 +222,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr,
         significant_msg_receiver,
         pd_worker,
+        local_reader,
         coprocessor_host,
         importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
@@ -367,12 +385,11 @@ fn main() {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
-    init_log(&config);
+    let guard = init_log(&config);
+    panic_hook::set_exit_hook(false, Some(guard));
 
     // Print version information.
     util::print_tikv_info();
-
-    panic_hook::set_exit_hook(false);
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {

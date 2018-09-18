@@ -14,6 +14,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
+use std::mem;
 use std::sync::Arc;
 
 use kvproto::metapb::Region;
@@ -25,7 +26,7 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::{keys, Callback, Msg};
 use raftstore::Result;
-use storage::{CfName, LARGE_CFS};
+use storage::{CfName, CF_WRITE, LARGE_CFS};
 use util::escape;
 use util::transport::{RetryableSendCh, Sender};
 use util::worker::Runnable;
@@ -33,36 +34,40 @@ use util::worker::Runnable;
 use super::metrics::*;
 
 #[derive(PartialEq, Eq)]
-struct KeyEntry {
-    key: Option<Vec<u8>>,
+pub struct KeyEntry {
+    key: Vec<u8>,
     pos: usize,
     value_size: usize,
+    cf: CfName,
 }
 
 impl KeyEntry {
-    fn new(key: Vec<u8>, pos: usize, value_size: usize) -> KeyEntry {
+    pub fn new(key: Vec<u8>, pos: usize, value_size: usize, cf: CfName) -> KeyEntry {
         KeyEntry {
-            key: Some(key),
+            key,
             pos,
             value_size,
+            cf,
         }
     }
 
-    fn take(&mut self) -> KeyEntry {
-        KeyEntry::new(self.key.take().unwrap(), self.pos, self.value_size)
+    pub fn key(&self) -> &[u8] {
+        self.key.as_ref()
+    }
+
+    pub fn is_commit_version(&self) -> bool {
+        self.cf == CF_WRITE
+    }
+
+    pub fn entry_size(&self) -> usize {
+        self.value_size + self.key.len()
     }
 }
 
 impl PartialOrd for KeyEntry {
     fn partial_cmp(&self, rhs: &KeyEntry) -> Option<Ordering> {
         // BinaryHeap is max heap, so we have to reverse order to get a min heap.
-        Some(
-            self.key
-                .as_ref()
-                .unwrap()
-                .cmp(rhs.key.as_ref().unwrap())
-                .reverse(),
-        )
+        Some(self.key.cmp(&rhs.key).reverse())
     }
 }
 
@@ -73,7 +78,7 @@ impl Ord for KeyEntry {
 }
 
 struct MergedIterator<'a> {
-    iters: Vec<DBIterator<&'a DB>>,
+    iters: Vec<(CfName, DBIterator<&'a DB>)>,
     heap: BinaryHeap<KeyEntry>,
 }
 
@@ -92,9 +97,14 @@ impl<'a> MergedIterator<'a> {
                 IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
             if iter.seek(start_key.into()) {
-                heap.push(KeyEntry::new(iter.key().to_vec(), pos, iter.value().len()));
+                heap.push(KeyEntry::new(
+                    iter.key().to_vec(),
+                    pos,
+                    iter.value().len(),
+                    *cf,
+                ));
             }
-            iters.push(iter);
+            iters.push((*cf, iter));
         }
         Ok(MergedIterator { iters, heap })
     }
@@ -104,14 +114,13 @@ impl<'a> MergedIterator<'a> {
             None => return None,
             Some(e) => e.pos,
         };
-        let iter = &mut self.iters[pos];
+        let (cf, iter) = &mut self.iters[pos];
         if iter.next() {
             // TODO: avoid copy key.
-            let e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len());
+            let mut e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len(), cf);
             let mut front = self.heap.peek_mut().unwrap();
-            let res = front.take();
-            *front = e;
-            Some(res)
+            mem::swap(&mut e, &mut front);
+            Some(e)
         } else {
             self.heap.pop()
         }
@@ -178,15 +187,18 @@ impl<C: Sender<Msg>> Runner<C> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut host =
-            self.coprocessor
-                .new_split_checker_host(region, &self.engine, task.auto_split);
+        let mut host = self.coprocessor.new_split_checker_host(
+            region,
+            &self.engine,
+            task.auto_split,
+            task.policy,
+        );
         if host.skip() {
             debug!("[region {}] skip split check", region.get_id());
             return;
         }
 
-        let split_key = match task.policy {
+        let split_keys = match host.policy() {
             CheckPolicy::SCAN => {
                 let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
                 let res = MergedIterator::new(
@@ -197,7 +209,7 @@ impl<C: Sender<Msg>> Runner<C> {
                     false,
                 ).map(|mut iter| {
                     while let Some(e) = iter.next() {
-                        if host.on_kv(region, e.key.as_ref().unwrap(), e.value_size as u64) {
+                        if host.on_kv(region, &e) {
                             break;
                         }
                     }
@@ -209,10 +221,10 @@ impl<C: Sender<Msg>> Runner<C> {
                     return;
                 }
 
-                host.split_key()
+                host.split_keys()
             }
             CheckPolicy::APPROXIMATE => {
-                let res = host.approximate_split_key(region, &self.engine);
+                let res = host.approximate_split_keys(region, &self.engine);
                 if let Err(e) = res {
                     error!(
                         "[region {}] failed to get approxiamte split key: {}",
@@ -221,14 +233,17 @@ impl<C: Sender<Msg>> Runner<C> {
                     return;
                 }
                 res.unwrap()
+                    .into_iter()
+                    .map(|k| keys::origin_key(&k).to_vec())
+                    .collect()
             }
         };
 
-        if let Some(key) = split_key {
+        if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
             let res = self
                 .ch
-                .try_send(new_split_region(region_id, region_epoch, key));
+                .try_send(new_split_region(region_id, region_epoch, split_keys));
             if let Err(e) = res {
                 warn!("[region {}] failed to send check result: {}", region_id, e);
             }
@@ -253,12 +268,11 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     }
 }
 
-fn new_split_region(region_id: u64, region_epoch: RegionEpoch, key: Vec<u8>) -> Msg {
-    let split_key = keys::origin_key(key.as_slice()).to_vec();
+fn new_split_region(region_id: u64, region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> Msg {
     Msg::SplitRegion {
         region_id,
         region_epoch,
-        split_key,
+        split_keys,
         callback: Callback::None,
     }
 }

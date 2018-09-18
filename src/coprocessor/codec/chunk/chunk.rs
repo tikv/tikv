@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME(shirly): remove following later
-#![allow(dead_code)]
 use super::column::{Column, ColumnEncoder};
 use super::Result;
 use coprocessor::codec::Datum;
@@ -20,7 +18,8 @@ use std::io::Write;
 use tipb::expression::FieldType;
 #[cfg(test)]
 use util::codec::BytesSlice;
-/// Chunk stores multiple rows of data in Apache Arrow format.
+
+/// `Chunk` stores multiple rows of data in Apache Arrow format.
 /// See https://arrow.apache.org/docs/memory_layout.html
 /// Values are appended in compact format and can be directly accessed without decoding.
 /// When the chunk is done processing, we can reuse the allocated memory by resetting it.
@@ -47,11 +46,13 @@ impl Chunk {
     }
 
     /// Get the number of rows in the chunk.
+    #[inline]
     pub fn num_cols(&self) -> usize {
         self.columns.len()
     }
 
     /// Get the number of rows in the chunk.
+    #[inline]
     pub fn num_rows(&self) -> usize {
         if self.columns.is_empty() {
             0
@@ -60,11 +61,14 @@ impl Chunk {
         }
     }
 
+    /// Append a datum to the column
+    #[inline]
     pub fn append_datum(&mut self, col_idx: usize, v: &Datum) -> Result<()> {
         self.columns[col_idx].append_datum(v)
     }
 
     /// Get the Row in the chunk with the row index.
+    #[inline]
     pub fn get_row(&self, idx: usize) -> Option<Row> {
         if idx < self.num_rows() {
             Some(Row::new(self, idx))
@@ -74,6 +78,7 @@ impl Chunk {
     }
 
     // Get the Iterator for Row in the Chunk.
+    #[inline]
     pub fn iter(&self) -> RowIterator {
         RowIterator::new(self)
     }
@@ -90,6 +95,7 @@ impl Chunk {
     }
 }
 
+/// `ChunkEncoder` encodes the chunk.
 pub trait ChunkEncoder: ColumnEncoder {
     fn encode_chunk(&mut self, data: &Chunk) -> Result<()> {
         for col in &data.columns {
@@ -101,6 +107,7 @@ pub trait ChunkEncoder: ColumnEncoder {
 
 impl<T: Write> ChunkEncoder for T {}
 
+/// `Row` represents one row in the chunk.
 pub struct Row<'a> {
     c: &'a Chunk,
     idx: usize,
@@ -112,20 +119,25 @@ impl<'a> Row<'a> {
     }
 
     /// Get the row index of Chunk.
+    #[inline]
     pub fn idx(&self) -> usize {
         self.idx
     }
 
     /// Get the number of values in the row.
+    #[inline]
     pub fn len(&self) -> usize {
         self.c.num_cols()
     }
 
+    /// Get the datum of the column with the specified type in the row.
+    #[inline]
     pub fn get_datum(&self, col_idx: usize, fp: &FieldType) -> Result<Datum> {
         self.c.columns[col_idx].get_datum(self.idx, fp)
     }
 }
 
+/// `RowIterator` is an iterator to iterate the row.
 pub struct RowIterator<'a> {
     c: &'a Chunk,
     idx: usize,

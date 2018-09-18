@@ -85,9 +85,11 @@ impl Drop for RocksEngineCore {
     }
 }
 
+#[derive(Clone)]
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
+    db: Arc<DB>,
 }
 
 impl RocksEngine {
@@ -105,12 +107,17 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = rocksdb::new_engine(&path, cfs, cfs_opts)?;
-        box_try!(worker.start(Runner(Arc::new(db))));
+        let db = Arc::new(rocksdb::new_engine(&path, cfs, cfs_opts)?);
+        box_try!(worker.start(Runner(Arc::clone(&db))));
         Ok(RocksEngine {
             sched: worker.scheduler(),
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
+            db,
         })
+    }
+
+    pub fn get_rocksdb(&self) -> Arc<DB> {
+        Arc::clone(&self.db)
     }
 
     pub fn stop(&self) {
@@ -131,44 +138,35 @@ impl Debug for RocksEngine {
     }
 }
 
-impl Clone for RocksEngine {
-    fn clone(&self) -> Self {
-        Self {
-            core: Arc::clone(&self.core),
-            sched: self.sched.clone(),
-        }
-    }
-}
-
 fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
     let wb = WriteBatch::new();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => if cf == CF_DEFAULT {
                 trace!("RocksEngine: delete {}", k);
-                wb.delete(k.encoded())
+                wb.delete(k.as_encoded())
             } else {
                 trace!("RocksEngine: delete_cf {} {}", cf, k);
                 let handle = rocksdb::get_cf_handle(db, cf)?;
-                wb.delete_cf(handle, k.encoded())
+                wb.delete_cf(handle, k.as_encoded())
             },
             Modify::Put(cf, k, v) => if cf == CF_DEFAULT {
                 trace!("RocksEngine: put {},{}", k, escape(&v));
-                wb.put(k.encoded(), &v)
+                wb.put(k.as_encoded(), &v)
             } else {
                 trace!("RocksEngine: put_cf {}, {}, {}", cf, k, escape(&v));
                 let handle = rocksdb::get_cf_handle(db, cf)?;
-                wb.put_cf(handle, k.encoded(), &v)
+                wb.put_cf(handle, k.as_encoded(), &v)
             },
             Modify::DeleteRange(cf, start_key, end_key) => {
                 trace!(
                     "RocksEngine: delete_range_cf {}, {}, {}",
                     cf,
-                    escape(start_key.encoded()),
-                    escape(end_key.encoded())
+                    escape(start_key.as_encoded()),
+                    escape(end_key.as_encoded())
                 );
                 let handle = rocksdb::get_cf_handle(db, cf)?;
-                wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
+                wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
             }
         };
         if let Err(msg) = res {
@@ -219,13 +217,13 @@ impl Snapshot for RocksSnapshot {
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get {}", key);
-        let v = box_try!(self.get_value(key.encoded()));
+        let v = box_try!(self.get_value(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf {} {}", cf, key);
-        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -235,7 +233,6 @@ impl Snapshot for RocksSnapshot {
         Ok(Cursor::new(iter, mode))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
     fn iter_cf(
         &self,
         cf: CfName,
@@ -258,13 +255,13 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.encoded().as_slice().into()))
+        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
         Ok(DBIterator::seek_for_prev(
             self,
-            key.encoded().as_slice().into(),
+            key.as_encoded().as_slice().into(),
         ))
     }
 

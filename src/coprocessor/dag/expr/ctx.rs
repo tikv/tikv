@@ -48,11 +48,10 @@ pub const FLAG_DIVIDED_BY_ZERO_AS_WARNING: u64 = 1 << 8;
 pub const MODE_ERROR_FOR_DIVISION_BY_ZERO: u64 = 27;
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
+
 #[derive(Debug)]
 pub struct EvalConfig {
-    /// Timezone to use when parse or calculate time.
-    ///
-    /// By default, the time zone is UTC.
+    /// timezone to use when parse/calculate time.
     pub tz: Tz,
     pub ignore_truncate: bool,
     pub truncate_as_warning: bool,
@@ -70,60 +69,112 @@ pub struct EvalConfig {
 
 impl Default for EvalConfig {
     fn default() -> EvalConfig {
-        EvalConfig::new(0).unwrap()
+        EvalConfig::new()
     }
 }
 
 impl EvalConfig {
-    pub fn new(flags: u64) -> Result<EvalConfig> {
-        let e = EvalConfig {
+    pub fn new() -> EvalConfig {
+        EvalConfig {
             tz: Tz::utc(),
-            ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
-            truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
-            overflow_as_warning: (flags & FLAG_OVERFLOW_AS_WARNING) > 0,
-            in_insert_stmt: (flags & FLAG_IN_INSERT_STMT) > 0,
-            in_update_or_delete_stmt: (flags & FLAG_IN_UPDATE_OR_DELETE_STMT) > 0,
-            in_select_stmt: (flags & FLAG_IN_SELECT_STMT) > 0,
-            pad_char_to_full_length: (flags & FLAG_PAD_CHAR_TO_FULL_LENGTH) > 0,
-            divided_by_zero_as_warning: (flags & FLAG_DIVIDED_BY_ZERO_AS_WARNING) > 0,
+            ignore_truncate: false,
+            truncate_as_warning: false,
+            overflow_as_warning: false,
+            in_insert_stmt: false,
+            in_update_or_delete_stmt: false,
+            in_select_stmt: false,
+            pad_char_to_full_length: false,
+            divided_by_zero_as_warning: false,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: 0,
             strict_sql_mode: false,
-        };
-
-        Ok(e)
+        }
     }
 
-    pub fn set_time_zone_by_name(&mut self, tz_name: &str) -> Result<()> {
+    pub fn set_ignore_truncate(mut self, new_value: bool) -> Self {
+        self.ignore_truncate = new_value;
+        self
+    }
+
+    pub fn set_truncate_as_warning(mut self, new_value: bool) -> Self {
+        self.truncate_as_warning = new_value;
+        self
+    }
+
+    pub fn set_overflow_as_warning(mut self, new_value: bool) -> Self {
+        self.overflow_as_warning = new_value;
+        self
+    }
+
+    pub fn set_in_insert_stmt(mut self, new_value: bool) -> Self {
+        self.in_insert_stmt = new_value;
+        self
+    }
+
+    pub fn set_in_update_or_delete_stmt(mut self, new_value: bool) -> Self {
+        self.in_update_or_delete_stmt = new_value;
+        self
+    }
+
+    pub fn set_in_select_stmt(mut self, new_value: bool) -> Self {
+        self.in_select_stmt = new_value;
+        self
+    }
+
+    pub fn set_pad_char_to_full_length(mut self, new_value: bool) -> Self {
+        self.pad_char_to_full_length = new_value;
+        self
+    }
+
+    pub fn set_divided_by_zero_as_warning(mut self, new_value: bool) -> Self {
+        self.divided_by_zero_as_warning = new_value;
+        self
+    }
+
+    pub fn set_max_warning_cnt(mut self, new_value: usize) -> Self {
+        self.max_warning_cnt = new_value;
+        self
+    }
+
+    pub fn set_sql_mode(mut self, new_value: u64) -> Self {
+        self.sql_mode = new_value;
+        self
+    }
+
+    pub fn set_strict_sql_mode(mut self, new_value: bool) -> Self {
+        self.strict_sql_mode = new_value;
+        self
+    }
+
+    pub fn set_time_zone_by_name(mut self, tz_name: &str) -> Result<Self> {
         match Tz::from_tz_name(tz_name) {
             Some(tz) => {
                 self.tz = tz;
-                Ok(())
+                Ok(self)
             }
             None => Err(Error::invalid_timezone(tz_name)),
         }
     }
 
-    pub fn set_time_zone_by_offset(&mut self, offset_sec: i64) -> Result<()> {
+    pub fn set_time_zone_by_offset(mut self, offset_sec: i64) -> Result<Self> {
         match Tz::from_offset(offset_sec) {
             Some(tz) => {
                 self.tz = tz;
-                Ok(())
+                Ok(self)
             }
             None => Err(Error::invalid_timezone(&format!("offset {}s", offset_sec))),
         }
     }
 
-    pub fn set_max_warning_cnt(&mut self, max_warning_cnt: usize) {
-        self.max_warning_cnt = max_warning_cnt;
-    }
-
-    pub fn set_sql_mode(&mut self, sql_mode: u64) {
-        self.sql_mode = sql_mode
-    }
-
-    pub fn set_strict_sql_mode(&mut self, strict_sql_mode: bool) {
-        self.strict_sql_mode = strict_sql_mode
+    pub fn set_by_flags(self, flags: u64) -> Self {
+        self.set_ignore_truncate((flags & FLAG_IGNORE_TRUNCATE) > 0)
+            .set_truncate_as_warning((flags & FLAG_TRUNCATE_AS_WARNING) > 0)
+            .set_overflow_as_warning((flags & FLAG_OVERFLOW_AS_WARNING) > 0)
+            .set_in_insert_stmt((flags & FLAG_IN_INSERT_STMT) > 0)
+            .set_in_update_or_delete_stmt((flags & FLAG_IN_UPDATE_OR_DELETE_STMT) > 0)
+            .set_in_select_stmt((flags & FLAG_IN_SELECT_STMT) > 0)
+            .set_pad_char_to_full_length((flags & FLAG_PAD_CHAR_TO_FULL_LENGTH) > 0)
+            .set_divided_by_zero_as_warning((flags & FLAG_DIVIDED_BY_ZERO_AS_WARNING) > 0)
     }
 
     /// detects if 'ERROR_FOR_DIVISION_BY_ZERO' mode is set in sql_mode
@@ -133,6 +184,11 @@ impl EvalConfig {
 
     pub fn new_eval_warnings(&self) -> EvalWarnings {
         EvalWarnings::new(self.max_warning_cnt)
+    }
+
+    #[cfg(test)]
+    pub fn default_for_test() -> EvalConfig {
+        EvalConfig::new().set_ignore_truncate(true)
     }
 }
 
@@ -238,11 +294,24 @@ impl EvalContext {
         Ok(())
     }
 
+    pub fn handle_invalid_time_error(&mut self, err: Error) -> Result<()> {
+        if err.code() != super::codec::error::ERR_TRUNCATE_WRONG_VALUE {
+            return Err(err);
+        }
+        let cfg = &self.cfg;
+        if cfg.strict_sql_mode && (cfg.in_insert_stmt || cfg.in_update_or_delete_stmt) {
+            Err(err)
+        } else {
+            self.warnings.append_warning(err);
+            Ok(())
+        }
+    }
+
     pub fn overflow_from_cast_str_as_int(
         &mut self,
         bytes: &[u8],
         orig_err: Error,
-        negitive: bool,
+        negative: bool,
     ) -> Result<i64> {
         if !self.cfg.in_select_stmt || !self.cfg.overflow_as_warning {
             return Err(orig_err);
@@ -250,7 +319,7 @@ impl EvalContext {
         let orig_str = String::from_utf8_lossy(bytes);
         self.warnings
             .append_warning(Error::truncated_wrong_val("INTEGER", &orig_str));
-        if negitive {
+        if negative {
             Ok(i64::MIN)
         } else {
             Ok(u64::MAX as i64)
@@ -267,25 +336,25 @@ impl EvalContext {
 
 #[cfg(test)]
 mod test {
+    use super::super::Error;
     use super::*;
     use std::sync::Arc;
 
     #[test]
     fn test_handle_truncate() {
         // ignore_truncate = false, truncate_as_warning = false
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_err());
         assert!(ctx.take_warnings().warnings.is_empty());
         // ignore_truncate = false;
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.take_warnings().warnings.is_empty());
 
         // ignore_truncate = false, truncate_as_warning = true
-        let mut ctx =
-            EvalContext::new(Arc::new(EvalConfig::new(FLAG_TRUNCATE_AS_WARNING).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_truncate_as_warning(true)));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(!ctx.take_warnings().warnings.is_empty());
@@ -293,7 +362,7 @@ mod test {
 
     #[test]
     fn test_max_warning_cnt() {
-        let eval_cfg = Arc::new(EvalConfig::new(FLAG_TRUNCATE_AS_WARNING).unwrap());
+        let eval_cfg = Arc::new(EvalConfig::new().set_truncate_as_warning(true));
         let mut ctx = EvalContext::new(Arc::clone(&eval_cfg));
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
@@ -309,7 +378,7 @@ mod test {
     #[test]
     fn test_handle_division_by_zero() {
         let cases = vec![
-            //(flag,sql_mode,strict_sql_mode=>is_ok,is_empty)
+            //(flag,sql_mode,strict_sql_mode,is_ok,is_empty)
             (0, 0, false, true, false), //warning
             (
                 FLAG_IN_INSERT_STMT,
@@ -342,11 +411,34 @@ mod test {
             ), //warning
         ];
         for (flag, sql_mode, strict_sql_mode, is_ok, is_empty) in cases {
-            let mut cfg = EvalConfig::new(flag).unwrap();
-            cfg.set_sql_mode(sql_mode);
-            cfg.set_strict_sql_mode(strict_sql_mode);
+            let cfg = EvalConfig::new()
+                .set_by_flags(flag)
+                .set_sql_mode(sql_mode)
+                .set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_division_by_zero().is_ok(), is_ok);
+            assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
+        }
+    }
+
+    #[test]
+    fn test_handle_invalid_time_error() {
+        let cases = vec![
+            //(flags,strict_sql_mode,is_ok,is_empty)
+            (0, false, true, false),                             //warning
+            (0, true, true, false),                              //warning
+            (FLAG_IN_INSERT_STMT, false, true, false),           //warning
+            (FLAG_IN_UPDATE_OR_DELETE_STMT, false, true, false), //warning
+            (FLAG_IN_UPDATE_OR_DELETE_STMT, true, false, true),  //error
+            (FLAG_IN_INSERT_STMT, true, false, true),            //error
+        ];
+        for (flags, strict_sql_mode, is_ok, is_empty) in cases {
+            let err = Error::invalid_time_format("");
+            let cfg = EvalConfig::new()
+                .set_by_flags(flags)
+                .set_strict_sql_mode(strict_sql_mode);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            assert_eq!(ctx.handle_invalid_time_error(err).is_ok(), is_ok);
             assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
         }
     }

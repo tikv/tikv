@@ -20,8 +20,7 @@ mod test_conf_change;
 mod test_lease_read;
 mod test_merge;
 mod test_multi;
-// TODO: test prevote.
-// mod test_prevote;
+mod test_prevote;
 mod test_region_heartbeat;
 mod test_service;
 mod test_single;
@@ -34,5 +33,3 @@ mod test_tombstone;
 mod test_transfer_leader;
 mod test_transport;
 mod test_update_region_size;
-
-use raftstore::*;

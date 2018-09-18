@@ -1,7 +1,7 @@
 pub const HIGH_PRI: i32 = -1;
 
 #[cfg(target_os = "linux")]
-pub mod pri {
+pub mod thread {
     use libc;
     use std::io::Error;
 
@@ -60,7 +60,7 @@ pub mod pri {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub mod pri {
+pub mod thread {
     use std::io::Error;
 
     pub fn set_priority(_: i32) -> Result<(), Error> {

@@ -23,7 +23,7 @@ use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
 };
 use storage::mvcc::{Write, WriteType};
-use storage::types;
+use storage::types::Key;
 use util::codec::number::{self, NumberEncoder};
 use util::codec::{Error, Result};
 
@@ -129,7 +129,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             return;
         }
 
-        let (k, ts) = match types::split_encoded_key_on_ts(key) {
+        let (k, ts) = match Key::split_on_ts_for(key) {
             Ok((k, ts)) => (k, ts),
             Err(_) => {
                 self.num_errors += 1;
@@ -678,7 +678,7 @@ mod tests {
         let mut collector = MvccPropertiesCollector::new();
         for &(key, ts, write_type, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
-            let k = keys::data_key(k.encoded());
+            let k = keys::data_key(k.as_encoded());
             let v = Write::new(write_type, ts, None).to_bytes();
             collector.add(&k, &v, entry_type, 0, 0);
         }
@@ -701,7 +701,7 @@ mod tests {
         for i in 0..num_entries {
             let s = format!("{:032}", i);
             let k = Key::from_raw(s.as_bytes()).append_ts(ts);
-            let k = keys::data_key(k.encoded());
+            let k = keys::data_key(k.as_encoded());
             let w = Write::new(WriteType::Put, ts, Some(s.as_bytes().to_owned()));
             entries.push((k, w.to_bytes()));
         }
@@ -721,9 +721,9 @@ mod tests {
         for i in 0..num_rows {
             let key = format!("k-{}", i);
             let k1 = Key::from_raw(key.as_bytes()).append_ts(2);
-            let k1 = keys::data_key(k1.encoded());
+            let k1 = keys::data_key(k1.as_encoded());
             let k2 = Key::from_raw(key.as_bytes()).append_ts(1);
-            let k2 = keys::data_key(k2.encoded());
+            let k2 = keys::data_key(k2.as_encoded());
             let v = Write::new(WriteType::Put, 0, None).to_bytes();
             collector.add(&k1, &v, DBEntryType::Put, 0, 0);
             collector.add(&k2, &v, DBEntryType::Put, 0, 0);
@@ -754,7 +754,7 @@ mod tests {
         ];
         for &(key, size, offset) in &cases {
             let k = Key::from_raw(key.as_bytes());
-            let k = keys::data_key(k.encoded());
+            let k = keys::data_key(k.as_encoded());
             let h = &props.index_handles[&k];
             assert_eq!(h.size, size);
             assert_eq!(h.offset, offset);
