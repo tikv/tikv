@@ -34,7 +34,7 @@ jobs:
           # Actually master does not need to download the cache. However we cannot make conditions here.
           name: Downloading ~/.cargo and ~/.local Cache from master
           keys:
-            - v3-cargo-master-{{ checksum "rust-toolchain" }}
+            - v3-cargo-master-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
       - run:
           name: Restoring ~/.cargo and ~/.local Cache (non-master branch only)
           command: |
@@ -77,7 +77,7 @@ jobs:
           # Actually master does not need to download the cache. However we cannot make conditions here.
           name: Downloading ./target Cache from master
           keys:
-            - v3-target-master-{{ checksum "rust-toolchain" }}
+            - v3-target-master-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
       - run:
           name: Restoring ./target Cache (non-master branch only)
           command: |
