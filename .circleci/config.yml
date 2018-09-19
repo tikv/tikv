@@ -95,9 +95,9 @@ jobs:
       - run:
           name: Caching ~/.cargo and ~/.local (master branch only)
           command: |
-            rm -rf ~/tikv_cache_cargo
-            mkdir ~/tikv_cache_cargo
             if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              rm -rf ~/tikv_cache_cargo
+              mkdir ~/tikv_cache_cargo
               echo "Current branch is $CIRCLE_BRANCH, creating tar for ~/.cargo and ~/.local"
               cd ~ && tar cf ~/tikv_cache_cargo/cargo.tar .cargo .local && cd -
             else
@@ -113,9 +113,9 @@ jobs:
       - run:
           name: Caching ./target (master branch only)
           command: |
-            rm -rf ~/tikv_cache_build
-            mkdir ~/tikv_cache_build
             if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              rm -rf ~/tikv_cache_build
+              mkdir ~/tikv_cache_build
               echo "Current branch is $CIRCLE_BRANCH, creating tar for ./target"
               tar cf ~/tikv_cache_build/target.tar target/debug/.fingerprint target/debug/build target/debug/deps target/debug/incremental
             else
