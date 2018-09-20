@@ -185,8 +185,8 @@ mod test {
         }
 
         // test zero case
-        let cfg = EvalConfig::new()
-            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
             .set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
@@ -228,8 +228,8 @@ mod test {
         }
 
         // test zero case
-        let cfg = EvalConfig::new()
-            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
             .set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
@@ -278,8 +278,8 @@ mod test {
         op.eval(&mut ctx, &[]).unwrap_err();
 
         // test zero case
-        let cfg = EvalConfig::new()
-            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
             .set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
