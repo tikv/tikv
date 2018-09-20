@@ -1010,11 +1010,11 @@ mod tests {
     #[test]
     fn test_handle_time() {
         // Asserted that the snapshot can be retrieved in 200ms.
-        const SNAPSHOT_DURATION_MS: u64 = 200;
+        const SNAPSHOT_DURATION_MS: i64 = 200;
 
         // Asserted that the delay caused by OS scheduling other tasks is smaller than 200ms.
         // This is mostly for CI.
-        const HANDLE_ERROR_MS: u64 = 200;
+        const HANDLE_ERROR_MS: i64 = 200;
 
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
@@ -1032,7 +1032,7 @@ mod tests {
         req_with_exec_detail.context.set_handle_time(true);
 
         {
-            let mut wait_time = 0;
+            let mut wait_time: i64 = 0;
 
             // Request 1: Unary, success response, takes 1000ms to execute.
             let handler_builder = box |_, _: &_| {
@@ -1043,7 +1043,7 @@ mod tests {
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Request 2: Unary, error response, takes 1500ms to execute.
             let handler_builder = box |_, _: &_| {
@@ -1053,22 +1053,21 @@ mod tests {
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
-            assert!((resp.get_exec_details().get_handle_time().get_process_ms() as u64) >= 1000);
+            assert!(resp.get_exec_details().get_handle_time().get_process_ms() >= 1000);
             assert!(
-                (resp.get_exec_details().get_handle_time().get_process_ms() as u64)
-                    < 1000 + HANDLE_ERROR_MS
+                resp.get_exec_details().get_handle_time().get_process_ms() < 1000 + HANDLE_ERROR_MS
             );
             assert!(
-                (resp.get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp.get_exec_details().get_handle_time().get_wait_ms()
                     >= wait_time - HANDLE_ERROR_MS
             );
             assert!(
-                (resp.get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp.get_exec_details().get_handle_time().get_wait_ms()
                     < wait_time + HANDLE_ERROR_MS
             );
             wait_time += 1000 - SNAPSHOT_DURATION_MS;
@@ -1076,23 +1075,22 @@ mod tests {
             // Response 2
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
-            assert!((resp.get_exec_details().get_handle_time().get_process_ms() as u64) >= 1500);
+            assert!(resp.get_exec_details().get_handle_time().get_process_ms() >= 1500);
             assert!(
-                (resp.get_exec_details().get_handle_time().get_process_ms() as u64)
-                    < 1500 + HANDLE_ERROR_MS
+                resp.get_exec_details().get_handle_time().get_process_ms() < 1500 + HANDLE_ERROR_MS
             );
             assert!(
-                (resp.get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp.get_exec_details().get_handle_time().get_wait_ms()
                     >= wait_time - HANDLE_ERROR_MS
             );
             assert!(
-                (resp.get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp.get_exec_details().get_handle_time().get_wait_ms()
                     < wait_time + HANDLE_ERROR_MS
             );
         }
 
         {
-            let mut wait_time = 0;
+            let mut wait_time: i64 = 0;
 
             // Request 1: Unary, success response, takes 1500ms to execute.
             let handler_builder = box |_, _: &_| {
@@ -1103,7 +1101,7 @@ mod tests {
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Request 2: Stream.
             let handler_builder = box |_, _: &_| {
@@ -1128,17 +1126,16 @@ mod tests {
             // Request 1, ignore. We have checked it in the previous case.
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
-            assert!((resp.get_exec_details().get_handle_time().get_process_ms() as u64) >= 1500);
+            assert!(resp.get_exec_details().get_handle_time().get_process_ms() >= 1500);
             assert!(
-                (resp.get_exec_details().get_handle_time().get_process_ms() as u64)
-                    < 1500 + HANDLE_ERROR_MS
+                resp.get_exec_details().get_handle_time().get_process_ms() < 1500 + HANDLE_ERROR_MS
             );
             assert!(
-                (resp.get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp.get_exec_details().get_handle_time().get_wait_ms()
                     >= wait_time - HANDLE_ERROR_MS
             );
             assert!(
-                (resp.get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp.get_exec_details().get_handle_time().get_wait_ms()
                     < wait_time + HANDLE_ERROR_MS
             );
             wait_time += 1500 - SNAPSHOT_DURATION_MS;
@@ -1148,45 +1145,45 @@ mod tests {
             assert_eq!(resp.len(), 2);
             assert!(resp[0].get_other_error().is_empty());
             assert!(
-                (resp[0]
+                resp[0]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() as u64) >= 1000
+                    .get_process_ms() >= 1000
             );
             assert!(
-                (resp[0]
+                resp[0]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() as u64) < 1000 + HANDLE_ERROR_MS
+                    .get_process_ms() < 1000 + HANDLE_ERROR_MS
             );
             assert!(
-                (resp[0].get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp[0].get_exec_details().get_handle_time().get_wait_ms()
                     >= wait_time - HANDLE_ERROR_MS
             );
             assert!(
-                (resp[0].get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp[0].get_exec_details().get_handle_time().get_wait_ms()
                     < wait_time + HANDLE_ERROR_MS
             );
 
             assert!(!resp[1].get_other_error().is_empty());
             assert!(
-                (resp[1]
+                resp[1]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() as u64) >= 1500
+                    .get_process_ms() >= 1500
             );
             assert!(
-                (resp[1]
+                resp[1]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() as u64) < 1500 + HANDLE_ERROR_MS
+                    .get_process_ms() < 1500 + HANDLE_ERROR_MS
             );
             assert!(
-                (resp[1].get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp[1].get_exec_details().get_handle_time().get_wait_ms()
                     >= wait_time - HANDLE_ERROR_MS
             );
             assert!(
-                (resp[1].get_exec_details().get_handle_time().get_wait_ms() as u64)
+                resp[1].get_exec_details().get_handle_time().get_wait_ms()
                     < wait_time + HANDLE_ERROR_MS
             );
         }
