@@ -334,7 +334,7 @@ impl<E: Engine> Endpoint<E> {
                     .map(|handler| (tracker, handler))
             });
 
-        stream::futures_ordered(vec![tracker_and_handler_future])
+        tracker_and_handler_future
             .map(|(mut tracker, handler)| {
                 tracker.on_begin_all_items();
 
@@ -394,7 +394,7 @@ impl<E: Engine> Endpoint<E> {
                     }
                 })
             })
-            .flatten()
+            .flatten_stream()
     }
 
     /// Handle a stream request and run on the read pool. Returns a stream producing each
