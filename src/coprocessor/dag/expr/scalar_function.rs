@@ -111,6 +111,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
+            | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::DateFormatSig => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -499,7 +500,6 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::WeekWithoutMode
             | ScalarFuncSig::Year
-            | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
@@ -731,6 +731,7 @@ dispatch_call! {
         ModInt => mod_int,
 
         Month => month,
+        YearWeekWithMode => year_week,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1060,6 +1061,7 @@ mod test {
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
+                    ScalarFuncSig::YearWeekWithMode,
                 ],
                 2,
                 2,
@@ -1490,7 +1492,6 @@ mod test {
             ScalarFuncSig::WeekWithMode,
             ScalarFuncSig::WeekWithoutMode,
             ScalarFuncSig::Year,
-            ScalarFuncSig::YearWeekWithMode,
             ScalarFuncSig::YearWeekWithoutMode,
         ];
 

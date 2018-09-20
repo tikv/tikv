@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod extension;
+pub mod extension;
 mod tz;
-mod weekmode;
+pub mod weekmode;
 
 use std::cmp::{min, Ordering};
 use std::fmt::{self, Display, Formatter};

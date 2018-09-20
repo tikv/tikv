@@ -15,6 +15,7 @@ use super::{EvalContext, Result, ScalarFunc};
 use chrono::offset::TimeZone;
 use chrono::Datelike;
 use coprocessor::codec::error::Error;
+use coprocessor::codec::mysql::time::{extension::DateTimeExtension, weekmode::WeekMode};
 use coprocessor::codec::mysql::{self, Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
@@ -83,6 +84,34 @@ impl ScalarFunc {
             ).map(|_| None);
         }
         Ok(Some(i64::from(t.get_time().month())))
+    }
+
+    #[inline]
+    pub fn year_week<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        match (
+            self.children[0].eval_time(ctx, row),
+            self.children[1].eval_int(ctx, row),
+        ) {
+            (Ok(Some(res)), mode) => if res.is_zero() {
+                Error::handle_invalid_time_error(
+                    ctx,
+                    Error::incorrect_datetime_value(&format!("{}", res)),
+                ).map(|_| None)
+            } else {
+                let (year, week) = res.get_time().year_week(match mode {
+                    Ok(Some(m)) => WeekMode::from_bits_truncate(m as u32),
+                    Ok(None) => WeekMode::from_bits_truncate(0),
+                    Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
+                });
+                Ok(Some(i64::from(year * 100 + week)))
+            },
+            (Ok(None), _) => Ok(None),
+            (Err(err), _) => Error::handle_invalid_time_error(ctx, err).map(|_| None),
+        }
     }
 
     #[inline]
@@ -309,6 +338,27 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_year_week() {
+        let tests = vec![
+            ("2011-11-11", 201145i64),
+            ("2008-02-10", 200806i64),
+            ("2000-02-11", 200006i64),
+            ("2100-02-11", 210006i64),
+            ("2011-11-11 10:10:10", 201145i64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let mode = datum_expr(Datum::I64(0i64));
+            let exp = Datum::I64(exp);
+            let f = scalar_func_expr(ScalarFuncSig::YearWeekWithMode, &[arg, mode]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp, "{} {}", got, exp);
         }
     }
 }
