@@ -21,10 +21,8 @@ use grpc::Error as GrpcError;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
-use coprocessor::EndPointTask;
 use pd::Error as PdError;
 use raftstore::Error as RaftServerError;
-use storage::engine::Engine;
 use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use util::codec::Error as CodecError;
@@ -97,12 +95,6 @@ quick_error!{
             from()
             display("{:?}", err)
         }
-        EndPointStopped {
-            description("Endpoint is stopped")
-        }
-        EndPointFull {
-            description("Endpoint is full")
-        }
         Sink {
             description("failed to poll from mpsc receiver")
         }
@@ -111,15 +103,6 @@ quick_error!{
             cause(err)
             display("{:?}", err)
             description(err.description())
-        }
-    }
-}
-
-impl<E: Engine> From<ScheduleError<EndPointTask<E>>> for Error {
-    fn from(err: ScheduleError<EndPointTask<E>>) -> Self {
-        match err {
-            ScheduleError::Stopped(_) => Error::EndPointStopped,
-            ScheduleError::Full(_) => Error::EndPointFull,
         }
     }
 }
