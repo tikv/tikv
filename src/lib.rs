@@ -19,6 +19,7 @@
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
+#![feature(duration_as_u128)]
 #![feature(entry_or_default)]
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen)]

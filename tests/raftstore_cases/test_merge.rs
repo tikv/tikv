@@ -25,6 +25,7 @@ use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
 use tikv::storage::{CF_RAFT, CF_WRITE};
 use tikv::util::config::*;
+use tikv::util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -438,8 +439,7 @@ fn test_node_merge_brain_split() {
 #[test]
 fn test_merge_approximate_size_and_keys() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     cluster.run();
 
     let mut range = 1..;
@@ -450,38 +450,60 @@ fn test_merge_approximate_size_and_keys() {
     let region = pd_client.get_region(b"").unwrap();
 
     cluster.must_split(&region, &middle_key);
-    thread::sleep(Duration::from_secs(1));
+    // make sure split check is invoked so size and keys are updated.
+    thread::sleep(Duration::from_millis(100));
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
-
     assert_ne!(left, right);
+
+    // make sure all peer's approximate size is not None.
+    cluster.must_transfer_leader(right.get_id(), right.get_peers()[0].clone());
+    thread::sleep(Duration::from_millis(100));
+    cluster.must_transfer_leader(right.get_id(), right.get_peers()[1].clone());
+    thread::sleep(Duration::from_millis(100));
+    cluster.must_transfer_leader(right.get_id(), right.get_peers()[2].clone());
+    thread::sleep(Duration::from_millis(100));
+
     let size = pd_client
-        .get_region_approximate_size(left.get_id())
-        .unwrap()
-        + pd_client
-            .get_region_approximate_size(right.get_id())
-            .unwrap();
+        .get_region_approximate_size(right.get_id())
+        .unwrap();
     assert_ne!(size, 0);
     let keys = pd_client
-        .get_region_approximate_keys(left.get_id())
-        .unwrap()
-        + pd_client
-            .get_region_approximate_keys(right.get_id())
-            .unwrap();
+        .get_region_approximate_keys(right.get_id())
+        .unwrap();
     assert_ne!(keys, 0);
 
     pd_client.must_merge(left.get_id(), right.get_id());
-    thread::sleep(Duration::from_secs(1));
+    // make sure split check is invoked so size and keys are updated.
+    thread::sleep(Duration::from_millis(100));
 
     let region = pd_client.get_region(b"").unwrap();
-    assert_eq!(
+    // size and keys should be updated.
+    assert_ne!(
         pd_client
             .get_region_approximate_size(region.get_id())
             .unwrap(),
         size
     );
-    assert_eq!(
+    assert_ne!(
+        pd_client
+            .get_region_approximate_keys(region.get_id())
+            .unwrap(),
+        keys
+    );
+
+    // after merge and then transfer leader, if not update new leader's approximate size, it maybe be stale.
+    cluster.must_transfer_leader(region.get_id(), region.get_peers()[0].clone());
+    // make sure split check is invoked
+    thread::sleep(Duration::from_millis(100));
+    assert_ne!(
+        pd_client
+            .get_region_approximate_size(region.get_id())
+            .unwrap(),
+        size
+    );
+    assert_ne!(
         pd_client
             .get_region_approximate_keys(region.get_id())
             .unwrap(),
@@ -565,4 +587,37 @@ fn test_node_merge_update_region() {
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v3");
+}
+
+#[test]
+fn test_merge_with_slow_promote() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    pd_client.must_add_peer(left.get_id(), new_peer(3, left.get_id() + 3));
+    pd_client.must_add_peer(right.get_id(), new_learner_peer(3, right.get_id() + 3));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+
+    let delay_filter = box DelayFilter::new(Duration::from_millis(20));
+    cluster.sim.wl().add_send_filter(3, delay_filter);
+
+    pd_client.must_add_peer(right.get_id(), new_peer(3, right.get_id() + 3));
+    pd_client.must_merge(right.get_id(), left.get_id());
+    cluster.sim.wl().clear_send_filters(3);
+    cluster.must_transfer_leader(left.get_id(), new_peer(3, left.get_id() + 3));
 }
