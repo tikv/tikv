@@ -953,7 +953,8 @@ mod test {
         );
 
         {
-            let eval_config = EvalConfig::new()
+            let mut eval_config = EvalConfig::new();
+            eval_config
                 .set_in_insert_stmt(true)
                 .set_strict_sql_mode(true);
             let mut ctx = EvalContext::new(Arc::new(eval_config));

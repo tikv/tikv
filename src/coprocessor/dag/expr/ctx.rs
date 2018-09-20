@@ -74,8 +74,8 @@ impl Default for EvalConfig {
 }
 
 impl EvalConfig {
-    pub fn new() -> EvalConfig {
-        EvalConfig {
+    pub fn new() -> Self {
+        Self {
             tz: Tz::utc(),
             ignore_truncate: false,
             truncate_as_warning: false,
@@ -91,62 +91,68 @@ impl EvalConfig {
         }
     }
 
-    pub fn set_ignore_truncate(mut self, new_value: bool) -> Self {
+    pub fn from_flags(flags: u64) -> Self {
+        let mut config = Self::new();
+        config.set_by_flags(flags);
+        config
+    }
+
+    pub fn set_ignore_truncate(&mut self, new_value: bool) -> &mut Self {
         self.ignore_truncate = new_value;
         self
     }
 
-    pub fn set_truncate_as_warning(mut self, new_value: bool) -> Self {
+    pub fn set_truncate_as_warning(&mut self, new_value: bool) -> &mut Self {
         self.truncate_as_warning = new_value;
         self
     }
 
-    pub fn set_overflow_as_warning(mut self, new_value: bool) -> Self {
+    pub fn set_overflow_as_warning(&mut self, new_value: bool) -> &mut Self {
         self.overflow_as_warning = new_value;
         self
     }
 
-    pub fn set_in_insert_stmt(mut self, new_value: bool) -> Self {
+    pub fn set_in_insert_stmt(&mut self, new_value: bool) -> &mut Self {
         self.in_insert_stmt = new_value;
         self
     }
 
-    pub fn set_in_update_or_delete_stmt(mut self, new_value: bool) -> Self {
+    pub fn set_in_update_or_delete_stmt(&mut self, new_value: bool) -> &mut Self {
         self.in_update_or_delete_stmt = new_value;
         self
     }
 
-    pub fn set_in_select_stmt(mut self, new_value: bool) -> Self {
+    pub fn set_in_select_stmt(&mut self, new_value: bool) -> &mut Self {
         self.in_select_stmt = new_value;
         self
     }
 
-    pub fn set_pad_char_to_full_length(mut self, new_value: bool) -> Self {
+    pub fn set_pad_char_to_full_length(&mut self, new_value: bool) -> &mut Self {
         self.pad_char_to_full_length = new_value;
         self
     }
 
-    pub fn set_divided_by_zero_as_warning(mut self, new_value: bool) -> Self {
+    pub fn set_divided_by_zero_as_warning(&mut self, new_value: bool) -> &mut Self {
         self.divided_by_zero_as_warning = new_value;
         self
     }
 
-    pub fn set_max_warning_cnt(mut self, new_value: usize) -> Self {
+    pub fn set_max_warning_cnt(&mut self, new_value: usize) -> &mut Self {
         self.max_warning_cnt = new_value;
         self
     }
 
-    pub fn set_sql_mode(mut self, new_value: u64) -> Self {
+    pub fn set_sql_mode(&mut self, new_value: u64) -> &mut Self {
         self.sql_mode = new_value;
         self
     }
 
-    pub fn set_strict_sql_mode(mut self, new_value: bool) -> Self {
+    pub fn set_strict_sql_mode(&mut self, new_value: bool) -> &mut Self {
         self.strict_sql_mode = new_value;
         self
     }
 
-    pub fn set_time_zone_by_name(mut self, tz_name: &str) -> Result<Self> {
+    pub fn set_time_zone_by_name(&mut self, tz_name: &str) -> Result<&mut Self> {
         match Tz::from_tz_name(tz_name) {
             Some(tz) => {
                 self.tz = tz;
@@ -156,7 +162,7 @@ impl EvalConfig {
         }
     }
 
-    pub fn set_time_zone_by_offset(mut self, offset_sec: i64) -> Result<Self> {
+    pub fn set_time_zone_by_offset(&mut self, offset_sec: i64) -> Result<&mut Self> {
         match Tz::from_offset(offset_sec) {
             Some(tz) => {
                 self.tz = tz;
@@ -166,7 +172,7 @@ impl EvalConfig {
         }
     }
 
-    pub fn set_by_flags(self, flags: u64) -> Self {
+    pub fn set_by_flags(&mut self, flags: u64) -> &mut Self {
         self.set_ignore_truncate((flags & FLAG_IGNORE_TRUNCATE) > 0)
             .set_truncate_as_warning((flags & FLAG_TRUNCATE_AS_WARNING) > 0)
             .set_overflow_as_warning((flags & FLAG_OVERFLOW_AS_WARNING) > 0)
@@ -188,7 +194,9 @@ impl EvalConfig {
 
     #[cfg(test)]
     pub fn default_for_test() -> EvalConfig {
-        EvalConfig::new().set_ignore_truncate(true)
+        let mut config = EvalConfig::new();
+        config.set_ignore_truncate(true);
+        config
     }
 }
 
@@ -354,7 +362,7 @@ mod test {
         assert!(ctx.take_warnings().warnings.is_empty());
 
         // ignore_truncate = false, truncate_as_warning = true
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_truncate_as_warning(true)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_TRUNCATE_AS_WARNING)));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(!ctx.take_warnings().warnings.is_empty());
@@ -362,7 +370,7 @@ mod test {
 
     #[test]
     fn test_max_warning_cnt() {
-        let eval_cfg = Arc::new(EvalConfig::new().set_truncate_as_warning(true));
+        let eval_cfg = Arc::new(EvalConfig::from_flags(FLAG_TRUNCATE_AS_WARNING));
         let mut ctx = EvalContext::new(Arc::clone(&eval_cfg));
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
@@ -411,8 +419,8 @@ mod test {
             ), //warning
         ];
         for (flag, sql_mode, strict_sql_mode, is_ok, is_empty) in cases {
-            let cfg = EvalConfig::new()
-                .set_by_flags(flag)
+            let mut cfg = EvalConfig::new();
+            cfg.set_by_flags(flag)
                 .set_sql_mode(sql_mode)
                 .set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
@@ -434,9 +442,8 @@ mod test {
         ];
         for (flags, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");
-            let cfg = EvalConfig::new()
-                .set_by_flags(flags)
-                .set_strict_sql_mode(strict_sql_mode);
+            let mut cfg = EvalConfig::new();
+            cfg.set_by_flags(flags).set_strict_sql_mode(strict_sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_invalid_time_error(err).is_ok(), is_ok);
             assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
