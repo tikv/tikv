@@ -712,6 +712,7 @@ mod test {
     use coprocessor::codec::error::*;
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time, Tz};
     use coprocessor::codec::{convert, Datum};
+    use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
     use coprocessor::dag::expr::test::{col_expr as base_col_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
@@ -821,9 +822,7 @@ mod test {
             assert!(res.is_none());
         }
 
-        let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::default_for_test().set_overflow_as_warning(true),
-        ));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
         let cases = vec![
             (
                 ScalarFuncSig::CastDecimalAsInt,
@@ -1868,7 +1867,7 @@ mod test {
 
             // test with overflow as warning
             let mut ctx =
-                EvalContext::new(Arc::new(EvalConfig::new().set_overflow_as_warning(true)));
+                EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
             let e = Expression::build(&mut ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
@@ -1934,11 +1933,9 @@ mod test {
             let mut col_expr = col_expr(0, i32::from(types::STRING));
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
-            let mut ctx = EvalContext::new(Arc::new(
-                EvalConfig::new()
-                    .set_overflow_as_warning(true)
-                    .set_in_select_stmt(true),
-            ));
+            let mut cfg = EvalConfig::new();
+            cfg.set_overflow_as_warning(true).set_in_select_stmt(true);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
             let e = Expression::build(&mut ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
@@ -1965,9 +1962,7 @@ mod test {
     //     let ex = scalar_func_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
 
     //     // test with overflow as warning
-    //     let mut ctx = EvalContext::new(Arc::new(
-    //         EvalConfig::new().set_overflow_as_warning(true),
-    //     ));
+    //     let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
     //     let e = Expression::build(&mut ctx, ex.clone()).unwrap();
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
     //     assert!(res.is_none());
