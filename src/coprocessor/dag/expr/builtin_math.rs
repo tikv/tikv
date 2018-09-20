@@ -112,6 +112,51 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn log2(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let res = n.log2();
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn log10(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let res = n.log10();
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn log_1_arg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let res = n.ln();
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn log_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let base = try_opt!(self.children[0].eval_real(ctx, row));
+        let n = try_opt!(self.children[1].eval_real(ctx, row));
+        let res = n.log(base);
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
     pub fn pi(&self, _ctx: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
         Ok(Some(f64::consts::PI))
     }
@@ -492,7 +537,7 @@ mod test {
             ),
         ];
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -504,6 +549,181 @@ mod test {
                 op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
                 op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
             }
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_log2() {
+        let tests = vec![
+            (ScalarFuncSig::Log2, Datum::F64(16_f64), 4_f64),
+            (
+                ScalarFuncSig::Log2,
+                Datum::F64(5_f64),
+                2.321928094887362_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Log2, Datum::F64(-1.234_f64), Datum::Null),
+            (ScalarFuncSig::Log2, Datum::F64(0_f64), Datum::Null),
+            (ScalarFuncSig::Log2, Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_log10() {
+        let tests = vec![
+            (ScalarFuncSig::Log10, Datum::F64(100_f64), 2_f64),
+            (
+                ScalarFuncSig::Log10,
+                Datum::F64(101_f64),
+                2.0043213737826426_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Log10, Datum::F64(-0.23323_f64), Datum::Null),
+            (ScalarFuncSig::Log10, Datum::F64(0_f64), Datum::Null),
+            (ScalarFuncSig::Log10, Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_log_1_arg() {
+        let tests = vec![
+            (ScalarFuncSig::Log1Arg, Datum::F64(f64::consts::E), 1.0_f64),
+            (
+                ScalarFuncSig::Log1Arg,
+                Datum::F64(100_f64),
+                4.605170185988092_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Log1Arg, Datum::F64(-1.0_f64), Datum::Null),
+            (ScalarFuncSig::Log1Arg, Datum::F64(0_f64), Datum::Null),
+            (ScalarFuncSig::Log1Arg, Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_log_2_args() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(10.0_f64),
+                Datum::F64(100.0_f64),
+                2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(2.0_f64),
+                Datum::F64(1.0_f64),
+                0.0_f64,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(0.5_f64),
+                Datum::F64(0.25_f64),
+                2.0_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(-0.23323_f64),
+                Datum::F64(2.0_f64),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::Null,
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(2.0_f64),
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::Null,
+                Datum::F64(2.0_f64),
+                Datum::Null,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1, exp) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg0, arg1, exp) in tests_invalid_f64 {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -644,7 +864,7 @@ mod test {
             (ScalarFuncSig::Cos, Datum::F64(f64::consts::PI), -1f64),
             (ScalarFuncSig::Cos, Datum::F64(-f64::consts::PI), -1f64),
         ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let expr = scalar_func_expr(sig, &[arg.clone()]);
