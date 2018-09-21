@@ -96,7 +96,7 @@ impl ScalarFunc {
             Ok(None) => return Ok(None),
             Ok(Some(res)) => res,
         };
-        if t.is_zero() {
+        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
             return Error::handle_invalid_time_error(
                 ctx,
                 Error::incorrect_datetime_value(&format!("{}", t)),
@@ -335,6 +335,7 @@ mod test {
     #[test]
     fn test_year() {
         let tests = vec![
+            ("0000-00-00 00:00:00", -1i64),
             ("1-01-01 01:01:01", 1i64),
             ("2018-01-01 01:01:01", 2018i64),
             ("2019-01-01 01:01:01", 2019i64),
@@ -368,7 +369,7 @@ mod test {
         // test zero case
         let cfg = EvalConfig::new()
             .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
             .set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
         let arg = datum_expr(Datum::Time(

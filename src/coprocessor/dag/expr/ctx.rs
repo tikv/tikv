@@ -45,6 +45,7 @@ pub const FLAG_OVERFLOW_AS_WARNING: u64 = 1 << 6;
 // FLAG_DIVIDED_BY_ZERO_AS_WARNING indicates if DividedByZero should be returned as warning.
 pub const FLAG_DIVIDED_BY_ZERO_AS_WARNING: u64 = 1 << 8;
 
+pub const MODE_NO_ZERO_DATE_MODE: u64 = 25;
 pub const MODE_ERROR_FOR_DIVISION_BY_ZERO: u64 = 27;
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
@@ -180,6 +181,11 @@ impl EvalConfig {
     /// detects if 'ERROR_FOR_DIVISION_BY_ZERO' mode is set in sql_mode
     pub fn mode_error_for_division_by_zero(&self) -> bool {
         self.sql_mode & MODE_ERROR_FOR_DIVISION_BY_ZERO == MODE_ERROR_FOR_DIVISION_BY_ZERO
+    }
+
+    /// detects if 'MODE_NO_ZERO_DATE_MODE' mode is set in sql_mode
+    pub fn mode_no_zero_date_mode(&self) -> bool {
+        self.sql_mode & MODE_NO_ZERO_DATE_MODE == MODE_NO_ZERO_DATE_MODE
     }
 
     pub fn new_eval_warnings(&self) -> EvalWarnings {
