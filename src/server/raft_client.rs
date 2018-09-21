@@ -71,7 +71,7 @@ impl Conn {
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft().unwrap();
+        let (sink, receiver) = client.raft().unwrap();
         let addr = addr.to_owned();
         client.spawn(
             rx_close
@@ -92,8 +92,7 @@ impl Conn {
                             warn!("send raftmessage to {} failed: {:?}", addr, e);
                         }),
                 )
-                .map(|_| ())
-                .map_err(|_| ()),
+                .then(|_| receiver.then(|_| Ok(()))),
         );
         Conn {
             stream: tx,
