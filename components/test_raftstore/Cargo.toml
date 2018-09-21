@@ -13,12 +13,18 @@ tempdir = "0.3"
 raft = "0.3"
 futures = "0.1"
 tokio-timer = "0.2"
-grpcio = { version = "0.3", features = [ "secure" ] }
+# grpcio = { version = "0.3", features = [ "secure" ] }
 rand = "0.3"
 log = "0.3.9"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "grpcio-0.4"
+
+[dependencies.grpcio]
+git = "https://github.com/overvenus/grpc-rs.git"
+features = [ "secure" ]
+branch = "v0.4.0"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"

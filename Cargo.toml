@@ -72,7 +72,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.3", features = [ "secure" ] }
+# grpcio = { version = "0.3", features = [ "secure" ] }
 raft = "0.3"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
@@ -85,6 +85,11 @@ rust-crypto = "^0.2"
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
 
+[dependencies.grpcio]
+git = "https://github.com/overvenus/grpc-rs.git"
+features = [ "secure" ]
+branch = "v0.4.0"
+
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
@@ -93,6 +98,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "grpcio-0.4"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
