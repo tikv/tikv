@@ -21,6 +21,7 @@ use raft::StateRole;
 use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use std::sync::{Arc, Mutex};
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
 use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
@@ -49,7 +50,6 @@ impl EventSenderFilter for RegionCollectionEventFilter {
 
 /// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
 /// done by sending commands to the thread.
-#[derive(Debug)]
 enum RegionCollectionMsg {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
@@ -62,34 +62,43 @@ enum RegionCollectionMsg {
 
 impl Display for RegionCollectionMsg {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        Debug::fmt(self, f)
+        write!(f, "RegionCollectionMsg(fmt unimplemented)")
     }
 }
 
 /// `RegionCollectionWorker` is the underlying runner of `RegionCollection`.
 struct RegionCollectionWorker {
     self_store_id: u64,
-    regions: BTreeMap<Vec<u8>, Region>,
+    regions: BTreeMap<Vec<u8>, (Region, StateRole)>,
 }
 
 impl RegionCollectionWorker {
     fn handle_split(&mut self, left: &Region, right: &Region) {
+        // Old region info should be updated after inserting.
         for region in &[left, right] {
-            self.regions
-                .insert(region.get_start_key().to_vec(), (*region).clone());
+            self.regions.insert(
+                region.get_start_key().to_vec(),
+                ((*region).clone(), StateRole::Candidate),
+            );
         }
     }
 
     fn handle_batch_split(&mut self, regions: &[Region]) {
+        // Old region info should be updated after inserting.
         for region in regions {
-            self.regions
-                .insert(region.get_start_key().to_vec(), region.clone());
+            self.regions.insert(
+                region.get_start_key().to_vec(),
+                (region.clone(), StateRole::Candidate),
+            );
         }
     }
 
-    fn handle_role_change(&mut self, region: Region, _role: StateRole) {
+    fn handle_role_change(&mut self, region: Region, role: StateRole) {
         // TODO: Save role to the map
-        self.regions.insert(region.get_start_key().to_vec(), region);
+        self.regions
+            .entry(region.get_start_key().to_vec())
+            .and_modify(|v| v.1 = role)
+            .or_insert((region, role));
     }
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
@@ -141,9 +150,10 @@ impl Runnable<RegionCollectionMsg> for RegionCollectionWorker {
 }
 
 /// `RegionCollection` keeps all region information separately from raftstore itself.
+#[derive(Clone)]
 pub struct RegionCollection {
     self_store_id: u64,
-    worker: Worker<RegionCollectionMsg>,
+    worker: Arc<Mutex<Worker<RegionCollectionMsg>>>,
     scheduler: Scheduler<RegionCollectionMsg>,
 }
 
@@ -163,13 +173,15 @@ impl RegionCollection {
         let scheduler = worker.scheduler();
         Self {
             self_store_id,
-            worker,
+            worker: Arc::new(Mutex::new(worker)),
             scheduler,
         }
     }
 
     pub fn start(&mut self) {
         self.worker
+            .lock()
+            .unwrap()
             .start(RegionCollectionWorker {
                 self_store_id: self.self_store_id,
                 regions: BTreeMap::default(),
