@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
-use crypto::{digest::Digest, md5::Md5};
+use crypto::{digest::Digest, md5::Md5, sha1::Sha1};
 
 impl ScalarFunc {
     pub fn md5<'a, 'b: 'a>(
@@ -28,6 +28,18 @@ impl ScalarFunc {
         hasher.input(input.as_ref());
         let md5 = hasher.result_str().into_bytes();
         Ok(Some(Cow::Owned(md5)))
+    }
+
+    pub fn sha1<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let mut hasher = Sha1::new();
+        hasher.input(input.as_ref());
+        let sha1 = hasher.result_str().into_bytes();
+        Ok(Some(Cow::Owned(sha1)))
     }
 }
 
@@ -65,5 +77,34 @@ mod test {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "md5(NULL)");
+    }
+
+    #[test]
+    fn test_sha1() {
+        let cases = vec![
+            ("", "da39a3ee5e6b4b0d3255bfef95601890afd80709"),
+            ("a", "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8"),
+            ("ab", "da23614e02469a0d7c7bd1bdab5c9c474b1904dc"),
+            ("abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
+            ("123", "40bd001563085fc35165329ea1ff5c5ecbdbbeef"),
+        ];
+        let mut ctx = EvalContext::default();
+
+        for (input_str, exp_str) in cases {
+            let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::SHA1, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
+            assert_eq!(got, exp, "sha1('{:?}')", input_str);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::SHA1, &[input]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        let exp = Datum::Null;
+        assert_eq!(got, exp, "sha1(NULL)");
     }
 }

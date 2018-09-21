@@ -108,6 +108,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RightShift
             | ScalarFuncSig::Pow
             | ScalarFuncSig::Atan2Args
+            | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
             | ScalarFuncSig::DateFormatSig => (2, 2),
@@ -209,6 +210,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonTypeSig
             | ScalarFuncSig::JsonUnquoteSig
             | ScalarFuncSig::Log10
+            | ScalarFuncSig::Log1Arg
             | ScalarFuncSig::Log2
             | ScalarFuncSig::ASCII
             | ScalarFuncSig::CharLength
@@ -233,6 +235,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UnHex
             | ScalarFuncSig::Cot
             | ScalarFuncSig::Degrees
+            | ScalarFuncSig::SHA1
             | ScalarFuncSig::MD5 => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -374,8 +377,6 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary2Args
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
-            | ScalarFuncSig::Log1Arg
-            | ScalarFuncSig::Log2Args
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::MakeDate
@@ -415,7 +416,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
-            | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
@@ -820,6 +820,8 @@ dispatch_call! {
         CaseWhenReal => case_when_real,
         Log2 => log2,
         Log10 => log10,
+        Log1Arg => log_1_arg,
+        Log2Args => log_2_args,
         GreatestReal => greatest_real,
         LeastReal => least_real,
         Sqrt => sqrt,
@@ -900,6 +902,7 @@ dispatch_call! {
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
+        SHA1 => sha1,
         Elt => elt,
     }
     TIME_CALLS {
@@ -1057,6 +1060,7 @@ mod test {
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::Atan2Args,
+                    ScalarFuncSig::Log2Args,
                 ],
                 2,
                 2,
@@ -1162,6 +1166,7 @@ mod test {
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::Log10,
+                    ScalarFuncSig::Log1Arg,
                     ScalarFuncSig::Log2,
                     ScalarFuncSig::BitCount,
                     ScalarFuncSig::BitLength,
@@ -1177,6 +1182,7 @@ mod test {
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv6,
                     ScalarFuncSig::MD5,
+                    ScalarFuncSig::SHA1,
                     ScalarFuncSig::Cot,
                     ScalarFuncSig::Degrees,
                 ],
@@ -1363,8 +1369,6 @@ mod test {
             ScalarFuncSig::LocateBinary2Args,
             ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
-            ScalarFuncSig::Log1Arg,
-            ScalarFuncSig::Log2Args,
             ScalarFuncSig::Lpad,
             ScalarFuncSig::LpadBinary,
             ScalarFuncSig::MakeDate,
@@ -1404,7 +1408,6 @@ mod test {
             ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
-            ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,

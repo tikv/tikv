@@ -445,10 +445,6 @@ impl<E: Engine> Scheduler<E> {
 }
 
 impl<E: Engine> Runnable<Msg> for Scheduler<E> {
-    fn run(&mut self, _: Msg) {
-        panic!("Shouldn't call Scheduler::run directly");
-    }
-
     fn run_batch(&mut self, msgs: &mut Vec<Msg>) {
         for msg in msgs.drain(..) {
             match msg {

@@ -479,10 +479,6 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 }
 
 impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
-    fn run(&mut self, _: Task) {
-        unreachable!()
-    }
-
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         self.metrics
             .borrow()
