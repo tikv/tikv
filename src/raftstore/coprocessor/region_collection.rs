@@ -88,7 +88,7 @@ impl RegionCollectionWorker {
     }
 
     fn handle_role_change(&mut self, region: Region, _role: StateRole) {
-        // TODO: Safe role to the map
+        // TODO: Save role to the map
         self.regions.insert(region.get_start_key().to_vec(), region);
     }
 
