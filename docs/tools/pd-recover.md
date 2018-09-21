@@ -41,7 +41,7 @@ This section describes how to recover a PD cluster which cannot start or provide
     - Obtain the Cluster ID from the PD and TiKV logs.
     - Obtain the allocated Alloc ID from either the PD log or the `Metadata Information` in the PD monitoring panel.
 
-    Specifying `alloc-id` requires a number larger than the current largest Alloc ID. If you fail to obtain the Alloc ID, you can make an estimate of a larger number according to the number of Regions and Stores in the cluster. Generally, you can specify a number that is several orders of magnitude larger.
+    Specifying `alloc-id` requires a number larger than the current largest Alloc ID. If you fail to obtain the Alloc ID, you can make an estimate of a larger number according to the number of Regions and stores in the cluster. Generally, you can specify a number that is several orders of magnitude larger.
 
 2. Stop the whole cluster, clear the PD data directory, and restart the PD cluster.
 3. Use PD Recover to recover and make sure that you use the correct `cluster-id` and appropriate `alloc-id`.
