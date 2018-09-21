@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(use_extern_macros)]
 #![feature(proc_macro_non_items)]
 
 extern crate chrono;
@@ -196,11 +195,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         let pd_sender = pd_sender.clone();
         move || coprocessor::ReadPoolContext::new(pd_sender.clone())
     });
+    let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
         storage.clone(),
-        cop_read_pool,
+        cop,
         raft_router,
         resolver,
         snap_mgr.clone(),
