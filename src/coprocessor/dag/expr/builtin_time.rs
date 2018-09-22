@@ -74,8 +74,7 @@ impl ScalarFunc {
             },
             None => Error::incorrect_datetime_value("None"),
         };
-        Error::handle_invalid_time_error(ctx, e)?;
-        Ok(None)
+        Error::handle_invalid_time_error(ctx, e).map(|_| Ok(None))?
     }
 
     #[inline]
