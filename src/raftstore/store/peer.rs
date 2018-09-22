@@ -1054,7 +1054,7 @@ impl Peer {
                         // We committed prepare merge, to prevent unsafe read index,
                         // we must record its index.
                         self.last_committed_prepare_merge_idx = entry.get_index();
-                        // After prepare_mrege is committed, the leader can not know
+                        // After prepare_merge is committed, the leader can not know
                         // when the target region merges majority of this region, also
                         // it can not know when the target region writes new values.
                         // To prevent unsafe local read, we suspect its leader lease.
