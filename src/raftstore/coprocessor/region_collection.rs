@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use super::{
-    register_raftstore_event_sender, AdminResponse, CoprocessorHost, EventSenderFilter,
-    ObserverContext, RaftStoreEvent,
+    AdminObserver, AdminRequest, AdminResponse, Coprocessor, CoprocessorHost, ObserverContext,
+    Result, RoleObserver,
 };
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::AdminCmdType;
@@ -27,25 +27,76 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 const CHANNEL_BUFFER_SIZE: usize = 256;
 
-/// Some events are not related to region collection. Filter out them.
-#[derive(Clone)]
-struct RegionCollectionEventFilter {}
+/// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor. Only Admin events and
+/// RoleChange events are listened.
+#[derive(Debug)]
+enum RaftStoreEvent {
+    PreProposeAdmin {
+        region: Region,
+        request: AdminRequest,
+    },
+    PreApplyAdmin {
+        region: Region,
+        request: AdminRequest,
+    },
+    PostApplyAdmin {
+        region: Region,
+        response: AdminResponse,
+    },
+    RoleChange {
+        region: Region,
+        role: StateRole,
+    },
+}
 
-impl EventSenderFilter for RegionCollectionEventFilter {
-    fn post_apply_admin_filter(&self, _: &ObserverContext, resp: &AdminResponse) -> bool {
-        // Only listen split and batch split events
-        // TODO: How to handle merging?
-        // TODO: Track changes of epoch
+impl Display for RaftStoreEvent {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        Debug::fmt(self, f)
+    }
+}
+
+#[derive(Clone)]
+struct EventSender {
+    scheduler: Scheduler<RegionCollectionMsg>,
+}
+
+impl Coprocessor for EventSender {}
+
+impl AdminObserver for EventSender {
+    fn post_apply_admin(&self, context: &mut ObserverContext, resp: &mut AdminResponse) {
         match resp.get_cmd_type() {
-            AdminCmdType::Split | AdminCmdType::BatchSplit => true,
-            _ => false,
+            AdminCmdType::Split | AdminCmdType::BatchSplit => {
+                let region = context.region.clone();
+                let response = resp.clone();
+                let event = RaftStoreEvent::PostApplyAdmin { region, response };
+                self.scheduler
+                    .schedule(RegionCollectionMsg::RaftStoreEvent(event))
+                    .unwrap();
+            }
+            _ => {}
         }
     }
+}
 
-    fn on_role_change_filter(&self, _: &ObserverContext, _: StateRole) -> bool {
-        // Listen all role change events
-        true
+impl RoleObserver for EventSender {
+    fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
+        let region = context.region.clone();
+        let event = RaftStoreEvent::RoleChange { region, role };
+        self.scheduler
+            .schedule(RegionCollectionMsg::RaftStoreEvent(event))
+            .unwrap();
     }
+}
+
+fn register_raftstore_event_sender(
+    host: &mut CoprocessorHost,
+    scheduler: Scheduler<RegionCollectionMsg>,
+) {
+    let event_sender = EventSender { scheduler };
+
+    host.registry
+        .register_admin_observer(1, box event_sender.clone());
+    host.registry.register_role_observer(1, box event_sender);
 }
 
 /// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
@@ -164,11 +215,7 @@ impl RegionCollection {
             .create();
         let scheduler = worker.scheduler();
 
-        register_raftstore_event_sender(host, RegionCollectionEventFilter {}, move |event| {
-            scheduler
-                .schedule(RegionCollectionMsg::RaftStoreEvent(event))
-                .unwrap()
-        });
+        register_raftstore_event_sender(host, scheduler.clone());
 
         let scheduler = worker.scheduler();
         Self {
