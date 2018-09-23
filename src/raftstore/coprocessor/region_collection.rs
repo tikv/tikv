@@ -12,7 +12,8 @@
 // limitations under the License.
 
 use super::{
-    AdminObserver, AdminResponse, Coprocessor, CoprocessorHost, ObserverContext, RoleObserver,
+    AdminObserver, AdminResponse, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionLoadObserver, RoleObserver,
 };
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::AdminCmdType;
@@ -32,8 +33,7 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 
-/// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor. Only Admin events and
-/// RoleChange events are listened.
+/// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 enum RaftStoreEvent {
     //    PreProposeAdmin {
@@ -52,11 +52,32 @@ enum RaftStoreEvent {
         region: Region,
         role: StateRole,
     },
+    RegionLoaded {
+        region: Region,
+    },
 }
 
 impl Display for RaftStoreEvent {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         Debug::fmt(self, f)
+    }
+}
+
+/// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
+/// done by sending commands to the thread.
+enum RegionCollectionMsg {
+    RaftStoreEvent(RaftStoreEvent),
+    SeekRegion {
+        from: Vec<u8>,
+        filter: SeekRegionFilter,
+        limit: u32,
+        callback: SeekRegionCallback,
+    },
+}
+
+impl Display for RegionCollectionMsg {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        write!(f, "RegionCollectionMsg(fmt unimplemented)")
     }
 }
 
@@ -93,6 +114,16 @@ impl RoleObserver for EventSender {
     }
 }
 
+impl RegionLoadObserver for EventSender {
+    fn on_region_loaded(&self, context: &mut ObserverContext, _: ()) {
+        let region = context.region.clone();
+        let event = RaftStoreEvent::RegionLoaded { region };
+        self.scheduler
+            .schedule(RegionCollectionMsg::RaftStoreEvent(event))
+            .unwrap();
+    }
+}
+
 fn register_raftstore_event_sender(
     host: &mut CoprocessorHost,
     scheduler: Scheduler<RegionCollectionMsg>,
@@ -101,25 +132,10 @@ fn register_raftstore_event_sender(
 
     host.registry
         .register_admin_observer(1, box event_sender.clone());
-    host.registry.register_role_observer(1, box event_sender);
-}
-
-/// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
-/// done by sending commands to the thread.
-enum RegionCollectionMsg {
-    RaftStoreEvent(RaftStoreEvent),
-    SeekRegion {
-        from: Vec<u8>,
-        filter: SeekRegionFilter,
-        limit: u32,
-        callback: SeekRegionCallback,
-    },
-}
-
-impl Display for RegionCollectionMsg {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "RegionCollectionMsg(fmt unimplemented)")
-    }
+    host.registry
+        .register_role_observer(1, box event_sender.clone());
+    host.registry
+        .register_region_load_observer(1, box event_sender);
 }
 
 /// `RegionCollectionWorker` is the underlying runner of `RegionCollection`.
@@ -183,31 +199,17 @@ impl RegionCollectionWorker {
     }
 
     fn handle_role_change(&mut self, region: Region, role: StateRole) {
-        // TODO: Save role to the map
         self.regions
-            .entry(region.get_id())
-            .and_modify(|v| v.1 = role)
-            .or_insert((region, role));
+            .insert(region.get_id(), (region, role))
+            .expect("region didn't exist in region collection");
     }
 
-    fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
-        match event {
-            RaftStoreEvent::PostApplyAdmin { response, .. } => match response.get_cmd_type() {
-                AdminCmdType::Split => {
-                    self.handle_split(
-                        response.get_split().get_left(),
-                        response.get_split().get_right(),
-                    );
-                }
-                AdminCmdType::BatchSplit => {
-                    self.handle_batch_split(response.get_splits().get_regions().iter());
-                }
-                _ => unreachable!(),
-            },
-            RaftStoreEvent::RoleChange { region, role } => {
-                self.handle_role_change(region, role);
-            }
-        }
+    fn handle_region_loaded(&mut self, region: Region) {
+        self.region_ranges
+            .insert(data_end_key(region.get_end_key()), region.get_id());
+        // TODO: Should we set it follower?
+        self.regions
+            .insert(region.get_id(), (region, StateRole::Follower));
     }
 
     fn handle_seek_region(
@@ -247,6 +249,29 @@ impl RegionCollectionWorker {
             }
         }
         callback(SeekRegionResult::Ended);
+    }
+
+    fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
+        match event {
+            RaftStoreEvent::PostApplyAdmin { response, .. } => match response.get_cmd_type() {
+                AdminCmdType::Split => {
+                    self.handle_split(
+                        response.get_split().get_left(),
+                        response.get_split().get_right(),
+                    );
+                }
+                AdminCmdType::BatchSplit => {
+                    self.handle_batch_split(response.get_splits().get_regions().iter());
+                }
+                _ => unreachable!(),
+            },
+            RaftStoreEvent::RoleChange { region, role } => {
+                self.handle_role_change(region, role);
+            }
+            RaftStoreEvent::RegionLoaded { region } => {
+                self.handle_region_loaded(region);
+            }
+        }
     }
 }
 
