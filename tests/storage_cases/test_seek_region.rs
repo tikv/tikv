@@ -17,14 +17,13 @@ use std::time::Duration;
 use test_raftstore::*;
 use tikv::raftstore::store::SeekRegionResult;
 use tikv::storage::engine::RegionInfoProvider;
+use tikv::util::collections::HashMap;
 use tikv::util::HandyRwLock;
 
-#[test]
-fn test_seek_region() {
-    // Prepare
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-
+fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
+    mut cluster: Cluster<T>,
+    region_info_providers: HashMap<u64, R>,
+) {
     for i in 0..15 {
         let i = i + b'0';
         let key = vec![b'k', i];
@@ -73,7 +72,7 @@ fn test_seek_region() {
     thread::sleep(Duration::from_secs(2));
 
     for node_id in cluster.get_node_ids() {
-        let engine = cluster.sim.rl().storages[&node_id].clone();
+        let engine = &region_info_providers[&node_id];
 
         // Test traverse all regions
         let mut sought_regions = Vec::new();
@@ -177,4 +176,27 @@ fn test_seek_region() {
             r => panic!("expect getting a region, but got {:?}", r),
         }
     }
+}
+
+#[test]
+fn test_raftkv_seek_region() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let mut region_info_providers = HashMap::default();
+    for node_id in cluster.get_node_ids() {
+        region_info_providers.insert(node_id, cluster.sim.rl().storages[&node_id].clone());
+    }
+
+    test_seek_region_impl(cluster, region_info_providers);
+}
+
+#[test]
+fn test_region_collection_seek_region() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let region_info_providers = cluster.sim.rl().region_collections.clone();
+
+    test_seek_region_impl(cluster, region_info_providers);
 }

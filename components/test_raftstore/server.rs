@@ -26,6 +26,7 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::coprocessor::RegionCollection;
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::{store, Result};
 use tikv::server::readpool::ReadPool;
@@ -63,6 +64,7 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, SimulateEngine>,
+    pub region_collections: HashMap<u64, RegionCollection>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
@@ -82,6 +84,7 @@ impl ServerCluster {
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
+            region_collections: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
         }
@@ -205,7 +208,12 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+
+        // Create region collection
+        let region_collection = RegionCollection::new(&mut coprocessor_host, node_id);
+        region_collection.start();
+        self.region_collections.insert(node_id, region_collection);
 
         node.start(
             event_loop,
@@ -255,6 +263,9 @@ impl Simulator for ServerCluster {
             meta.server.stop().unwrap();
             meta.node.stop().unwrap();
             meta.worker.stop().unwrap().join().unwrap();
+        }
+        if let Some(region_collection) = self.region_collections.remove(&node_id) {
+            region_collection.stop();
         }
     }
 

@@ -17,10 +17,11 @@ use super::{
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::AdminCmdType;
 use raft::StateRole;
+use raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
 use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
 use raftstore::store::util;
 use std::collections::BTreeMap;
-use std::collections::Bound::{Included, Unbounded};
+use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
@@ -121,6 +122,7 @@ impl Display for RegionCollectionMsg {
 /// `RegionCollectionWorker` is the underlying runner of `RegionCollection`.
 struct RegionCollectionWorker {
     self_store_id: u64,
+    // Prefixed end key ('z' + key) -> (Region, State)
     regions: BTreeMap<Vec<u8>, (Region, StateRole)>,
 }
 
@@ -129,7 +131,7 @@ impl RegionCollectionWorker {
         // Old region info should be updated after inserting.
         for region in &[left, right] {
             self.regions.insert(
-                region.get_start_key().to_vec(),
+                data_end_key(region.get_end_key()),
                 ((*region).clone(), StateRole::Candidate),
             );
         }
@@ -139,7 +141,7 @@ impl RegionCollectionWorker {
         // Old region info should be updated after inserting.
         for region in regions {
             self.regions.insert(
-                region.get_start_key().to_vec(),
+                data_end_key(region.get_end_key()),
                 (region.clone(), StateRole::Candidate),
             );
         }
@@ -148,7 +150,7 @@ impl RegionCollectionWorker {
     fn handle_role_change(&mut self, region: Region, role: StateRole) {
         // TODO: Save role to the map
         self.regions
-            .entry(region.get_start_key().to_vec())
+            .entry(data_end_key(region.get_end_key()))
             .and_modify(|v| v.1 = role)
             .or_insert((region, role));
     }
@@ -175,14 +177,15 @@ impl RegionCollectionWorker {
 
     fn handle_seek_region(
         &self,
-        from: Vec<u8>,
+        from_key: Vec<u8>,
         filter: SeekRegionFilter,
         mut limit: u32,
         callback: SeekRegionCallback,
     ) {
         assert!(limit > 0);
 
-        for (_start_key, (region, role)) in self.regions.range((Included(from), Unbounded)) {
+        let from_key = data_key(&from_key);
+        for (end_key, (region, role)) in self.regions.range((Excluded(from_key), Unbounded)) {
             if filter(region, role) {
                 callback(SeekRegionResult::Found {
                     local_peer: util::find_peer(region, self.self_store_id)
@@ -197,12 +200,12 @@ impl RegionCollectionWorker {
             if limit == 0 {
                 // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
                 // than `LimitExceeded`.
-                if region.get_end_key().is_empty() {
+                if end_key.as_slice() >= DATA_MAX_KEY {
                     break;
                 }
 
                 callback(SeekRegionResult::LimitExceeded {
-                    next_key: region.get_end_key().to_vec(),
+                    next_key: origin_key(end_key).to_vec(),
                 });
                 return;
             }
@@ -254,7 +257,7 @@ impl RegionCollection {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         self.worker
             .lock()
             .unwrap()
@@ -263,6 +266,10 @@ impl RegionCollection {
                 regions: BTreeMap::default(),
             })
             .unwrap();
+    }
+
+    pub fn stop(&self) {
+        self.worker.lock().unwrap().stop().unwrap().join().unwrap();
     }
 }
 
