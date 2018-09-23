@@ -12,16 +12,17 @@
 // limitations under the License.
 
 use super::{
-    AdminObserver, AdminRequest, AdminResponse, Coprocessor, CoprocessorHost, ObserverContext,
-    Result, RoleObserver,
+    AdminObserver, AdminResponse, Coprocessor, CoprocessorHost, ObserverContext, RoleObserver,
 };
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::AdminCmdType;
 use raft::StateRole;
 use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
+use raftstore::store::util;
 use std::collections::BTreeMap;
+use std::collections::Bound::{Included, Unbounded};
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
 use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
@@ -31,14 +32,14 @@ const CHANNEL_BUFFER_SIZE: usize = 256;
 /// RoleChange events are listened.
 #[derive(Debug)]
 enum RaftStoreEvent {
-    PreProposeAdmin {
-        region: Region,
-        request: AdminRequest,
-    },
-    PreApplyAdmin {
-        region: Region,
-        request: AdminRequest,
-    },
+    //    PreProposeAdmin {
+    //        region: Region,
+    //        request: AdminRequest,
+    //    },
+    //    PreApplyAdmin {
+    //        region: Region,
+    //        request: AdminRequest,
+    //    },
     PostApplyAdmin {
         region: Region,
         response: AdminResponse,
@@ -169,7 +170,6 @@ impl RegionCollectionWorker {
             RaftStoreEvent::RoleChange { region, role } => {
                 self.handle_role_change(region, role);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -177,10 +177,37 @@ impl RegionCollectionWorker {
         &self,
         from: Vec<u8>,
         filter: SeekRegionFilter,
-        limit: u32,
+        mut limit: u32,
         callback: SeekRegionCallback,
     ) {
-        unimplemented!();
+        assert!(limit > 0);
+
+        for (_start_key, (region, role)) in self.regions.range((Included(from), Unbounded)) {
+            if filter(region, role) {
+                callback(SeekRegionResult::Found {
+                    local_peer: util::find_peer(region, self.self_store_id)
+                        .cloned()
+                        .unwrap_or_else(Peer::default),
+                    region: region.clone(),
+                });
+                return;
+            }
+
+            limit -= 1;
+            if limit == 0 {
+                // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
+                // than `LimitExceeded`.
+                if region.get_end_key().is_empty() {
+                    break;
+                }
+
+                callback(SeekRegionResult::LimitExceeded {
+                    next_key: region.get_end_key().to_vec(),
+                });
+                return;
+            }
+        }
+        callback(SeekRegionResult::Ended);
     }
 }
 
@@ -195,7 +222,9 @@ impl Runnable<RegionCollectionMsg> for RegionCollectionWorker {
                 filter,
                 limit,
                 callback,
-            } => {}
+            } => {
+                self.handle_seek_region(from, filter, limit, callback);
+            }
         }
     }
 }
@@ -244,6 +273,30 @@ impl RegionInfoProvider for RegionCollection {
         filter: SeekRegionFilter,
         limit: u32,
     ) -> EngineResult<SeekRegionResult> {
-        unimplemented!();
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionCollectionMsg::SeekRegion {
+            from: from.to_vec(),
+            filter,
+            limit,
+            callback: box move |res| {
+                tx.send(res).unwrap_or_else(|e| {
+                    panic!(
+                        "region collection failed to send result back to caller: {:?}",
+                        e
+                    )
+                })
+            },
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collection: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive seek region result from region collection: {:?}",
+                        e
+                    )
+                })
+            })
     }
 }
