@@ -33,6 +33,14 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 
+/// `RegionCollection` is used to collect all regions on this TiKV into a collection so that other
+/// parts of TiKV can get region information from it. It registers several observers to raftstore,
+/// which is named `EventSender`, and it simply send some specific types of events throw a channel.
+/// In the mean time, `RegionCollectionWorker` keeps fetching messages from the channel, and mutate
+/// the collection according tho the messages. When an accessor method of `RegionCollection` is
+/// called, it also simply send a message to `RegionCollectionWorker`, and the result will be send
+/// back through as soon as it's finished.
+
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 enum RaftStoreEvent {
@@ -81,6 +89,8 @@ impl Display for RegionCollectionMsg {
     }
 }
 
+/// `EventSender` implements observer traits. It simply send the events that we are interested in
+/// through the `scheduler`.
 #[derive(Clone)]
 struct EventSender {
     scheduler: Scheduler<RegionCollectionMsg>,
@@ -124,6 +134,7 @@ impl RegionLoadObserver for EventSender {
     }
 }
 
+/// Create an `EventSender` and register it to given coprocessor host.
 fn register_raftstore_event_sender(
     host: &mut CoprocessorHost,
     scheduler: Scheduler<RegionCollectionMsg>,
