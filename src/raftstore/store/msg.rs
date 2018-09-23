@@ -57,7 +57,7 @@ pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
 pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
 
 pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
-pub type SeekRegionFilter = Box<Fn(&metapb::Region, &StateRole) -> bool + Send>;
+pub type SeekRegionFilter = Box<Fn(&metapb::Region, StateRole) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,

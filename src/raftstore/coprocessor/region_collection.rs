@@ -23,11 +23,14 @@ use raftstore::store::util;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use std::iter::Iterator;
 use std::sync::{mpsc, Arc, Mutex};
+use std::usize;
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
+use util::collections::HashMap;
 use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
-const CHANNEL_BUFFER_SIZE: usize = 256;
+const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor. Only Admin events and
 /// RoleChange events are listened.
@@ -122,35 +125,67 @@ impl Display for RegionCollectionMsg {
 /// `RegionCollectionWorker` is the underlying runner of `RegionCollection`.
 struct RegionCollectionWorker {
     self_store_id: u64,
-    // Prefixed end key ('z' + key) -> (Region, State)
-    regions: BTreeMap<Vec<u8>, (Region, StateRole)>,
+    // region_id -> (Region, State)
+    regions: HashMap<u64, (Region, StateRole)>,
+    // region_id -> prefixed end key ('z' + key)
+    region_ranges: BTreeMap<Vec<u8>, u64>,
 }
 
 impl RegionCollectionWorker {
     fn handle_split(&mut self, left: &Region, right: &Region) {
         // Old region info should be updated after inserting.
-        for region in &[left, right] {
-            self.regions.insert(
-                data_end_key(region.get_end_key()),
-                ((*region).clone(), StateRole::Candidate),
-            );
-        }
+        self.handle_batch_split(vec![left, right].into_iter());
     }
 
-    fn handle_batch_split(&mut self, regions: &[Region]) {
+    fn handle_batch_split<'a, I: Iterator<Item = &'a Region>>(&mut self, regions: I) {
         // Old region info should be updated after inserting.
         for region in regions {
-            self.regions.insert(
-                data_end_key(region.get_end_key()),
-                (region.clone(), StateRole::Candidate),
-            );
+            let mut is_new_region = true;
+            if let Some((ref mut old_region, _)) = self.regions.get_mut(&region.get_id()) {
+                is_new_region = false;
+                assert_eq!(old_region.get_id(), region.get_id());
+
+                // If the region with this region_id already existed in the collection, it must be
+                // stale and need to be updated. There may be a corresponding item in
+                // `region_ranges`. If the end_key changed, the old item in `region_ranges` should
+                // be removed, unless it was already updated.
+                if old_region.get_end_key() != region.get_end_key() {
+                    // The region's end_key has changed.
+                    // Remove the old entry in `self.region_ranges` if it haven't been updated by
+                    // other items in `regions`. The entry with key equals to old_region's end key
+                    // was updated in previous circles in this for-loop, if it maps to a id that is
+                    // different from `region.id`.
+                    let old_end_key = data_end_key(old_region.get_end_key());
+                    if let Some(old_id) = self.region_ranges.get(&old_end_key).cloned() {
+                        if old_id == region.get_id() {
+                            self.region_ranges.remove(&old_end_key);
+                        }
+                    }
+                }
+
+                // If the region already exists, update it and keep the original role.
+                *old_region = region.clone();
+            }
+
+            if is_new_region {
+                // If it's a new region, set it to follower state.
+                // TODO: Should we set it follower?
+                self.regions
+                    .insert(region.get_id(), (region.clone(), StateRole::Follower));
+            }
+
+            // If the end_key changed or the region didn't exist previously, insert a new item;
+            // otherwise, update the old item. All regions in param `regions` must have unique
+            // end_keys, so it won't conflict with each other.
+            self.region_ranges
+                .insert(data_end_key(region.get_end_key()), region.get_id());
         }
     }
 
     fn handle_role_change(&mut self, region: Region, role: StateRole) {
         // TODO: Save role to the map
         self.regions
-            .entry(data_end_key(region.get_end_key()))
+            .entry(region.get_id())
             .and_modify(|v| v.1 = role)
             .or_insert((region, role));
     }
@@ -165,7 +200,7 @@ impl RegionCollectionWorker {
                     );
                 }
                 AdminCmdType::BatchSplit => {
-                    self.handle_batch_split(response.get_splits().get_regions());
+                    self.handle_batch_split(response.get_splits().get_regions().iter());
                 }
                 _ => unreachable!(),
             },
@@ -185,8 +220,9 @@ impl RegionCollectionWorker {
         assert!(limit > 0);
 
         let from_key = data_key(&from_key);
-        for (end_key, (region, role)) in self.regions.range((Excluded(from_key), Unbounded)) {
-            if filter(region, role) {
+        for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
+            let (region, role) = &self.regions[region_id];
+            if filter(region, *role) {
                 callback(SeekRegionResult::Found {
                     local_peer: util::find_peer(region, self.self_store_id)
                         .cloned()
@@ -263,7 +299,8 @@ impl RegionCollection {
             .unwrap()
             .start(RegionCollectionWorker {
                 self_store_id: self.self_store_id,
-                regions: BTreeMap::default(),
+                regions: HashMap::default(),
+                region_ranges: BTreeMap::default(),
             })
             .unwrap();
     }
