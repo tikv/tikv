@@ -243,6 +243,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
+            self.coprocessor_host.on_region_loaded(region, ());
             Ok(true)
         })?;
 
