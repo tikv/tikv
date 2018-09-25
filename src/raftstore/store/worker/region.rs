@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -341,9 +340,7 @@ impl SnapContext {
     }
 
     // check the number of files at level 0 to avoid write stall after ingesting sst,
-    // and return the number of files can to be ingested.
-    fn check_level_0_num_files(&self) -> u64 {
-        let mut min = u64::MAX;
+    fn check_level_0_num_files(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
             if plain_file_used(cf) {
@@ -353,22 +350,20 @@ impl SnapContext {
             let handle = match rocksdb::get_cf_handle(&self.engines.kv, cf) {
                 Ok(handle) => handle,
                 Err(_) => {
-                    // when having trouble in getting cf handle, just return 1 here
+                    // when having trouble in getting cf handle, just return true here
                     // then apply_snap() will return error which can be handled in handle_apply()
-                    return 1;
+                    return true;
                 }
             };
 
             if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
-                let diff = u64::from(options.get_level_zero_slowdown_writes_trigger()) - 1 - n;
-                if diff <= 0 {
-                    return 0;
+                if i64::from(options.get_level_zero_slowdown_writes_trigger()) - 1 - n as i64 <= 0 {
+                    return false;
                 }
-                min = cmp::min(diff, min);
             }
         }
-        min
+        true
     }
 
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
@@ -544,9 +539,10 @@ impl Runner {
         }
     }
 
-    fn handle_pending_applies(&mut self, n: u64) {
-        // should not handle too many applies than the number of files that can be ingested
-        for _ in 0..n {
+    fn handle_pending_applies(&mut self) {
+        // Should not handle too many applies than the number of files that can be ingested.
+        // Check level 0 every time because we can not make sure how does the number of level 0 files change.
+        while self.ctx.check_level_0_num_files() {
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
             } else {
@@ -570,24 +566,23 @@ impl Runnable<Task> for Runner {
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
             Task::Apply { region_id, status } => {
-                match self.ctx.check_level_0_num_files() {
-                    0 => {
-                        // delay the apply and retry later
-                        self.pending_applies
-                            .push_back(Task::Apply { region_id, status });
-                        SNAP_COUNTER_VEC
-                            .with_label_values(&["apply", "delay"])
-                            .inc();
-                    }
-                    n => if self.pending_applies.is_empty() {
-                        self.ctx.handle_apply(region_id, status)
+                if self.ctx.check_level_0_num_files() {
+                    if self.pending_applies.is_empty() {
+                        self.ctx.handle_apply(region_id, status);
                     } else {
-                        // if there is any pending apply, do not directly handle this apply.
+                        // if there is any pending apply, do not directly handle this apply,
                         // which makes sure appling snapshots in order
                         self.pending_applies
                             .push_back(Task::Apply { region_id, status });
-                        self.handle_pending_applies(n)
-                    },
+                        self.handle_pending_applies();
+                    }
+                } else {
+                    // delay the apply and retry later
+                    self.pending_applies
+                        .push_back(Task::Apply { region_id, status });
+                    SNAP_COUNTER_VEC
+                        .with_label_values(&["apply", "delay"])
+                        .inc();
                 }
             }
             Task::Destroy {
@@ -627,14 +622,13 @@ impl RunnableWithTimer<Task, Event> for Runner {
         match event {
             Event::CheckApply => {
                 if !self.pending_applies.is_empty() {
-                    match self.ctx.check_level_0_num_files() {
-                        0 => {
-                            // delay again
-                            SNAP_COUNTER_VEC
-                                .with_label_values(&["apply", "delay"])
-                                .inc_by(self.pending_applies.len() as i64);
-                        }
-                        n => self.handle_pending_applies(n),
+                    if self.ctx.check_level_0_num_files() {
+                        self.handle_pending_applies();
+                    } else {
+                        // delay again
+                        SNAP_COUNTER_VEC
+                            .with_label_values(&["apply", "delay"])
+                            .inc_by(self.pending_applies.len() as i64);
                     }
                 }
                 timer.add_task(
@@ -655,12 +649,89 @@ impl RunnableWithTimer<Task, Event> for Runner {
 
 #[cfg(test)]
 mod test {
+    use std::sync::{mpsc, Arc};
     use std::thread;
     use std::time::Duration;
 
+    use kvproto::metapb::{Peer, Region};
+    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+    use raftstore::store::engine::Mutable;
+    use raftstore::store::engine::Peekable;
+    use raftstore::store::keys;
+    use raftstore::store::peer_storage::JOB_STATUS_PENDING;
+    use raftstore::store::worker::RegionRunner;
+    use raftstore::store::SnapKey;
+    use raftstore::store::{Engines, SnapManager};
+    use raftstore::Result;
+    use rocksdb::{ColumnFamilyOptions, Writable};
+    use rocksdb::{WriteBatch, DB};
+    use std::io;
+    use std::sync::atomic::AtomicUsize;
+    use storage::ALL_CFS;
+    use storage::{CF_DEFAULT, CF_RAFT};
+    use tempdir::TempDir;
+    use util::rocksdb;
+    use util::rocksdb::CFOptions;
     use util::time;
+    use util::timer::Timer;
+    use util::worker::Worker;
 
+    use super::Event;
     use super::PendingDeleteRanges;
+    use super::Task;
+
+    pub fn get_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
+        let mut peer = Peer::new();
+        peer.set_store_id(store_id);
+        peer.set_id(peer_id);
+        let mut region = Region::new();
+        region.set_id(region_id);
+        region.set_start_key(b"a".to_vec());
+        region.set_end_key(b"z".to_vec());
+        region.mut_region_epoch().set_version(1);
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_peers().push(peer.clone());
+        region
+    }
+
+    pub fn get_test_db(path: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>> {
+        let p = path.path().to_str().unwrap();
+        let db = rocksdb::new_engine(p, ALL_CFS, cf_opts)?;
+        let key = keys::data_key(b"test");
+        // write some data into each cf
+        for (i, cf) in ALL_CFS.iter().enumerate() {
+            let handle = rocksdb::get_cf_handle(&db, cf)?;
+            let mut p = Peer::new();
+            p.set_store_id(1);
+            p.set_id((i + 1) as u64);
+            db.put_msg_cf(handle, &key[..], &p)?;
+        }
+        Ok(Arc::new(db))
+    }
+
+    fn get_test_db_for_regions(
+        path: &TempDir,
+        cf_opts: Option<Vec<CFOptions>>,
+        regions: &[u64],
+    ) -> Result<Arc<DB>> {
+        let kv = get_test_db(path, cf_opts)?;
+        for &region_id in regions {
+            // Put apply state into kv engine.
+            let mut apply_state = RaftApplyState::new();
+            apply_state.set_applied_index(10);
+            apply_state.mut_truncated_state().set_index(10);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+
+            // Put region info into kv engine.
+            let region = get_test_region(region_id, 1, 1);
+            let mut region_state = RegionLocalState::new();
+            region_state.set_region(region);
+            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+        }
+        Ok(kv)
+    }
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -734,5 +805,151 @@ mod test {
             pending_delete_ranges.remove(&start_key);
         }
         assert_eq!(pending_delete_ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_pending_applies() {
+        let temp_dir = TempDir::new("test_pending_applies").unwrap();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_slowdown_writes_trigger(5);
+        cf_opts.set_disable_auto_compactions(true);
+        let cfs_opts = vec![
+            rocksdb::CFOptions::new("default", cf_opts.clone()),
+            rocksdb::CFOptions::new("write", cf_opts.clone()),
+            rocksdb::CFOptions::new("lock", cf_opts.clone()),
+            rocksdb::CFOptions::new("raft", cf_opts.clone()),
+        ];
+        let db = get_test_db_for_regions(&temp_dir, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
+
+        for cf_name in db.cf_names() {
+            let cf = db.cf_handle(cf_name).unwrap();
+            for i in 0..6 {
+                db.put_cf(cf, &[i], &[i]).unwrap();
+                db.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
+                db.flush_cf(cf, true).unwrap();
+                // check level 0 files
+                assert_eq!(
+                    rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+                    u64::from(i) + 1
+                );
+            }
+        }
+
+        let snap_dir = TempDir::new("snap_dir").unwrap();
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mut worker = Worker::new("snap-manager");
+        let sched = worker.scheduler();
+        let runner = RegionRunner::new(
+            Engines::new(Arc::clone(&db), Arc::clone(&db)),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+        );
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(100), Event::CheckApply);
+        worker.start_with_timer(runner, timer).unwrap();
+
+        let gen_and_apply_snap = |id: u64| {
+            // construct snapshot
+            let (tx, rx) = mpsc::sync_channel(1);
+            sched
+                .schedule(Task::Gen {
+                    region_id: id,
+                    notifier: tx,
+                })
+                .unwrap();
+            let s1 = rx.recv().unwrap();
+            let data = s1.get_data();
+            let key = SnapKey::from_snap(&s1).unwrap();
+            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+            let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
+            let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
+            io::copy(&mut s2, &mut s3).unwrap();
+            s3.save().unwrap();
+
+            // set applying state
+            let wb = WriteBatch::new();
+            let handle = db.cf_handle(CF_RAFT).unwrap();
+            let region_key = keys::region_state_key(id);
+            let mut region_state = db
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                .unwrap()
+                .unwrap();
+            region_state.set_state(PeerState::Applying);
+            wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
+            db.write(wb).unwrap();
+
+            // apply snapshot
+            let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
+            sched
+                .schedule(Task::Apply {
+                    region_id: id,
+                    status,
+                })
+                .unwrap();
+        };
+        let wait_apply_finish = |id: u64| {
+            let region_key = keys::region_state_key(id);
+            loop {
+                thread::sleep(Duration::from_millis(100));
+                if db
+                    .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                    .unwrap()
+                    .unwrap()
+                    .get_state() == PeerState::Normal
+                {
+                    break;
+                }
+            }
+        };
+        let cf = db.cf_handle(CF_DEFAULT).unwrap();
+
+        // snapshot will not ingest cause already write stall
+        gen_and_apply_snap(1);
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 6);
+
+        // compact all files to the bottomest level
+        rocksdb::compact_files_in_range(&db, None, None, None).unwrap();
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 0);
+
+        wait_apply_finish(1);
+
+        // the pending apply task should be finished and snapshots are ingested.
+        // note that when ingest sst, it may flush memtable if overlap,
+        // so here will two level 0 files.
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 2);
+
+        // no write stall, ingest without delay
+        gen_and_apply_snap(2);
+        wait_apply_finish(2);
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+
+        // snapshot will not ingest cause it may cause write stall
+        gen_and_apply_snap(3);
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+        gen_and_apply_snap(4);
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+        gen_and_apply_snap(5);
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+
+        // compact all files to the bottomest level
+        rocksdb::compact_files_in_range(&db, None, None, None).unwrap();
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 0);
+
+        // make sure have checked pending applies
+        wait_apply_finish(4);
+
+        // before two pending apply tasks should be finished and snapshots are ingested
+        // and one still in pending.
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+
+        // make sure have checked pending applies
+        rocksdb::compact_files_in_range(&db, None, None, None).unwrap();
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 0);
+        wait_apply_finish(5);
+
+        // the last one pending task finished
+        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 2);
     }
 }
