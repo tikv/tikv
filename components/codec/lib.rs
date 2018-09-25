@@ -28,6 +28,7 @@ extern crate rand;
 extern crate test;
 
 mod buffer;
+mod byte;
 mod convert;
 mod error;
 mod number;
@@ -38,5 +39,6 @@ pub mod prelude {
 }
 
 pub use self::buffer::{BufferReader, BufferWriter};
+pub use self::byte::MemComparableByteCodec;
 pub use self::error::{Error, Result};
 pub use self::number::NumberCodec;

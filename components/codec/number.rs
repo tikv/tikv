@@ -1138,7 +1138,7 @@ mod tests {
                 for prefix_len in 1..20 {
                     let mut prefix: Vec<u8> = Vec::with_capacity(prefix_len);
                     for _ in 0..prefix_len {
-                        prefix.push(rand::random::<u8>());
+                        prefix.push(rand::random());
                     }
 
                     let mut buf = prefix.clone();
