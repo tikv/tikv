@@ -885,7 +885,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_naive_encode_all_asc_small(b: &mut test::Bencher) {
+    fn bench_memcmp_encode_all_asc_small_naive(b: &mut test::Bencher) {
         let src = [b'x'; 100];
         let mut dest = [0; 200];
         b.iter(|| {
@@ -911,7 +911,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_naive_encode_all_asc_large(b: &mut test::Bencher) {
+    fn bench_memcmp_encode_all_asc_large_naive(b: &mut test::Bencher) {
         let src = [b'x'; 1000];
         let mut dest = [0; 2000];
         b.iter(|| {
@@ -937,7 +937,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_original_encode_all_asc_large(b: &mut test::Bencher) {
+    fn bench_memcmp_encode_all_asc_large_original(b: &mut test::Bencher) {
         let src = [b'x'; 1000];
         let mut dest: Vec<u8> = Vec::with_capacity(2000);
         b.iter(|| {
@@ -950,7 +950,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_original_encode_all_desc_large(b: &mut test::Bencher) {
+    fn bench_memcmp_encode_all_desc_large_original(b: &mut test::Bencher) {
         let src = [b'x'; 1000];
         let mut dest: Vec<u8> = Vec::with_capacity(2000);
         b.iter(|| {
@@ -991,7 +991,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_original_decode_first_asc_large(b: &mut test::Bencher) {
+    fn bench_memcmp_decode_first_asc_large_original(b: &mut test::Bencher) {
         let raw = [b'x'; 1000];
         let mut encoded = vec![0; super::MemComparableByteCodec::encoded_len(1000)];
         super::MemComparableByteCodec::encode_all(&raw, encoded.as_mut_slice());
@@ -1004,7 +1004,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_original_decode_first_desc_large(b: &mut test::Bencher) {
+    fn bench_memcmp_decode_first_desc_large_original(b: &mut test::Bencher) {
         let raw = [b'x'; 1000];
         let mut encoded = vec![0; super::MemComparableByteCodec::encoded_len(1000)];
         super::MemComparableByteCodec::encode_all_desc(&raw, encoded.as_mut_slice());
@@ -1043,7 +1043,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_original_decode_first_in_place_asc_large(b: &mut test::Bencher) {
+    fn bench_memcmp_decode_first_in_place_asc_large_original(b: &mut test::Bencher) {
         let raw = [b'x'; 1000];
         let mut encoded = vec![0; super::MemComparableByteCodec::encoded_len(1000)];
         super::MemComparableByteCodec::encode_all(&raw, encoded.as_mut_slice());
@@ -1055,7 +1055,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_memcmp_original_decode_first_in_place_desc_large(b: &mut test::Bencher) {
+    fn bench_memcmp_decode_first_in_place_desc_large_original(b: &mut test::Bencher) {
         let raw = [b'x'; 1000];
         let mut encoded = vec![0; super::MemComparableByteCodec::encoded_len(1000)];
         super::MemComparableByteCodec::encode_all_desc(&raw, encoded.as_mut_slice());
