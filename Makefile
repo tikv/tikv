@@ -85,7 +85,7 @@ test:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	cargo test --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --features "${ENABLE_FEATURES}" --all --bench benches ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --features "${ENABLE_FEATURES}" --bench benches ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
