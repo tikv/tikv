@@ -383,7 +383,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        Ok(Some(self.produce_time_with_str(ctx, &s)?))
+        Ok(Some(self.produce_time_with_float_str(ctx, &s)?))
     }
 
     pub fn cast_str_as_time<'a, 'b: 'a>(
@@ -675,6 +675,13 @@ impl ScalarFunc {
 
     fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
         let mut t = Time::parse_datetime(s, self.tp.get_decimal() as i8, ctx.cfg.tz)?;
+        t.set_tp(self.tp.get_tp() as u8)?;
+        Ok(Cow::Owned(t))
+    }
+
+    fn produce_time_with_float_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
+        let mut t =
+            Time::parse_datetime_from_float_string(s, self.tp.get_decimal() as i8, ctx.cfg.tz)?;
         t.set_tp(self.tp.get_tp() as u8)?;
         Ok(Cow::Owned(t))
     }
