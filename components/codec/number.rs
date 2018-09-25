@@ -398,6 +398,7 @@ impl NumberCodec {
         // This efficient implementation is ported from facebook/folly.
         // Copyright 2013-present Facebook, Inc.
 
+        #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
         unsafe {
             let mut val = 0u64;
             let mut ptr = buf.as_ptr();
@@ -406,6 +407,8 @@ impl NumberCodec {
             if ::std::intrinsics::likely(buf.len() >= MAX_VARINT64_LENGTH) {
                 // Fast path
                 let mut b: u64;
+                // Actually this loop never loops, it is only for using `break`.
+                #[cfg_attr(feature = "cargo-clippy", allow(never_loop))]
                 loop {
                     b = *ptr as u64;
                     ptr = ptr.offset(1);
@@ -1019,6 +1022,7 @@ mod tests {
         get_u16_samples().into_iter().map(|v| v as i16).collect()
     }
 
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
     fn get_u32_samples() -> Vec<u32> {
         let mut samples = vec![
             (::std::i32::MIN as u32),
@@ -1042,6 +1046,7 @@ mod tests {
         get_u32_samples().into_iter().map(|v| v as i32).collect()
     }
 
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
     fn get_u64_samples() -> Vec<u64> {
         let mut samples = vec![
             (::std::i64::MIN as u64),
@@ -1065,6 +1070,7 @@ mod tests {
         get_u64_samples().into_iter().map(|v| v as i64).collect()
     }
 
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
     fn get_f64_samples() -> Vec<f64> {
         vec![
             -1.0,
@@ -1412,6 +1418,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
     fn test_f64() {
         test_mem_compare!(
             get_f64_samples(),
@@ -1424,6 +1431,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
     fn test_f64_desc() {
         test_mem_compare!(
             get_f64_samples(),
@@ -1502,6 +1510,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
     fn test_f64_le() {
         test_codec!(
             get_f64_samples(),
@@ -1623,9 +1632,8 @@ mod tests {
                     }
                     for pos in 0usize..buf_len - len + 1 {
                         let mut buf = payload.clone();
-                        for i in 0..len {
-                            buf[pos + i] = base_buf[i];
-                        }
+                        buf[pos..pos + len].clone_from_slice(&base_buf[0..len]);
+
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
                         assert_eq!(
@@ -2001,9 +2009,7 @@ mod benches {
     #[bench]
     fn bench_decode_varint_normal_number_codec_fast_path(b: &mut test::Bencher) {
         let mut buf: Vec<u8> = vec![0; 10];
-        for i in 0..VARINT_ENCODED.len() {
-            buf[i] = VARINT_ENCODED[i];
-        }
+        buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
         b.iter(|| {
             let mut pos = 0;
             let (v, bytes) =
@@ -2032,9 +2038,7 @@ mod benches {
     #[bench]
     fn bench_decode_varint_normal_original_fast_path(b: &mut test::Bencher) {
         let mut buf: Vec<u8> = vec![0; 10];
-        for i in 0..VARINT_ENCODED.len() {
-            buf[i] = VARINT_ENCODED[i];
-        }
+        buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
         b.iter(|| {
             let mut slice = test::black_box(&buf).as_slice();
             let v = decode_var_u64_original(&mut slice).unwrap();

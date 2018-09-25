@@ -518,6 +518,7 @@ mod tests {
             let encoded_len = MemComparableByteCodec::encoded_len(payload_len);
             let mut payload_encoded: Vec<u8> =
                 vec![0; encoded_prefix_len + encoded_len + encoded_suffix_len];
+            #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
             for i in 0..encoded_prefix_len {
                 payload_encoded[i] = rand::random();
             }
@@ -530,6 +531,7 @@ mod tests {
                     MemComparableByteCodec::encode_all(src, dest);
                 }
             }
+            #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
             for i in encoded_prefix_len + encoded_len..encoded_suffix_len {
                 payload_encoded[i] = rand::random();
             }
@@ -796,7 +798,7 @@ mod benches {
     }
 
     /// The original implementation of `decode_bytes_in_place` in TiKV.
-    fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> super::Result<()> {
+    fn original_decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> super::Result<()> {
         let mut write_offset = 0;
         let mut read_offset = 0;
         loop {
@@ -1047,7 +1049,7 @@ mod benches {
         super::MemComparableByteCodec::encode_all(&raw, encoded.as_mut_slice());
         b.iter(|| {
             let mut encoded = test::black_box(encoded.clone());
-            decode_bytes_in_place(&mut encoded, test::black_box(false)).unwrap();
+            original_decode_bytes_in_place(&mut encoded, test::black_box(false)).unwrap();
             test::black_box(&encoded);
         });
     }
@@ -1059,7 +1061,7 @@ mod benches {
         super::MemComparableByteCodec::encode_all_desc(&raw, encoded.as_mut_slice());
         b.iter(|| {
             let mut encoded = test::black_box(encoded.clone());
-            decode_bytes_in_place(&mut encoded, test::black_box(true)).unwrap();
+            original_decode_bytes_in_place(&mut encoded, test::black_box(true)).unwrap();
             test::black_box(&encoded);
         });
     }
