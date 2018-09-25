@@ -649,29 +649,23 @@ impl RunnableWithTimer<Task, Event> for Runner {
 
 #[cfg(test)]
 mod test {
+    use std::io;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::{mpsc, Arc};
     use std::thread;
     use std::time::Duration;
 
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-    use raftstore::store::engine::Mutable;
-    use raftstore::store::engine::Peekable;
-    use raftstore::store::keys;
+    use raftstore::store::engine::{Mutable, Peekable};
     use raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use raftstore::store::worker::RegionRunner;
-    use raftstore::store::SnapKey;
-    use raftstore::store::{Engines, SnapManager};
+    use raftstore::store::{keys, Engines, SnapKey, SnapManager};
     use raftstore::Result;
-    use rocksdb::{ColumnFamilyOptions, Writable};
-    use rocksdb::{WriteBatch, DB};
-    use std::io;
-    use std::sync::atomic::AtomicUsize;
-    use storage::ALL_CFS;
-    use storage::{CF_DEFAULT, CF_RAFT};
+    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch, DB};
+    use storage::{ALL_CFS, CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb;
-    use util::rocksdb::CFOptions;
+    use util::rocksdb::{CFOptions, Self};
     use util::time;
     use util::timer::Timer;
     use util::worker::Worker;
