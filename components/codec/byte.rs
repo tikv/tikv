@@ -496,6 +496,19 @@ mod tests {
     }
 
     #[test]
+    fn test_memcmp_encode_all_panic() {
+        let cases = vec![(0, 0), (0, 7), (0, 8), (7, 8), (8, 9), (8, 17)];
+        for (src_len, dest_len) in cases {
+            let src = vec![0; src_len];
+            let mut dest = vec![0; dest_len];
+            let result = ::std::panic::catch_unwind(move || {
+                let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
+            });
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
     fn test_memcmp_try_decode_first() {
         use super::MEMCMP_GROUP_SIZE as N;
 
@@ -638,9 +651,116 @@ mod tests {
         }
     }
 
-    // TODO: Test error cases
+    #[test]
+    fn test_memcmp_try_decode_first_error() {
+        let cases = vec![
+            vec![1, 2, 3, 4],
+            vec![0, 0, 0, 0, 0, 0, 0, 247],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 246],
+            vec![0, 0, 0, 0, 0, 0, 0, 1, 247],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 0],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 255],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 1, 0, 0, 0, 0, 0, 0, 0, 247],
+        ];
+        for invalid_src in cases {
+            let mut dest = vec![0; invalid_src.len()];
+            let result = MemComparableByteCodec::try_decode_first(
+                invalid_src.as_slice(),
+                dest.as_mut_slice(),
+            );
+            assert!(result.is_err());
+        }
+    }
 
-    // TODO: Test panic cases
+    #[test]
+    fn test_memcmp_try_decode_first_panic() {
+        let cases = vec![
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 247],
+            vec![1, 2, 3, 4, 5, 6, 7, 0, 254],
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+        ];
+        for src in cases {
+            {
+                let src = src.clone();
+                let mut dest = vec![0; src.len() - 1];
+                let result = ::std::panic::catch_unwind(move || {
+                    let _ = MemComparableByteCodec::try_decode_first(
+                        src.as_slice(),
+                        dest.as_mut_slice(),
+                    );
+                });
+                assert!(result.is_err());
+            }
+            {
+                let mut dest = vec![0; src.len()];
+                MemComparableByteCodec::try_decode_first(src.as_slice(), dest.as_mut_slice())
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_memcmp_compare() {
+        use std::cmp::Ordering;
+
+        let cases: Vec<(&[u8], &[u8], _)> = vec![
+            (b"", b"\x00", Ordering::Less),
+            (b"\x00", b"\x00", Ordering::Equal),
+            (b"\xFF", b"\x00", Ordering::Greater),
+            (b"\xFF", b"\xFF\x00", Ordering::Less),
+            (b"a", b"b", Ordering::Less),
+            (b"a", b"\x00", Ordering::Greater),
+            (b"\x00", b"\x01", Ordering::Less),
+            (b"\x00\x01", b"\x00\x00", Ordering::Greater),
+            (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
+            (b"\x00\x00\x00", b"\x00\x00", Ordering::Greater),
+            (
+                b"\x00\x00\x00\x00\x00\x00\x00\x00",
+                b"\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+                Ordering::Less,
+            ),
+            (b"\x01\x02\x03\x00", b"\x01\x02\x03", Ordering::Greater),
+            (b"\x01\x03\x03\x04", b"\x01\x03\x03\x05", Ordering::Less),
+            (
+                b"\x01\x02\x03\x04\x05\x06\x07",
+                b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                Ordering::Less,
+            ),
+            (
+                b"\x01\x02\x03\x04\x05\x06\x07\x08\x09",
+                b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                Ordering::Greater,
+            ),
+            (
+                b"\x01\x02\x03\x04\x05\x06\x07\x08\x00",
+                b"\x01\x02\x03\x04\x05\x06\x07\x08",
+                Ordering::Greater,
+            ),
+        ];
+
+        fn encode_asc(src: &[u8]) -> Vec<u8> {
+            let mut buf = vec![0; MemComparableByteCodec::encoded_len(src.len())];
+            let encoded = MemComparableByteCodec::encode_all(src, buf.as_mut_slice());
+            assert_eq!(encoded, buf.len());
+            buf
+        }
+
+        fn encode_desc(src: &[u8]) -> Vec<u8> {
+            let mut buf = vec![0; MemComparableByteCodec::encoded_len(src.len())];
+            let encoded = MemComparableByteCodec::encode_all_desc(src, buf.as_mut_slice());
+            assert_eq!(encoded, buf.len());
+            buf
+        }
+
+        for (x, y, ord) in cases {
+            assert_eq!(x.cmp(y), ord);
+            assert_eq!(encode_asc(x).cmp(&encode_asc(y)), ord);
+            assert_eq!(encode_desc(x).cmp(&encode_desc(y)), ord.reverse());
+        }
+    }
 }
 
 #[cfg(test)]
