@@ -111,7 +111,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
-            | ScalarFuncSig::DateFormatSig => (2, 2),
+            | ScalarFuncSig::DateFormatSig
+            | ScalarFuncSig::TruncateInt => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -472,7 +473,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::TruncateDecimal
-            | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
@@ -762,6 +762,8 @@ dispatch_call! {
         Sign => sign,
 
         RoundInt => round_int,
+
+        TruncateInt => truncate_int,
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -1059,6 +1061,7 @@ mod test {
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
+                    ScalarFuncSig::TruncateInt,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
                 ],
@@ -1464,7 +1467,6 @@ mod test {
             ScalarFuncSig::Trim2Args,
             ScalarFuncSig::Trim3Args,
             ScalarFuncSig::TruncateDecimal,
-            ScalarFuncSig::TruncateInt,
             ScalarFuncSig::TruncateReal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
