@@ -13,7 +13,7 @@
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::Datum;
+use coprocessor::codec::{mysql, Datum};
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
 use rand::{Rng, SeedableRng, XorShiftRng};
@@ -310,6 +310,33 @@ impl ScalarFunc {
     pub fn degrees(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.to_degrees()))
+    }
+
+    #[inline]
+    pub fn truncate_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let x = try_opt!(self.children[0].eval_int(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            0
+        } else {
+            d
+        };
+        if d >= 0 {
+            Ok(Some(x))
+        } else if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag()) {
+            if d < -19 {
+                return Ok(Some(0));
+            }
+            let x = x as u64;
+            let shift = 10_u64.pow(-d as u32);
+            Ok(Some((x / shift * shift) as i64))
+        } else {
+            if d < -18 {
+                return Ok(Some(0));
+            }
+            let shift = 10_i64.pow(-d as u32);
+            Ok(Some(x / shift * shift))
+        }
     }
 }
 
@@ -1195,4 +1222,76 @@ mod test {
         }
     }
 
+    #[test]
+    fn test_truncate() {
+        let tests = vec![
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(0),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(5),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(-2),
+                Datum::I64(1000),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(309),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(i64::min_value()),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::U64(u64::max_value()),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::U64(18446744073709551615),
+                Datum::I64(-2),
+                Datum::U64(18446744073709551600),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::U64(18446744073709551615),
+                Datum::I64(-20),
+                Datum::U64(0),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::U64(18446744073709551615),
+                Datum::I64(2),
+                Datum::U64(18446744073709551615),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, x, d, exp) in tests {
+            let x = datum_expr(x);
+            let d = datum_expr(d);
+            let is_unsigned = mysql::has_unsigned_flag(x.get_field_type().get_flag());
+            let mut f = scalar_func_expr(sig, &[x, d]);
+            if is_unsigned {
+                f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
 }
