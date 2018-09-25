@@ -166,6 +166,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Date
             | ScalarFuncSig::LastDay
             | ScalarFuncSig::Month
+            | ScalarFuncSig::Year
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -498,7 +499,6 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::WeekWithoutMode
-            | ScalarFuncSig::Year
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
         };
@@ -731,6 +731,7 @@ dispatch_call! {
         ModInt => mod_int,
 
         Month => month,
+        Year => year,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1122,6 +1123,7 @@ mod test {
                     ScalarFuncSig::Date,
                     ScalarFuncSig::LastDay,
                     ScalarFuncSig::Month,
+                    ScalarFuncSig::Year,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1492,7 +1494,6 @@ mod test {
             ScalarFuncSig::WeekOfYear,
             ScalarFuncSig::WeekWithMode,
             ScalarFuncSig::WeekWithoutMode,
-            ScalarFuncSig::Year,
             ScalarFuncSig::YearWeekWithMode,
             ScalarFuncSig::YearWeekWithoutMode,
         ];
