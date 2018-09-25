@@ -345,7 +345,7 @@ mod test {
     }
 
     impl RegionChangeObserver for TestCoprocessor {
-        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent) {
+        fn on_region_changed(&self, ctx: &mut ObserverContext, _: &RegionChangeEvent) {
             self.called.fetch_add(8, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
