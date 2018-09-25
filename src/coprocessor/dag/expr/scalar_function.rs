@@ -111,7 +111,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
-            | ScalarFuncSig::DateFormatSig => (2, 2),
+            | ScalarFuncSig::DateFormatSig
+            | ScalarFuncSig::TruncateInt => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -165,6 +166,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Date
             | ScalarFuncSig::LastDay
             | ScalarFuncSig::Month
+            | ScalarFuncSig::Year
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -472,7 +474,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::TruncateDecimal
-            | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
@@ -498,7 +499,6 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::WeekWithoutMode
-            | ScalarFuncSig::Year
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
         };
@@ -731,6 +731,7 @@ dispatch_call! {
         ModInt => mod_int,
 
         Month => month,
+        Year => year,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -762,6 +763,8 @@ dispatch_call! {
         Sign => sign,
 
         RoundInt => round_int,
+
+        TruncateInt => truncate_int,
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -1059,6 +1062,7 @@ mod test {
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
+                    ScalarFuncSig::TruncateInt,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
                 ],
@@ -1119,6 +1123,7 @@ mod test {
                     ScalarFuncSig::Date,
                     ScalarFuncSig::LastDay,
                     ScalarFuncSig::Month,
+                    ScalarFuncSig::Year,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1464,7 +1469,6 @@ mod test {
             ScalarFuncSig::Trim2Args,
             ScalarFuncSig::Trim3Args,
             ScalarFuncSig::TruncateDecimal,
-            ScalarFuncSig::TruncateInt,
             ScalarFuncSig::TruncateReal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
@@ -1490,7 +1494,6 @@ mod test {
             ScalarFuncSig::WeekOfYear,
             ScalarFuncSig::WeekWithMode,
             ScalarFuncSig::WeekWithoutMode,
-            ScalarFuncSig::Year,
             ScalarFuncSig::YearWeekWithMode,
             ScalarFuncSig::YearWeekWithoutMode,
         ];
