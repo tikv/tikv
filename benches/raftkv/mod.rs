@@ -100,7 +100,7 @@ fn new_engine() -> (TempDir, Arc<DB>) {
     (dir, Arc::new(db))
 }
 
-// speed of light for async_snapshot
+// The lower limit of time a async_snapshot may take.
 #[bench]
 fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let (_dir, db) = new_engine();
