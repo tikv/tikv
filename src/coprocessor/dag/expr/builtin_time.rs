@@ -356,11 +356,10 @@ mod test {
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::Null);
 
-        // test zero case
-        let cfg = EvalConfig::new()
-            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
-            .set_strict_sql_mode(true);
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT);
+        cfg.set_sql_mode(MODE_NO_ZERO_DATE_MODE);
+        cfg.set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
         let arg = datum_expr(Datum::Time(
             Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
