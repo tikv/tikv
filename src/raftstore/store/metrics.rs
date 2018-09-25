@@ -213,4 +213,10 @@ lazy_static! {
             "Bucketed histogram of rocksdb ingestion durations",
             exponential_buckets(0.005, 2.0, 20).unwrap()
         ).unwrap();
+    pub static ref RAFT_INVALID_PROPOSAL_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_raft_invalid_proposal_total",
+            "Total number of raft invalid proposal.",
+            &["type"]
+        ).unwrap();
 }
