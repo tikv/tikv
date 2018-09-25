@@ -544,7 +544,7 @@ impl Peer {
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a follower
         // becomeing a leader.
-        self.update_read_progress(progress);
+        self.maybe_update_read_progress(progress);
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -808,7 +808,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress = ReadProgress::term(self.term());
-                    self.update_read_progress(progress);
+                    self.maybe_update_read_progress(progress);
                     self.maybe_renew_leader_lease(monotonic_raw_now());
                     debug!(
                         "{} becomes leader and lease expired time is {:?}",
@@ -1054,7 +1054,7 @@ impl Peer {
                         // We committed prepare merge, to prevent unsafe read index,
                         // we must record its index.
                         self.last_committed_prepare_merge_idx = entry.get_index();
-                        // After prepare_mrege is committed, the leader can not know
+                        // After prepare_merge is committed, the leader can not know
                         // when the target region merges majority of this region, also
                         // it can not know when the target region writes new values.
                         // To prevent unsafe local read, we suspect its leader lease.
@@ -1168,7 +1168,7 @@ impl Peer {
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            self.update_read_progress(progress);
+            self.maybe_update_read_progress(progress);
         }
     }
 
@@ -1202,11 +1202,14 @@ impl Peer {
         let term = self.term();
         if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
-            self.update_read_progress(progress);
+            self.maybe_update_read_progress(progress);
         }
     }
 
-    fn update_read_progress(&self, progress: ReadProgress) {
+    fn maybe_update_read_progress(&self, progress: ReadProgress) {
+        if self.pending_remove {
+            return;
+        }
         let update = ReadTask::update(self.region_id, progress);
         debug!("{} update {}", self.tag, update);
         self.read_scheduler.schedule(update).unwrap();

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, HistogramVec, IntCounterVec, IntGaugeVec};
+use prometheus::*;
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
@@ -42,11 +42,6 @@ lazy_static! {
         "tikv_coprocessor_request_error",
         "Total number of push down request error.",
         &["reason"]
-    ).unwrap();
-    pub static ref COPR_PENDING_REQS: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_coprocessor_pending_request",
-        "Total number of pending push down request.",
-        &["req", "priority"]
     ).unwrap();
     pub static ref COPR_SCAN_KEYS: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_scan_keys",

@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message as PbMsg, RepeatedField};
+use protobuf::{Message, RepeatedField};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
 use coprocessor::dag::expr::EvalConfig;
@@ -24,7 +24,7 @@ use storage::{Snapshot, SnapshotStore};
 use super::executor::{build_exec, Executor, ExecutorMetrics};
 
 pub struct DAGContext {
-    req_ctx: ReqContext,
+    deadline: Deadline,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
@@ -35,27 +35,27 @@ impl DAGContext {
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: S,
-        req_ctx: ReqContext,
+        req_ctx: &ReqContext,
         batch_row_limit: usize,
     ) -> Result<Self> {
-        let mut eval_cfg = EvalConfig::new().set_by_flags(req.get_flags());
+        let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
-            eval_cfg = box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
+            box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
         } else if req.has_time_zone_offset() {
-            eval_cfg = box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
+            box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
         } else {
             // This should not be reachable. However we will not panic here in case
             // of compatibility issues.
         }
         if req.has_max_warning_count() {
-            eval_cfg = eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
+            eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }
         if req.has_sql_mode() {
-            eval_cfg = eval_cfg.set_sql_mode(req.get_sql_mode());
+            eval_cfg.set_sql_mode(req.get_sql_mode());
         }
         if req.has_is_strict_sql_mode() {
-            eval_cfg = eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
+            eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
         }
         let store = SnapshotStore::new(
             snap,
@@ -72,7 +72,7 @@ impl DAGContext {
             req.get_collect_range_counts(),
         )?;
         Ok(Self {
-            req_ctx,
+            deadline: req_ctx.deadline,
             exec: dag_executor,
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
@@ -105,7 +105,7 @@ impl RequestHandler for DAGContext {
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.req_ctx.check_if_outdated()?;
+                    self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
@@ -151,6 +151,7 @@ impl RequestHandler for DAGContext {
         while record_cnt < self.batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
+                    self.deadline.check_if_exceeded()?;
                     record_cnt += 1;
                     let value = row.get_binary(&self.output_offsets)?;
                     chunk.mut_rows_data().extend_from_slice(&value);

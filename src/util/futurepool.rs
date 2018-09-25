@@ -218,12 +218,6 @@ impl<T: Context + 'static> FuturePool<T> {
         self.running_task_count.load(Ordering::Acquire)
     }
 
-    /// TODO: Remove this interface to avoid accessing context delegators from outside.
-    #[inline]
-    pub fn get_context_delegators(&self) -> ContextDelegators<T> {
-        self.context_delegators.clone()
-    }
-
     pub fn spawn<F, R>(&self, future_factory: R) -> CpuFuture<F::Item, F::Error>
     where
         R: FnOnce(ContextDelegators<T>) -> F + Send + 'static,
