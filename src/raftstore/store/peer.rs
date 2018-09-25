@@ -36,7 +36,7 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::worker::{
     apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
@@ -427,6 +427,11 @@ impl Peer {
             .unwrap();
     }
 
+    pub fn signal_new_region(&self) {
+        self.coprocessor_host
+            .on_region_changed(self.region(), &RegionChangeEvent::New);
+    }
+
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
@@ -545,6 +550,8 @@ impl Peer {
         // Always update read delegate's region to avoid stale region info after a follower
         // becomeing a leader.
         self.maybe_update_read_progress(progress);
+        self.coprocessor_host
+            .on_region_changed(self.region(), &RegionChangeEvent::Update);
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -999,6 +1006,7 @@ impl Peer {
 
         if apply_snap_result.is_some() {
             self.register_delegates();
+            self.signal_new_region();
         }
 
         apply_snap_result

@@ -136,7 +136,13 @@ pub trait RoleObserver: Coprocessor {
     fn on_role_change(&self, _: &mut ObserverContext, _: StateRole) {}
 }
 
-pub trait RegionLoadObserver: Coprocessor {
-    /// Hook to call when the TiKV is starting up, and a region is loaded from disk
-    fn on_region_loaded(&self, _: &mut ObserverContext, _: ()) {}
+pub enum RegionChangeEvent {
+    New,
+    Update,
+    Destroy,
+}
+
+pub trait RegionChangeObserver: Coprocessor {
+    /// Hook to call when a region changed on this TiKV
+    fn on_region_changed(&self, _: &mut ObserverContext, _: &RegionChangeEvent) {}
 }

@@ -41,6 +41,7 @@ use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{FutureWorker, Stopped};
 
 use super::{store::register_timer, Key};
+use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::cmd_resp::{bind_term, new_error};
 use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
@@ -825,6 +826,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.local_reader
             .schedule(ReadTask::destroy(region_id))
             .unwrap();
+        // Trigger region change observer
+        self.coprocessor_host
+            .on_region_changed(p.region(), &RegionChangeEvent::Destroy);
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -1043,6 +1047,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             new_peer.register_delegates();
+            new_peer.signal_new_region();
             self.region_peers.insert(new_region_id, new_peer);
 
             if !campaigned {
