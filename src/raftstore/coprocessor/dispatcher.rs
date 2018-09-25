@@ -344,6 +344,13 @@ mod test {
         }
     }
 
+    impl RegionChangeObserver for TestCoprocessor {
+        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent) {
+            self.called.fetch_add(8, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
@@ -370,6 +377,8 @@ mod test {
             .register_query_observer(1, Box::new(ob.clone()));
         host.registry
             .register_role_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_region_change_observer(1, Box::new(ob.clone()));
         let region = Region::new();
         let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());
@@ -393,6 +402,9 @@ mod test {
 
         host.on_role_change(&region, StateRole::Leader);
         assert_all!(&[&ob.called], &[28]);
+
+        host.on_region_changed(&region, &RegionChangeEvent::New);
+        assert_all!(&[&ob.called], &[36]);
     }
 
     #[test]
