@@ -479,6 +479,10 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 }
 
 impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
+    fn run(&mut self, _: Task) {
+        unreachable!()
+    }
+
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         self.metrics
             .borrow()
@@ -495,7 +499,10 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
         for task in tasks.drain(..) {
             match task {
                 Task::Register(delegate) => {
-                    info!("{} register ReadDelegate", delegate.tag);
+                    debug!(
+                        "{} register ReadDelegate for {:?}",
+                        delegate.tag, delegate.peer_id
+                    );
                     self.delegates.insert(delegate.region.get_id(), delegate);
                 }
                 Task::Read(StoreMsg::RaftCmd {
@@ -525,16 +532,14 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                     if let Some(delegate) = self.delegates.get_mut(&region_id) {
                         delegate.update(progress);
                     } else {
-                        warn!(
-                            "update unregistered ReadDelegate, region_id: {}, {:?}",
+                        panic!(
+                            "unregistered ReadDelegate, region_id: {}, {:?}",
                             region_id, progress
                         );
                     }
                 }
                 Task::Destroy(region_id) => {
-                    if let Some(delegate) = self.delegates.remove(&region_id) {
-                        info!("{} destroy ReadDelegate", delegate.tag);
-                    }
+                    self.delegates.remove(&region_id);
                 }
             }
         }

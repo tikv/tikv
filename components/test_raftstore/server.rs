@@ -163,14 +163,13 @@ impl Simulator for ServerCluster {
         let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
             || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
-                cop.clone(),
+                cop_read_pool.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),

@@ -364,9 +364,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
 
                 let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
-                    // Maybe the target is promoted from learner to voter, but the follower
-                    // doesn't know it. So we only compare peer id.
-                    assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
+                    assert_eq!(peer, msg.get_from_peer());
                     // Let stale peer decides whether it should wait for merging or just remove
                     // itself.
                     Some(local_state.get_merge_state().get_target().to_owned())
@@ -782,10 +780,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.apply_worker
                 .schedule(ApplyTask::destroy(job.region_id))
                 .unwrap();
+            self.local_reader
+                .schedule(ReadTask::destroy(job.region_id))
+                .unwrap();
         }
         if job.async_remove {
             info!(
-                "[region {}] {} is destroyed asynchronously",
+                "[region {}] {} is destroyed asychroniously",
                 job.region_id,
                 job.peer.get_id()
             );
@@ -1458,15 +1459,27 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn check_propose_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
+        let region_id = msg.get_header().get_region_id();
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => return Err(Error::RegionNotFound(region_id)),
+        };
+        if !peer.is_leader() {
+            return Err(Error::NotLeader(
+                region_id,
+                peer.get_peer_from_cache(peer.leader_id()),
+            ));
+        }
+        Ok(peer)
+    }
+
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
         // Check store_id, make sure that the msg is dispatched to the right place.
-        if let Err(e) = util::check_store_id(msg, self.store_id()) {
-            self.raft_metrics.invalid_proposal.mismatch_store_id += 1;
-            return Err(e);
-        }
+        util::check_store_id(msg, self.store_id())?;
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             let resp = self.execute_status_command(msg)?;
@@ -1474,33 +1487,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // Check whether the store has the right peer to handle the request.
-
-        let region_id = msg.get_header().get_region_id();
-        let peer = match self.region_peers.get(&region_id) {
-            Some(peer) => peer,
-            None => {
-                self.raft_metrics.invalid_proposal.region_not_found += 1;
-                return Err(Error::RegionNotFound(region_id));
-            }
-        };
-
-        if !peer.is_leader() {
-            self.raft_metrics.invalid_proposal.not_leader += 1;
-            return Err(Error::NotLeader(
-                region_id,
-                peer.get_peer_from_cache(peer.leader_id()),
-            ));
-        }
+        let peer = self.check_propose_peer(msg)?;
         // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, peer.peer_id()) {
-            self.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
-            return Err(e);
-        }
+        util::check_peer_id(msg, peer.peer_id())?;
         // Check whether the term is stale.
-        if let Err(e) = util::check_term(msg, peer.term()) {
-            self.raft_metrics.invalid_proposal.stale_command += 1;
-            return Err(e);
-        }
+        util::check_term(msg, peer.term())?;
 
         match util::check_region_epoch(msg, peer.region(), true) {
             Err(Error::StaleEpoch(msg, mut new_regions)) => {
@@ -1513,7 +1504,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let sibling_region = self.region_peers[&sibling_region_id].region();
                     new_regions.push(sibling_region.to_owned());
                 }
-                self.raft_metrics.invalid_proposal.stale_epoch += 1;
                 Err(Error::StaleEpoch(msg, new_regions))
             }
             Err(e) => Err(e),
@@ -1620,13 +1610,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
     pub fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        // As leader, we would not keep caches for the peers that didn't response heartbeat in the
-        // last few seconds. That happens probably because another TiKV is down. In this case if we
-        // do not clean up the cache, it may keep growing.
-        let drop_cache_duration =
-            self.cfg.raft_heartbeat_interval() + self.cfg.raft_entry_cache_life_time.0;
-        let cache_alive_limit = Instant::now() - drop_cache_duration;
-
         let mut total_gc_logs = 0;
 
         for (&region_id, peer) in &mut self.region_peers {
@@ -1648,22 +1631,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             //                  ^                                       ^
             //                  |-----------------threshold------------ |
             //              first_index                         replicated_index
-            // `alive_cache_idx` is the smallest `replicated_index` of healthy up nodes.
-            // `alive_cache_idx` is only used to gc cache.
+            // `healthy_replicated_index` is the smallest `replicated_index` of healthy nodes.
             let truncated_idx = peer.get_store().truncated_index();
             let last_idx = peer.get_store().last_index();
-            let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
-            for (peer_id, p) in peer.raft_group.raft.prs().iter() {
+            let (mut replicated_idx, mut healthy_replicated_idx) = (last_idx, last_idx);
+            for (_, p) in peer.raft_group.raft.prs().iter() {
                 if replicated_idx > p.matched {
                     replicated_idx = p.matched;
                 }
-                if let Some(last_heartbeat) = peer.peer_heartbeats.get(peer_id) {
-                    if alive_cache_idx > p.matched
-                        && p.matched >= truncated_idx
-                        && *last_heartbeat > cache_alive_limit
-                    {
-                        alive_cache_idx = p.matched;
-                    }
+                if healthy_replicated_idx > p.matched && p.matched >= truncated_idx {
+                    healthy_replicated_idx = p.matched;
                 }
             }
             // When an election happened or a new peer is added, replicated_idx can be 0.
@@ -1677,7 +1654,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
             }
             peer.mut_store()
-                .maybe_gc_cache(alive_cache_idx, applied_idx);
+                .maybe_gc_cache(healthy_replicated_idx, applied_idx);
             let first_idx = peer.get_store().first_index();
             let mut compact_idx;
             if applied_idx > first_idx

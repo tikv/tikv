@@ -361,6 +361,7 @@ impl RowColsDict {
         let end_offsets = self
             .cols
             .values()
+            .into_iter()
             .map(|meta| meta.offset + meta.length - start)
             .collect();
         (&self.value[start..start + length], end_offsets)

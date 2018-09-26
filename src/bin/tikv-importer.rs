@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
+#![feature(use_extern_macros)]
 #![feature(proc_macro_non_items)]
 
 extern crate chrono;
@@ -35,7 +36,6 @@ extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
-#[macro_use]
 extern crate tikv;
 extern crate toml;
 
@@ -100,11 +100,11 @@ fn main() {
         .get_matches();
 
     let config = setup_config(&matches);
-    let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
-
+    init_log(&config);
     initial_metric(&config.metric, None);
+
     util::print_tikv_info();
+    panic_hook::set_exit_hook(false);
     check_environment_variables();
 
     run_import_server(&config);

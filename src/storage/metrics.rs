@@ -77,6 +77,15 @@ lazy_static! {
         "Bucketed counter of kv keys scan details for each cf",
         &["req", "cf", "tag"]
     ).unwrap();
+    pub static ref BATCH_COMMANDS: HistogramVec = register_histogram_vec!(
+        "tikv_storage_batch_commands_total",
+        "Bucketed histogram of total number of a batch of commands",
+        &["type"],
+        vec![
+            1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 48.0,
+            64.0, 96.0, 128.0, 192.0, 256.0,
+        ]
+    ).unwrap();
     pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_kv_command_key_write",
         "Bucketed histogram of keys write of a kv command",
@@ -91,21 +100,18 @@ lazy_static! {
         "tikv_storage_gc_skipped_counter",
         "Total number of gc command skipped owing to optimization"
     ).unwrap();
-    pub static ref GC_TASK_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_gcworker_gc_task_duration_vec",
+    pub static ref GC_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_gcworker_gc_task_duration",
         "Duration of gc tasks execution",
-        &["task"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
-    pub static ref GC_GCTASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_gcworker_gc_tasks_vec",
-        "Counter of gc tasks processed by gc_worker",
-        &["task"]
+    pub static ref GC_GCTASK_COUNTER: IntCounter = register_int_counter!(
+        "tikv_gcworker_gc_tasks",
+        "Counter of gc tasks processed by gc_worker"
     ).unwrap();
-    pub static ref GC_GCTASK_FAIL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_gcworker_gc_task_fail_vec",
-        "Counter of gc tasks that is failed",
-        &["task"]
+    pub static ref GC_GCTASK_FAIL_COUNTER: IntCounter = register_int_counter!(
+        "tikv_gcworker_gc_task_fail",
+        "Counter of gc tasks that is failed"
     ).unwrap();
     pub static ref GC_TOO_BUSY_COUNTER: IntCounter = register_int_counter!(
         "tikv_gc_worker_too_busy",

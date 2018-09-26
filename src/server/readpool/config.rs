@@ -33,7 +33,7 @@ pub struct Config {
 }
 
 impl Config {
-    // TODO: Add #[cfg(test)]
+    /// Only used in tests.
     pub fn default_with_concurrency(concurrency: usize) -> Self {
         Self {
             high_concurrency: concurrency,
@@ -46,7 +46,7 @@ impl Config {
         }
     }
 
-    // TODO: Add #[cfg(test)]
+    /// Only used in tests.
     pub fn default_for_test() -> Self {
         Self::default_with_concurrency(2)
     }

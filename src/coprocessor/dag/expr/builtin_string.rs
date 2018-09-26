@@ -112,7 +112,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Owned(b"".to_vec())));
         }
         if s.chars().count() > i as usize {
-            let t = s.chars();
+            let t = s.chars().into_iter();
             return Ok(Some(Cow::Owned(
                 t.take(i as usize).collect::<String>().into_bytes(),
             )));

@@ -20,20 +20,22 @@ use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
 
-use coprocessor::Endpoint;
+use coprocessor::{self, EndPointHost, EndPointTask};
 use import::ImportSSTService;
 use raftstore::store::{Engines, SnapManager};
 use storage::{Engine, Storage};
 use util::security::SecurityManager;
-use util::worker::Worker;
+use util::worker::{Builder as WorkerBuilder, Worker};
 
 use super::raft_client::RaftClient;
+use super::readpool::ReadPool;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 
+const DEFAULT_COPROCESSOR_BATCH: usize = 256;
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, E: Engine> {
@@ -46,9 +48,12 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
     raft_router: T,
     // The kv storage.
     storage: Storage<E>,
+    // For handling coprocessor requests.
+    end_point_worker: Worker<EndPointTask<E>>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+    cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
@@ -57,7 +62,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E>,
-        cop: Endpoint<E>,
+        // TODO: Remove once endpoint itself is passed to here.
+        cop_readpool: ReadPool<coprocessor::ReadPoolContext>,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -75,12 +81,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             Arc::clone(cfg),
             Arc::clone(security_mgr),
         )));
+        let end_point_worker = WorkerBuilder::new("end-point-worker")
+            .batch_size(DEFAULT_COPROCESSOR_BATCH)
+            .create();
         let snap_worker = Worker::new("snap-handler");
+
         let kv_service = KvService::new(
             storage.clone(),
-            cop,
+            end_point_worker.scheduler(),
             raft_router.clone(),
             snap_worker.scheduler(),
+            cfg.end_point_recursion_limit,
+            cfg.end_point_stream_channel_size,
         );
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
@@ -125,8 +137,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             trans,
             raft_router,
             storage,
+            end_point_worker,
             snap_mgr,
             snap_worker,
+            cop_readpool,
         };
 
         Ok(svr)
@@ -137,6 +151,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
     }
 
     pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
+        let end_point = EndPointHost::new(
+            self.storage.get_engine(),
+            self.end_point_worker.scheduler(),
+            &cfg,
+            self.cop_readpool.clone(),
+        );
+        box_try!(self.end_point_worker.start(end_point));
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
@@ -151,6 +172,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        self.end_point_worker.stop();
         self.snap_worker.stop();
         if let Err(e) = self.storage.stop() {
             error!("failed to stop store: {:?}", e);
@@ -179,7 +201,6 @@ mod tests {
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
-    use coprocessor;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::Transport;
     use raftstore::store::Msg as StoreMsg;
@@ -274,13 +295,12 @@ mod tests {
             &readpool::Config::default_for_test(),
             || || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
         );
-        let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
 
         let mut server = Server::new(
             &cfg,
             &security_mgr,
             storage,
-            cop,
+            cop_read_pool,
             router,
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),

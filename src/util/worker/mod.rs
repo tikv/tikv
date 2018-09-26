@@ -84,9 +84,7 @@ impl<T> Debug for ScheduleError<T> {
 
 pub trait Runnable<T: Display> {
     /// Run a task.
-    fn run(&mut self, _: T) {
-        unimplemented!()
-    }
+    fn run(&mut self, t: T);
 
     /// Run a batch of tasks.
     ///
@@ -417,6 +415,10 @@ mod test {
     }
 
     impl Runnable<u64> for BatchRunner {
+        fn run(&mut self, _: u64) {
+            panic!("should call run_batch");
+        }
+
         fn run_batch(&mut self, ms: &mut Vec<u64>) {
             self.ch.send(ms.to_vec()).unwrap();
         }

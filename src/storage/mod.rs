@@ -242,7 +242,6 @@ impl Debug for Command {
 }
 
 pub const CMD_TAG_GC: &str = "gc";
-pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
 
 impl Command {
     pub fn readonly(&self) -> bool {
@@ -396,8 +395,8 @@ pub struct Storage<E: Engine> {
     engine: E,
 
     // to schedule the execution of storage commands
-    worker: Arc<Mutex<Worker<Msg>>>,
-    worker_scheduler: worker::Scheduler<Msg>,
+    worker: Arc<Mutex<Worker<Msg<E>>>>,
+    worker_scheduler: worker::Scheduler<Msg<E>>,
 
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker<E>,
@@ -437,10 +436,6 @@ impl<E: Engine> Storage<E> {
             gc_worker,
             max_key_size: config.max_key_size,
         })
-    }
-
-    pub fn mut_gc_worker(&mut self) -> &mut GCWorker<E> {
-        &mut self.gc_worker
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -865,21 +860,6 @@ impl<E: Engine> Storage<E> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&[CMD_TAG_GC])
-            .inc();
-        Ok(())
-    }
-
-    pub fn async_unsafe_destroy_range(
-        &self,
-        ctx: Context,
-        start_key: Key,
-        end_key: Key,
-        callback: Callback<()>,
-    ) -> Result<()> {
-        self.gc_worker
-            .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&[CMD_TAG_UNSAFE_DESTROY_RANGE])
             .inc();
         Ok(())
     }
