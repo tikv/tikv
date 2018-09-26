@@ -36,15 +36,6 @@ jobs:
           keys:
             - v3-cargo-master-{{ checksum "rust-toolchain" }}
       - run:
-          name: Restoring ~/.cargo and ~/.local Cache (non-master branch only)
-          command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              echo "Current branch is $CIRCLE_BRANCH, skip"
-            else
-              echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
-              tar xf ~/tikv_cache_cargo/cargo.tar -C ~/ || true
-            fi
-      - run:
           name: Setting up Rust and the rest of the Build Environment
           command: |
             if [[ ! -e $HOME/.cargo ]]; then
@@ -79,16 +70,6 @@ jobs:
           keys:
             - v3-target-master-{{ checksum "rust-toolchain" }}
       - run:
-          name: Restoring ./target Cache (non-master branch only)
-          command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              echo "Current branch is $CIRCLE_BRANCH, skip"
-            else
-              echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
-              tar xf ~/tikv_cache_build/target.tar || true
-            fi
-          no_output_timeout: 1800s
-      - run:
           name: Building
           command: env SKIP_TESTS=true make trace_test
           no_output_timeout: 1800s
@@ -97,12 +78,8 @@ jobs:
           command: |
             rm -rf ~/tikv_cache_cargo
             mkdir ~/tikv_cache_cargo
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              echo "Current branch is $CIRCLE_BRANCH, creating tar for ~/.cargo and ~/.local"
-              cd ~ && tar cf ~/tikv_cache_cargo/cargo.tar .cargo .local && cd -
-            else
-              echo "Current branch is $CIRCLE_BRANCH, skip"
-            fi
+            echo "Current branch is $CIRCLE_BRANCH, creating tar for ~/.cargo and ~/.local"
+            cd ~ && tar cf ~/tikv_cache_cargo/cargo.tar .cargo .local && cd -
           no_output_timeout: 1800s
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
@@ -115,12 +92,8 @@ jobs:
           command: |
             rm -rf ~/tikv_cache_build
             mkdir ~/tikv_cache_build
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              echo "Current branch is $CIRCLE_BRANCH, creating tar for ./target"
-              tar cf ~/tikv_cache_build/target.tar target/debug/.fingerprint target/debug/build target/debug/deps target/debug/incremental
-            else
-              echo "Current branch is $CIRCLE_BRANCH, skip"
-            fi
+            echo "Current branch is $CIRCLE_BRANCH, creating tar for ./target"
+            tar cf ~/tikv_cache_build/target.tar target/debug/.fingerprint target/debug/build target/debug/deps target/debug/incremental
           no_output_timeout: 1800s
       - save_cache:
           # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
@@ -129,16 +102,10 @@ jobs:
           paths:
             - ~/tikv_cache_build
       - run:
-          name: Testing
-          command: make trace_test
-          no_output_timeout: 1800s
-      - run:
           name: Calculating code coverage (master branch only)
           command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              cargo tarpaulin --no-count --skip-clean --out Xml
-              bash <(curl -s https://codecov.io/bash)
-            fi
+            cargo tarpaulin --no-count --skip-clean --out Xml
+            bash <(curl -s https://codecov.io/bash)
           no_output_timeout: 1800s
 workflows:
   version: 2
