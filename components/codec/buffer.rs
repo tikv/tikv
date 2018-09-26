@@ -248,12 +248,6 @@ mod tests {
         buffer.advance(22);
         assert_eq!(buffer, &base[40..40]);
         assert_eq!(buffer.bytes(), &base[40..40]);
-
-        let result = ::std::panic::catch_unwind(move || {
-            // When buffer is `&[u8]`, advance cannot exceed len.
-            buffer.advance(1);
-        });
-        assert!(result.is_err());
     }
 
     #[test]
@@ -432,7 +426,9 @@ mod tests {
             assert_ne!(vec_ptr, vec.as_ptr());
 
             // Move len() forward and check whether our previous written data exists.
-            unsafe { vec.advance_mut(payload_len); }
+            unsafe {
+                vec.advance_mut(payload_len);
+            }
             assert_eq!(vec.as_slice(), payload.as_slice());
         }
     }

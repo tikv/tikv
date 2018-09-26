@@ -16,9 +16,9 @@
 #[macro_use]
 extern crate quick_error;
 #[cfg(test)]
-extern crate test;
-#[cfg(test)]
 extern crate rand;
+#[cfg(test)]
+extern crate test;
 
 mod buffer;
 mod error;
