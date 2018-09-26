@@ -427,7 +427,7 @@ impl Peer {
             .unwrap();
     }
 
-    pub fn signal_new_region(&self) {
+    pub fn notify_new_region(&self) {
         self.coprocessor_host
             .on_region_changed(self.region(), RegionChangeEvent::New);
     }
@@ -1009,7 +1009,7 @@ impl Peer {
 
         if apply_snap_result.is_some() {
             self.register_delegates();
-            self.signal_new_region();
+            self.notify_new_region();
         }
 
         apply_snap_result
