@@ -950,7 +950,7 @@ pub trait BufferNumberEncoder: BufferWriter {
     }
 
     /// Writes a signed 64 bit integer `v` in VarInt encoding,
-    /// which is not memory-comparable. Returns thenumber of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that encoded.
     ///
     /// Note:
     /// - VarInt encoding is slow, try avoid using it.
@@ -1807,11 +1807,10 @@ mod benches {
         });
     }
 
-
     #[inline]
     fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> super::Result<T>
-        where
-            F: Fn(&[u8]) -> T,
+    where
+        F: Fn(&[u8]) -> T,
     {
         if data.len() >= size {
             let buf = &data[..size];
@@ -1824,7 +1823,11 @@ mod benches {
     /// The original implementation in TiKV
     fn original_decode_u64_le(data: &mut &[u8]) -> super::Result<u64> {
         use byteorder::ByteOrder;
-        read_num_bytes(::std::mem::size_of::<u64>(), data, byteorder::LittleEndian::read_u64)
+        read_num_bytes(
+            ::std::mem::size_of::<u64>(),
+            data,
+            byteorder::LittleEndian::read_u64,
+        )
     }
 
     /// Decode u64 little endian using `bytes::Buf` over a `Cursor<&[u8]>`.
