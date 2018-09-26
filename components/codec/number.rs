@@ -1807,6 +1807,26 @@ mod benches {
         });
     }
 
+
+    #[inline]
+    fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> super::Result<T>
+        where
+            F: Fn(&[u8]) -> T,
+    {
+        if data.len() >= size {
+            let buf = &data[..size];
+            *data = &data[size..];
+            return Ok(f(buf));
+        }
+        Err(super::Error::BufferTooSmall)
+    }
+
+    /// The original implementation in TiKV
+    fn original_decode_u64_le(data: &mut &[u8]) -> super::Result<u64> {
+        use byteorder::ByteOrder;
+        read_num_bytes(::std::mem::size_of::<u64>(), data, byteorder::LittleEndian::read_u64)
+    }
+
     /// Decode u64 little endian using `bytes::Buf` over a `Cursor<&[u8]>`.
     #[bench]
     fn bench_decode_u64_le_bytes_buf(b: &mut test::Bencher) {
@@ -1832,6 +1852,18 @@ mod benches {
             let v = cursor.read_u64_le().unwrap();
             assert_eq!(v, 0x0807060504030201);
             assert_eq!(cursor.position(), 8);
+        });
+    }
+
+    /// Decode u64 little endian using the original implementation in TiKV.
+    #[bench]
+    fn bench_decode_u64_le_original(b: &mut test::Bencher) {
+        let buf: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+        b.iter(|| {
+            let mut slice = test::black_box(buf.as_slice());
+            let v = original_decode_u64_le(&mut slice).unwrap();
+            assert_eq!(v, 0x0807060504030201);
+            test::black_box(&slice);
         });
     }
 
