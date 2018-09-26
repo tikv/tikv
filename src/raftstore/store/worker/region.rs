@@ -665,7 +665,7 @@ mod test {
     use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch, DB};
     use storage::{ALL_CFS, CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb::{CFOptions, Self};
+    use util::rocksdb::{self, CFOptions};
     use util::time;
     use util::timer::Timer;
     use util::worker::Worker;
