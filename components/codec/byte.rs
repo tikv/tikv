@@ -136,7 +136,7 @@ impl MemComparableByteCodec {
     /// When there is an error, `dest` may contain partially written data.
     #[inline]
     pub fn try_decode_first(src: &[u8], dest: &mut [u8]) -> Result<(usize, usize)> {
-        Self::try_decode_first_internal(src, dest, AsendingMemComparableCodecHelper)
+        Self::try_decode_first_internal(src, dest, AscendingMemComparableCodecHelper)
     }
 
     /// Decodes bytes in descending memory-comparable format in the `src` into `dest`.
@@ -290,11 +290,11 @@ trait MemComparableCodecHelper {
     fn get_raw_padding(padding_size: usize) -> &'static [u8];
 }
 
-struct AsendingMemComparableCodecHelper;
+struct AscendingMemComparableCodecHelper;
 
 struct DescendingMemComparableCodecHelper;
 
-impl MemComparableCodecHelper for AsendingMemComparableCodecHelper {
+impl MemComparableCodecHelper for AscendingMemComparableCodecHelper {
     const PADDING: [u8; MEMCMP_GROUP_SIZE] = [MEMCMP_PADDING; MEMCMP_GROUP_SIZE];
 
     #[inline]

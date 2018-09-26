@@ -109,7 +109,7 @@ impl BufferWriter for Vec<u8> {
     unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
         // Return a slice starting from `self.len()` position and has at least `size` space.
 
-        // Ensure returned slice has enough space (64 or more)
+        // Ensure returned slice has enough space
         self.reserve(size);
         let ptr = self.as_mut_ptr();
         &mut ::std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
