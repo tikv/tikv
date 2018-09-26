@@ -18,7 +18,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver as StdReceiver};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time:: Instant;
 use std::{thread, u64};
 use time;
 
@@ -39,7 +39,6 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::time::{duration_to_sec, SlowTimer};
-use util::timer::Timer;
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Scheduler, Worker};
 use util::{rocksdb, sys as util_sys, RingQueue};
@@ -57,8 +56,8 @@ use raftstore::store::peer_storage::{self, CacheQueryStats};
 use raftstore::store::transport::Transport;
 use raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionEvent, RegionRunner,
-    RegionTask, SplitCheckRunner, PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_INTERVAL,
+    ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask,
+    SplitCheckRunner,
 };
 use raftstore::store::{
     util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
@@ -421,15 +420,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.use_delete_range,
             self.cfg.clean_stale_peer_delay.0,
         );
-        let mut timer = Timer::new(2);
-        timer.add_task(
-            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-            RegionEvent::CheckApply,
-        );
-        timer.add_task(
-            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-            RegionEvent::CheckPeer,
-        );
+        let timer = RegionRunner::new_timer();
         box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);

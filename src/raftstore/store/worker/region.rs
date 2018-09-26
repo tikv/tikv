@@ -539,6 +539,19 @@ impl Runner {
         }
     }
 
+    pub fn new_timer() -> Timer<Event> {
+        let mut timer = Timer::new(2);
+        timer.add_task(
+            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+            Event::CheckApply,
+        );
+        timer.add_task(
+            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
+            Event::CheckPeer,
+        );
+        timer
+    }
+
     fn handle_pending_applies(&mut self) {
         // Should not handle too many applies than the number of files that can be ingested.
         // Check level 0 every time because we can not make sure how does the number of level 0 files change.
@@ -840,8 +853,7 @@ mod test {
             true,
             Duration::from_secs(0),
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckApply);
+        let timer = RegionRunner::new_timer();
         worker.start_with_timer(runner, timer).unwrap();
 
         let gen_and_apply_snap = |id: u64| {
