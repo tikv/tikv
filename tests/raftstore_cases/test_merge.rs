@@ -23,8 +23,7 @@ use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
-use tikv::storage::{CF_RAFT, CF_WRITE};
-use tikv::util::config::*;
+use tikv::storage::CF_RAFT;
 use tikv::util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
