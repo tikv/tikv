@@ -130,6 +130,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
+    coprocessor_host_hook: Option<Box<Fn(u64, &mut CoprocessorHost)>>,
 }
 
 impl NodeCluster {
@@ -139,6 +140,7 @@ impl NodeCluster {
             pd_client,
             nodes: HashMap::default(),
             simulate_trans: HashMap::default(),
+            coprocessor_host_hook: None,
         }
     }
 }
@@ -151,6 +153,10 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
+    fn hook_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
+        self.coprocessor_host_hook = Some(op)
+    }
+
     fn run_node(
         &mut self,
         node_id: u64,
@@ -190,7 +196,11 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+
+        if let Some(h) = self.coprocessor_host_hook.as_ref() {
+            h(node_id, &mut coprocessor_host);
+        }
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");

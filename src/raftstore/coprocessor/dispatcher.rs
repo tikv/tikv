@@ -248,7 +248,7 @@ impl CoprocessorHost {
         loop_ob!(region, &self.registry.role_observers, on_role_change, role);
     }
 
-    pub fn on_region_changed(&self, region: &Region, event: &RegionChangeEvent) {
+    pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent) {
         loop_ob!(
             region,
             &self.registry.region_change_observers,
@@ -345,7 +345,7 @@ mod test {
     }
 
     impl RegionChangeObserver for TestCoprocessor {
-        fn on_region_changed(&self, ctx: &mut ObserverContext, _: &RegionChangeEvent) {
+        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent) {
             self.called.fetch_add(8, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -403,7 +403,7 @@ mod test {
         host.on_role_change(&region, StateRole::Leader);
         assert_all!(&[&ob.called], &[28]);
 
-        host.on_region_changed(&region, &RegionChangeEvent::New);
+        host.on_region_changed(&region, RegionChangeEvent::New);
         assert_all!(&[&ob.called], &[36]);
     }
 

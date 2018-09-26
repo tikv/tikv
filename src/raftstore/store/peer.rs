@@ -429,7 +429,7 @@ impl Peer {
 
     pub fn signal_new_region(&self) {
         self.coprocessor_host
-            .on_region_changed(self.region(), &RegionChangeEvent::New);
+            .on_region_changed(self.region(), RegionChangeEvent::New);
     }
 
     #[inline]
@@ -550,8 +550,11 @@ impl Peer {
         // Always update read delegate's region to avoid stale region info after a follower
         // becomeing a leader.
         self.maybe_update_read_progress(progress);
-        self.coprocessor_host
-            .on_region_changed(self.region(), &RegionChangeEvent::Update);
+
+        if !self.pending_remove {
+            self.coprocessor_host
+                .on_region_changed(self.region(), RegionChangeEvent::Update);
+        }
     }
 
     pub fn peer_id(&self) -> u64 {

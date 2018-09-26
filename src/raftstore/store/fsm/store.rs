@@ -244,7 +244,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // in DB.
             self.region_peers.insert(region_id, peer);
             self.coprocessor_host
-                .on_region_changed(region, &RegionChangeEvent::New);
+                .on_region_changed(region, RegionChangeEvent::New);
             Ok(true)
         })?;
 
