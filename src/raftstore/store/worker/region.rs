@@ -553,26 +553,20 @@ impl Runner {
         timer
     }
 
-    // try to apply the task if it is some.
-    // when task is none, it will try to apply pending task.
-    //
-    // when task is some, return indicate whether apply the task or not;
-    // when task is none, return indicate whether apply pending task or not.
-    fn maybe_handle_applies(&mut self, task: Option<Task>) -> bool {
-        if task.is_some() {
-            self.pending_applies.push_back(task.unwrap());
-        }
-
-        // should not handle too many applies than the number of files that can be ingested.
-        if !self.ctx.ingest_maybe_stall() {
-            // handle pending apply first to makes sure appling snapshots in order.
+    // try to apply pending tasks if there is some.
+    fn handle_pending_applies(&mut self) {
+        while !self.pending_applies.is_empty() {
+            // should not handle too many applies than the number of files that can be ingested.
+            // check level 0 every time because we can not make sure how does the number of level 0 files change.
+            if self.ctx.ingest_maybe_stall() {
+                break;
+            }
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
                 // empty indicates the pending task that handled above is exactly the task passed in.
                 return self.pending_applies.is_empty();
             }
         }
-        false
     }
 }
 
@@ -590,7 +584,10 @@ impl Runnable<Task> for Runner {
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
             task @ Task::Apply { .. } => {
-                if !self.maybe_handle_applies(Some(task)) {
+                // to makes sure appling snapshots in order.
+                self.pending_applies.push_back(task);
+                self.handle_pending_applies();
+                if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
                     SNAP_COUNTER_VEC
                         .with_label_values(&["apply", "delay"])
@@ -633,16 +630,13 @@ impl RunnableWithTimer<Task, Event> for Runner {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
-                while !self.pending_applies.is_empty() {
-                    // Check level 0 every time because we can not make sure how does the number of level 0 files change.
-                    if !self.maybe_handle_applies(None) {
-                        break;
-                    }
+                self.handle_pending_applies();
+                if !self.pending_applies.is_empty() {
+                    // delay again
+                    SNAP_COUNTER_VEC
+                        .with_label_values(&["apply", "delay"])
+                        .inc_by(self.pending_applies.len() as i64);
                 }
-                // delay again
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["apply", "delay"])
-                    .inc_by(self.pending_applies.len() as i64);
                 timer.add_task(
                     Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
                     Event::CheckApply,
