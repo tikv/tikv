@@ -340,6 +340,7 @@ impl SnapContext {
     }
 
     // check the number of files at level 0 to avoid write stall after ingesting sst,
+    // return indicate whether permit to ingest or not.
     fn check_level_0_num_files(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -358,7 +359,7 @@ impl SnapContext {
 
             if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
-                if i64::from(options.get_level_zero_slowdown_writes_trigger()) - 1 - n as i64 <= 0 {
+                if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
                     return false;
                 }
             }
@@ -547,7 +548,7 @@ impl Runner {
         );
         timer.add_task(
             Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-            Event::CheckPeer,
+            Event::CheckStalePeer,
         );
         timer
     }
@@ -561,7 +562,7 @@ impl Runner {
         if task.is_some() {
             self.pending_applies.push_back(task.unwrap());
         }
-        
+
         // should not handle too many applies than the number of files that can be ingested.
         if self.ctx.check_level_0_num_files() {
             // handle pending apply first to makes sure appling snapshots in order.
@@ -588,7 +589,7 @@ impl Runnable<Task> for Runner {
                 self.pool
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
-            task @ Task::Apply{..} => {
+            task @ Task::Apply { .. } => {
                 if !self.maybe_handle_applies(Some(task)) {
                     // delay the apply and retry later
                     SNAP_COUNTER_VEC
@@ -624,7 +625,7 @@ impl Runnable<Task> for Runner {
 
 /// region related timeout event.
 pub enum Event {
-    CheckPeer,
+    CheckStalePeer,
     CheckApply,
 }
 
@@ -647,11 +648,11 @@ impl RunnableWithTimer<Task, Event> for Runner {
                     Event::CheckApply,
                 );
             }
-            Event::CheckPeer => {
+            Event::CheckStalePeer => {
                 self.ctx.clean_timeout_ranges();
                 timer.add_task(
                     Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-                    Event::CheckPeer,
+                    Event::CheckStalePeer,
                 );
             }
         }
