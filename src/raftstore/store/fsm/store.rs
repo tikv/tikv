@@ -18,7 +18,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver as StdReceiver};
 use std::sync::Arc;
-use std::time:: Instant;
+use std::time::Instant;
 use std::{thread, u64};
 use time;
 

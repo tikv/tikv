@@ -552,16 +552,26 @@ impl Runner {
         timer
     }
 
-    fn handle_pending_applies(&mut self) {
-        // Should not handle too many applies than the number of files that can be ingested.
-        // Check level 0 every time because we can not make sure how does the number of level 0 files change.
-        while self.ctx.check_level_0_num_files() {
+    // try to apply the task if it is some.
+    // when task is none, it will try to apply pending task.
+    //
+    // when task is some, return indicate whether apply the task or not;
+    // when task is none, return indicate whether apply pending task or not.
+    fn maybe_handle_applies(&mut self, task: Option<Task>) -> bool {
+        if task.is_some() {
+            self.pending_applies.push_back(task.unwrap());
+        }
+        
+        // should not handle too many applies than the number of files that can be ingested.
+        if self.ctx.check_level_0_num_files() {
+            // handle pending apply first to makes sure appling snapshots in order.
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
-            } else {
-                break;
+                // empty indicates the pending task that handled above is exactly the task passed in.
+                return self.pending_applies.is_empty();
             }
         }
+        false
     }
 }
 
@@ -578,21 +588,9 @@ impl Runnable<Task> for Runner {
                 self.pool
                     .execute(move |_| ctx.handle_gen(region_id, notifier))
             }
-            Task::Apply { region_id, status } => {
-                if self.ctx.check_level_0_num_files() {
-                    if self.pending_applies.is_empty() {
-                        self.ctx.handle_apply(region_id, status);
-                    } else {
-                        // if there is any pending apply, do not directly handle this apply,
-                        // which makes sure appling snapshots in order
-                        self.pending_applies
-                            .push_back(Task::Apply { region_id, status });
-                        self.handle_pending_applies();
-                    }
-                } else {
+            task @ Task::Apply{..} => {
+                if !self.maybe_handle_applies(Some(task)) {
                     // delay the apply and retry later
-                    self.pending_applies
-                        .push_back(Task::Apply { region_id, status });
                     SNAP_COUNTER_VEC
                         .with_label_values(&["apply", "delay"])
                         .inc();
@@ -634,16 +632,16 @@ impl RunnableWithTimer<Task, Event> for Runner {
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
-                if !self.pending_applies.is_empty() {
-                    if self.ctx.check_level_0_num_files() {
-                        self.handle_pending_applies();
-                    } else {
-                        // delay again
-                        SNAP_COUNTER_VEC
-                            .with_label_values(&["apply", "delay"])
-                            .inc_by(self.pending_applies.len() as i64);
+                while !self.pending_applies.is_empty() {
+                    // Check level 0 every time because we can not make sure how does the number of level 0 files change.
+                    if !self.maybe_handle_applies(None) {
+                        break;
                     }
                 }
+                // delay again
+                SNAP_COUNTER_VEC
+                    .with_label_values(&["apply", "delay"])
+                    .inc_by(self.pending_applies.len() as i64);
                 timer.add_task(
                     Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
                     Event::CheckApply,
@@ -680,10 +678,8 @@ mod test {
     use tempdir::TempDir;
     use util::rocksdb::{self, CFOptions};
     use util::time;
-    use util::timer::Timer;
     use util::worker::Worker;
 
-    use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
 
