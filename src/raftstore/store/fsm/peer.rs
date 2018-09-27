@@ -46,7 +46,7 @@ use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::*;
-use raftstore::store::msg::{Callback, ReadResponse};
+use raftstore::store::msg::Callback;
 use raftstore::store::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use raftstore::store::peer_storage::ApplySnapResult;
 use raftstore::store::transport::Transport;
@@ -1460,27 +1460,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    fn check_propose_peer(&self, msg: &RaftCmdRequest) -> Result<&Peer> {
-        let region_id = msg.get_header().get_region_id();
-        let peer = match self.region_peers.get(&region_id) {
-            Some(peer) => peer,
-            None => return Err(Error::RegionNotFound(region_id)),
-        };
-        if !peer.is_leader() {
-            return Err(Error::NotLeader(
-                region_id,
-                peer.get_peer_from_cache(peer.leader_id()),
-            ));
-        }
-        Ok(peer)
-    }
-
     fn pre_propose_raft_command(
         &mut self,
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
         // Check store_id, make sure that the msg is dispatched to the right place.
-        util::check_store_id(msg, self.store_id())?;
+        if let Err(e) = util::check_store_id(msg, self.store_id()) {
+            self.raft_metrics.invalid_proposal.mismatch_store_id += 1;
+            return Err(e);
+        }
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
             let resp = self.execute_status_command(msg)?;
@@ -1488,11 +1476,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // Check whether the store has the right peer to handle the request.
-        let peer = self.check_propose_peer(msg)?;
+
+        let region_id = msg.get_header().get_region_id();
+        let peer = match self.region_peers.get(&region_id) {
+            Some(peer) => peer,
+            None => {
+                self.raft_metrics.invalid_proposal.region_not_found += 1;
+                return Err(Error::RegionNotFound(region_id));
+            }
+        };
+
+        if !peer.is_leader() {
+            self.raft_metrics.invalid_proposal.not_leader += 1;
+            return Err(Error::NotLeader(
+                region_id,
+                peer.get_peer_from_cache(peer.leader_id()),
+            ));
+        }
         // peer_id must be the same as peer's.
-        util::check_peer_id(msg, peer.peer_id())?;
+        if let Err(e) = util::check_peer_id(msg, peer.peer_id()) {
+            self.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
+            return Err(e);
+        }
         // Check whether the term is stale.
-        util::check_term(msg, peer.term())?;
+        if let Err(e) = util::check_term(msg, peer.term()) {
+            self.raft_metrics.invalid_proposal.stale_command += 1;
+            return Err(e);
+        }
 
         match util::check_region_epoch(msg, peer.region(), true) {
             Err(Error::StaleEpoch(msg, mut new_regions)) => {
@@ -1505,6 +1515,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let sibling_region = self.region_peers[&sibling_region_id].region();
                     new_regions.push(sibling_region.to_owned());
                 }
+                self.raft_metrics.invalid_proposal.stale_epoch += 1;
                 Err(Error::StaleEpoch(msg, new_regions))
             }
             Err(e) => Err(e),
@@ -1548,40 +1559,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
-    }
-
-    pub fn propose_batch_raft_snapshot_command(
-        &mut self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: Callback,
-    ) {
-        let size = batch.len();
-        BATCH_SNAPSHOT_COMMANDS.observe(size as f64);
-        let mut ret = Vec::with_capacity(size);
-        for msg in batch {
-            match self.pre_propose_raft_command(&msg) {
-                Ok(Some(resp)) => {
-                    ret.push(Some(ReadResponse {
-                        response: resp,
-                        snapshot: None,
-                    }));
-                    continue;
-                }
-                Err(e) => {
-                    ret.push(Some(ReadResponse {
-                        response: new_error(e),
-                        snapshot: None,
-                    }));
-                    continue;
-                }
-                _ => (),
-            }
-
-            let region_id = msg.get_header().get_region_id();
-            let peer = self.region_peers.get_mut(&region_id).unwrap();
-            ret.push(peer.propose_snapshot(msg, &mut self.raft_metrics.propose));
-        }
-        on_finished.invoke_batch_read(ret)
     }
 
     pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {

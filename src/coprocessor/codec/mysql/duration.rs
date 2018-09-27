@@ -83,6 +83,10 @@ impl Duration {
     }
 
     pub fn micro_secs(&self) -> u32 {
+        self.dur.subsec_micros()
+    }
+
+    pub fn nano_secs(&self) -> u32 {
         self.dur.subsec_nanos()
     }
 
@@ -209,7 +213,7 @@ impl Duration {
         )?;
         if self.fsp > 0 {
             write!(buf, ".")?;
-            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
+            let nanos = self.dur.subsec_nanos() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
             write!(buf, "{:01$}", nanos, self.fsp as usize)?;
         }
         let d = unsafe { str::from_utf8_unchecked(&buf).parse()? };
@@ -245,7 +249,7 @@ impl Display for Duration {
         )?;
         if self.fsp > 0 {
             write!(formatter, ".")?;
-            let nanos = self.micro_secs() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
+            let nanos = self.dur.subsec_nanos() / (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
             write!(formatter, "{:01$}", nanos, self.fsp as usize)?;
         }
         Ok(())
@@ -299,6 +303,93 @@ mod test {
     use super::*;
     use coprocessor::codec::mysql::MAX_FSP;
     use util::escape;
+
+    #[test]
+    fn test_hours() {
+        let cases: Vec<(&str, i8, u64)> = vec![
+            ("31 11:30:45", 0, 31 * 24 + 11),
+            ("11:30:45", 0, 11),
+            ("-11:30:45.9233456", 0, 11),
+            ("272:59:59", 0, 272),
+        ];
+
+        for (input, fsp, exp) in cases {
+            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let res = dur.hours();
+            assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_minutes() {
+        let cases: Vec<(&str, i8, u64)> = vec![
+            ("31 11:30:45", 0, 30),
+            ("11:30:45", 0, 30),
+            ("-11:30:45.9233456", 0, 30),
+        ];
+
+        for (input, fsp, exp) in cases {
+            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let res = dur.minutes();
+            assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_secs() {
+        let cases: Vec<(&str, i8, u64)> = vec![
+            ("31 11:30:45", 0, 45),
+            ("11:30:45", 0, 45),
+            ("-11:30:45.9233456", 1, 45),
+            ("-11:30:45.9233456", 0, 46),
+        ];
+
+        for (input, fsp, exp) in cases {
+            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let res = dur.secs();
+            assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_micro_secs() {
+        let cases: Vec<(&str, i8, u32)> = vec![
+            ("31 11:30:45.123", 6, 123000),
+            ("11:30:45.123345", 3, 123000),
+            ("11:30:45.123345", 5, 123350),
+            ("11:30:45.123345", 6, 123345),
+            ("11:30:45.1233456", 6, 123346),
+            ("11:30:45.9233456", 0, 0),
+            ("11:30:45.000010", 6, 10),
+            ("11:30:45.00010", 5, 100),
+        ];
+
+        for (input, fsp, exp) in cases {
+            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let res = dur.micro_secs();
+            assert_eq!(exp, res);
+        }
+    }
+
+    #[test]
+    fn test_nano_secs() {
+        let cases: Vec<(&str, i8, u32)> = vec![
+            ("31 11:30:45.123", 6, 123000),
+            ("11:30:45.123345", 3, 123000),
+            ("11:30:45.123345", 5, 123350),
+            ("11:30:45.123345", 6, 123345),
+            ("11:30:45.1233456", 6, 123346),
+            ("11:30:45.9233456", 0, 0),
+            ("11:30:45.000010", 6, 10),
+            ("11:30:45.00010", 5, 100),
+        ];
+
+        for (input, fsp, exp) in cases {
+            let dur = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let res = dur.nano_secs();
+            assert_eq!(exp * 1000, res);
+        }
+    }
 
     #[test]
     fn test_parse() {

@@ -39,6 +39,7 @@ impl ScalarFunc {
 mod test {
     use coprocessor::codec::mysql::Decimal;
     use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
     use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
@@ -95,9 +96,7 @@ mod test {
                 Datum::I64(37),
             ),
         ];
-        let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::default_for_test().set_overflow_as_warning(true),
-        ));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastStringAsInt, args);
@@ -129,9 +128,7 @@ mod test {
                 Datum::I64(63),
             ),
         ];
-        let mut ctx = EvalContext::new(Arc::new(
-            EvalConfig::default_for_test().set_overflow_as_warning(true),
-        ));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, args);
