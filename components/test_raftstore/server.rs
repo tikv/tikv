@@ -26,7 +26,6 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::coprocessor::RegionCollection;
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::{store, Result};
 use tikv::server::readpool::ReadPool;
@@ -84,7 +83,6 @@ impl ServerCluster {
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
-            region_collections: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
             coprocessor_host_hook: None,
@@ -215,7 +213,6 @@ impl Simulator for ServerCluster {
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
-
         if let Some(h) = self.coprocessor_host_hook.as_ref() {
             h(node_id, &mut coprocessor_host);
         }
@@ -268,9 +265,6 @@ impl Simulator for ServerCluster {
             meta.server.stop().unwrap();
             meta.node.stop().unwrap();
             meta.worker.stop().unwrap().join().unwrap();
-        }
-        if let Some(region_collection) = self.region_collections.remove(&node_id) {
-            region_collection.stop();
         }
     }
 

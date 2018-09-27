@@ -248,7 +248,6 @@ impl CoprocessorHost {
         loop_ob!(region, &self.registry.role_observers, on_role_change, role);
     }
 
-
     pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent) {
         loop_ob!(
             region,

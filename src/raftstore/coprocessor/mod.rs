@@ -138,7 +138,6 @@ pub trait RoleObserver: Coprocessor {
     fn on_role_change(&self, _: &mut ObserverContext, _: StateRole) {}
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RegionChangeEvent {
     New,

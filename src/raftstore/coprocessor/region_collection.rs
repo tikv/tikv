@@ -12,11 +12,10 @@
 // limitations under the License.
 
 use super::{
-    AdminObserver, AdminResponse, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionLoadObserver, RoleObserver,
+    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RoleObserver,
 };
 use kvproto::metapb::{Peer, Region};
-use kvproto::raft_cmdpb::AdminCmdType;
 use raft::StateRole;
 use raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
 use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
@@ -24,7 +23,6 @@ use raftstore::store::util;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::iter::Iterator;
 use std::sync::{mpsc, Arc, Mutex};
 use std::usize;
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
@@ -44,25 +42,10 @@ const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 enum RaftStoreEvent {
-    //    PreProposeAdmin {
-    //        region: Region,
-    //        request: AdminRequest,
-    //    },
-    //    PreApplyAdmin {
-    //        region: Region,
-    //        request: AdminRequest,
-    //    },
-    PostApplyAdmin {
-        region: Region,
-        response: AdminResponse,
-    },
-    RoleChange {
-        region: Region,
-        role: StateRole,
-    },
-    RegionLoaded {
-        region: Region,
-    },
+    NewRegion { region: Region },
+    UpdateRegion { region: Region },
+    DestroyRegion { region: Region },
+    RoleChange { region: Region, role: StateRole },
 }
 
 impl Display for RaftStoreEvent {
@@ -98,36 +81,24 @@ struct EventSender {
 
 impl Coprocessor for EventSender {}
 
-impl AdminObserver for EventSender {
-    fn post_apply_admin(&self, context: &mut ObserverContext, resp: &mut AdminResponse) {
-        match resp.get_cmd_type() {
-            AdminCmdType::Split | AdminCmdType::BatchSplit => {
-                let region = context.region.clone();
-                let response = resp.clone();
-                let event = RaftStoreEvent::PostApplyAdmin { region, response };
-                self.scheduler
-                    .schedule(RegionCollectionMsg::RaftStoreEvent(event))
-                    .unwrap();
-            }
-            _ => {}
-        }
-    }
-}
-
-impl RoleObserver for EventSender {
-    fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
-        let region = context.region.clone();
-        let event = RaftStoreEvent::RoleChange { region, role };
+impl RegionChangeObserver for EventSender {
+    fn on_region_changed(&self, context: &mut ObserverContext, event: RegionChangeEvent) {
+        let region = context.region().clone();
+        let event = match event {
+            RegionChangeEvent::New => RaftStoreEvent::NewRegion { region },
+            RegionChangeEvent::Update => RaftStoreEvent::UpdateRegion { region },
+            RegionChangeEvent::Destroy => RaftStoreEvent::DestroyRegion { region },
+        };
         self.scheduler
             .schedule(RegionCollectionMsg::RaftStoreEvent(event))
             .unwrap();
     }
 }
 
-impl RegionLoadObserver for EventSender {
-    fn on_region_loaded(&self, context: &mut ObserverContext, _: ()) {
-        let region = context.region.clone();
-        let event = RaftStoreEvent::RegionLoaded { region };
+impl RoleObserver for EventSender {
+    fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
+        let region = context.region().clone();
+        let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler
             .schedule(RegionCollectionMsg::RaftStoreEvent(event))
             .unwrap();
@@ -142,11 +113,9 @@ fn register_raftstore_event_sender(
     let event_sender = EventSender { scheduler };
 
     host.registry
-        .register_admin_observer(1, box event_sender.clone());
-    host.registry
         .register_role_observer(1, box event_sender.clone());
     host.registry
-        .register_region_load_observer(1, box event_sender);
+        .register_region_change_observer(1, box event_sender.clone());
 }
 
 /// `RegionCollectionWorker` is the underlying runner of `RegionCollection`.
@@ -159,68 +128,73 @@ struct RegionCollectionWorker {
 }
 
 impl RegionCollectionWorker {
-    fn handle_split(&mut self, left: &Region, right: &Region) {
-        // Old region info should be updated after inserting.
-        self.handle_batch_split(vec![left, right].into_iter());
+    fn handle_new_region(&mut self, region: Region) {
+        self.region_ranges
+            .insert(data_end_key(region.get_end_key()), region.get_id());
+        // TODO: Should we set it follower?
+        self.regions
+            .insert(region.get_id(), (region, StateRole::Follower));
     }
 
-    fn handle_batch_split<'a, I: Iterator<Item = &'a Region>>(&mut self, regions: I) {
-        // Old region info should be updated after inserting.
-        for region in regions {
-            let mut is_new_region = true;
-            if let Some((ref mut old_region, _)) = self.regions.get_mut(&region.get_id()) {
-                is_new_region = false;
-                assert_eq!(old_region.get_id(), region.get_id());
+    fn handle_update_region(&mut self, region: Region) {
+        let mut is_new_region = true;
+        if let Some((ref mut old_region, _)) = self.regions.get_mut(&region.get_id()) {
+            is_new_region = false;
+            assert_eq!(old_region.get_id(), region.get_id());
 
-                // If the region with this region_id already existed in the collection, it must be
-                // stale and need to be updated. There may be a corresponding item in
-                // `region_ranges`. If the end_key changed, the old item in `region_ranges` should
-                // be removed, unless it was already updated.
-                if old_region.get_end_key() != region.get_end_key() {
-                    // The region's end_key has changed.
-                    // Remove the old entry in `self.region_ranges` if it haven't been updated by
-                    // other items in `regions`. The entry with key equals to old_region's end key
-                    // was updated in previous circles in this for-loop, if it maps to a id that is
-                    // different from `region.id`.
-                    let old_end_key = data_end_key(old_region.get_end_key());
-                    if let Some(old_id) = self.region_ranges.get(&old_end_key).cloned() {
-                        if old_id == region.get_id() {
-                            self.region_ranges.remove(&old_end_key);
-                        }
+            // If the region with this region_id already existed in the collection, it must be
+            // stale and need to be updated. There may be a corresponding item in
+            // `region_ranges`. If the end_key changed, the old item in `region_ranges` should
+            // be removed, unless it was already updated.
+            if old_region.get_end_key() != region.get_end_key() {
+                // The region's end_key has changed.
+                // Remove the old entry in `self.region_ranges` if it haven't been updated by
+                // other items in `regions`. The entry with key equals to old_region's end key
+                // was updated in previous circles in this for-loop, if it maps to a id that is
+                // different from `region.id`.
+                let old_end_key = data_end_key(old_region.get_end_key());
+                if let Some(old_id) = self.region_ranges.get(&old_end_key).cloned() {
+                    if old_id == region.get_id() {
+                        self.region_ranges.remove(&old_end_key);
                     }
                 }
-
-                // If the region already exists, update it and keep the original role.
-                *old_region = region.clone();
             }
 
-            if is_new_region {
-                // If it's a new region, set it to follower state.
-                // TODO: Should we set it follower?
-                self.regions
-                    .insert(region.get_id(), (region.clone(), StateRole::Follower));
-            }
-
-            // If the end_key changed or the region didn't exist previously, insert a new item;
-            // otherwise, update the old item. All regions in param `regions` must have unique
-            // end_keys, so it won't conflict with each other.
-            self.region_ranges
-                .insert(data_end_key(region.get_end_key()), region.get_id());
+            // If the region already exists, update it and keep the original role.
+            *old_region = region.clone();
         }
+
+        if is_new_region {
+            // If it's a new region, set it to follower state.
+            // TODO: Should we set it follower?
+            self.regions
+                .insert(region.get_id(), (region.clone(), StateRole::Follower));
+        }
+
+        // If the end_key changed or the region didn't exist previously, insert a new item;
+        // otherwise, update the old item. All regions in param `regions` must have unique
+        // end_keys, so it won't conflict with each other.
+        self.region_ranges
+            .insert(data_end_key(region.get_end_key()), region.get_id());
+    }
+
+    fn handle_destroy_region(&mut self, region: Region) {
+        let end_key = data_end_key(region.get_end_key());
+
+        // The entry may be updated by other regions.
+        if let Some(id) = self.region_ranges.get(&end_key).cloned() {
+            if id == region.get_id() {
+                self.region_ranges.remove(&end_key);
+            }
+        }
+
+        self.regions.remove(&region.get_id());
     }
 
     fn handle_role_change(&mut self, region: Region, role: StateRole) {
         self.regions
             .insert(region.get_id(), (region, role))
             .expect("region didn't exist in region collection");
-    }
-
-    fn handle_region_loaded(&mut self, region: Region) {
-        self.region_ranges
-            .insert(data_end_key(region.get_end_key()), region.get_id());
-        // TODO: Should we set it follower?
-        self.regions
-            .insert(region.get_id(), (region, StateRole::Follower));
     }
 
     fn handle_seek_region(
@@ -264,23 +238,17 @@ impl RegionCollectionWorker {
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
-            RaftStoreEvent::PostApplyAdmin { response, .. } => match response.get_cmd_type() {
-                AdminCmdType::Split => {
-                    self.handle_split(
-                        response.get_split().get_left(),
-                        response.get_split().get_right(),
-                    );
-                }
-                AdminCmdType::BatchSplit => {
-                    self.handle_batch_split(response.get_splits().get_regions().iter());
-                }
-                _ => unreachable!(),
-            },
+            RaftStoreEvent::NewRegion { region } => {
+                self.handle_new_region(region);
+            }
+            RaftStoreEvent::UpdateRegion { region } => {
+                self.handle_update_region(region);
+            }
+            RaftStoreEvent::DestroyRegion { region } => {
+                self.handle_destroy_region(region);
+            }
             RaftStoreEvent::RoleChange { region, role } => {
                 self.handle_role_change(region, role);
-            }
-            RaftStoreEvent::RegionLoaded { region } => {
-                self.handle_region_loaded(region);
             }
         }
     }

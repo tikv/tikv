@@ -11,10 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
 use test_raftstore::*;
+use tikv::raftstore::coprocessor::RegionCollection;
 use tikv::raftstore::store::SeekRegionResult;
 use tikv::storage::engine::RegionInfoProvider;
 use tikv::util::collections::HashMap;
@@ -194,9 +196,19 @@ fn test_raftkv_seek_region() {
 #[test]
 fn test_region_collection_seek_region() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
 
-    let region_info_providers = cluster.sim.rl().region_collections.clone();
+    let (tx, rx) = channel();
+    cluster
+        .sim
+        .wl()
+        .hook_create_coprocessor_host(box move |id, host| {
+            let p = RegionCollection::new(host, id);
+            tx.send((id, p)).unwrap()
+        });
+
+    cluster.run();
+    let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
+    assert_eq!(region_info_providers.len(), 3);
 
     test_seek_region_impl(cluster, region_info_providers);
 }
