@@ -563,8 +563,6 @@ impl Runner {
             }
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
-                // empty indicates the pending task that handled above is exactly the task passed in.
-                return self.pending_applies.is_empty();
             }
         }
     }
