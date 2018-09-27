@@ -341,7 +341,7 @@ impl SnapContext {
 
     // check the number of files at level 0 to avoid write stall after ingesting sst,
     // return indicate whether permit to ingest or not.
-    fn check_level_0_num_files(&self) -> bool {
+    fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
             if plain_file_used(cf) {
@@ -564,7 +564,7 @@ impl Runner {
         }
 
         // should not handle too many applies than the number of files that can be ingested.
-        if self.ctx.check_level_0_num_files() {
+        if self.ctx.ingest_maybe_stall() {
             // handle pending apply first to makes sure appling snapshots in order.
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
