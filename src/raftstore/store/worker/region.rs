@@ -340,7 +340,7 @@ impl SnapContext {
     }
 
     // check the number of files at level 0 to avoid write stall after ingesting sst,
-    // return indicate whether permit to ingest or not.
+    // return indicate whether ingest will cause write stall or not.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -351,20 +351,20 @@ impl SnapContext {
             let handle = match rocksdb::get_cf_handle(&self.engines.kv, cf) {
                 Ok(handle) => handle,
                 Err(_) => {
-                    // when having trouble in getting cf handle, just return true here
+                    // when having trouble in getting cf handle, just return false here
                     // then apply_snap() will return error which can be handled in handle_apply()
-                    return true;
+                    return false;
                 }
             };
 
             if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
                 if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
-                    return false;
+                    return true;
                 }
             }
         }
-        true
+        false
     }
 
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
@@ -564,7 +564,7 @@ impl Runner {
         }
 
         // should not handle too many applies than the number of files that can be ingested.
-        if self.ctx.ingest_maybe_stall() {
+        if !self.ctx.ingest_maybe_stall() {
             // handle pending apply first to makes sure appling snapshots in order.
             if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
                 self.ctx.handle_apply(region_id, status);
