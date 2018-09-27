@@ -64,10 +64,10 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, SimulateEngine>,
-    pub region_collections: HashMap<u64, RegionCollection>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
+    coprocessor_host_hook: Option<Box<Fn(u64, &mut CoprocessorHost)>>,
 }
 
 impl ServerCluster {
@@ -87,6 +87,7 @@ impl ServerCluster {
             region_collections: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            coprocessor_host_hook: None,
         }
     }
 
@@ -96,6 +97,10 @@ impl ServerCluster {
 }
 
 impl Simulator for ServerCluster {
+    fn hook_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
+        self.coprocessor_host_hook = Some(op);
+    }
+
     fn run_node(
         &mut self,
         node_id: u64,
@@ -210,10 +215,10 @@ impl Simulator for ServerCluster {
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
-        // Create region collection
-        let region_collection = RegionCollection::new(&mut coprocessor_host, node_id);
-        region_collection.start();
-        self.region_collections.insert(node_id, region_collection);
+
+        if let Some(h) = self.coprocessor_host_hook.as_ref() {
+            h(node_id, &mut coprocessor_host);
+        }
 
         node.start(
             event_loop,
