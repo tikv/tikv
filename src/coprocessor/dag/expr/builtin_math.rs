@@ -338,6 +338,29 @@ impl ScalarFunc {
             Ok(Some(x / shift * shift))
         }
     }
+
+    #[inline]
+    pub fn truncate_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let x = try_opt!(self.children[0].eval_real(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            (d as u64).min(i32::max_value() as u64) as i32
+        } else if d >= 0 {
+            d.min(i64::from(i32::max_value())) as i32
+        } else {
+            d.max(i64::from(i32::min_value())) as i32
+        };
+        let m = 10_f64.powi(d);
+        let tmp = x * m;
+        let r = if tmp == 0_f64 {
+            0_f64
+        } else if tmp.is_infinite() {
+            x
+        } else {
+            tmp.trunc() / m
+        };
+        Ok(Some(r))
+    }
 }
 
 fn get_rand(arg: Option<u64>) -> XorShiftRng {
@@ -1223,7 +1246,7 @@ mod test {
     }
 
     #[test]
-    fn test_truncate() {
+    fn test_truncate_int() {
         let tests = vec![
             (
                 ScalarFuncSig::TruncateInt,
@@ -1280,6 +1303,83 @@ mod test {
                 Datum::U64(18446744073709551615),
             ),
         ];
+        check_truncate_data(tests);
+    }
+
+    #[test]
+    fn test_truncate_real() {
+        let tests = vec![
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(-1.23),
+                Datum::I64(0),
+                Datum::F64(-1.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(1.58),
+                Datum::I64(0),
+                Datum::F64(1.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(1.298),
+                Datum::I64(1),
+                Datum::F64(1.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(-1),
+                Datum::F64(120.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(100),
+                Datum::F64(123.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(-100),
+                Datum::F64(0.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(i64::max_value()),
+                Datum::F64(123.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(i64::min_value()),
+                Datum::F64(0.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::U64(u64::max_value()),
+                Datum::F64(123.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(-1.23),
+                Datum::I64(0),
+                Datum::F64(-1.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(1.797693134862315708145274237317043567981e+308),
+                Datum::I64(2),
+                Datum::F64(1.797693134862315708145274237317043567981e+308),
+            ),
+        ];
+        check_truncate_data(tests);
+    }
+
+    fn check_truncate_data(tests: Vec<(ScalarFuncSig, Datum, Datum, Datum)>) {
         let mut ctx = EvalContext::default();
         for (sig, x, d, exp) in tests {
             let x = datum_expr(x);
