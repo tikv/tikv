@@ -301,6 +301,70 @@ impl RaftProposeMetrics {
     }
 }
 
+/// The buffered metrics counter for invalid propose
+#[derive(Clone)]
+pub struct RaftInvalidProposeMetrics {
+    pub mismatch_store_id: u64,
+    pub region_not_found: u64,
+    pub not_leader: u64,
+    pub mismatch_peer_id: u64,
+    pub stale_command: u64,
+    pub stale_epoch: u64,
+}
+
+impl Default for RaftInvalidProposeMetrics {
+    fn default() -> RaftInvalidProposeMetrics {
+        RaftInvalidProposeMetrics {
+            mismatch_store_id: 0,
+            region_not_found: 0,
+            not_leader: 0,
+            mismatch_peer_id: 0,
+            stale_command: 0,
+            stale_epoch: 0,
+        }
+    }
+}
+
+impl RaftInvalidProposeMetrics {
+    fn flush(&mut self) {
+        if self.mismatch_store_id > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["mismatch_store_id"])
+                .inc_by(self.mismatch_store_id as i64);
+            self.mismatch_store_id = 0;
+        }
+        if self.region_not_found > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["region_not_found"])
+                .inc_by(self.region_not_found as i64);
+            self.region_not_found = 0;
+        }
+        if self.not_leader > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["not_leader"])
+                .inc_by(self.not_leader as i64);
+            self.not_leader = 0;
+        }
+        if self.mismatch_peer_id > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["mismatch_peer_id"])
+                .inc_by(self.mismatch_peer_id as i64);
+            self.mismatch_peer_id = 0;
+        }
+        if self.stale_command > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["stale_command"])
+                .inc_by(self.stale_command as i64);
+            self.stale_command = 0;
+        }
+        if self.stale_epoch > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["stale_epoch"])
+                .inc_by(self.stale_epoch as i64);
+            self.stale_epoch = 0;
+        }
+    }
+}
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -312,6 +376,7 @@ pub struct RaftMetrics {
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
     pub leader_missing: usize,
+    pub invalid_proposal: RaftInvalidProposeMetrics,
 }
 
 impl Default for RaftMetrics {
@@ -329,6 +394,7 @@ impl Default for RaftMetrics {
                 .local(),
             append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
             leader_missing: 0,
+            invalid_proposal: Default::default(),
         }
     }
 }
@@ -343,6 +409,7 @@ impl RaftMetrics {
         self.process_ready.flush();
         self.append_log.flush();
         self.message_dropped.flush();
+        self.invalid_proposal.flush();
         LEADER_MISSING.set(self.leader_missing as i64);
     }
 }

@@ -111,7 +111,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
-            | ScalarFuncSig::DateFormatSig => (2, 2),
+            | ScalarFuncSig::DateFormatSig
+            | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateReal => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -165,6 +167,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Date
             | ScalarFuncSig::LastDay
             | ScalarFuncSig::Month
+            | ScalarFuncSig::Year
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -235,6 +238,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UnHex
             | ScalarFuncSig::Cot
             | ScalarFuncSig::Degrees
+            | ScalarFuncSig::SHA1
             | ScalarFuncSig::MD5 => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -415,7 +419,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
-            | ScalarFuncSig::SHA1
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
@@ -472,8 +475,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::TruncateDecimal
-            | ScalarFuncSig::TruncateInt
-            | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
@@ -498,7 +499,6 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::WeekWithoutMode
-            | ScalarFuncSig::Year
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
         };
@@ -731,6 +731,7 @@ dispatch_call! {
         ModInt => mod_int,
 
         Month => month,
+        Year => year,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -762,6 +763,8 @@ dispatch_call! {
         Sign => sign,
 
         RoundInt => round_int,
+
+        TruncateInt => truncate_int,
 
         IfNullInt => if_null_int,
         IfInt => if_int,
@@ -812,6 +815,7 @@ dispatch_call! {
         PI => pi,
         Rand => rand,
         RandWithSeed => rand_with_seed,
+        TruncateReal => truncate_real,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -902,6 +906,7 @@ dispatch_call! {
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
+        SHA1 => sha1,
         Elt => elt,
     }
     TIME_CALLS {
@@ -1058,6 +1063,8 @@ mod test {
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
+                    ScalarFuncSig::TruncateInt,
+                    ScalarFuncSig::TruncateReal,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
                 ],
@@ -1118,6 +1125,7 @@ mod test {
                     ScalarFuncSig::Date,
                     ScalarFuncSig::LastDay,
                     ScalarFuncSig::Month,
+                    ScalarFuncSig::Year,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1181,6 +1189,7 @@ mod test {
                     ScalarFuncSig::IsIPv4,
                     ScalarFuncSig::IsIPv6,
                     ScalarFuncSig::MD5,
+                    ScalarFuncSig::SHA1,
                     ScalarFuncSig::Cot,
                     ScalarFuncSig::Degrees,
                 ],
@@ -1406,7 +1415,6 @@ mod test {
             ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
-            ScalarFuncSig::SHA1,
             ScalarFuncSig::SHA2,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
@@ -1463,8 +1471,6 @@ mod test {
             ScalarFuncSig::Trim2Args,
             ScalarFuncSig::Trim3Args,
             ScalarFuncSig::TruncateDecimal,
-            ScalarFuncSig::TruncateInt,
-            ScalarFuncSig::TruncateReal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,
@@ -1489,7 +1495,6 @@ mod test {
             ScalarFuncSig::WeekOfYear,
             ScalarFuncSig::WeekWithMode,
             ScalarFuncSig::WeekWithoutMode,
-            ScalarFuncSig::Year,
             ScalarFuncSig::YearWeekWithMode,
             ScalarFuncSig::YearWeekWithoutMode,
         ];
