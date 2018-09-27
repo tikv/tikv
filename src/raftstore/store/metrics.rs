@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use prometheus::*;
 use rocksdb::{set_perf_level, PerfContext, PerfLevel};
+use util::time::duration_to_ms;
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -233,12 +234,12 @@ lazy_static! {
 
 pub struct WritePerfContext {
     tag: &'static str,
-    start_time: Instant,
-    wal_time: u64,
-    memtable_time: u64,
-    delay_time: u64,
-    pre_and_post_process_time: u64,
-    db_mutex_lock_time: u64,
+    start: Instant,
+    wal: u64,
+    memtable: u64,
+    lock: u64,
+    delay: u64,
+    process: u64,
 }
 
 impl WritePerfContext {
@@ -247,12 +248,12 @@ impl WritePerfContext {
         let ctx = PerfContext::get();
         WritePerfContext {
             tag,
-            start_time: Instant::now(),
-            wal_time: ctx.write_wal_time(),
-            memtable_time: ctx.write_memtable_time(),
-            delay_time: ctx.write_delay_time(),
-            pre_and_post_process_time: ctx.write_pre_and_post_process_time(),
-            db_mutex_lock_time: ctx.db_mutex_lock_nanos(),
+            start: Instant::now(),
+            wal: ctx.write_wal_time(),
+            memtable: ctx.write_memtable_time(),
+            lock: ctx.db_mutex_lock_nanos(),
+            delay: ctx.write_delay_time(),
+            process: ctx.write_pre_and_post_process_time(),
         }
     }
 }
@@ -260,32 +261,34 @@ impl WritePerfContext {
 impl Drop for WritePerfContext {
     fn drop(&mut self) {
         let end = PerfContext::get();
-        let wal_time = end.write_wal_time() - self.wal_time;
-        let memtable_time = end.write_memtable_time() - self.memtable_time;
-        let delay_time = end.write_delay_time() - self.delay_time;
-        let process_time = end.write_pre_and_post_process_time() - self.pre_and_post_process_time;
-        let lock_time = end.db_mutex_lock_nanos() - self.db_mutex_lock_time;
-        if self.start_time.elapsed() > Duration::from_millis(5) {
+        let wal = end.write_wal_time() - self.wal;
+        let memtable = end.write_memtable_time() - self.memtable;
+        let lock = end.db_mutex_lock_nanos() - self.lock;
+        let delay = end.write_delay_time() - self.delay;
+        let process = end.write_pre_and_post_process_time() - self.process;
+
+        let elapsed = duration_to_ms(self.start.elapsed());
+        if elapsed > 1 {
             info!(
-                "[WritePerfContext] {} wal {} memtable {} delay {} process {} lock {}",
-                self.tag, wal_time, memtable_time, delay_time, process_time, lock_time
+                "{} - {} wal {} memtable {} lock {} delay {} process {}",
+                elapsed, self.tag, wal, memtable, lock, delay, process
             );
         }
+
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "wal"])
-            .observe(wal_time as f64 / 1000.0);
+            .observe(wal as f64 / 1000.0);
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "memtable"])
-            .observe(memtable_time as f64 / 1000.0);
-        STORE_WRITE_TIME
-            .with_label_values(&[self.tag, "delay"])
-            .observe(delay_time as f64 / 1000.0);
-        STORE_WRITE_TIME
-            .with_label_values(&[self.tag, "process"])
-            .observe(process_time as f64 / 1000.0);
+            .observe(memtable as f64 / 1000.0);
         STORE_WRITE_TIME
             .with_label_values(&[self.tag, "lock"])
-            .observe(lock_time as f64 / 1000.0);
+            .observe(lock as f64 / 1000.0);
+        STORE_WRITE_TIME
+            .with_label_values(&[self.tag, "delay"])
+            .observe(delay as f64 / 1000.0);
+        STORE_WRITE_TIME
+            .with_label_values(&[self.tag, "process"])
+            .observe(process as f64 / 1000.0);
     }
->>>>>>> ac74dbbe... raftstore: add perf context for writes
 }

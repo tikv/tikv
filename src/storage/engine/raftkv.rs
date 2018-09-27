@@ -15,7 +15,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::io::Error as IoError;
 use std::result;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
@@ -40,6 +40,7 @@ use raftstore::store::{
 use rocksdb::TablePropertiesCollection;
 use server::transport::RaftStoreRouter;
 use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
+use util::time::duration_to_ms;
 
 quick_error! {
     #[derive(Debug)]
@@ -303,13 +304,19 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             reqs.push(req);
         }
 
+        let timer = Instant::now();
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.write.start_coarse_timer();
 
-        self.exec_write_requests(ctx, reqs, box move |(cb_ctx, res)| match res {
+        self.exec_write_requests(ctx, reqs.clone(), box move |(cb_ctx, res)| match res {
             Ok(CmdRes::Resp(_)) => {
-                req_timer.observe_duration();
+                let elapsed = duration_to_ms(timer.elapsed());
+                if elapsed > 1 {
+                    warn!("{} - engine async write: request = {:?}", elapsed, reqs);
+                }
                 ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                ASYNC_REQUESTS_DURATIONS_VEC
+                    .write
+                    .observe(elapsed as f64 / 1000.0);
                 fail_point!("raftkv_async_write_finish");
                 cb((cb_ctx, Ok(())))
             }

@@ -40,7 +40,7 @@ use util::collections::{HashMap, HashSet};
 use util::rocksdb;
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
-use util::time::{duration_to_sec, SlowTimer};
+use util::time::{duration_to_ms, SlowTimer};
 use util::timer::Timer;
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Scheduler, Worker};
@@ -1042,10 +1042,14 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 request,
                 callback,
             } => {
+                let elapsed = duration_to_ms(send_time.elapsed());
+                if elapsed > 1 {
+                    warn!("{} - raftstore wait time: request = {:?}", elapsed, request);
+                }
                 self.raft_metrics
                     .propose
                     .request_wait_time
-                    .observe(duration_to_sec(send_time.elapsed()) as f64);
+                    .observe(elapsed as f64 / 1000.0);
                 self.propose_raft_command(request, callback)
             }
             Msg::Quit => {

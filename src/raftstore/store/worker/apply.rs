@@ -50,7 +50,7 @@ use raftstore::store::{cmd_resp, keys, util, Engines, Store};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::HashMap;
-use util::time::{duration_to_sec, Instant, SlowTimer};
+use util::time::{duration_to_ms, duration_to_sec, Instant, SlowTimer};
 use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
 
@@ -893,16 +893,22 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
     ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+        let timer = Instant::now();
         let req = Rc::clone(&ctx.exec_ctx.as_ref().unwrap().req);
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(&req, &self.region, include_region)?;
-        if req.has_admin_request() {
+        let res = if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req.get_admin_request())
         } else {
             self.exec_write_cmd(ctx, req.get_requests())
+        };
+        let elapsed = duration_to_ms(timer.elapsed());
+        if elapsed > 1 {
+            warn!("{} - raftstore apply time: request = {:?}", elapsed, req);
         }
+        res
     }
 
     fn exec_admin_cmd(
