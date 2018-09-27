@@ -203,6 +203,7 @@ fn test_region_collection_seek_region() {
         .wl()
         .hook_create_coprocessor_host(box move |id, host| {
             let p = RegionCollection::new(host, id);
+            p.start();
             tx.send((id, p)).unwrap()
         });
 
@@ -210,5 +211,9 @@ fn test_region_collection_seek_region() {
     let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
     assert_eq!(region_info_providers.len(), 3);
 
-    test_seek_region_impl(cluster, region_info_providers);
+    test_seek_region_impl(cluster, region_info_providers.clone());
+
+    for (_, p) in region_info_providers {
+        p.stop();
+    }
 }
