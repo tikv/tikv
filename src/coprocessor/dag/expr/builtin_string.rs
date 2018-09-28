@@ -51,6 +51,19 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
+        match self.children[0].eval_int(ctx, row) {
+            Err(_e) => self.oct_string(ctx, row),
+            Ok(None) => Ok(None),
+            Ok(Some(res)) => Ok(Some(Cow::Owned(format!("{:o}", res).into_bytes()))),
+        }
+    }
+
+    #[inline]
+    pub fn oct_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         let mut num: u64 = 0;
         let mut i: usize = 1;
@@ -353,7 +366,97 @@ mod test {
     }
 
     #[test]
+    fn test_oct_string() {
+        let cases = vec![
+            (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
+            (Datum::Bytes(b"8".to_vec()), Datum::Bytes(b"10".to_vec())),
+            (Datum::Bytes(b"365".to_vec()), Datum::Bytes(b"555".to_vec())),
+            (
+                Datum::Bytes(b"1024".to_vec()),
+                Datum::Bytes(b"2000".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"-1".to_vec()),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"-365".to_vec()),
+                Datum::Bytes(b"1777777777777777777223".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"-9223372036854775809".to_vec()),
+                Datum::Bytes(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"18446744073709551614".to_vec()),
+                Datum::Bytes(b"1777777777777777777776".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"18446744073709551615".to_vec()),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"18446744073709551616".to_vec()),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::Bytes(
+                    b"111111111111111111111111111111111111111111111111111111111111111".to_vec(),
+                ),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::OctInt, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    #[allow(overflowing_literals)]
     fn test_oct_int() {
+        let cases = vec![
+            (Datum::I64(12), Datum::Bytes(b"14".to_vec())),
+            (Datum::I64(8), Datum::Bytes(b"10".to_vec())),
+            (Datum::I64(365), Datum::Bytes(b"555".to_vec())),
+            (Datum::I64(1024), Datum::Bytes(b"2000".to_vec())),
+            (
+                Datum::I64(-1),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::I64(-365),
+                Datum::Bytes(b"1777777777777777777223".to_vec()),
+            ),
+            (
+                Datum::I64(-9223372036854775809),
+                Datum::Bytes(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::U64(18446744073709551614),
+                Datum::Bytes(b"1777777777777777777776".to_vec()),
+            ),
+            (
+                Datum::U64(18446744073709551615),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let args = &[datum_expr(input)];
+            let op = scalar_func_expr(ScalarFuncSig::OctInt, args);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+
         let cases = vec![
             (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
             (Datum::Bytes(b"8".to_vec()), Datum::Bytes(b"10".to_vec())),
