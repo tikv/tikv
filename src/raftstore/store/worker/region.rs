@@ -629,12 +629,6 @@ impl RunnableWithTimer<Task, Event> for Runner {
         match event {
             Event::CheckApply => {
                 self.handle_pending_applies();
-                if !self.pending_applies.is_empty() {
-                    // delay again
-                    SNAP_COUNTER_VEC
-                        .with_label_values(&["apply", "delay"])
-                        .inc_by(self.pending_applies.len() as i64);
-                }
                 timer.add_task(
                     Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
                     Event::CheckApply,
