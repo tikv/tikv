@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::sync::{mpsc as futures_mpsc, oneshot};
-use futures::{future, stream, Future, Sink, Stream};
+use futures::{future, Future, Sink, Stream};
 use grpc::{
     ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     ServerStreamingSink, UnarySink, WriteFlags,
@@ -26,13 +25,12 @@ use kvproto::tikvpb_grpc;
 use protobuf::RepeatedField;
 use std::iter::{self, FromIterator};
 
-use coprocessor::local_metrics::BasicLocalMetrics;
-use coprocessor::{err_resp, EndPointTask, RequestTask};
+use coprocessor::Endpoint;
 use raftstore::store::{Callback, Msg as StoreMessage};
 use server::metrics::*;
 use server::snap::Task as SnapTask;
 use server::transport::RaftStoreRouter;
-use server::{Error, OnResponse};
+use server::Error;
 use storage::engine::Error as EngineError;
 use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use storage::txn::Error as TxnError;
@@ -49,31 +47,25 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     // For handling KV requests.
     storage: Storage<E>,
     // For handling coprocessor requests.
-    end_point_scheduler: Scheduler<EndPointTask<E>>,
+    cop: Endpoint<E>,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
-    recursion_limit: u32,
-    stream_channel_size: usize,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
     pub fn new(
         storage: Storage<E>,
-        end_point_scheduler: Scheduler<EndPointTask<E>>,
+        cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        recursion_limit: u32,
-        stream_channel_size: usize,
     ) -> Self {
         Service {
             storage,
-            end_point_scheduler,
+            cop,
             ch,
             snap_scheduler,
-            recursion_limit,
-            stream_channel_size,
         }
     }
 
@@ -81,17 +73,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         &self,
         ctx: RpcContext,
         sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map_err(|_| ()));
-    }
-
-    fn send_fail_status_to_stream<M>(
-        &self,
-        ctx: RpcContext,
-        sink: ServerStreamingSink<M>,
         err: Error,
         code: RpcStatusCode,
     ) {
@@ -811,42 +792,61 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn unsafe_destroy_range(
+        &self,
+        ctx: RpcContext,
+        mut req: UnsafeDestroyRangeRequest,
+        sink: UnarySink<UnsafeDestroyRangeResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .unsafe_destroy_range
+            .start_coarse_timer();
+
+        // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
+        // MAX_KEY as end here.
+        assert!(!req.get_start_key().is_empty());
+        assert!(!req.get_end_key().is_empty());
+
+        let (cb, f) = paired_future_callback();
+        let res = self.storage.async_unsafe_destroy_range(
+            req.take_context(),
+            Key::from_raw(&req.take_start_key()),
+            Key::from_raw(&req.take_end_key()),
+            cb,
+        );
+
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = UnsafeDestroyRangeResponse::new();
+                // Region error is impossible here.
+                if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", "unsafe_destroy_range", e);
+                GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
 
-        let (tx, rx) = oneshot::channel();
-        let on_resp = OnResponse::Unary(tx);
-        let req_task = match RequestTask::new(ctx.peer(), req, on_resp, self.recursion_limit) {
-            Ok(req_task) => req_task,
-            Err(e) => {
-                let mut metrics = BasicLocalMetrics::default();
-                let future = sink
-                    .success(err_resp(e, &mut metrics))
-                    .map(|_| timer.observe_duration())
-                    .map_err(move |e| {
-                        debug!("{} failed: {:?}", "coprocessor", e);
-                        GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
-                    });
-                return ctx.spawn(future);
-            }
-        };
-
-        let task = EndPointTask::Request(req_task);
-        if let Err(e) = self.end_point_scheduler.schedule(task) {
-            // TODO: report busy instead.
-            let error = Error::from(e);
-            let code = RpcStatusCode::ResourceExhausted;
-            return self.send_fail_status(ctx, sink, error, code);
-        }
-
-        let future = rx
-            .map_err(Error::from)
-            .and_then(|resp| sink.success(resp).map_err(Error::from))
+        let future = self
+            .cop
+            .parse_and_handle_unary_request(req, Some(ctx.peer()))
+            .map_err(|_| unreachable!())
+            .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "coprocessor", e);
                 GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
             });
+
         ctx.spawn(future);
     }
 
@@ -860,44 +860,19 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .coprocessor_stream
             .start_coarse_timer();
 
-        let (tx, rx) = futures_mpsc::channel(self.stream_channel_size);
-        let on_resp = OnResponse::Streaming(tx);
-        let req_task = match RequestTask::new(ctx.peer(), req, on_resp, self.recursion_limit) {
-            Ok(req_task) => req_task,
-            Err(e) => {
-                let mut metrics = BasicLocalMetrics::default();
-                let stream = stream::once::<_, GrpcError>(Ok(err_resp(e, &mut metrics)))
-                    .map(|resp| (resp, WriteFlags::default()));
-                let future = sink
-                    .send_all(stream)
-                    .map(|_| timer.observe_duration())
-                    .map_err(move |e| {
-                        debug!("{} failed: {:?}", "coprocessor_stream", e);
-                        GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
-                    });
-                return ctx.spawn(future);
-            }
-        };
-
-        let task = EndPointTask::Request(req_task);
-        if let Err(e) = self.end_point_scheduler.schedule(task) {
-            // TODO: report busy instead.
-            let error = Error::from(e);
-            let code = RpcStatusCode::ResourceExhausted;
-            return self.send_fail_status_to_stream(ctx, sink, error, code);
-        }
-
-        let stream = rx
+        let stream = self
+            .cop
+            .parse_and_handle_stream_request(req, Some(ctx.peer()))
             .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
             .map_err(|e| {
                 let code = RpcStatusCode::Unknown;
                 let msg = Some(format!("{:?}", e));
                 GrpcError::RpcFailure(RpcStatus::new(code, msg))
             });
-
         let future = sink
             .send_all(stream)
             .map(|_| timer.observe_duration())
+            .map_err(Error::from)
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "coprocessor_stream", e);
                 GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();

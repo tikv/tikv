@@ -35,8 +35,8 @@ quick_error! {
         Outdated(elapsed: Duration, tag: &'static str) {
             description("request is outdated")
         }
-        Full(allow: usize) {
-            description("running queue is full")
+        Full {
+            description("Coprocessor end-point thread pool is full")
         }
         Eval(err: tipb::select::Error) {
             from()

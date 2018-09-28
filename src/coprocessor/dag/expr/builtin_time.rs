@@ -26,14 +26,18 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let t = try_opt!(self.children[0].eval_time(ctx, row));
-        if t.invalid_zero() {
-            return Err(box_err!("Incorrect datetime value: '{}'", t));
-        }
-        let format_mask = try_opt!(self.children[1].eval_string(ctx, row));
-        let format_mask_str = String::from_utf8(format_mask.into_owned())?;
-        let res = t.date_format(format_mask_str)?;
-        Ok(Some(Cow::Owned(res.into_bytes())))
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(res) => if !res.invalid_zero() {
+                let format_mask = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+                let res = res.date_format(format_mask.into_owned())?;
+                return Ok(Some(Cow::Owned(res.into_bytes())));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", res))
+            },
+            None => Error::incorrect_datetime_value("None"),
+        };
+        Error::handle_invalid_time_error(ctx, e)?;
+        Ok(None)
     }
 
     #[inline]
@@ -42,25 +46,17 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                )
-            }
-            Ok(Some(res)) => res,
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                let mut res = t.to_mut().clone();
+                res.set_tp(mysql::types::DATE).unwrap();
+                return Ok(Some(Cow::Owned(res)));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
         };
-        if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            );
-        }
-        let mut res = t.to_mut().clone();
-        res.set_tp(mysql::types::DATE).unwrap();
-        Ok(Some(Cow::Owned(res)))
+        Error::handle_invalid_time_error(ctx, e).map(|_| Ok(None))?
     }
 
     #[inline]
@@ -69,23 +65,35 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                return Ok(Some(i64::from(t.get_time().month())));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
+        };
+        Error::handle_invalid_time_error(ctx, e).map(|_| Ok(None))?
+    }
+
+    #[inline]
+    pub fn year<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
         let t = match self.children[0].eval_time(ctx, row) {
             Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
-                ).map(|_| None)
-            }
+            Ok(None) => return Ok(None),
             Ok(Some(res)) => res,
         };
-        if t.is_zero() {
+        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
             return Error::handle_invalid_time_error(
                 ctx,
                 Error::incorrect_datetime_value(&format!("{}", t)),
             ).map(|_| None);
         }
-        Ok(Some(i64::from(t.get_time().month())))
+        Ok(Some(i64::from(t.get_time().year())))
     }
 
     #[inline]
@@ -94,32 +102,23 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = match self.children[0].eval_time(ctx, row) {
-            Err(err) => return Error::handle_invalid_time_error(ctx, err),
-            Ok(None) => {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value("None"),
+        let e = match self.children[0].eval_time(ctx, row)? {
+            Some(mut t) => if !t.is_zero() {
+                let mut res = t.to_mut().clone();
+                let time = t.get_time();
+                res.set_time(
+                    time.timezone()
+                        .ymd_opt(time.year(), time.month(), t.last_day_of_month())
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap(),
                 );
-            }
-            Ok(Some(res)) => res,
+                return Ok(Some(Cow::Owned(res)));
+            } else {
+                Error::incorrect_datetime_value(&format!("{}", t))
+            },
+            None => Error::incorrect_datetime_value("None"),
         };
-        if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            );
-        }
-        let mut res = t.to_mut().clone();
-
-        let time = t.get_time();
-        res.set_time(
-            time.timezone()
-                .ymd_opt(time.year(), time.month(), t.last_day_of_month())
-                .and_hms_opt(0, 0, 0)
-                .unwrap(),
-        );
-        Ok(Some(Cow::Owned(res)))
+        Error::handle_invalid_time_error(ctx, e).map(|_| Ok(None))?
     }
 }
 
@@ -183,6 +182,33 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.to_string().into_bytes()));
         }
+
+        // test NULL case
+        let arg1 = datum_expr(Datum::Null);
+        let arg2 = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "null should be wrong"),
+            Err(_) => assert!(true),
+        }
+
+        // test zero case
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg1 = datum_expr(Datum::Null);
+        let arg2 = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::DateFormatSig, &[arg1, arg2]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]);
+        match got {
+            Ok(_) => assert!(false, "null should be wrong"),
+            Err(_) => assert!(true),
+        }
     }
 
     #[test]
@@ -212,8 +238,8 @@ mod test {
         }
 
         // test zero case
-        let cfg = EvalConfig::new()
-            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
             .set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
@@ -262,8 +288,8 @@ mod test {
         op.eval(&mut ctx, &[]).unwrap_err();
 
         // test zero case
-        let cfg = EvalConfig::new()
-            .set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
             .set_strict_sql_mode(true);
         ctx = EvalContext::new(Arc::new(cfg));
@@ -294,5 +320,52 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    #[test]
+    fn test_year() {
+        let tests = vec![
+            ("0000-00-00 00:00:00", -1i64),
+            ("1-01-01 01:01:01", 1i64),
+            ("2018-01-01 01:01:01", 2018i64),
+            ("2019-01-01 01:01:01", 2019i64),
+            ("2020-01-01 01:01:01", 2020i64),
+            ("2021-01-01 01:01:01", 2021i64),
+            ("2022-01-01 01:01:01", 2022i64),
+            ("2023-01-01 01:01:01", 2023i64),
+            ("2024-01-01 01:01:01", 2024i64),
+            ("2025-01-01 01:01:01", 2025i64),
+            ("2026-01-01 01:01:01", 2026i64),
+            ("2027-01-01 01:01:01", 2027i64),
+            ("2028-01-01 01:01:01", 2028i64),
+            ("2029-01-01 01:01:01", 2029i64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let exp = Datum::I64(exp);
+            let f = scalar_func_expr(ScalarFuncSig::Year, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::Year, &[input]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
+
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT);
+        cfg.set_sql_mode(MODE_NO_ZERO_DATE_MODE);
+        cfg.set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg = datum_expr(Datum::Time(
+            Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
+        ));
+        let f = scalar_func_expr(ScalarFuncSig::Year, &[arg]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        op.eval(&mut ctx, &[]).unwrap_err();
     }
 }
