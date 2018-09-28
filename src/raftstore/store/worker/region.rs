@@ -653,75 +653,23 @@ mod test {
     use std::thread;
     use std::time::Duration;
 
-    use kvproto::metapb::{Peer, Region};
-    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+    use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use raftstore::store::engine::{Mutable, Peekable};
     use raftstore::store::peer_storage::JOB_STATUS_PENDING;
+    use raftstore::store::snap::test::get_test_db_for_regions;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::{keys, Engines, SnapKey, SnapManager};
-    use raftstore::Result;
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch, DB};
-    use storage::{ALL_CFS, CF_DEFAULT, CF_RAFT};
+    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
+    use storage::{ CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb::{self, CFOptions};
+    use util::rocksdb;
     use util::time;
+    use util::timer::Timer;
     use util::worker::Worker;
 
     use super::PendingDeleteRanges;
     use super::Task;
-
-    pub fn get_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
-        let mut peer = Peer::new();
-        peer.set_store_id(store_id);
-        peer.set_id(peer_id);
-        let mut region = Region::new();
-        region.set_id(region_id);
-        region.set_start_key(b"a".to_vec());
-        region.set_end_key(b"z".to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
-        region.mut_peers().push(peer.clone());
-        region
-    }
-
-    pub fn get_test_db(path: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>> {
-        let p = path.path().to_str().unwrap();
-        let db = rocksdb::new_engine(p, ALL_CFS, cf_opts)?;
-        let key = keys::data_key(b"test");
-        // write some data into each cf
-        for (i, cf) in ALL_CFS.iter().enumerate() {
-            let handle = rocksdb::get_cf_handle(&db, cf)?;
-            let mut p = Peer::new();
-            p.set_store_id(1);
-            p.set_id((i + 1) as u64);
-            db.put_msg_cf(handle, &key[..], &p)?;
-        }
-        Ok(Arc::new(db))
-    }
-
-    fn get_test_db_for_regions(
-        path: &TempDir,
-        cf_opts: Option<Vec<CFOptions>>,
-        regions: &[u64],
-    ) -> Result<Arc<DB>> {
-        let kv = get_test_db(path, cf_opts)?;
-        for &region_id in regions {
-            // Put apply state into kv engine.
-            let mut apply_state = RaftApplyState::new();
-            apply_state.set_applied_index(10);
-            apply_state.mut_truncated_state().set_index(10);
-            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
-            kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
-
-            // Put region info into kv engine.
-            let region = get_test_region(region_id, 1, 1);
-            let mut region_state = RegionLocalState::new();
-            region_state.set_region(region);
-            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
-            kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
-        }
-        Ok(kv)
-    }
+    use super::Event;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -836,7 +784,11 @@ mod test {
             true,
             Duration::from_secs(0),
         );
-        let timer = RegionRunner::new_timer();
+        let mut timer = Timer::new(1);
+        timer.add_task(
+            Duration::from_millis(100),
+            Event::CheckApply,
+        );
         worker.start_with_timer(runner, timer).unwrap();
 
         let gen_and_apply_snap = |id: u64| {
