@@ -1513,7 +1513,11 @@ pub mod test {
         Ok(Arc::new(db))
     }
 
-    pub fn get_test_db_for_regions(path: &TempDir, cf_opts:Option<Vec<CFOptions>>, regions: &[u64]) -> Result<Arc<DB>> {
+    pub fn get_test_db_for_regions(
+        path: &TempDir,
+        cf_opts: Option<Vec<CFOptions>>,
+        regions: &[u64],
+    ) -> Result<Arc<DB>> {
         let kv = open_test_db(path, cf_opts)?;
         for &region_id in regions {
             // Put apply state into kv engine.
@@ -1767,7 +1771,9 @@ pub mod test {
         test_snap_validation(open_test_db);
     }
 
-    fn test_snap_validation(get_db: fn(p: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>>) {
+    fn test_snap_validation(
+        get_db: fn(p: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>>,
+    ) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = TempDir::new("test-snap-validation-db").unwrap();

@@ -660,16 +660,16 @@ mod test {
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::{keys, Engines, SnapKey, SnapManager};
     use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
-    use storage::{ CF_DEFAULT, CF_RAFT};
+    use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
     use util::rocksdb;
     use util::time;
     use util::timer::Timer;
     use util::worker::Worker;
 
+    use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
-    use super::Event;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -785,10 +785,7 @@ mod test {
             Duration::from_secs(0),
         );
         let mut timer = Timer::new(1);
-        timer.add_task(
-            Duration::from_millis(100),
-            Event::CheckApply,
-        );
+        timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();
 
         let gen_and_apply_snap = |id: u64| {
