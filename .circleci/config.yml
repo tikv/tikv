@@ -58,34 +58,17 @@ jobs:
           name: Installing tarpaulin
           command: |
             RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.1 --force
+      - restore_cache:
+          # Actually master does not need to download the cache. However we cannot make conditions here.
+          name: Downloading ./target Cache from master
+          keys:
+            - v3-target-master-{{ checksum "rust-toolchain" }}
       - run:
-          name: Caching ~/.cargo and ~/.local (master branch only)
+          name: Restoring ./target Cache (non-master branch only)
           command: |
-            rm -rf ~/tikv_cache_cargo
-            mkdir ~/tikv_cache_cargo
-            echo "Current branch is $CIRCLE_BRANCH, creating tar for ~/.cargo and ~/.local"
-            cd ~ && tar cf ~/tikv_cache_cargo/cargo.tar .cargo .local && cd -
+              echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
+              tar xf ~/tikv_cache_build/target.tar || true
           no_output_timeout: 1800s
-      - save_cache:
-          # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
-          name: Uploading ~/.cargo and ~/.local Cache (master branch only)
-          key: v3-cargo-{{ .Branch }}-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
-          paths:
-            - ~/tikv_cache_cargo
-      - run:
-          name: Caching ./target (master branch only)
-          command: |
-            rm -rf ~/tikv_cache_build
-            mkdir ~/tikv_cache_build
-            echo "Current branch is $CIRCLE_BRANCH, creating tar for ./target"
-            tar cf ~/tikv_cache_build/target.tar target/debug/.fingerprint target/debug/build target/debug/deps target/debug/incremental
-          no_output_timeout: 1800s
-      - save_cache:
-          # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
-          name: Uploading ./target Cache (master branch only)
-          key: v3-target-{{ .Branch }}-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
-          paths:
-            - ~/tikv_cache_build
       - run:
           name: Calculating code coverage (master branch only)
           command: |
