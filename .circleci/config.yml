@@ -54,23 +54,10 @@ jobs:
             # Force a clock update and stop ntp.
             sudo service ntp stop
             sudo ntpd -gq
-      # check format first
-      - run:
-          name: Checking Format
-          command: make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
       - run:
           name: Installing tarpaulin
           command: |
             RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.1 --force
-      - restore_cache:
-          # Actually master does not need to download the cache. However we cannot make conditions here.
-          name: Downloading ./target Cache from master
-          keys:
-            - v3-target-master-{{ checksum "rust-toolchain" }}
-      - run:
-          name: Building
-          command: env SKIP_TESTS=true make trace_test
-          no_output_timeout: 1800s
       - run:
           name: Caching ~/.cargo and ~/.local (master branch only)
           command: |
