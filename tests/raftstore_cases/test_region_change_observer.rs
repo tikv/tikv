@@ -47,7 +47,7 @@ fn test_region_change_observer_impl<S: Simulator>(mut cluster: Cluster<S>) {
         cluster
             .sim
             .wl()
-            .hook_create_coprocessor_host(box move |id, host| {
+            .post_create_coprocessor_host(box move |id, host| {
                 if id == 1 {
                     let (sender, receiver) = sync_channel(10);
                     host.registry

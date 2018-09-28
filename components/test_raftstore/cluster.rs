@@ -47,7 +47,7 @@ pub trait Simulator {
     // Set a function that will be invoked after creating each CoprocessorHost. The first argument
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
-    fn hook_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>);
+    fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>);
     // Pass 0 to let pd allocate a node id if db is empty.
     // If node id > 0, the node must be created in db already,
     // and the node id must be the same as given argument.
