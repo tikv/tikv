@@ -394,82 +394,78 @@ impl NumberCodec {
     /// # Errors
     ///
     /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
+    #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
         // This efficient implementation is ported from facebook/folly.
         // Copyright 2013-present Facebook, Inc.
 
         #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
         unsafe {
-            let mut val = 0u64;
             let mut ptr = buf.as_ptr();
-            let ptr_end = buf.as_ptr().offset(buf.len() as isize);
-
-            if ::std::intrinsics::likely(buf.len() >= MAX_VARINT64_LENGTH) {
+            let len = buf.len();
+            let mut val = 0u64;
+            if ::std::intrinsics::likely(len >= MAX_VARINT64_LENGTH) {
                 // Fast path
                 let mut b: u64;
-                // Actually this loop never loops, it is only for using `break`.
-                #[cfg_attr(feature = "cargo-clippy", allow(never_loop))]
-                loop {
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val = b & 0x7f;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 7;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 14;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 21;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 28;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 35;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 42;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 49;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x7f) << 56;
-                    if b < 0x80 {
-                        break;
-                    }
-                    b = *ptr as u64;
-                    ptr = ptr.offset(1);
-                    val |= (b & 0x01) << 63;
-                    break;
+                b = *ptr as u64;
+                val = b & 0x7f;
+                if ::std::intrinsics::likely(b < 0x80) {
+                    return Ok((val, 1));
                 }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 7;
+                if b < 0x80 {
+                    return Ok((val, 2));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 14;
+                if b < 0x80 {
+                    return Ok((val, 3));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 21;
+                if b < 0x80 {
+                    return Ok((val, 4));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 28;
+                if b < 0x80 {
+                    return Ok((val, 5));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 35;
+                if b < 0x80 {
+                    return Ok((val, 6));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 42;
+                if b < 0x80 {
+                    return Ok((val, 7));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 49;
+                if b < 0x80 {
+                    return Ok((val, 8));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x7f) << 56;
+                if b < 0x80 {
+                    return Ok((val, 9));
+                }
+                ptr = ptr.offset(1);
+                b = *ptr as u64;
+                val |= (b & 0x01) << 63;
+                Ok((val, 10))
             } else {
+                let ptr_end = buf.as_ptr().offset(len as isize);
                 // Slow path
                 let mut shift = 0;
                 while ptr != ptr_end && *ptr >= 0x80 {
@@ -477,14 +473,12 @@ impl NumberCodec {
                     shift += 7;
                     ptr = ptr.offset(1);
                 }
-                if ptr == ptr_end {
+                if ::std::intrinsics::unlikely(ptr == ptr_end) {
                     return Err(Error::BufferTooSmall);
                 }
                 val |= (*ptr as u64) << shift;
-                ptr = ptr.offset(1);
+                Ok((val, ptr.offset_from(buf.as_ptr()) as usize + 1))
             }
-
-            Ok((val, ptr.offset_from(buf.as_ptr()) as usize))
         }
     }
 
@@ -1715,7 +1709,7 @@ mod benches {
             );
             pos += 8;
             test::black_box(buf);
-            assert_eq!(pos, 8);
+            test::black_box(pos);
         });
     }
 
@@ -1731,7 +1725,7 @@ mod benches {
                 cursor
                     .write_u64::<byteorder::LittleEndian>(test::black_box(0xDEADBEEF))
                     .unwrap();
-                assert_eq!(cursor.position(), 8);
+                test::black_box(cursor.position());
             }
             test::black_box(&buf);
         });
@@ -1747,7 +1741,7 @@ mod benches {
             {
                 let mut cursor = ::std::io::Cursor::new(test::black_box(buf.as_mut_slice()));
                 cursor.write_u64_le(test::black_box(0xDEADBEEF)).unwrap();
-                assert_eq!(cursor.position(), 8);
+                test::black_box(cursor.position());
             }
             test::black_box(&buf);
         });
@@ -1762,7 +1756,6 @@ mod benches {
         b.iter(|| {
             buf.write_u64_le(test::black_box(0xDEADBEEF)).unwrap();
             test::black_box(&buf);
-            assert_eq!(buf.len(), 8);
             unsafe { buf.set_len(0) }; // shrink the vector, to avoid growing during benchmark
         });
     }
@@ -1775,8 +1768,8 @@ mod benches {
             let mut pos = 0;
             let v = super::NumberCodec::decode_u64_le(test::black_box(&buf[..]));
             pos += 8;
-            assert_eq!(v, 0x0807060504030201);
-            assert_eq!(pos, 8);
+            test::black_box(v);
+            test::black_box(pos);
         });
     }
 
@@ -1788,8 +1781,8 @@ mod benches {
             let mut slice = buf.as_slice();
             let v = super::NumberCodec::decode_u64_le(test::black_box(slice));
             slice = &slice[8..];
-            assert_eq!(v, 0x0807060504030201);
-            test::black_box(slice);
+            test::black_box(v);
+            test::black_box(&slice);
         });
     }
 
@@ -1802,8 +1795,8 @@ mod benches {
         b.iter(|| {
             let mut cursor = ::std::io::Cursor::new(test::black_box(&buf[..]));
             let v = cursor.read_u64::<byteorder::LittleEndian>().unwrap();
-            assert_eq!(v, 0x0807060504030201);
-            assert_eq!(cursor.position(), 8);
+            test::black_box(v);
+            test::black_box(cursor.position());
         });
     }
 
@@ -1839,8 +1832,8 @@ mod benches {
         b.iter(|| {
             let mut cursor = ::std::io::Cursor::new(test::black_box(buf.as_slice()));
             let v = cursor.get_u64_le();
-            assert_eq!(v, 0x0807060504030201);
-            assert_eq!(cursor.position(), 8);
+            test::black_box(v);
+            test::black_box(cursor.position());
         });
     }
 
@@ -1853,8 +1846,8 @@ mod benches {
         b.iter(|| {
             let mut cursor = ::std::io::Cursor::new(test::black_box(buf.as_slice()));
             let v = cursor.read_u64_le().unwrap();
-            assert_eq!(v, 0x0807060504030201);
-            assert_eq!(cursor.position(), 8);
+            test::black_box(v);
+            test::black_box(cursor.position());
         });
     }
 
@@ -1865,7 +1858,7 @@ mod benches {
         b.iter(|| {
             let mut slice = test::black_box(buf.as_slice());
             let v = original_decode_u64_le(&mut slice).unwrap();
-            assert_eq!(v, 0x0807060504030201);
+            test::black_box(v);
             test::black_box(&slice);
         });
     }
@@ -1885,7 +1878,7 @@ mod benches {
             );
             pos += bytes;
             test::black_box(&buf);
-            assert_eq!(pos, VARINT_ENCODED.len());
+            test::black_box(pos);
         });
     }
 
@@ -1913,7 +1906,6 @@ mod benches {
                 test::black_box(VARINT_SAMPLE),
             ).unwrap();
             test::black_box(&buf);
-            assert_eq!(buf.len(), VARINT_ENCODED.len());
             unsafe { buf.set_len(0) };
         });
     }
@@ -1933,7 +1925,6 @@ mod benches {
         b.iter(|| {
             naive_encode_varint(test::black_box(&mut buf), test::black_box(VARINT_SAMPLE));
             test::black_box(&buf);
-            assert_eq!(buf.len(), VARINT_ENCODED.len());
             unsafe { buf.set_len(0) };
         });
     }
@@ -1951,7 +1942,6 @@ mod benches {
                 writer.flush().unwrap();
             }
             test::black_box(&buf);
-            assert_eq!(buf.len(), VARINT_ENCODED.len());
             unsafe { buf.set_len(0) };
         });
     }
@@ -1961,12 +1951,10 @@ mod benches {
     fn bench_decode_varint_small_number_codec_fast_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         b.iter(|| {
-            let mut pos = 0;
             let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf[..])).unwrap();
-            pos += bytes;
-            assert_eq!(v, 60);
-            assert_eq!(pos, 1);
+                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            test::black_box(v);
+            test::black_box(bytes);
         });
     }
 
@@ -1975,12 +1963,10 @@ mod benches {
     fn bench_decode_varint_small_number_codec_slow_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0];
         b.iter(|| {
-            let mut pos = 0;
             let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf[..])).unwrap();
-            pos += bytes;
-            assert_eq!(v, 60);
-            assert_eq!(pos, 1);
+                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            test::black_box(v);
+            test::black_box(bytes);
         });
     }
 
@@ -2033,10 +2019,10 @@ mod benches {
     fn bench_decode_varint_small_original_fast_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0];
         b.iter(|| {
-            let mut slice = test::black_box(&buf).as_slice();
+            let mut slice = test::black_box(buf.as_slice());
             let v = decode_var_u64_original(&mut slice).unwrap();
-            assert_eq!(v, 60);
-            test::black_box(slice);
+            test::black_box(v);
+            test::black_box(&slice);
         });
     }
 
@@ -2046,12 +2032,10 @@ mod benches {
         let mut buf: Vec<u8> = vec![0; 10];
         buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
         b.iter(|| {
-            let mut pos = 0;
             let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf[..])).unwrap();
-            pos += bytes;
-            assert_eq!(v, VARINT_SAMPLE);
-            assert_eq!(pos, VARINT_ENCODED.len());
+                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            test::black_box(v);
+            test::black_box(bytes);
         });
     }
 
@@ -2060,12 +2044,10 @@ mod benches {
     fn bench_decode_varint_normal_number_codec_slow_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = VARINT_ENCODED.to_vec();
         b.iter(|| {
-            let mut pos = 0;
             let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf[..])).unwrap();
-            pos += bytes;
-            assert_eq!(v, VARINT_SAMPLE);
-            assert_eq!(pos, VARINT_ENCODED.len());
+                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            test::black_box(v);
+            test::black_box(bytes);
         });
     }
 
@@ -2075,10 +2057,10 @@ mod benches {
         let mut buf: Vec<u8> = vec![0; 10];
         buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
         b.iter(|| {
-            let mut slice = test::black_box(&buf).as_slice();
+            let mut slice = test::black_box(buf.as_slice());
             let v = decode_var_u64_original(&mut slice).unwrap();
-            assert_eq!(v, VARINT_SAMPLE);
-            test::black_box(slice);
+            test::black_box(v);
+            test::black_box(&slice);
         });
     }
 
@@ -2087,10 +2069,10 @@ mod benches {
     fn bench_decode_varint_normal_original_slow_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = VARINT_ENCODED.to_vec();
         b.iter(|| {
-            let mut slice = test::black_box(&buf).as_slice();
+            let mut slice = test::black_box(buf.as_slice());
             let v = decode_var_u64_original(&mut slice).unwrap();
-            assert_eq!(v, VARINT_SAMPLE);
-            test::black_box(slice);
+            test::black_box(v);
+            test::black_box(&slice);
         });
     }
 }
