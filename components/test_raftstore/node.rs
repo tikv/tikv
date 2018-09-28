@@ -153,7 +153,7 @@ impl NodeCluster {
 }
 
 impl Simulator for NodeCluster {
-    fn hook_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
+    fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
         self.coprocessor_host_hook = Some(op)
     }
 
@@ -198,8 +198,8 @@ impl Simulator for NodeCluster {
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
-        if let Some(h) = self.coprocessor_host_hook.as_ref() {
-            h(node_id, &mut coprocessor_host);
+        if let Some(f) = self.coprocessor_host_hook.as_ref() {
+            f(node_id, &mut coprocessor_host);
         }
 
         let importer = {
