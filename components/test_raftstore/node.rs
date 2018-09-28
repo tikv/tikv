@@ -130,7 +130,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
-    coprocessor_host_hook: Option<Box<Fn(u64, &mut CoprocessorHost)>>,
+    post_create_coprocessor_host: Option<Box<Fn(u64, &mut CoprocessorHost)>>,
 }
 
 impl NodeCluster {
@@ -140,7 +140,7 @@ impl NodeCluster {
             pd_client,
             nodes: HashMap::default(),
             simulate_trans: HashMap::default(),
-            coprocessor_host_hook: None,
+            post_create_coprocessor_host: None,
         }
     }
 }
@@ -154,7 +154,7 @@ impl NodeCluster {
 
 impl Simulator for NodeCluster {
     fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
-        self.coprocessor_host_hook = Some(op)
+        self.post_create_coprocessor_host = Some(op)
     }
 
     fn run_node(
@@ -198,7 +198,7 @@ impl Simulator for NodeCluster {
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
-        if let Some(f) = self.coprocessor_host_hook.as_ref() {
+        if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
         }
 
