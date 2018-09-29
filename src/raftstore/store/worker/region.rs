@@ -49,10 +49,10 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
-pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // milliseconds
+pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // 10000 milliseconds
 
 // used to periodically check whether schedule pending applies in region runner
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // milliseconds
+pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
@@ -350,7 +350,8 @@ impl SnapContext {
 
             let handle = match rocksdb::get_cf_handle(&self.engines.kv, cf) {
                 Ok(handle) => handle,
-                Err(_) => {
+                Err(e) => {
+                    error!("failed to check level 0: {:?}", e);
                     // when having trouble in getting cf handle, just return false here
                     // then apply_snap() will return error which can be handled in handle_apply()
                     return false;
