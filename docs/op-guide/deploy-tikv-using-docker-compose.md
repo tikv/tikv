@@ -43,8 +43,10 @@ Make sure you have installed the following items on your machine:
 2. Edit the `compose/values.yaml` file to configure `networkMode` to `host` and comment the TiDB section out.
 
     ```bash
-    cd tidb-docker-compose/compose
-    networkMode: host
+    cd tidb-docker-compose
+    vim compose/values.yaml
+    sed -i 's/pushgateway:9091/127.0.0.1:9091/g' config/* # Change the Pushgateway address for the "host" network mode
+    sed -i 's/prometheus:9090/127.0.0.1:9090/g' config/* # Change the Prometheus address for the "host" network mode
     ```
 
 3. Generate the `generated-docker-compose.yml` file.
