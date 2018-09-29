@@ -1484,6 +1484,7 @@ pub mod test {
 
     #[derive(Clone)]
     struct DummyDeleter;
+    type DBBuilder = fn(p: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>>;
 
     impl SnapshotDeleter for DummyDeleter {
         fn delete_snapshot(&self, _: &SnapKey, snap: &Snapshot, _: bool) -> bool {
@@ -1649,7 +1650,7 @@ pub mod test {
         test_snap_file(open_test_db);
     }
 
-    fn test_snap_file(get_db: fn(p: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>>) {
+    fn test_snap_file(get_db: DBBuilder) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
@@ -1771,9 +1772,7 @@ pub mod test {
         test_snap_validation(open_test_db);
     }
 
-    fn test_snap_validation(
-        get_db: fn(p: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>>,
-    ) {
+    fn test_snap_validation(get_db: DBBuilder) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = TempDir::new("test-snap-validation-db").unwrap();
