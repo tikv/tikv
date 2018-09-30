@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use tikv::coprocessor::codec::Datum;
+use tikv::coprocessor::codec::datum;
+use tikv::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use tikv::util::codec::{bytes, number};
 
 /// An array of datums in the same data type and is column oriented.
 ///
@@ -95,54 +96,99 @@ impl BatchColumn {
     ///
     /// Returns `Error::InvalidData` if datum data is invalid or cannot be decoded in current
     /// column's type.
-    ///
-    // TODO: We can remove the dependency of `Datum` and decode by our own.
     #[inline]
-    pub fn push_datum(&mut self, mut datum: &[u8]) -> ::Result<()> {
-        // Note that there will be a memory copy when decoding.
-        ::tikv::coprocessor::codec::datum::decode_datum(&mut datum)
-            .map_err(|_| ::Error::InvalidData)
-            .and_then(|datum| {
-                match self {
-                    BatchColumn::Int(ref mut vec) => match datum {
-                        Datum::Null => vec.push(None),
-                        Datum::I64(v) => vec.push(Some(v)),
-                        Datum::U64(v) => vec.push(Some(v as i64)),
-                        _ => return Err(::Error::InvalidData),
-                    },
-                    BatchColumn::Real(ref mut vec) => match datum {
-                        Datum::Null => vec.push(None),
-                        Datum::F64(v) => vec.push(Some(v)),
-                        _ => return Err(::Error::InvalidData),
-                    },
-                    BatchColumn::Decimal(ref mut vec) => match datum {
-                        Datum::Null => vec.push(None),
-                        Datum::Dec(v) => vec.push(Some(v)),
-                        _ => return Err(::Error::InvalidData),
-                    },
-                    BatchColumn::String(ref mut vec) => match datum {
-                        Datum::Null => vec.push(None),
-                        Datum::Bytes(v) => vec.push(Some(v)),
-                        _ => return Err(::Error::InvalidData),
-                    },
-                    BatchColumn::DateTime(ref mut vec) => match datum {
-                        Datum::Null => vec.push(None),
-                        Datum::Time(v) => vec.push(Some(v)),
-                        _ => return Err(::Error::InvalidData),
-                    },
-                    BatchColumn::Duration(ref mut vec) => match datum {
-                        Datum::Null => vec.push(None),
-                        Datum::Dur(v) => vec.push(Some(v)),
-                        _ => return Err(::Error::InvalidData),
-                    },
-                    BatchColumn::Json(ref mut vec) => match datum {
-                        Datum::Null => vec.push(None),
-                        Datum::Json(v) => vec.push(Some(v)),
-                        _ => return Err(::Error::InvalidData),
-                    },
-                };
-                Ok(())
-            })
+    pub fn push_datum(&mut self, mut raw_datum: &[u8]) -> ::Result<()> {
+        // The inner implementation is much like `decode_datum` + `as_xxx`, however it construct
+        // value directly without constructing a `Datum` first to improve performance.
+
+        // TODO: Use BufferReader.
+        if raw_datum.is_empty() {
+            return Err(::Error::InvalidData);
+        }
+
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+
+        match self {
+            BatchColumn::Int(ref mut vec) => match flag {
+                datum::NIL_FLAG => vec.push(None),
+                datum::INT_FLAG => {
+                    let v = number::decode_i64(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                datum::UINT_FLAG => {
+                    let v = number::decode_u64(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v as i64));
+                }
+                datum::VAR_INT_FLAG => {
+                    let v =
+                        number::decode_var_i64(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                datum::VAR_UINT_FLAG => {
+                    let v =
+                        number::decode_var_u64(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v as i64));
+                }
+                _ => return Err(::Error::InvalidData),
+            },
+            BatchColumn::Real(ref mut vec) => match flag {
+                datum::NIL_FLAG => vec.push(None),
+                datum::FLOAT_FLAG => {
+                    let v = number::decode_f64(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                _ => return Err(::Error::InvalidData),
+            },
+            BatchColumn::Decimal(ref mut vec) => match flag {
+                datum::NIL_FLAG => vec.push(None),
+                datum::DECIMAL_FLAG => {
+                    let v = Decimal::decode(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                _ => return Err(::Error::InvalidData),
+            },
+            BatchColumn::String(ref mut vec) => match flag {
+                datum::NIL_FLAG => vec.push(None),
+                datum::BYTES_FLAG => {
+                    let v = bytes::decode_bytes(&mut raw_datum, false)
+                        .map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                datum::COMPACT_BYTES_FLAG => {
+                    let v = bytes::decode_compact_bytes(&mut raw_datum)
+                        .map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                _ => return Err(::Error::InvalidData),
+            },
+            BatchColumn::DateTime(ref mut vec) => match flag {
+                datum::NIL_FLAG => vec.push(None),
+                // TODO
+                // Datum::Time(v) => vec.push(Some(v)),
+                _ => return Err(::Error::InvalidData),
+            },
+            BatchColumn::Duration(ref mut vec) => match flag {
+                datum::NIL_FLAG => vec.push(None),
+                datum::DURATION_FLAG => {
+                    let nanos =
+                        number::decode_i64(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    let v = Duration::from_nanos(nanos, MAX_FSP).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                _ => return Err(::Error::InvalidData),
+            },
+            BatchColumn::Json(ref mut vec) => match flag {
+                datum::NIL_FLAG => vec.push(None),
+                datum::JSON_FLAG => {
+                    let v = Json::decode(&mut raw_datum).map_err(|_| ::Error::InvalidData)?;
+                    vec.push(Some(v));
+                }
+                _ => return Err(::Error::InvalidData),
+            },
+        }
+
+        Ok(())
     }
 }
 

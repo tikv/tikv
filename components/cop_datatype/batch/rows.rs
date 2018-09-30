@@ -292,7 +292,7 @@ mod benches {
     }
 
     #[bench]
-    fn bench_lazy_batch_column_decode(b: &mut test::Bencher) {
+    fn bench_lazy_batch_column_clone_decode(b: &mut test::Bencher) {
         use num_traits::ToPrimitive;
         use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
 
