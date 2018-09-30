@@ -17,7 +17,7 @@ lazy_static! {
     pub static ref REGION_SIZE_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_region_size",
         "Bucketed histogram of approximate region size.",
-        exponential_buckets(4096.0, 2.0, 20).unwrap()
+        exponential_buckets(1024.0 * 1024.0, 2.0, 20).unwrap() // max bucket would be 512GB
     ).unwrap();
     pub static ref REGION_KEYS_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_region_keys",
