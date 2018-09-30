@@ -1467,6 +1467,30 @@ mod test {
                 Datum::U64(u64::max_value()),
                 Datum::Dec("23.298".parse().unwrap()),
             ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("1.999999999999999999999999999999".parse().unwrap()),
+                Datum::I64(31),
+                Datum::Dec("1.999999999999999999999999999999".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("99999999999999999999999999999999999999999999999999999999999999999".parse().unwrap()),
+                Datum::I64(-66),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("99999999999999999999999999999999999.999999999999999999999999999999".parse().unwrap()),
+                Datum::I64(31),
+                Datum::Dec("99999999999999999999999999999999999.999999999999999999999999999999".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("99999999999999999999999999999999999.999999999999999999999999999999".parse().unwrap()),
+                Datum::I64(-36),
+                Datum::Dec("0".parse().unwrap()),
+            ),
         ];
         check_truncate_data(tests);
     }
