@@ -26,7 +26,9 @@ This document defines the roadmap for TiKV development.
 - [ ] Distributed GC - Distribute MVCC garbage collection control to TiKV
 
 ## Coprocessor
-- [ ] Coprocessor Chunk Execution - Process data in chunk to improve performance
+- [x] Streaming - Cut large data set into small chunks to optimize memory consumption
+- [ ] Chunk Execution - Process data in chunk to improve performance
+- [ ] Request Tracing - Provide per-request execution details
 
 ## Tools
 - [x] TiKV Importer - Speed up data importing by SST file ingestion
@@ -34,6 +36,7 @@ This document defines the roadmap for TiKV development.
 ## Client
 - [ ] TiKV client (Rust crate)
 - [ ] Batch gRPC Message - Reduce message overhead
+- [ ] Flow Control - Do flow control in scheduler to avoid write stall in advance
 
 ## PD
 - [ ] Optimize Region metadata - Save Region metadata in detached storage engine
