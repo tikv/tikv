@@ -348,16 +348,7 @@ impl SnapContext {
                 continue;
             }
 
-            let handle = match rocksdb::get_cf_handle(&self.engines.kv, cf) {
-                Ok(handle) => handle,
-                Err(e) => {
-                    error!("failed to check level 0: {:?}", e);
-                    // when having trouble in getting cf handle, just return false here
-                    // then apply_snap() will return error which can be handled in handle_apply()
-                    return false;
-                }
-            };
-
+            let handle = match rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
             if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
                 if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
