@@ -128,7 +128,8 @@ members = [
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
-  "components/test_util"
+  "components/test_util",
+  "components/codec",
 ]
 
 [profile.dev]

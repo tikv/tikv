@@ -1038,18 +1038,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
                 self.propose_raft_command(request, callback)
             }
-            // For now, it is only called by batch snapshot.
-            Msg::BatchRaftSnapCmds {
-                send_time,
-                batch,
-                on_finished,
-            } => {
-                self.raft_metrics
-                    .propose
-                    .request_wait_time
-                    .observe(duration_to_sec(send_time.elapsed()) as f64);
-                self.propose_batch_raft_snapshot_command(batch, on_finished);
-            }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
