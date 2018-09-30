@@ -130,6 +130,7 @@ members = [
   "components/test_coprocessor",
   "components/test_util",
   "components/codec",
+  "components/cop_datatype",
 ]
 
 [profile.dev]
