@@ -17,13 +17,6 @@ quick_error! {
         InvalidData {
             description("Invalid data")
         }
-        UnsupportedType {
-            description("Unsupported type")
-        }
-        InvalidConversion(from: String, to: String) {
-            description("Invalid conversion")
-            display("Invalid conversion from {} to {}", from, to)
-        }
     }
 }
 

@@ -17,6 +17,7 @@ use tikv::coprocessor::codec::Datum;
 /// An array of datums in the same data type and is column oriented.
 ///
 /// Stores datums of multiple rows of one column.
+#[derive(Clone)]
 pub enum BatchColumn {
     Int(Vec<Option<i64>>),
     Real(Vec<Option<f64>>),
@@ -30,8 +31,9 @@ pub enum BatchColumn {
 impl BatchColumn {
     /// Creates an empty `BatchColumn` according to `eval_tp` and reserves capacity according
     /// to `capacity`.
-    pub fn with_capacity(capacity: usize, eval_tp: &::EvalTypeProvider) -> ::Result<Self> {
-        eval_tp.get_eval_type().map(|eval_tp| match eval_tp {
+    #[inline]
+    pub fn with_capacity(capacity: usize, eval_tp: &::EvalTypeProvider) -> Self {
+        match eval_tp.get_eval_type() {
             ::EvalType::Int => BatchColumn::Int(Vec::with_capacity(capacity)),
             ::EvalType::Real => BatchColumn::Real(Vec::with_capacity(capacity)),
             ::EvalType::Decimal => BatchColumn::Decimal(Vec::with_capacity(capacity)),
@@ -39,10 +41,11 @@ impl BatchColumn {
             ::EvalType::DateTime => BatchColumn::DateTime(Vec::with_capacity(capacity)),
             ::EvalType::Duration => BatchColumn::Duration(Vec::with_capacity(capacity)),
             ::EvalType::Json => BatchColumn::Json(Vec::with_capacity(capacity)),
-        })
+        }
     }
 
     /// Returns the number of datums contained in this column.
+    #[inline]
     pub fn len(&self) -> usize {
         match self {
             BatchColumn::Int(ref v) => v.len(),
@@ -58,14 +61,43 @@ impl BatchColumn {
     /// Returns whether this column is empty.
     ///
     /// Equals to `len() == 0`.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Shortens the column, keeping the first `len` datums and dropping the rest.
+    ///
+    /// If `len` is greater than the column's current length, this has no effect.
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        match self {
+            BatchColumn::Int(ref mut v) => v.truncate(len),
+            BatchColumn::Real(ref mut v) => v.truncate(len),
+            BatchColumn::Decimal(ref mut v) => v.truncate(len),
+            BatchColumn::String(ref mut v) => v.truncate(len),
+            BatchColumn::DateTime(ref mut v) => v.truncate(len),
+            BatchColumn::Duration(ref mut v) => v.truncate(len),
+            BatchColumn::Json(ref mut v) => v.truncate(len),
+        };
+    }
+
+    /// Clears the column, removing all datums.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.truncate(0);
     }
 
     /// Pushes a value into the inner vector by decoding the datum and converting to current
     /// column's type.
     ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidData` if datum data is invalid or cannot be decoded in current
+    /// column's type.
+    ///
     // TODO: We can remove the dependency of `Datum` and decode by our own.
+    #[inline]
     pub fn push_datum(&mut self, mut datum: &[u8]) -> ::Result<()> {
         // Note that there will be a memory copy when decoding.
         ::tikv::coprocessor::codec::datum::decode_datum(&mut datum)
@@ -76,74 +108,37 @@ impl BatchColumn {
                         Datum::Null => vec.push(None),
                         Datum::I64(v) => vec.push(Some(v)),
                         Datum::U64(v) => vec.push(Some(v as i64)),
-                        datum => {
-                            // We want to call datum's Display interface,
-                            // instead of its own "to_string".
-                            return Err(::Error::InvalidConversion(
-                                ::std::string::ToString::to_string(&datum),
-                                "BatchColumn::Int".to_owned(),
-                            ));
-                        }
+                        _ => return Err(::Error::InvalidData),
                     },
                     BatchColumn::Real(ref mut vec) => match datum {
                         Datum::Null => vec.push(None),
                         Datum::F64(v) => vec.push(Some(v)),
-                        datum => {
-                            return Err(::Error::InvalidConversion(
-                                ::std::string::ToString::to_string(&datum),
-                                "BatchColumn::Real".to_owned(),
-                            ))
-                        }
+                        _ => return Err(::Error::InvalidData),
                     },
                     BatchColumn::Decimal(ref mut vec) => match datum {
                         Datum::Null => vec.push(None),
                         Datum::Dec(v) => vec.push(Some(v)),
-                        datum => {
-                            return Err(::Error::InvalidConversion(
-                                ::std::string::ToString::to_string(&datum),
-                                "BatchColumn::Decimal".to_owned(),
-                            ))
-                        }
+                        _ => return Err(::Error::InvalidData),
                     },
                     BatchColumn::String(ref mut vec) => match datum {
                         Datum::Null => vec.push(None),
                         Datum::Bytes(v) => vec.push(Some(v)),
-                        datum => {
-                            return Err(::Error::InvalidConversion(
-                                ::std::string::ToString::to_string(&datum),
-                                "BatchColumn::String".to_owned(),
-                            ))
-                        }
+                        _ => return Err(::Error::InvalidData),
                     },
                     BatchColumn::DateTime(ref mut vec) => match datum {
                         Datum::Null => vec.push(None),
                         Datum::Time(v) => vec.push(Some(v)),
-                        datum => {
-                            return Err(::Error::InvalidConversion(
-                                ::std::string::ToString::to_string(&datum),
-                                "BatchColumn::DateTime".to_owned(),
-                            ))
-                        }
+                        _ => return Err(::Error::InvalidData),
                     },
                     BatchColumn::Duration(ref mut vec) => match datum {
                         Datum::Null => vec.push(None),
                         Datum::Dur(v) => vec.push(Some(v)),
-                        datum => {
-                            return Err(::Error::InvalidConversion(
-                                ::std::string::ToString::to_string(&datum),
-                                "BatchColumn::Duration".to_owned(),
-                            ))
-                        }
+                        _ => return Err(::Error::InvalidData),
                     },
                     BatchColumn::Json(ref mut vec) => match datum {
                         Datum::Null => vec.push(None),
                         Datum::Json(v) => vec.push(Some(v)),
-                        datum => {
-                            return Err(::Error::InvalidConversion(
-                                ::std::string::ToString::to_string(&datum),
-                                "BatchColumn::Json".to_owned(),
-                            ))
-                        }
+                        _ => return Err(::Error::InvalidData),
                     },
                 };
                 Ok(())
@@ -152,8 +147,9 @@ impl BatchColumn {
 }
 
 impl ::EvalTypeProvider for BatchColumn {
-    fn get_eval_type(&self) -> ::Result<::EvalType> {
-        let eval_tp = match self {
+    #[inline]
+    fn get_eval_type(&self) -> ::EvalType {
+        match self {
             BatchColumn::Int(_) => ::EvalType::Int,
             BatchColumn::Real(_) => ::EvalType::Real,
             BatchColumn::Decimal(_) => ::EvalType::Decimal,
@@ -161,7 +157,6 @@ impl ::EvalTypeProvider for BatchColumn {
             BatchColumn::DateTime(_) => ::EvalType::DateTime,
             BatchColumn::Duration(_) => ::EvalType::Duration,
             BatchColumn::Json(_) => ::EvalType::Json,
-        };
-        Ok(eval_tp)
+        }
     }
 }

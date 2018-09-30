@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg_attr(test, feature(test))]
+
 #[macro_use]
 extern crate bitflags;
 #[macro_use]
@@ -19,6 +21,8 @@ extern crate enum_primitive_derive;
 extern crate quick_error;
 extern crate num_traits;
 extern crate smallvec;
+#[cfg(test)]
+extern crate test;
 
 extern crate tikv; // TODO: We should avoid importing whole TiKV
 extern crate tipb;

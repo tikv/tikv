@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! This module is deprecated. Please refer to `components/cop_datatype/field_type.rs`.
+
 use super::charset::COLLATION_BIN_ID;
 use tipb::expression::FieldType;
 

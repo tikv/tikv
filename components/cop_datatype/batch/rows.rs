@@ -30,13 +30,23 @@ pub struct BatchRows<E> {
     some_error: Option<E>,
 }
 
+impl<E: Clone> Clone for BatchRows<E> {
+    fn clone(&self) -> Self {
+        Self {
+            columns: self.columns.clone(),
+            number_of_rows: self.number_of_rows,
+            some_error: self.some_error.clone(),
+        }
+    }
+}
+
 impl<E> BatchRows<E> {
     /// Creates a new `BatchRows`, which contains `columns_count` number of raw columns
     /// and each of them reserves capacity according to `rows_capacity`.
     pub fn raw(columns_count: usize, rows_capacity: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
         for _ in 0..columns_count {
-            let column = LazyBatchColumn::Raw(Vec::with_capacity(rows_capacity));
+            let column = LazyBatchColumn::raw_with_capacity(rows_capacity);
             columns.push(column);
         }
         Self {
@@ -69,8 +79,6 @@ impl<E> BatchRows<E> {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnsupportedType` if given column type is not supported.
-    ///
     /// Returns `Error::InvalidData` if raw data cannot be decoded by given column type.
     pub fn ensure_column_decoded(
         &mut self,
@@ -96,13 +104,22 @@ impl<E> BatchRows<E> {
     }
 }
 
+#[derive(Clone)]
 enum LazyBatchColumn {
-    /// Ensure that for small datum values (i.e. Int, Real, Time) they are stored compactly.
-    Raw(Vec<SmallVec<[u8; 10]>>),
+    /// Ensure that small datum values (i.e. Int, Real, Time) are stored compactly.
+    /// Notice that there is an extra 1 byte for datum to store the flag, so there are 9 bytes.
+    Raw(Vec<SmallVec<[u8; 9]>>),
     Decoded(::BatchColumn),
 }
 
 impl LazyBatchColumn {
+    /// Creates a new `LazyBatchColumn::Raw` with specified capacity.
+    #[inline]
+    pub fn raw_with_capacity(capacity: usize) -> Self {
+        LazyBatchColumn::Raw(Vec::with_capacity(capacity))
+    }
+
+    #[inline]
     pub fn is_raw(&self) -> bool {
         match self {
             LazyBatchColumn::Raw(_) => true,
@@ -110,6 +127,7 @@ impl LazyBatchColumn {
         }
     }
 
+    #[inline]
     pub fn is_decoded(&self) -> bool {
         match self {
             LazyBatchColumn::Raw(_) => false,
@@ -117,6 +135,7 @@ impl LazyBatchColumn {
         }
     }
 
+    #[inline]
     pub fn get_decoded(&self) -> &::BatchColumn {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
@@ -124,13 +143,15 @@ impl LazyBatchColumn {
         }
     }
 
-    pub fn get_raw(&self) -> &Vec<SmallVec<[u8; 10]>> {
+    #[inline]
+    pub fn get_raw(&self) -> &Vec<SmallVec<[u8; 9]>> {
         match self {
             LazyBatchColumn::Raw(ref v) => v,
             LazyBatchColumn::Decoded(_) => panic!("LazyBatchColumn is already decoded"),
         }
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         match self {
             LazyBatchColumn::Raw(ref v) => v.len(),
@@ -138,6 +159,20 @@ impl LazyBatchColumn {
         }
     }
 
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        match self {
+            LazyBatchColumn::Raw(ref mut v) => v.truncate(len),
+            LazyBatchColumn::Decoded(ref mut v) => v.truncate(len),
+        };
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.truncate(0)
+    }
+
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -145,8 +180,6 @@ impl LazyBatchColumn {
     /// Decodes this column according to column info if the column is not decoded.
     ///
     /// # Errors
-    ///
-    /// Returns `Error::UnsupportedType` if column type is not supported.
     ///
     /// Returns `Error::InvalidData` if raw data cannot be decoded by given column type.
     pub fn decode(&mut self, column_info: &ColumnInfo) -> ::Result<()> {
@@ -156,7 +189,7 @@ impl LazyBatchColumn {
 
         // TODO: Can we eliminate an copy here?
 
-        let mut decoded_column = ::BatchColumn::with_capacity(self.len(), column_info)?;
+        let mut decoded_column = ::BatchColumn::with_capacity(self.len(), column_info);
         {
             let raw_values = self.get_raw();
             for raw_value in raw_values {
@@ -179,6 +212,7 @@ impl LazyBatchColumn {
     /// # Panics
     ///
     /// Panics when current column is already decoded.
+    #[inline]
     pub fn push_raw(&mut self, raw_datum: &[u8]) {
         match self {
             LazyBatchColumn::Raw(ref mut v) => {
@@ -186,5 +220,122 @@ impl LazyBatchColumn {
             }
             LazyBatchColumn::Decoded(_) => panic!("LazyBatchColumn is already decoded"),
         }
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use test;
+
+    use super::*;
+
+    #[bench]
+    fn bench_lazy_batch_column_push_raw_4bytes(b: &mut test::Bencher) {
+        let mut column = LazyBatchColumn::raw_with_capacity(1000);
+        let val = vec![0; 4];
+        b.iter(|| {
+            let column = test::black_box(&mut column);
+            for _ in 0..1000 {
+                column.push_raw(test::black_box(&val))
+            }
+            test::black_box(&column);
+            column.clear();
+            test::black_box(&column);
+        });
+    }
+
+    #[bench]
+    fn bench_lazy_batch_column_push_raw_9bytes(b: &mut test::Bencher) {
+        let mut column = LazyBatchColumn::raw_with_capacity(1000);
+        let val = vec![0; 9];
+        b.iter(|| {
+            let column = test::black_box(&mut column);
+            for _ in 0..1000 {
+                column.push_raw(test::black_box(&val))
+            }
+            test::black_box(&column);
+            column.clear();
+            test::black_box(&column);
+        });
+    }
+
+    /// 10 bytes > inline size for LazyBatchColumn, which will be slower. This benchmark
+    /// shows how slow it is.
+    #[bench]
+    fn bench_lazy_batch_column_push_raw_10bytes(b: &mut test::Bencher) {
+        let mut column = LazyBatchColumn::raw_with_capacity(1000);
+        let val = vec![0; 10];
+        b.iter(|| {
+            let column = test::black_box(&mut column);
+            for _ in 0..1000 {
+                column.push_raw(test::black_box(&val))
+            }
+            test::black_box(&column);
+            column.clear();
+            test::black_box(&column);
+        });
+    }
+
+    #[bench]
+    fn bench_lazy_batch_column_clone(b: &mut test::Bencher) {
+        use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
+
+        let mut column = LazyBatchColumn::raw_with_capacity(1000);
+        let mut datum_raw: Vec<u8> = Vec::new();
+        DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
+        for _ in 0..1000 {
+            column.push_raw(datum_raw.as_slice());
+        }
+        b.iter(|| {
+            test::black_box(test::black_box(&column).clone());
+        });
+    }
+
+    #[bench]
+    fn bench_lazy_batch_column_decode(b: &mut test::Bencher) {
+        use num_traits::ToPrimitive;
+        use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
+
+        let mut column = LazyBatchColumn::raw_with_capacity(1000);
+        let mut datum_raw: Vec<u8> = Vec::new();
+        DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
+        for _ in 0..1000 {
+            column.push_raw(datum_raw.as_slice());
+        }
+        let mut col_info = ::tipb::schema::ColumnInfo::new();
+        col_info.set_tp(::FieldTypeTp::LongLong.to_i32().unwrap());
+
+        b.iter(|| {
+            let mut col = test::black_box(&column).clone();
+            col.decode(&col_info).unwrap();
+            test::black_box(&col);
+        });
+    }
+
+    /// The performance of naively decoding multiple datums.
+    #[bench]
+    fn bench_batch_decode(b: &mut test::Bencher) {
+        use tikv::coprocessor::codec::datum::{self, Datum, DatumEncoder};
+
+        let mut datum_raw: Vec<u8> = Vec::new();
+        DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
+
+        b.iter(|| {
+            for _ in 0..1000 {
+                let mut raw = test::black_box(&datum_raw).as_slice();
+                let datum = datum::decode_datum(&mut raw).unwrap();
+                match datum {
+                    Datum::I64(v) => {
+                        test::black_box(v);
+                    }
+                    Datum::U64(v) => {
+                        test::black_box(v);
+                    }
+                    _ => {
+                        panic!();
+                    }
+                }
+            }
+        });
     }
 }

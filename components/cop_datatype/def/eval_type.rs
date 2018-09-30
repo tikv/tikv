@@ -11,7 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// Data types that implementations accept in function signatures.
+/// Function implementations' parameter data types.
+///
+/// It is similar to the `EvalType` in TiDB, but differs in the follows for historical reasons:
+/// - Doesn't provide type `Timestamp`. It is handled by the same type as `DateTime`
+///   instead of a new type.
 pub enum EvalType {
     Int,
     Real,
@@ -22,8 +26,14 @@ pub enum EvalType {
     Json,
 }
 
-impl From<::FieldTypeTp> for EvalType {
-    fn from(tp: ::FieldTypeTp) -> Self {
+pub trait EvalTypeProvider {
+    fn get_eval_type(&self) -> EvalType;
+}
+
+impl<T: ::FieldTypeProvider> EvalTypeProvider for T {
+    #[inline]
+    fn get_eval_type(&self) -> EvalType {
+        let tp = self.get_tp();
         match tp {
             ::FieldTypeTp::Tiny
             | ::FieldTypeTp::Short
@@ -41,16 +51,5 @@ impl From<::FieldTypeTp> for EvalType {
             ::FieldTypeTp::JSON => EvalType::Json,
             _ => EvalType::String,
         }
-    }
-}
-
-pub trait EvalTypeProvider {
-    fn get_eval_type(&self) -> ::Result<EvalType>;
-}
-
-impl<T: ::FieldTypeProvider> EvalTypeProvider for T {
-    fn get_eval_type(&self) -> ::Result<EvalType> {
-        let field_type_tp = self.get_tp()?;
-        Ok(field_type_tp.into())
     }
 }
