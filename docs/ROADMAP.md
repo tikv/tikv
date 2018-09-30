@@ -21,6 +21,9 @@ This document defines the roadmap for TiKV development.
 - [ ] Titan - Separate large key-values from LSM-Tree
 - [ ] Pluggable Engine Interface - Clean up the engine wrapper code and provide more extendibility
 
+## Storage
+- [ ] Flow Control - Do flow control in scheduler to avoid write stall in advance
+
 ## Transaction
 - [x] Optimize transaction conflicts
 - [ ] Distributed GC - Distribute MVCC garbage collection control to TiKV
@@ -36,7 +39,6 @@ This document defines the roadmap for TiKV development.
 ## Client
 - [ ] TiKV client (Rust crate)
 - [ ] Batch gRPC Message - Reduce message overhead
-- [ ] Flow Control - Do flow control in scheduler to avoid write stall in advance
 
 ## PD
 - [ ] Optimize Region metadata - Save Region metadata in detached storage engine
