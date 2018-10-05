@@ -111,8 +111,12 @@ impl ScalarFunc {
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RegexpBinarySig
+            | ScalarFuncSig::RoundWithFracDec
+            | ScalarFuncSig::RoundWithFracInt
+            | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateReal => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -228,6 +232,8 @@ impl ScalarFunc {
             | ScalarFuncSig::RTrim
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::BitLength
+            | ScalarFuncSig::RouldReal
+            | ScalarFuncSig::RoundDec
             | ScalarFuncSig::RoundInt
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
@@ -407,11 +413,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Replace
             | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
-            | ScalarFuncSig::RouldReal
-            | ScalarFuncSig::RoundDec
-            | ScalarFuncSig::RoundWithFracDec
-            | ScalarFuncSig::RoundWithFracInt
-            | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::Rpad
@@ -419,7 +420,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
-            | ScalarFuncSig::SHA2
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
@@ -763,6 +763,7 @@ dispatch_call! {
         Sign => sign,
 
         RoundInt => round_int,
+        RoundWithFracInt => round_with_frac_int,
 
         TruncateInt => truncate_int,
 
@@ -812,6 +813,8 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
+        RouldReal => round_real,
+        RoundWithFracReal => round_with_frac_real,
         PI => pi,
         Rand => rand,
         RandWithSeed => rand_with_seed,
@@ -861,6 +864,8 @@ dispatch_call! {
         CeilIntToDec => cast_int_as_decimal,
         FloorDecToDec => floor_dec_to_dec,
         FloorIntToDec => cast_int_as_decimal,
+        RoundDec => round_dec,
+        RoundWithFracDec => round_with_frac_dec,
 
         IfNullDecimal => if_null_decimal,
         IfDecimal => if_decimal,
@@ -908,6 +913,7 @@ dispatch_call! {
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
         SHA1 => sha1,
+        SHA2 => sha2,
         Elt => elt,
     }
     TIME_CALLS {
@@ -1068,6 +1074,9 @@ mod test {
                     ScalarFuncSig::TruncateReal,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
+                    ScalarFuncSig::RoundWithFracDec,
+                    ScalarFuncSig::RoundWithFracInt,
+                    ScalarFuncSig::RoundWithFracReal,
                 ],
                 2,
                 2,
@@ -1158,6 +1167,9 @@ mod test {
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
+                    ScalarFuncSig::RouldReal,
+                    ScalarFuncSig::RoundDec,
+                    ScalarFuncSig::RoundInt,
                     ScalarFuncSig::Rand,
                     ScalarFuncSig::RandWithSeed,
                     ScalarFuncSig::CRC32,
@@ -1404,11 +1416,6 @@ mod test {
             ScalarFuncSig::Replace,
             ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
-            ScalarFuncSig::RouldReal,
-            ScalarFuncSig::RoundDec,
-            ScalarFuncSig::RoundWithFracDec,
-            ScalarFuncSig::RoundWithFracInt,
-            ScalarFuncSig::RoundWithFracReal,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
             ScalarFuncSig::Rpad,
@@ -1416,7 +1423,6 @@ mod test {
             ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
-            ScalarFuncSig::SHA2,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
@@ -1508,5 +1514,4 @@ mod test {
             );
         }
     }
-
 }

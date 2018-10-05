@@ -142,5 +142,12 @@ codegen-units = 4
 lto = true
 opt-level = 3
 debug = true
-# TODO: remove this once rust-lang/rust#50199 is resolved.
-codegen-units = 2
+# TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
+codegen-units = 1
+
+# The benchmark profile is identical to release, except that lto = false
+[profile.bench]
+lto = false
+opt-level = 3
+debug = true
+codegen-units = 1
