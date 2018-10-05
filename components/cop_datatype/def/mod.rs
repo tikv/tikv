@@ -16,5 +16,8 @@
 mod eval_type;
 mod field_type;
 
-pub use self::eval_type::{EvalType, EvalTypeProvider};
-pub use self::field_type::{Collation, FieldTypeFlag, FieldTypeProvider, FieldTypeTp};
+pub use self::eval_type::EvalType;
+pub use self::field_type::{Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+
+/// Length is unspecified, applicable to `FieldType`'s `flen` and `decimal`.
+pub const UNSPECIFIED_LENGTH: isize = -1;

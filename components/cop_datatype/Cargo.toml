@@ -8,10 +8,8 @@ description = "TiKV Coprocessor data types"
 path = "lib.rs"
 
 [dependencies]
-tikv = { path = "../../" }  # TODO: Remove
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 bitflags = "1.0"
 enum-primitive-derive = "0.1"
-num-traits = "0.1"
+num-traits = "0.2"
 quick-error = "1.2"
-smallvec = "0.6"

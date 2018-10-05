@@ -20,11 +20,12 @@ pub use self::chunk::{Chunk, ChunkEncoder};
 
 #[cfg(test)]
 mod test {
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
 
-    pub fn field_type(tp: u8) -> FieldType {
+    pub fn field_type(tp: FieldTypeTp) -> FieldType {
         let mut fp = FieldType::new();
-        fp.set_tp(i32::from(tp));
+        (&mut fp as &mut FieldTypeAccessor).set_tp(tp);
         fp
     }
 }

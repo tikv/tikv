@@ -20,6 +20,8 @@ use std::mem;
 use std::str::FromStr;
 use std::{i64, str};
 
+use cop_datatype::FieldTypeTp;
+
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
     PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
@@ -347,7 +349,7 @@ impl Datum {
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
         let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
-        let tp = mysql::types::LONG_LONG;
+        let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
             Datum::U64(u) => convert::convert_uint_to_int(u, upper_bound, tp),

@@ -11,17 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{BigEndian, ReadBytesExt};
 use std::iter::Peekable;
 use std::mem;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
+use byteorder::{BigEndian, ReadBytesExt};
+
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::{datum, mysql, table};
+use coprocessor::codec::{datum, table};
 use coprocessor::util;
 use coprocessor::*;
 
@@ -136,7 +139,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
         };
 
         if let Some(ref pk_col) = self.pk_col {
-            let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
+            let handle_datum = if pk_col.flag().contains(FieldTypeFlag::UNSIGNED) {
                 // PK column is unsigned
                 datum::Datum::U64(handle as u64)
             } else {
@@ -275,12 +278,12 @@ pub mod test {
     use byteorder::{BigEndian, WriteBytesExt};
     use std::i64;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
     use coprocessor::codec::datum::{self, Datum};
-    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
     use util::collections::HashMap;
 
@@ -340,8 +343,8 @@ pub mod test {
         unique: bool,
     ) -> Data {
         let cols = vec![
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
 
         let mut kv_data = Vec::new();

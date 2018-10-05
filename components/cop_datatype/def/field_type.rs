@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
@@ -25,7 +27,7 @@ use num_traits::FromPrimitive;
 /// are flattened into `ColumnInfo`. Semantically these fields are identical.
 ///
 /// Please refer to `mysql/type.go` in TiDB.
-#[derive(Primitive, PartialEq)]
+#[derive(Primitive, PartialEq, Debug, Clone, Copy)]
 pub enum FieldTypeTp {
     Unspecified = 0, // Default
     Tiny = 1,
@@ -57,14 +59,26 @@ pub enum FieldTypeTp {
     Geometry = 0xff,
 }
 
-/// Valid values of `tipv::expression::FieldType::collate` and
+impl fmt::Display for FieldTypeTp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+/// Valid values of `tipb::expression::FieldType::collate` and
 /// `tipb::schema::ColumnInfo::collation`.
 ///
 /// The default value if `UTF8Bin`.
-#[derive(Primitive, PartialEq)]
+#[derive(Primitive, PartialEq, Debug, Clone, Copy)]
 pub enum Collation {
     Binary = 63,
     UTF8Bin = 83, // Default
+}
+
+impl fmt::Display for Collation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
 }
 
 bitflags! {
@@ -86,21 +100,36 @@ bitflags! {
     }
 }
 
-pub trait FieldTypeProvider {
-    fn get_tp(&self) -> FieldTypeTp;
+/// A uniform `FieldType` access interface for `FieldType` and `ColumnInfo`.
+pub trait FieldTypeAccessor {
+    fn tp(&self) -> FieldTypeTp;
 
-    fn get_flag(&self) -> FieldTypeFlag;
+    fn set_tp(&mut self, tp: FieldTypeTp);
 
-    fn get_flen(&self) -> i32;
+    fn flag(&self) -> FieldTypeFlag;
 
-    fn get_decimal(&self) -> i32;
+    fn set_flag(&mut self, flag: FieldTypeFlag);
 
-    fn get_collation(&self) -> Collation;
+    fn flen(&self) -> isize;
 
-    /// Whether this type is unsigned.
+    fn set_flen(&mut self, flen: isize);
+
+    fn decimal(&self) -> isize;
+
+    fn set_decimal(&mut self, decimal: isize);
+
+    fn collation(&self) -> Collation;
+
+    fn set_collation(&mut self, collation: Collation);
+
+    /// Whether this type is a hybrid type, which can represent different types of value in
+    /// specific context.
+    ///
+    /// Please refer to `Hybrid` in TiDB.
     #[inline]
-    fn is_unsigned(&self) -> bool {
-        self.get_flag().contains(FieldTypeFlag::UNSIGNED)
+    fn is_hybrid(&self) -> bool {
+        let tp = self.tp();
+        tp == FieldTypeTp::Enum || tp == FieldTypeTp::Bit || tp == FieldTypeTp::Set
     }
 
     /// Whether this type is a blob type.
@@ -108,7 +137,7 @@ pub trait FieldTypeProvider {
     /// Please refer to `IsTypeBlob` in TiDB.
     #[inline]
     fn is_blob_like(&self) -> bool {
-        let tp = self.get_tp();
+        let tp = self.tp();
         tp == FieldTypeTp::TinyBlob
             || tp == FieldTypeTp::MediumBlob
             || tp == FieldTypeTp::Blob
@@ -120,7 +149,7 @@ pub trait FieldTypeProvider {
     /// Please refer to `IsTypeChar` in TiDB.
     #[inline]
     fn is_char_like(&self) -> bool {
-        let tp = self.get_tp();
+        let tp = self.tp();
         tp == FieldTypeTp::String || tp == FieldTypeTp::VarChar
     }
 
@@ -129,7 +158,7 @@ pub trait FieldTypeProvider {
     /// Please refer to `IsTypeVarchar` in TiDB.
     #[inline]
     fn is_varchar_like(&self) -> bool {
-        let tp = self.get_tp();
+        let tp = self.tp();
         tp == FieldTypeTp::VarString || tp == FieldTypeTp::VarChar
     }
 
@@ -141,7 +170,7 @@ pub trait FieldTypeProvider {
         self.is_blob_like()
             || self.is_char_like()
             || self.is_varchar_like()
-            || self.get_tp() == FieldTypeTp::Unspecified
+            || self.tp() == FieldTypeTp::Unspecified
     }
 
     /// Whether this type is a binary-string-like type.
@@ -149,7 +178,7 @@ pub trait FieldTypeProvider {
     /// Please refer to `IsBinaryStr` in TiDB.
     #[inline]
     fn is_binary_string_like(&self) -> bool {
-        self.get_collation() == Collation::Binary && self.is_string_like()
+        self.collation() == Collation::Binary && self.is_string_like()
     }
 
     /// Whether this type is a non-binary-string-like type.
@@ -157,60 +186,110 @@ pub trait FieldTypeProvider {
     /// Please refer to `IsNonBinaryStr` in TiDB.
     #[inline]
     fn is_non_binary_string_like(&self) -> bool {
-        self.get_collation() != Collation::Binary && self.is_string_like()
+        self.collation() != Collation::Binary && self.is_string_like()
     }
 }
 
-impl FieldTypeProvider for FieldType {
+impl FieldTypeAccessor for FieldType {
     #[inline]
-    fn get_tp(&self) -> FieldTypeTp {
-        FieldTypeTp::from_i32(FieldType::get_tp(self)).unwrap_or(FieldTypeTp::Unspecified)
+    fn tp(&self) -> FieldTypeTp {
+        FieldTypeTp::from_i32(self.get_tp()).unwrap_or(FieldTypeTp::Unspecified)
     }
 
     #[inline]
-    fn get_flag(&self) -> FieldTypeFlag {
-        FieldTypeFlag::from_bits_truncate(FieldType::get_flag(self))
+    fn set_tp(&mut self, tp: FieldTypeTp) {
+        FieldType::set_tp(self, tp as i32);
     }
 
     #[inline]
-    fn get_flen(&self) -> i32 {
-        FieldType::get_flen(self)
+    fn flag(&self) -> FieldTypeFlag {
+        FieldTypeFlag::from_bits_truncate(self.get_flag())
     }
 
     #[inline]
-    fn get_decimal(&self) -> i32 {
-        FieldType::get_decimal(self)
+    fn set_flag(&mut self, flag: FieldTypeFlag) {
+        FieldType::set_flag(self, flag.bits());
     }
 
     #[inline]
-    fn get_collation(&self) -> Collation {
-        Collation::from_i32(FieldType::get_collate(self)).unwrap_or(Collation::UTF8Bin)
+    fn flen(&self) -> isize {
+        self.get_flen() as isize
+    }
+
+    #[inline]
+    fn set_flen(&mut self, flen: isize) {
+        FieldType::set_flen(self, flen as i32);
+    }
+
+    #[inline]
+    fn decimal(&self) -> isize {
+        self.get_decimal() as isize
+    }
+
+    #[inline]
+    fn set_decimal(&mut self, decimal: isize) {
+        FieldType::set_decimal(self, decimal as i32);
+    }
+
+    #[inline]
+    fn collation(&self) -> Collation {
+        Collation::from_i32(self.get_collate()).unwrap_or(Collation::UTF8Bin)
+    }
+
+    #[inline]
+    fn set_collation(&mut self, collation: Collation) {
+        FieldType::set_collate(self, collation as i32);
     }
 }
 
-impl FieldTypeProvider for ColumnInfo {
+impl FieldTypeAccessor for ColumnInfo {
     #[inline]
-    fn get_tp(&self) -> FieldTypeTp {
-        FieldTypeTp::from_i32(ColumnInfo::get_tp(self)).unwrap_or(FieldTypeTp::Unspecified)
+    fn tp(&self) -> FieldTypeTp {
+        FieldTypeTp::from_i32(self.get_tp()).unwrap_or(FieldTypeTp::Unspecified)
     }
 
     #[inline]
-    fn get_flag(&self) -> FieldTypeFlag {
-        FieldTypeFlag::from_bits_truncate(ColumnInfo::get_flag(self) as u32)
+    fn set_tp(&mut self, tp: FieldTypeTp) {
+        ColumnInfo::set_tp(self, tp as i32);
     }
 
     #[inline]
-    fn get_flen(&self) -> i32 {
-        ColumnInfo::get_columnLen(self)
+    fn flag(&self) -> FieldTypeFlag {
+        FieldTypeFlag::from_bits_truncate(self.get_flag() as u32)
     }
 
     #[inline]
-    fn get_decimal(&self) -> i32 {
-        ColumnInfo::get_decimal(self)
+    fn set_flag(&mut self, flag: FieldTypeFlag) {
+        ColumnInfo::set_flag(self, flag.bits() as i32);
     }
 
     #[inline]
-    fn get_collation(&self) -> Collation {
-        Collation::from_i32(ColumnInfo::get_collation(self)).unwrap_or(Collation::UTF8Bin)
+    fn flen(&self) -> isize {
+        self.get_columnLen() as isize
+    }
+
+    #[inline]
+    fn set_flen(&mut self, flen: isize) {
+        ColumnInfo::set_columnLen(self, flen as i32);
+    }
+
+    #[inline]
+    fn decimal(&self) -> isize {
+        self.get_decimal() as isize
+    }
+
+    #[inline]
+    fn set_decimal(&mut self, decimal: isize) {
+        ColumnInfo::set_decimal(self, decimal as i32);
+    }
+
+    #[inline]
+    fn collation(&self) -> Collation {
+        Collation::from_i32(self.get_collation()).unwrap_or(Collation::UTF8Bin)
+    }
+
+    #[inline]
+    fn set_collation(&mut self, collation: Collation) {
+        ColumnInfo::set_collation(self, collation as i32);
     }
 }

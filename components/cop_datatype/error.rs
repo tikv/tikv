@@ -14,8 +14,9 @@
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        InvalidData {
-            description("Invalid data")
+        UnsupportedType(name: String) {
+            display("Unsupported type {}", name)
+            description("Unsupported type")
         }
     }
 }

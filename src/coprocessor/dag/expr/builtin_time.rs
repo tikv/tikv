@@ -15,7 +15,7 @@ use super::{EvalContext, Result, ScalarFunc};
 use chrono::offset::TimeZone;
 use chrono::Datelike;
 use coprocessor::codec::error::Error;
-use coprocessor::codec::mysql::{self, Time};
+use coprocessor::codec::mysql::{Time, TimeType};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
@@ -49,7 +49,7 @@ impl ScalarFunc {
         let e = match self.children[0].eval_time(ctx, row)? {
             Some(mut t) => if !t.is_zero() {
                 let mut res = t.to_mut().clone();
-                res.set_tp(mysql::types::DATE).unwrap();
+                res.set_time_type(TimeType::Date).unwrap();
                 return Ok(Some(Cow::Owned(res)));
             } else {
                 Error::incorrect_datetime_value(&format!("{}", t))

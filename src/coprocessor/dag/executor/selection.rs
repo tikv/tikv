@@ -95,13 +95,13 @@ mod tests {
     use std::i64;
     use std::sync::Arc;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use coprocessor::codec::datum::Datum;
-    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
 
@@ -150,9 +150,9 @@ mod tests {
     fn test_selection_executor_simple() {
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
         let raw_data = vec![
             vec![
@@ -233,9 +233,9 @@ mod tests {
     fn test_selection_executor_condition() {
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::LONG_LONG),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::LongLong),
         ];
         let raw_data = vec![
             vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::I64(7)],

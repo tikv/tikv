@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #![cfg_attr(test, feature(test))]
+#![feature(try_from)]
 
 #[macro_use]
 extern crate bitflags;
@@ -20,21 +21,17 @@ extern crate enum_primitive_derive;
 #[macro_use]
 extern crate quick_error;
 extern crate num_traits;
-extern crate smallvec;
 #[cfg(test)]
 extern crate test;
 
-extern crate tikv; // TODO: We should avoid importing whole TiKV
 extern crate tipb;
 
-mod batch;
 mod def;
 mod error;
 
 pub mod prelude {
-    pub use super::def::{EvalTypeProvider, FieldTypeProvider};
+    pub use super::def::FieldTypeAccessor;
 }
 
-pub use self::batch::*;
 pub use self::def::*;
 pub use self::error::*;

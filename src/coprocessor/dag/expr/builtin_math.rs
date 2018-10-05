@@ -11,15 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
-use coprocessor::codec::{mysql, Datum};
+use std::borrow::Cow;
+use std::{f64, i64};
+
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
 use rand::{Rng, SeedableRng, XorShiftRng};
-use std::borrow::Cow;
-use std::{f64, i64};
 use time;
+
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
+
+use super::{Error, EvalContext, Result, ScalarFunc};
+use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
+use coprocessor::codec::Datum;
 
 impl ScalarFunc {
     #[inline]
@@ -380,14 +385,22 @@ impl ScalarFunc {
     pub fn truncate_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let x = try_opt!(self.children[0].eval_int(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+        let d = if self.children[1]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             0
         } else {
             d
         };
         if d >= 0 {
             Ok(Some(x))
-        } else if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag()) {
+        } else if self.children[0]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             if d < -19 {
                 return Ok(Some(0));
             }
@@ -407,7 +420,11 @@ impl ScalarFunc {
     pub fn truncate_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+        let d = if self.children[1]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             (d as u64).min(i32::max_value() as u64) as i32
         } else if d >= 0 {
             d.min(i64::from(i32::max_value())) as i32
@@ -451,14 +468,16 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::mysql::types;
-    use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::sync::Arc;
     use std::{f64, i64, u64};
+
+    use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
     use tipb::expression::ScalarFuncSig;
+
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     #[test]
     fn test_abs() {
@@ -484,7 +503,7 @@ mod test {
             let arg = datum_expr(arg);
             let mut f = scalar_func_expr(sig, &[arg]);
             if sig == ScalarFuncSig::AbsUInt {
-                f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
+                (f.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
             }
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
@@ -561,12 +580,18 @@ mod test {
             let arg = datum_expr(arg);
             let mut op =
                 Expression::build(&mut ctx, scalar_func_expr(sig, &[arg.clone()])).unwrap();
-            if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
-                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            if arg
+                .get_field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED)
+            {
+                (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
             }
             if sig == ScalarFuncSig::CeilIntToDec || sig == ScalarFuncSig::CeilDecToDec {
-                op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
-                op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
+                (op.mut_field_type() as &mut FieldTypeAccessor)
+                    .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
+                (op.mut_field_type() as &mut FieldTypeAccessor)
+                    .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
             }
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -629,12 +654,18 @@ mod test {
             let arg = datum_expr(arg);
             let mut op =
                 Expression::build(&mut ctx, scalar_func_expr(sig, &[arg.clone()])).unwrap();
-            if mysql::has_unsigned_flag(arg.get_field_type().get_flag()) {
-                op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+            if arg
+                .get_field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED)
+            {
+                (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
             }
             if sig == ScalarFuncSig::FloorIntToDec || sig == ScalarFuncSig::FloorDecToDec {
-                op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
-                op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
+                (op.mut_field_type() as &mut FieldTypeAccessor)
+                    .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
+                (op.mut_field_type() as &mut FieldTypeAccessor)
+                    .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
             }
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -1579,10 +1610,10 @@ mod test {
         for (sig, x, d, exp) in tests {
             let x = datum_expr(x);
             let d = datum_expr(d);
-            let is_unsigned = mysql::has_unsigned_flag(x.get_field_type().get_flag());
+            let is_unsigned = x.get_field_type().flag().contains(FieldTypeFlag::UNSIGNED);
             let mut f = scalar_func_expr(sig, &[x, d]);
             if is_unsigned {
-                f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
+                (f.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
             }
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();

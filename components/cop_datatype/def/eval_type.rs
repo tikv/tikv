@@ -11,11 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+
 /// Function implementations' parameter data types.
 ///
-/// It is similar to the `EvalType` in TiDB, but differs in the follows for historical reasons:
-/// - Doesn't provide type `Timestamp`. It is handled by the same type as `DateTime`
-///   instead of a new type.
+/// It is similar to the `EvalType` in TiDB, but doesn't provide type `Timestamp`, which is
+/// handled by the same type as `DateTime` here instead of a new type.
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum EvalType {
     Int,
     Real,
@@ -26,21 +28,22 @@ pub enum EvalType {
     Json,
 }
 
-pub trait EvalTypeProvider {
-    fn get_eval_type(&self) -> EvalType;
+impl fmt::Display for EvalType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
 }
 
-impl<T: ::FieldTypeProvider> EvalTypeProvider for T {
-    #[inline]
-    fn get_eval_type(&self) -> EvalType {
-        let tp = self.get_tp();
-        match tp {
+impl ::std::convert::TryFrom<::FieldTypeTp> for EvalType {
+    type Error = ::Error;
+
+    fn try_from(tp: ::FieldTypeTp) -> Result<Self, ::Error> {
+        let eval_type = match tp {
             ::FieldTypeTp::Tiny
             | ::FieldTypeTp::Short
             | ::FieldTypeTp::Int24
             | ::FieldTypeTp::Long
             | ::FieldTypeTp::LongLong
-            | ::FieldTypeTp::Bit
             | ::FieldTypeTp::Year => EvalType::Int,
             ::FieldTypeTp::Float | ::FieldTypeTp::Double => EvalType::Real,
             ::FieldTypeTp::NewDecimal => EvalType::Decimal,
@@ -49,7 +52,18 @@ impl<T: ::FieldTypeProvider> EvalTypeProvider for T {
             }
             ::FieldTypeTp::Duration => EvalType::Duration,
             ::FieldTypeTp::JSON => EvalType::Json,
-            _ => EvalType::String,
-        }
+            ::FieldTypeTp::VarChar
+            | ::FieldTypeTp::TinyBlob
+            | ::FieldTypeTp::MediumBlob
+            | ::FieldTypeTp::LongBlob
+            | ::FieldTypeTp::Blob
+            | ::FieldTypeTp::VarString
+            | ::FieldTypeTp::String => EvalType::String,
+            _ => {
+                // Note: In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
+                return Err(::Error::UnsupportedType(tp.to_string()));
+            }
+        };
+        Ok(eval_type)
     }
 }
