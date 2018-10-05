@@ -211,6 +211,7 @@ impl TryFrom<FieldTypeTp> for TimeType {
             FieldTypeTp::Date => Ok(TimeType::Date),
             FieldTypeTp::DateTime => Ok(TimeType::DateTime),
             FieldTypeTp::Timestamp => Ok(TimeType::Timestamp),
+            FieldTypeTp::Unspecified => Ok(TimeType::DateTime), // FIXME: We should forbid this
             _ => Err(box_err!("Time does not support field type {}", value)),
         }
     }
