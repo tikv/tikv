@@ -16,7 +16,7 @@ use std::mem;
 use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
-use test_raftstore::{new_node_cluster, new_server_cluster, Cluster, Simulator};
+use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
 use tikv::raftstore::coprocessor::{
     Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
 };
@@ -35,7 +35,7 @@ impl RegionChangeObserver for TestObserver {
     }
 }
 
-fn test_region_change_observer_impl<S: Simulator>(mut cluster: Cluster<S>) {
+fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -174,13 +174,7 @@ fn test_region_change_observer_impl<S: Simulator>(mut cluster: Cluster<S>) {
 }
 
 #[test]
-fn test_server_region_change_observer() {
-    let cluster = new_server_cluster(1, 3);
-    test_region_change_observer_impl(cluster);
-}
-
-#[test]
-fn test_node_region_change_observer() {
+fn test_region_change_observer() {
     let cluster = new_node_cluster(1, 3);
     test_region_change_observer_impl(cluster);
 }

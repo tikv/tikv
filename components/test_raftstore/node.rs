@@ -150,13 +150,16 @@ impl NodeCluster {
     pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<Msg, ServerRaftStoreRouter> {
         self.trans.rl().routers.get(&node_id).cloned().unwrap()
     }
+
+    // Set a function that will be invoked after creating each CoprocessorHost. The first argument
+    // of `op` is the node_id.
+    // Set this before invoking `run_node`.
+    pub fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
+        self.post_create_coprocessor_host = Some(op)
+    }
 }
 
 impl Simulator for NodeCluster {
-    fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
-        self.post_create_coprocessor_host = Some(op)
-    }
-
     fn run_node(
         &mut self,
         node_id: u64,

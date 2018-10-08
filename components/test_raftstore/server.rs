@@ -66,7 +66,6 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
-    post_create_coprocessor_host: Option<Box<Fn(u64, &mut CoprocessorHost)>>,
 }
 
 impl ServerCluster {
@@ -85,7 +84,6 @@ impl ServerCluster {
             storages: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
-            post_create_coprocessor_host: None,
         }
     }
 
@@ -95,10 +93,6 @@ impl ServerCluster {
 }
 
 impl Simulator for ServerCluster {
-    fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
-        self.post_create_coprocessor_host = Some(op);
-    }
-
     fn run_node(
         &mut self,
         node_id: u64,
@@ -211,11 +205,7 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
-
-        if let Some(f) = self.post_create_coprocessor_host.as_ref() {
-            f(node_id, &mut coprocessor_host);
-        }
+        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
 
         node.start(
             event_loop,
