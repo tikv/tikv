@@ -418,18 +418,18 @@ impl Peer {
         Ok(peer)
     }
 
-    pub fn register_delegates(&self) {
+    /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
+    /// Also trigger `RegionChangeEvent::Create` here.
+    pub fn activate(&self) {
         self.apply_scheduler
             .schedule(ApplyTask::register(self))
             .unwrap();
         self.read_scheduler
             .schedule(ReadTask::register(self))
             .unwrap();
-    }
 
-    pub fn notify_new_region(&self) {
         self.coprocessor_host
-            .on_region_changed(self.region(), RegionChangeEvent::New);
+            .on_region_changed(self.region(), RegionChangeEvent::Create);
     }
 
     #[inline]
@@ -1008,8 +1008,7 @@ impl Peer {
         }
 
         if apply_snap_result.is_some() {
-            self.register_delegates();
-            self.notify_new_region();
+            self.activate();
         }
 
         apply_snap_result

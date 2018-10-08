@@ -403,7 +403,7 @@ mod test {
         host.on_role_change(&region, StateRole::Leader);
         assert_all!(&[&ob.called], &[28]);
 
-        host.on_region_changed(&region, RegionChangeEvent::New);
+        host.on_region_changed(&region, RegionChangeEvent::Create);
         assert_all!(&[&ob.called], &[36]);
     }
 

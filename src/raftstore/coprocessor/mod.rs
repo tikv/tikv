@@ -138,7 +138,7 @@ pub trait RoleObserver: Coprocessor {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RegionChangeEvent {
-    New,
+    Create,
     Update,
     Destroy,
 }
