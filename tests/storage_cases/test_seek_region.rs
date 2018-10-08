@@ -195,13 +195,13 @@ fn test_raftkv_seek_region() {
 
 #[test]
 fn test_region_collection_seek_region() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
 
     let (tx, rx) = channel();
     cluster
         .sim
         .wl()
-        .hook_create_coprocessor_host(box move |id, host| {
+        .post_create_coprocessor_host(box move |id, host| {
             let p = RegionCollection::new(host, id);
             p.start();
             tx.send((id, p)).unwrap()

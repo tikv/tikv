@@ -85,7 +85,7 @@ impl RegionChangeObserver for EventSender {
     fn on_region_changed(&self, context: &mut ObserverContext, event: RegionChangeEvent) {
         let region = context.region().clone();
         let event = match event {
-            RegionChangeEvent::New => RaftStoreEvent::NewRegion { region },
+            RegionChangeEvent::Create => RaftStoreEvent::NewRegion { region },
             RegionChangeEvent::Update => RaftStoreEvent::UpdateRegion { region },
             RegionChangeEvent::Destroy => RaftStoreEvent::DestroyRegion { region },
         };
@@ -128,6 +128,14 @@ struct RegionCollectionWorker {
 }
 
 impl RegionCollectionWorker {
+    fn new(self_store_id: u64) -> Self {
+        Self {
+            self_store_id,
+            regions: HashMap::default(),
+            region_ranges: BTreeMap::default(),
+        }
+    }
+
     fn handle_new_region(&mut self, region: Region) {
         self.region_ranges
             .insert(data_end_key(region.get_end_key()), region.get_id());
@@ -179,16 +187,16 @@ impl RegionCollectionWorker {
     }
 
     fn handle_destroy_region(&mut self, region: Region) {
-        let end_key = data_end_key(region.get_end_key());
+        if let Some((removed_region, _)) = self.regions.remove(&region.get_id()) {
+            let end_key = data_end_key(removed_region.get_end_key());
 
-        // The entry may be updated by other regions.
-        if let Some(id) = self.region_ranges.get(&end_key).cloned() {
-            if id == region.get_id() {
-                self.region_ranges.remove(&end_key);
+            // The entry may be updated by other regions.
+            if let Some(id) = self.region_ranges.get(&end_key).cloned() {
+                if id == region.get_id() {
+                    self.region_ranges.remove(&end_key);
+                }
             }
         }
-
-        self.regions.remove(&region.get_id());
     }
 
     fn handle_role_change(&mut self, region: Region, role: StateRole) {
@@ -301,11 +309,7 @@ impl RegionCollection {
         self.worker
             .lock()
             .unwrap()
-            .start(RegionCollectionWorker {
-                self_store_id: self.self_store_id,
-                regions: HashMap::default(),
-                region_ranges: BTreeMap::default(),
-            })
+            .start(RegionCollectionWorker::new(self.self_store_id))
             .unwrap();
     }
 
@@ -346,5 +350,295 @@ impl RegionInfoProvider for RegionCollection {
                     )
                 })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_region(id: u64, start_key: &[u8], end_key: &[u8]) -> Region {
+        let mut region = Region::default();
+        region.set_id(id);
+        region.set_start_key(start_key.to_vec());
+        region.set_end_key(end_key.to_vec());
+        region
+    }
+
+    fn check_collection(c: &RegionCollectionWorker, regions: &[(Region, StateRole)]) {
+        let region_ranges: Vec<_> = regions
+            .iter()
+            .map(|(r, _)| (data_end_key(r.get_end_key()), r.get_id()))
+            .collect();
+
+        let mut is_regions_equal = c.regions.len() == regions.len();
+
+        if is_regions_equal {
+            for (expect_region, expect_role) in regions {
+                is_regions_equal = is_regions_equal
+                    && c.regions
+                        .get(&expect_region.get_id())
+                        .map_or(false, |(region, role)| {
+                            expect_region == region && expect_role == role
+                        });
+
+                if !is_regions_equal {
+                    break;
+                }
+            }
+        }
+        if !is_regions_equal {
+            panic!("regions: expect {:?}, but got {:?}", regions, c.regions);
+        }
+
+        let mut is_ranges_equal = c.region_ranges.len() == region_ranges.len();
+        is_ranges_equal = is_ranges_equal
+            && c.region_ranges.iter().zip(region_ranges.iter()).all(
+                |((actual_key, actual_id), (expect_key, expect_id))| {
+                    actual_key == expect_key && actual_id == expect_id
+                },
+            );
+        if !is_ranges_equal {
+            panic!(
+                "region_ranges: expect {:?}, but got {:?}",
+                region_ranges, c.region_ranges
+            );
+        }
+    }
+
+    /// Add a set of regions to an empty collection and check if it's successfully loaded.
+    fn must_load_regions(c: &mut RegionCollectionWorker, regions: &[Region]) {
+        assert!(c.regions.is_empty());
+        assert!(c.region_ranges.is_empty());
+
+        for region in regions {
+            must_create_region(c, &region);
+        }
+
+        let expected_regions: Vec<_> = regions
+            .iter()
+            .map(|r| (r.clone(), StateRole::Follower))
+            .collect();
+        check_collection(&c, &expected_regions);
+    }
+
+    fn must_create_region(c: &mut RegionCollectionWorker, region: &Region) {
+        assert!(c.regions.get(&region.get_id()).is_none());
+
+        c.handle_new_region(region.clone());
+
+        assert_eq!(&c.regions[&region.get_id()].0, region);
+        assert_eq!(
+            c.region_ranges[&data_end_key(region.get_end_key())],
+            region.get_id()
+        );
+    }
+
+    fn must_update_region(c: &mut RegionCollectionWorker, region: &Region) {
+        assert!(c.regions.get(&region.get_id()).is_some());
+        let old_end_key = c.regions[&region.get_id()].0.get_end_key().to_vec();
+
+        c.handle_update_region(region.clone());
+
+        assert_eq!(&c.regions[&region.get_id()].0, region);
+        assert_eq!(
+            c.region_ranges[&data_end_key(region.get_end_key())],
+            region.get_id()
+        );
+        // If end_key is updated and the region_id corresponding to the `old_end_key` doesn't equals
+        // to `region.id`, it shouldn't be removed since it was used by another region.
+        if old_end_key.as_slice() != region.get_end_key() {
+            assert!(
+                c.region_ranges
+                    .get(&data_end_key(&old_end_key))
+                    .map_or(true, |id| *id != region.get_id())
+            );
+        }
+    }
+
+    fn must_destroy_region(c: &mut RegionCollectionWorker, id: u64) {
+        let end_key = c.regions[&id].0.get_end_key().to_vec();
+
+        c.handle_destroy_region(new_region(id, b"", b""));
+
+        assert!(c.regions.get(&id).is_none());
+        // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
+        // removed since it was used by another region.
+        assert!(
+            c.region_ranges
+                .get(&data_end_key(&end_key))
+                .map_or(true, |r| *r != id)
+        );
+    }
+
+    fn must_change_role(c: &mut RegionCollectionWorker, region: &Region, role: StateRole) {
+        assert!(c.regions.get(&region.get_id()).is_some());
+
+        c.handle_role_change(region.clone(), role);
+
+        assert_eq!(c.regions[&region.get_id()].1, role);
+    }
+
+    fn print(c: &RegionCollectionWorker) {
+        use storage::Key;
+        eprintln!("regions:");
+        for (k, v) in &c.regions {
+            eprintln!("  {}: {:?}", k, v);
+        }
+        eprintln!("ranges:");
+        for (k, v) in &c.region_ranges {
+            eprintln!("  {}: {:?}", Key::from_encoded_slice(k), v)
+        }
+        eprintln!("");
+    }
+
+    #[test]
+    fn test_basic_updating() {
+        let mut c = RegionCollectionWorker::new(0);
+        let init_regions = &[
+            new_region(1, b"", b"k1"),
+            new_region(2, b"k1", b"k9"),
+            new_region(3, b"k9", b""),
+        ];
+
+        must_load_regions(&mut c, init_regions);
+
+        // end_key changed
+        must_update_region(&mut c, &new_region(2, b"k2", b"k8"));
+        // end_key changed (previous end_key is empty)
+        must_update_region(&mut c, &new_region(3, b"k9", b"k99"));
+        // end_key not changed
+        must_update_region(&mut c, &new_region(1, b"k0", b"k1"));
+        check_collection(
+            &c,
+            &[
+                (new_region(1, b"k0", b"k1"), StateRole::Follower),
+                (new_region(2, b"k2", b"k8"), StateRole::Follower),
+                (new_region(3, b"k9", b"k99"), StateRole::Follower),
+            ],
+        );
+
+        must_change_role(&mut c, &new_region(1, b"k0", b"k1"), StateRole::Candidate);
+        must_create_region(&mut c, &new_region(5, b"k99", b""));
+        must_change_role(&mut c, &new_region(2, b"k2", b"k8"), StateRole::Leader);
+        must_update_region(&mut c, &new_region(2, b"k3", b"k7"));
+        must_create_region(&mut c, &new_region(4, b"k1", b"k3"));
+        check_collection(
+            &c,
+            &[
+                (new_region(1, b"k0", b"k1"), StateRole::Candidate),
+                (new_region(4, b"k1", b"k3"), StateRole::Follower),
+                (new_region(2, b"k3", b"k7"), StateRole::Leader),
+                (new_region(3, b"k9", b"k99"), StateRole::Follower),
+                (new_region(5, b"k99", b""), StateRole::Follower),
+            ],
+        );
+
+        must_destroy_region(&mut c, 4);
+        must_destroy_region(&mut c, 3);
+        check_collection(
+            &c,
+            &[
+                (new_region(1, b"k0", b"k1"), StateRole::Candidate),
+                (new_region(2, b"k3", b"k7"), StateRole::Leader),
+                (new_region(5, b"k99", b""), StateRole::Follower),
+            ],
+        );
+    }
+
+    /// Simulate splitting a region into 3 regions, and the region with old id will be the
+    /// `derive_index`-th region of them. The events are triggered in order indicated by `seq`.
+    /// This is to ensure the collection is correct, no matter what the events' order to happen is.
+    /// Values in `seq` and of `derive_index` start from 1.
+    fn test_split_impl(derive_index: usize, seq: &[usize]) {
+        let mut c = RegionCollectionWorker::new(0);
+        let init_regions = &[
+            new_region(1, b"", b"k1"),
+            new_region(2, b"k1", b"k9"),
+            new_region(3, b"k9", b""),
+        ];
+        must_load_regions(&mut c, init_regions);
+
+        let mut final_regions = vec![
+            new_region(1, b"", b"k1"),
+            new_region(4, b"k1", b"k3"),
+            new_region(5, b"k3", b"k6"),
+            new_region(6, b"k6", b"k9"),
+            new_region(3, b"k9", b""),
+        ];
+        // `derive_index` starts from 1
+        final_regions[derive_index].set_id(2);
+
+        for idx in seq {
+            if *idx == derive_index {
+                must_update_region(&mut c, &final_regions[*idx]);
+            } else {
+                must_create_region(&mut c, &final_regions[*idx]);
+            }
+        }
+
+        let final_regions = final_regions
+            .into_iter()
+            .map(|r| (r, StateRole::Follower))
+            .collect::<Vec<_>>();
+        check_collection(&c, &final_regions);
+    }
+
+    #[test]
+    fn test_split() {
+        test_split_impl(1, &[1, 2, 3]);
+        test_split_impl(1, &[3, 2, 1]);
+
+        test_split_impl(2, &[2, 1, 3]);
+        test_split_impl(2, &[3, 1, 2]);
+        test_split_impl(2, &[1, 2, 3]);
+        test_split_impl(2, &[3, 2, 1]);
+        test_split_impl(2, &[1, 3, 2]);
+        test_split_impl(2, &[2, 3, 1]);
+
+        test_split_impl(3, &[1, 2, 3]);
+        test_split_impl(3, &[3, 2, 1]);
+    }
+
+    fn test_merge_impl(to_left: bool, update_first: bool) {
+        let mut c = RegionCollectionWorker::new(0);
+        let init_regions = &[
+            new_region(1, b"", b"k1"),
+            new_region(2, b"k1", b"k2"),
+            new_region(3, b"k2", b"k3"),
+            new_region(4, b"k3", b""),
+        ];
+        must_load_regions(&mut c, init_regions);
+
+        let (mut updating_region, destroying_region_id) = if to_left {
+            (init_regions[1].clone(), init_regions[2].get_id())
+        } else {
+            (init_regions[2].clone(), init_regions[1].get_id())
+        };
+        updating_region.set_start_key(b"k1".to_vec());
+        updating_region.set_end_key(b"k3".to_vec());
+
+        if update_first {
+            must_update_region(&mut c, &updating_region);
+            must_destroy_region(&mut c, destroying_region_id);
+        } else {
+            must_destroy_region(&mut c, destroying_region_id);
+            must_update_region(&mut c, &updating_region);
+        }
+
+        let final_regions = &[
+            (new_region(1, b"", b"k1"), StateRole::Follower),
+            (updating_region, StateRole::Follower),
+            (new_region(4, b"k3", b""), StateRole::Follower),
+        ];
+        check_collection(&c, final_regions);
+    }
+
+    #[test]
+    fn test_merge() {
+        test_merge_impl(false, false);
+        test_merge_impl(false, true);
+        test_merge_impl(true, false);
+        test_merge_impl(true, true);
     }
 }
