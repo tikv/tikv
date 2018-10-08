@@ -116,6 +116,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateReal => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -419,7 +420,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
-            | ScalarFuncSig::SHA2
             | ScalarFuncSig::Sleep
             | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
@@ -912,6 +912,7 @@ dispatch_call! {
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
         SHA1 => sha1,
+        SHA2 => sha2,
         Elt => elt,
     }
     TIME_CALLS {
@@ -1421,7 +1422,6 @@ mod test {
             ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
-            ScalarFuncSig::SHA2,
             ScalarFuncSig::Sleep,
             ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
@@ -1513,5 +1513,4 @@ mod test {
             );
         }
     }
-
 }
