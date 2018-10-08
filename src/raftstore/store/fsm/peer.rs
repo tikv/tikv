@@ -1046,8 +1046,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 new_peer.heartbeat_pd(&self.pd_worker);
             }
 
-            new_peer.register_delegates();
-            new_peer.notify_new_region();
+            new_peer.activate();
             self.region_peers.insert(new_region_id, new_peer);
 
             if !campaigned {
