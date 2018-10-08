@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::Decimal;
+use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use coprocessor::codec::{mysql, Datum};
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
@@ -207,6 +207,70 @@ impl ScalarFunc {
     #[inline]
     pub fn round_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
+    }
+
+    #[inline]
+    pub fn round_dec<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let number = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let result: Result<Decimal> = number
+            .into_owned()
+            .round(DEFAULT_FSP, RoundMode::HalfEven)
+            .into();
+        result.map(|t| Some(Cow::Owned(t)))
+    }
+
+    #[inline]
+    pub fn round_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let number = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(number.round()))
+    }
+
+    #[inline]
+    pub fn round_with_frac_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let number = try_opt!(self.children[0].eval_int(ctx, row));
+        let digits = try_opt!(self.children[1].eval_int(ctx, row));
+
+        if digits >= 0 {
+            Ok(Some(number))
+        } else {
+            let power = 10.0_f64.powi(-digits as i32);
+            let frac = number as f64 / power;
+            Ok(Some((frac.round() * power) as i64))
+        }
+    }
+
+    #[inline]
+    pub fn round_with_frac_real(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<f64>> {
+        let number = try_opt!(self.children[0].eval_real(ctx, row));
+        let digits = try_opt!(self.children[1].eval_int(ctx, row));
+
+        let power = 10.0_f64.powi(-digits as i32);
+        let frac = number / power;
+        Ok(Some(frac.round() * power))
+    }
+
+    #[inline]
+    pub fn round_with_frac_dec<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let number = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let digits = try_opt!(self.children[1].eval_int(ctx, row));
+
+        let result: Result<Decimal> = number
+            .into_owned()
+            .round(digits as i8, RoundMode::HalfEven)
+            .into();
+        result.map(|t| Some(Cow::Owned(t)))
     }
 
     #[inline]
@@ -827,6 +891,37 @@ mod test {
                 Datum::I64(i64::MIN),
                 Datum::I64(i64::MIN),
             ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("123.456"),
+                str2dec("123.000"),
+            ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("123.656"),
+                str2dec("124.000"),
+            ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("-123.456"),
+                str2dec("-123.000"),
+            ),
+            (ScalarFuncSig::RouldReal, Datum::F64(3.45), Datum::F64(3f64)),
+            (
+                ScalarFuncSig::RouldReal,
+                Datum::F64(-3.45),
+                Datum::F64(-3f64),
+            ),
+            (
+                ScalarFuncSig::RouldReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(f64::MAX),
+            ),
+            (
+                ScalarFuncSig::RouldReal,
+                Datum::F64(f64::MIN),
+                Datum::F64(f64::MIN),
+            ),
         ];
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
@@ -836,6 +931,106 @@ mod test {
             let op = Expression::build(&mut ctx, expr).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let tests = vec![
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(23),
+                Datum::I64(2),
+                Datum::I64(23),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(23),
+                Datum::I64(-1),
+                Datum::I64(20),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-27),
+                Datum::I64(-1),
+                Datum::I64(-30),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-27),
+                Datum::I64(-2),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-27),
+                Datum::I64(-2),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("150.000"),
+                Datum::I64(2),
+                str2dec("150.00"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("150.257"),
+                Datum::I64(1),
+                str2dec("150.3"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("153.257"),
+                Datum::I64(-1),
+                str2dec("150"),
+            ),
+        ];
+
+        let real_tests = vec![
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(-1.298_f64),
+                Datum::I64(1),
+                -1.3_f64,
+            ),
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(-1.298_f64),
+                Datum::I64(0),
+                -1.0_f64,
+            ),
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(23.298_f64),
+                Datum::I64(2),
+                23.30_f64,
+            ),
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(23.298_f64),
+                Datum::I64(-1),
+                20.0_f64,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1, exp) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        for (sig, arg0, arg1, exp) in real_tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
         }
     }
 
