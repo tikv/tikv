@@ -155,13 +155,11 @@ impl ScalarFunc {
         }
         let len = s.chars().count();
         if len > i as usize {
-            let t = s.chars();
-            return Ok(Some(Cow::Owned(
-                t.skip(len - i as usize)
-                    .take(i as usize)
-                    .collect::<String>()
-                    .into_bytes(),
-            )));
+            let mut t = s.chars();
+            for _ in 0..len - i as usize {
+                t.next();
+            }
+            return Ok(Some(Cow::Owned(t.as_str().to_string().into_bytes())));
         }
         Ok(Some(Cow::Owned(s.to_string().into_bytes())))
     }
