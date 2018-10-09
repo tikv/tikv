@@ -42,7 +42,7 @@ const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 enum RaftStoreEvent {
-    NewRegion { region: Region },
+    CreateRegion { region: Region },
     UpdateRegion { region: Region },
     DestroyRegion { region: Region },
     RoleChange { region: Region, role: StateRole },
@@ -56,6 +56,7 @@ impl Display for RaftStoreEvent {
 
 /// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
 /// done by sending commands to the thread.
+#[derive(Debug)]
 enum RegionCollectionMsg {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
@@ -66,9 +67,21 @@ enum RegionCollectionMsg {
     },
 }
 
+// So we can derive `Debug` on `RegionCollectionMsg`
+impl Debug for SeekRegionFilter {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        write!(f, "<filter>")
+    }
+}
+impl Debug for SeekRegionCallback {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        write!(f, "<callback>")
+    }
+}
+
 impl Display for RegionCollectionMsg {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "RegionCollectionMsg(fmt unimplemented)")
+        Debug::fmt(self, f)
     }
 }
 
@@ -85,7 +98,7 @@ impl RegionChangeObserver for EventSender {
     fn on_region_changed(&self, context: &mut ObserverContext, event: RegionChangeEvent) {
         let region = context.region().clone();
         let event = match event {
-            RegionChangeEvent::Create => RaftStoreEvent::NewRegion { region },
+            RegionChangeEvent::Create => RaftStoreEvent::CreateRegion { region },
             RegionChangeEvent::Update => RaftStoreEvent::UpdateRegion { region },
             RegionChangeEvent::Destroy => RaftStoreEvent::DestroyRegion { region },
         };
@@ -270,7 +283,7 @@ impl RegionCollectionWorker {
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
-            RaftStoreEvent::NewRegion { region } => {
+            RaftStoreEvent::CreateRegion { region } => {
                 self.handle_create_region(region);
             }
             RaftStoreEvent::UpdateRegion { region } => {
