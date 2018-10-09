@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::util::{is_initial_msg, KeysInfoFormatter};
 use raftstore::Result;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -240,6 +240,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
+            self.coprocessor_host
+                .on_region_changed(region, RegionChangeEvent::Create);
             Ok(true)
         })?;
 
