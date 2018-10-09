@@ -136,7 +136,17 @@ impl RegionCollectionWorker {
         }
     }
 
-    fn handle_new_region(&mut self, region: Region) {
+    fn handle_create_region(&mut self, region: Region) {
+        if self.regions.get(&region.get_id()).is_some() {
+            warn!(
+                "region_collection: trying to create new region {} but it already exists. \
+                 try to update it.",
+                region.get_id(),
+            );
+            self.handle_update_region(region);
+            return;
+        }
+
         self.region_ranges
             .insert(data_end_key(region.get_end_key()), region.get_id());
         // TODO: Should we set it follower?
@@ -150,18 +160,17 @@ impl RegionCollectionWorker {
             is_new_region = false;
             assert_eq!(old_region.get_id(), region.get_id());
 
-            // If the region with this region_id already existed in the collection, it must be
-            // stale and need to be updated. There may be a corresponding item in
-            // `region_ranges`. If the end_key changed, the old item in `region_ranges` should
-            // be removed, unless it was already updated.
+            // If the end_key changed, the old item in `region_ranges` should be removed.
+            // However it shouldn't be removed if it was already updated by another region. In this
+            // case, the old_end_key
             if old_region.get_end_key() != region.get_end_key() {
                 // The region's end_key has changed.
                 // Remove the old entry in `self.region_ranges` if it haven't been updated by
-                // other items in `regions`. The entry with key equals to old_region's end key
-                // was updated in previous circles in this for-loop, if it maps to a id that is
-                // different from `region.id`.
+                // other items in `regions`.
                 let old_end_key = data_end_key(old_region.get_end_key());
                 if let Some(old_id) = self.region_ranges.get(&old_end_key).cloned() {
+                    // If they don't equal, we shouldn't remove it because it was updated by another
+                    // region.
                     if old_id == region.get_id() {
                         self.region_ranges.remove(&old_end_key);
                     }
@@ -173,6 +182,10 @@ impl RegionCollectionWorker {
         }
 
         if is_new_region {
+            warn!(
+                "region_collection: trying to update region {} but it doesn't exist.",
+                region.get_id()
+            );
             // If it's a new region, set it to follower state.
             // TODO: Should we set it follower?
             self.regions
@@ -188,6 +201,7 @@ impl RegionCollectionWorker {
 
     fn handle_destroy_region(&mut self, region: Region) {
         if let Some((removed_region, _)) = self.regions.remove(&region.get_id()) {
+            assert_eq!(removed_region.get_id(), region.get_id());
             let end_key = data_end_key(removed_region.get_end_key());
 
             // The entry may be updated by other regions.
@@ -196,13 +210,23 @@ impl RegionCollectionWorker {
                     self.region_ranges.remove(&end_key);
                 }
             }
+        } else {
+            warn!(
+                "region_collection: destroying region {} but it doesn't exist",
+                region.get_id()
+            )
         }
     }
 
-    fn handle_role_change(&mut self, region: Region, role: StateRole) {
-        self.regions
-            .insert(region.get_id(), (region, role))
-            .expect("region didn't exist in region collection");
+    fn handle_role_change(&mut self, region: Region, new_role: StateRole) {
+        let region_id = region.get_id();
+        if self.regions.get(&region_id).is_none() {
+            warn!("region_collection: role change on region {} but the region doesn't exist. create it.", region_id);
+            self.handle_create_region(region);
+        }
+
+        let role = &mut self.regions.get_mut(&region_id).unwrap().1;
+        *role = new_role;
     }
 
     fn handle_seek_region(
@@ -247,7 +271,7 @@ impl RegionCollectionWorker {
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
             RaftStoreEvent::NewRegion { region } => {
-                self.handle_new_region(region);
+                self.handle_create_region(region);
             }
             RaftStoreEvent::UpdateRegion { region } => {
                 self.handle_update_region(region);
@@ -425,7 +449,7 @@ mod tests {
     fn must_create_region(c: &mut RegionCollectionWorker, region: &Region) {
         assert!(c.regions.get(&region.get_id()).is_none());
 
-        c.handle_new_region(region.clone());
+        c.handle_create_region(region.clone());
 
         assert_eq!(&c.regions[&region.get_id()].0, region);
         assert_eq!(
@@ -479,18 +503,18 @@ mod tests {
         assert_eq!(c.regions[&region.get_id()].1, role);
     }
 
-    fn print(c: &RegionCollectionWorker) {
-        use storage::Key;
-        eprintln!("regions:");
-        for (k, v) in &c.regions {
-            eprintln!("  {}: {:?}", k, v);
-        }
-        eprintln!("ranges:");
-        for (k, v) in &c.region_ranges {
-            eprintln!("  {}: {:?}", Key::from_encoded_slice(k), v)
-        }
-        eprintln!("");
-    }
+    // fn print(c: &RegionCollectionWorker) {
+    //     use storage::Key;
+    //     eprintln!("regions:");
+    //     for (k, v) in &c.regions {
+    //         eprintln!("  {}: {:?}", k, v);
+    //     }
+    //     eprintln!("ranges:");
+    //     for (k, v) in &c.region_ranges {
+    //         eprintln!("  {}: {:?}", Key::from_encoded_slice(k), v)
+    //     }
+    //     eprintln!("");
+    // }
 
     #[test]
     fn test_basic_updating() {
@@ -586,18 +610,21 @@ mod tests {
 
     #[test]
     fn test_split() {
-        test_split_impl(1, &[1, 2, 3]);
-        test_split_impl(1, &[3, 2, 1]);
+        let indices = &[1, 2, 3];
+        let orders = &[
+            &[1, 2, 3],
+            &[1, 3, 2],
+            &[2, 1, 3],
+            &[2, 3, 1],
+            &[3, 1, 2],
+            &[3, 2, 1],
+        ];
 
-        test_split_impl(2, &[2, 1, 3]);
-        test_split_impl(2, &[3, 1, 2]);
-        test_split_impl(2, &[1, 2, 3]);
-        test_split_impl(2, &[3, 2, 1]);
-        test_split_impl(2, &[1, 3, 2]);
-        test_split_impl(2, &[2, 3, 1]);
-
-        test_split_impl(3, &[1, 2, 3]);
-        test_split_impl(3, &[3, 2, 1]);
+        for index in indices {
+            for order in orders {
+                test_split_impl(*index, *order);
+            }
+        }
     }
 
     fn test_merge_impl(to_left: bool, update_first: bool) {
