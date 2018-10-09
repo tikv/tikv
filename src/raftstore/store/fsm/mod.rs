@@ -15,39 +15,30 @@
 //! and store is also a special state machine that handles all requests across
 //! stores. They are mixed for now, will be separated in the future.
 
-mod peer;
-mod store;
-mod transport;
+pub mod peer;
+pub mod store;
+pub mod transport;
 
 pub use self::peer::{DestroyPeerJob, Peer};
 pub use self::store::{new_compaction_listener, Store, StoreInfo};
-pub use self::transport::{MailBox, Router};
+pub use self::transport::{create_router, OneshotNotifier, Router};
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::u64;
 
-use futures::sync::oneshot;
-use futures_cpupool::CpuPool;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
 
-use pd::PdTask;
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::StoreMsg;
 use util::collections::HashMap;
-use util::future::CountDownLatch;
-use util::mpsc::{self, Receiver};
-use util::worker::{FutureScheduler, Scheduler};
+use util::worker::Scheduler;
 use util::RingQueue;
 
 use super::config::Config;
-use super::worker::{
-    ApplyTask, CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask,
-    SplitCheckTask,
-};
-use super::{Engines, SnapManager};
+use super::worker::{ApplyTask, ReadTask, RegionTask};
+use super::Engines;
 
 type Key = Vec<u8>;
 
@@ -65,7 +56,7 @@ pub struct StoreMeta {
     // the regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
     // (region_id, version) -> BiLock.
-    pub merge_locks: HashMap<(u64, u64), oneshot::Sender<()>>,
+    pub merge_locks: HashMap<(u64, u64), Option<OneshotNotifier>>,
 }
 
 impl StoreMeta {
@@ -91,30 +82,18 @@ impl StoreMeta {
     }
 }
 
-pub trait ConfigProvider<Transport> {
+pub trait ConfigProvider {
     fn store_id(&self) -> u64;
-    fn config(&self) -> Arc<Config>;
     fn snap_scheduler(&self) -> Scheduler<RegionTask>;
-    fn engines(&self) -> Engines;
-    fn coprocessor_host(&self) -> Arc<CoprocessorHost>;
+    fn engines(&self) -> &Engines;
     fn apply_scheduler(&self) -> Scheduler<ApplyTask>;
     fn read_scheduler(&self) -> Scheduler<ReadTask>;
-    fn pd_scheduler(&self) -> FutureScheduler<PdTask>;
-    fn raft_log_gc_scheduler(&self) -> Scheduler<RaftlogGcTask>;
-    fn store_meta(&self) -> Arc<Mutex<StoreMeta>>;
-    fn consistency_check_scheduler(&self) -> Scheduler<ConsistencyCheckTask>;
-    fn snap_manager(&self) -> SnapManager;
-    fn split_check_scheduler(&self) -> Scheduler<SplitCheckTask>;
-    fn cleanup_sst_scheduler(&self) -> Scheduler<CleanupSSTTask>;
-    fn transport(&self) -> Transport;
-    fn poller(&self) -> CpuPool;
-    fn count_down_latch(&self) -> CountDownLatch;
-    fn local_store_stat(&self) -> LocalStoreStat;
-    fn router(&self) -> Router;
+    fn coprocessor_host(&self) -> Arc<CoprocessorHost>;
+    fn config(&self) -> Arc<Config>;
 }
 
 #[derive(Default)]
-struct StoreStat {
+pub struct StoreStat {
     pub lock_cf_bytes_written: AtomicU64,
 
     pub engine_total_bytes_written: AtomicU64,
@@ -124,7 +103,7 @@ struct StoreStat {
 }
 
 #[derive(Clone, Default)]
-struct GlobalStoreStat {
+pub struct GlobalStoreStat {
     pub stat: Arc<StoreStat>,
 }
 
@@ -186,10 +165,4 @@ impl LocalStoreStat {
             self.is_busy = false;
         }
     }
-}
-
-#[inline]
-pub fn create_router(cfg: &super::Config) -> (Router, Receiver<StoreMsg>) {
-    let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
-    (Router::new(tx), rx)
 }

@@ -58,8 +58,6 @@ mod jemalloc {
 
 #[cfg(not(unix))]
 mod jemalloc {
-    use tikv::raftstore::store::Engines;
-
     pub fn dump_stats() -> String {
         String::default()
     }

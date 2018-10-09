@@ -15,13 +15,12 @@ use protobuf::{Message, RepeatedField};
 use std::collections::hash_map::Entry;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::TryRecvError;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
-use futures::sync::oneshot;
-use futures::{Async, Future, Poll, Stream};
-use futures_cpupool::CpuPool;
+use futures::Future;
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb::CheckPolicy;
@@ -32,41 +31,36 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
-use raft::{self, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
-use rocksdb::rocksdb_options::WriteOptions;
+use raft::{self, Ready, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use rocksdb::DB;
-use tokio_timer::timer::Handle;
 
-use pd::PdTask;
+use pd::{PdClient, PdTask};
 use raftstore::{Error, Result};
 use storage::CF_RAFT;
 use util::escape;
-use util::future::CountDownLatch;
-use util::mpsc::{loose_bounded, Receiver};
-use util::time::{duration_to_sec, SlowTimer};
-use util::timer::GLOBAL_TIMER_HANDLE;
-use util::worker::{FutureScheduler, Scheduler, Stopped};
+use util::mpsc::Receiver;
+use util::time::duration_to_sec;
+use util::worker::{Scheduler, Stopped};
 
 use super::Key;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::cmd_resp::{bind_term, new_error};
 use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
-use raftstore::store::fsm::{ConfigProvider, LocalStoreStat, MailBox, Router, StoreMeta};
+use raftstore::store::fsm::transport::{self, OneshotPoller, PollContext};
+use raftstore::store::fsm::{ConfigProvider, StoreMeta};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
-use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
-use raftstore::store::peer::{self, ConsistencyState, ReadyContext, StaleState};
-use raftstore::store::peer_storage::{ApplySnapResult, PeerStorage};
+use raftstore::store::peer::{self, ConsistencyState, StaleState};
+use raftstore::store::peer_storage::{ApplySnapResult, InvokeContext, PeerStorage};
 use raftstore::store::transport::Transport;
 use raftstore::store::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use raftstore::store::worker::{
-    ApplyTask, ApplyTaskRes, CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask,
+    Apply, ApplyTask, ApplyTaskRes, CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask,
     RegionTask, SplitCheckTask,
 };
 use raftstore::store::{
-    util, Config, Engines, PeerMsg, PeerTick, SignificantMsg, SnapKey, SnapManager,
-    SnapshotDeleter, StoreMsg,
+    util, Config, Engines, PeerMsg, PeerTick, SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
 };
 
 pub struct DestroyPeerJob {
@@ -85,38 +79,18 @@ bitflags! {
     }
 }
 
-struct MergeAsyncWait {
+pub struct MergeAsyncWait {
     res: ApplyRes,
-    notifier: oneshot::Receiver<()>,
+    poller: OneshotPoller,
 }
 
-pub struct Peer<T: 'static> {
-    peer: peer::Peer,
-    pd_scheduler: FutureScheduler<PdTask>,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
-    split_check_scheduler: Scheduler<SplitCheckTask>,
-    cleanup_sst_scheduler: Scheduler<CleanupSSTTask>,
-    store_meta: Arc<Mutex<StoreMeta>>,
-    poller: CpuPool,
-    raft_metrics: RaftMetrics,
-    snap_mgr: SnapManager,
-    timer: Handle,
-    mail_box: MailBox,
-    router: Router,
-    receiver: Receiver<PeerMsg>,
-    trans: T,
-    latch: CountDownLatch,
-    store_stat: LocalStoreStat,
-    tick_tracker: TickSchedulerTracker,
-    pending_apply: Option<MergeAsyncWait>,
-    need_flush_trans: bool,
-    queued_snapshot: bool,
-    has_ready: bool,
-    stopped: bool,
+pub struct Peer<'a, T: 'static, C: 'static> {
+    pub peer: &'a mut peer::Peer,
+    pub ctx: &'a mut PollContext<T, C>,
+    pub scheduler: &'a transport::Scheduler,
 }
 
-impl<T: Transport> ConfigProvider<T> for Peer<T> {
+impl<'a, T: Transport, C> ConfigProvider for Peer<'a, T, C> {
     #[inline]
     fn store_id(&self) -> u64 {
         self.peer.peer.get_store_id()
@@ -143,77 +117,17 @@ impl<T: Transport> ConfigProvider<T> for Peer<T> {
     }
 
     #[inline]
-    fn engines(&self) -> Engines {
-        self.peer.engines.clone()
+    fn engines(&self) -> &Engines {
+        &self.peer.engines
     }
 
     #[inline]
     fn coprocessor_host(&self) -> Arc<CoprocessorHost> {
-        Arc::clone(&self.peer.coprocessor_host)
-    }
-
-    #[inline]
-    fn pd_scheduler(&self) -> FutureScheduler<PdTask> {
-        self.pd_scheduler.clone()
-    }
-
-    #[inline]
-    fn raft_log_gc_scheduler(&self) -> Scheduler<RaftlogGcTask> {
-        self.raftlog_gc_scheduler.clone()
-    }
-
-    #[inline]
-    fn consistency_check_scheduler(&self) -> Scheduler<ConsistencyCheckTask> {
-        self.consistency_check_scheduler.clone()
-    }
-
-    #[inline]
-    fn store_meta(&self) -> Arc<Mutex<StoreMeta>> {
-        self.store_meta.clone()
-    }
-
-    #[inline]
-    fn snap_manager(&self) -> SnapManager {
-        self.snap_mgr.clone()
-    }
-
-    #[inline]
-    fn split_check_scheduler(&self) -> Scheduler<SplitCheckTask> {
-        self.split_check_scheduler.clone()
-    }
-
-    #[inline]
-    fn cleanup_sst_scheduler(&self) -> Scheduler<CleanupSSTTask> {
-        self.cleanup_sst_scheduler.clone()
-    }
-
-    #[inline]
-    fn transport(&self) -> T {
-        self.trans.clone()
-    }
-
-    #[inline]
-    fn poller(&self) -> CpuPool {
-        self.poller.clone()
-    }
-
-    #[inline]
-    fn count_down_latch(&self) -> CountDownLatch {
-        self.latch.clone()
-    }
-
-    #[inline]
-    fn local_store_stat(&self) -> LocalStoreStat {
-        self.store_stat.clone()
-    }
-
-    #[inline]
-    fn router(&self) -> Router {
-        self.router.clone()
+        self.peer.coprocessor_host.clone()
     }
 }
 
-impl<T> Peer<T> {
+impl<'a, T, C> Peer<'a, T, C> {
     pub fn peer_id(&self) -> u64 {
         self.peer.peer_id()
     }
@@ -237,53 +151,19 @@ impl<T> Peer<T> {
     pub fn kv_engine(&self) -> &Arc<DB> {
         &self.peer.engines.kv
     }
-
-    pub fn mail_box(&self) -> MailBox {
-        self.mail_box.clone()
-    }
 }
 
-impl<T: Transport> Peer<T> {
-    pub fn create<P: ConfigProvider<T>>(p: &P, region: &Region) -> Result<Peer<T>> {
-        let peer = peer::Peer::create(p, region)?;
-        Ok(Peer::new(p, peer))
-    }
-
-    pub fn replicate<P: ConfigProvider<T>>(
-        p: &P,
-        region_id: u64,
-        peer: metapb::Peer,
-    ) -> Result<Peer<T>> {
-        let peer = peer::Peer::replicate(p, region_id, peer)?;
-        Ok(Peer::new(p, peer))
-    }
-
-    fn new<P: ConfigProvider<T>>(p: &P, peer: peer::Peer) -> Peer<T> {
-        let (tx, rx) = loose_bounded(peer.cfg.notify_capacity);
+impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
+    #[inline]
+    pub fn new(
+        peer: &'a mut peer::Peer,
+        ctx: &'a mut PollContext<T, C>,
+        scheduler: &'a transport::Scheduler,
+    ) -> Peer<'a, T, C> {
         Peer {
             peer,
-            pd_scheduler: p.pd_scheduler(),
-            raftlog_gc_scheduler: p.raft_log_gc_scheduler(),
-            consistency_check_scheduler: p.consistency_check_scheduler(),
-            split_check_scheduler: p.split_check_scheduler(),
-            cleanup_sst_scheduler: p.cleanup_sst_scheduler(),
-            store_meta: p.store_meta(),
-            raft_metrics: RaftMetrics::default(),
-            poller: p.poller(),
-            snap_mgr: p.snap_manager(),
-            timer: GLOBAL_TIMER_HANDLE.clone(),
-            mail_box: tx,
-            router: p.router(),
-            receiver: rx,
-            trans: p.transport(),
-            latch: p.count_down_latch(),
-            store_stat: p.local_store_stat(),
-            tick_tracker: TickSchedulerTracker::empty(),
-            pending_apply: None,
-            need_flush_trans: false,
-            queued_snapshot: false,
-            has_ready: false,
-            stopped: false,
+            ctx,
+            scheduler,
         }
     }
 
@@ -328,7 +208,7 @@ impl<T: Transport> Peer<T> {
         self.peer.mut_store().schedule_applying_snapshot();
     }
 
-    pub fn resume_merging(&mut self, state: MergeState, meta: &mut StoreMeta) {
+    pub fn resume_merging(&mut self, state: MergeState) {
         info!(
             "{} resume merging [region {:?}, state: {:?}]",
             self.peer.tag,
@@ -336,7 +216,8 @@ impl<T: Transport> Peer<T> {
             state
         );
         self.peer.pending_merge_state = Some(state);
-        self.notify_prepare_merge(meta);
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        self.notify_prepare_merge(&mut meta);
     }
 
     fn notify_prepare_merge(&self, meta: &mut StoreMeta) {
@@ -344,21 +225,31 @@ impl<T: Transport> Peer<T> {
             self.region_id(),
             self.region().get_region_epoch().get_version(),
         );
-        let (tx, _) = oneshot::channel();
         // If it's registered already, then remove it to notify
         // Commit merge, and then insert a new one to indicate prepare merge
         // is handled.
-        meta.merge_locks.insert(lock_key, tx);
+        meta.merge_locks.insert(lock_key, None);
     }
 
-    pub fn start(mut self, poller: &CpuPool) {
+    pub fn start(&mut self, state: Option<RegionLocalState>) {
+        if let Some(mut s) = state {
+            match s.get_state() {
+                PeerState::Normal => {}
+                PeerState::Applying => {
+                    self.resume_applying_snapshot();
+                }
+                PeerState::Merging => {
+                    self.resume_merging(s.take_merge_state());
+                }
+                PeerState::Tombstone => unreachable!(),
+            }
+        }
         self.schedule_raft_base_tick();
         self.schedule_raft_gc_log_tick();
         self.schedule_check_peer_stale_state_tick();
         if self.peer.pending_merge_state.is_some() {
             self.schedule_merge_check_tick();
         }
-        poller.spawn(self).forget()
     }
 
     fn on_role_changed(&mut self, role: StateRole) {
@@ -374,15 +265,20 @@ impl<T: Transport> Peer<T> {
     }
 }
 
-impl<T: Transport> Peer<T> {
+impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
     #[inline]
     fn schedule_tick(&self, dur: Duration, tick: PeerTick) {
         if dur != Duration::new(0, 0) {
-            let tx = self.mail_box.clone();
-            let f = self.timer.delay(Instant::now() + dur).map(move |_| {
+            // TODO: what if mail box changes?
+            let tx = match self.scheduler.router().peer_notifier(self.region_id()) {
+                Some(tx) => tx,
+                // TODO: verify if it's really shutting down.
+                None => return,
+            };
+            let f = self.ctx.timer.delay(Instant::now() + dur).map(move |_| {
                 let _ = tx.force_send(PeerMsg::Tick(tick));
             });
-            self.poller.spawn(f).forget()
+            self.ctx.poller.spawn(f).forget()
         }
     }
 
@@ -395,17 +291,15 @@ impl<T: Transport> Peer<T> {
         if !self.peer.pending_remove {
             if !self.peer.is_applying_snapshot() && !self.peer.has_pending_snapshot() {
                 if self.peer.raft_group.tick() {
-                    self.has_ready = true;
+                    self.peer.has_ready = true;
                 }
             } else {
                 // need to check if snapshot is applied
-                self.has_ready = true;
+                self.peer.has_ready = true;
             }
             self.schedule_raft_base_tick();
         }
 
-        self.raft_metrics.flush();
-        self.store_stat.flush();
         self.peer.mut_store().flush_cache_metrics();
     }
 
@@ -419,9 +313,9 @@ impl<T: Transport> Peer<T> {
                     &mut apply_res.exec_res,
                     &apply_res.metrics,
                 ) {
-                    self.pending_apply = Some(MergeAsyncWait {
+                    self.peer.pending_merge_apply = Some(MergeAsyncWait {
                         res: apply_res,
-                        notifier: rx,
+                        poller: rx,
                     });
                     return;
                 }
@@ -431,7 +325,7 @@ impl<T: Transport> Peer<T> {
                     apply_res.merged,
                     &apply_res.metrics,
                 ) {
-                    self.has_ready = true;
+                    self.peer.has_ready = true;
                 }
             }
             ApplyTaskRes::Destroy(p) => {
@@ -443,11 +337,11 @@ impl<T: Transport> Peer<T> {
     }
 
     fn resume_handling_pending_apply(&mut self) -> bool {
-        let pending_apply = self.pending_apply.take().unwrap();
+        let pending_apply = self.peer.pending_merge_apply.take().unwrap();
         let mut res = pending_apply.res;
         debug!("{} resume handling apply result {:?}", self.peer.tag, res);
         if let Some(rx) = self.on_ready_exec_results(res.merged, &mut res.exec_res) {
-            self.pending_apply = Some(MergeAsyncWait { res, notifier: rx });
+            self.peer.pending_merge_apply = Some(MergeAsyncWait { res, poller: rx });
             return false;
         }
         if self.peer.post_apply(
@@ -456,7 +350,7 @@ impl<T: Transport> Peer<T> {
             res.merged,
             &res.metrics,
         ) {
-            self.has_ready = true;
+            self.peer.has_ready = true;
         }
         true
     }
@@ -496,8 +390,8 @@ impl<T: Transport> Peer<T> {
             // delete them here. If the snapshot file will be reused when
             // receiving, then it will fail to pass the check again, so
             // missing snapshot files should not be noticed.
-            let s = self.snap_mgr.get_snapshot_for_applying(&key)?;
-            self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+            let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+            self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
             return Ok(());
         }
 
@@ -506,10 +400,10 @@ impl<T: Transport> Peer<T> {
         self.peer.step(msg.take_message())?;
 
         if self.peer.any_new_peer_catch_up(from_peer_id) {
-            self.peer.heartbeat_pd(&self.pd_scheduler);
+            self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
         }
 
-        self.has_ready = true;
+        self.peer.has_ready = true;
         Ok(())
     }
 
@@ -524,13 +418,13 @@ impl<T: Transport> Peer<T> {
                 to.get_store_id(),
                 self.store_id()
             );
-            self.raft_metrics.message_dropped.mismatch_store_id += 1;
+            self.ctx.raft_metrics.message_dropped.mismatch_store_id += 1;
             return false;
         }
 
         if !msg.has_region_epoch() {
             error!("{} missing epoch in raft message, ignore it", self.peer.tag);
-            self.raft_metrics.message_dropped.mismatch_region_epoch += 1;
+            self.ctx.raft_metrics.message_dropped.mismatch_region_epoch += 1;
             return false;
         }
 
@@ -577,7 +471,7 @@ impl<T: Transport> Peer<T> {
                 target.get_id(),
                 self.peer.peer_id()
             );
-            self.raft_metrics.message_dropped.stale_msg += 1;
+            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             true
         } else if target.get_id() > self.peer.peer_id() {
             match self.peer.maybe_destroy() {
@@ -588,11 +482,12 @@ impl<T: Transport> Peer<T> {
                     );
                     if self.handle_destroy_peer(job) {
                         let _ = self
-                            .router
+                            .scheduler
+                            .router()
                             .send_store_message(StoreMsg::RaftMessage(msg.clone()));
                     }
                 }
-                None => self.raft_metrics.message_dropped.applying_snap += 1,
+                None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
             }
             true
         } else {
@@ -617,7 +512,7 @@ impl<T: Transport> Peer<T> {
                 "{} raft message {:?} is stale, current {:?}, ignore it",
                 self.peer.tag, msg_type, cur_epoch
             );
-            self.raft_metrics.message_dropped.stale_msg += 1;
+            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
 
@@ -636,10 +531,10 @@ impl<T: Transport> Peer<T> {
         } else {
             gc_msg.set_is_tombstone(true);
         }
-        if let Err(e) = self.trans.send(gc_msg) {
+        if let Err(e) = self.ctx.trans.send(gc_msg) {
             error!("{} send gc message failed {:?}", self.peer.tag, e);
         }
-        self.need_flush_trans = true;
+        self.ctx.need_flush_trans = true;
     }
 
     /// Check if it's necessary to gc the source merge peer.
@@ -650,7 +545,7 @@ impl<T: Transport> Peer<T> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
 
-        let meta = self.store_meta.lock().unwrap();
+        let meta = self.ctx.store_meta.lock().unwrap();
         if let Some(epoch) = meta.pending_cross_snap.get(&target_region_id).or_else(|| {
             meta.regions
                 .get(&target_region_id)
@@ -702,7 +597,7 @@ impl<T: Transport> Peer<T> {
             region: merge_target.to_owned(),
             merge_source: Some(self.region_id()),
         };
-        if let Err(e) = self.pd_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!(
                 "{} failed to validate target peer {:?}: {}",
                 self.peer.tag, target_peer, e
@@ -719,7 +614,7 @@ impl<T: Transport> Peer<T> {
 
         if self.peer.peer != *msg.get_to_peer() {
             info!("{} receive stale gc message, ignore.", self.peer.tag);
-            self.raft_metrics.message_dropped.stale_msg += 1;
+            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
         // TODO: ask pd to guarantee we are stale now.
@@ -732,7 +627,7 @@ impl<T: Transport> Peer<T> {
             Some(job) => {
                 self.handle_destroy_peer(job);
             }
-            None => self.raft_metrics.message_dropped.applying_snap += 1,
+            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
         }
     }
 
@@ -760,11 +655,11 @@ impl<T: Transport> Peer<T> {
                 snap_region,
                 msg.get_to_peer()
             );
-            self.raft_metrics.message_dropped.region_no_peer += 1;
+            self.ctx.raft_metrics.message_dropped.region_no_peer += 1;
             return Ok(Some(key));
         }
 
-        let mut meta = self.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         if meta.regions[&self.region_id()] != *self.region() {
             if !self.peer.is_initialized() {
                 info!("{} stale delegate detected, skip.", self.peer.tag);
@@ -793,7 +688,7 @@ impl<T: Transport> Peer<T> {
             );
             meta.pending_cross_snap
                 .insert(region_id, snap_region.get_region_epoch().to_owned());
-            self.raft_metrics.message_dropped.region_overlap += 1;
+            self.ctx.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(Some(key));
         }
         for region in &meta.pending_snapshot_regions {
@@ -806,7 +701,7 @@ impl<T: Transport> Peer<T> {
                     "{} pending region overlapped {:?}, {:?}",
                     self.peer.tag, region, snap_region
                 );
-                self.raft_metrics.message_dropped.region_overlap += 1;
+                self.ctx.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(Some(key));
             }
         }
@@ -819,167 +714,52 @@ impl<T: Transport> Peer<T> {
                     snap_region.get_region_epoch(),
                     r
                 );
-                self.raft_metrics.message_dropped.stale_msg += 1;
+                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
                 return Ok(Some(key));
             }
         }
         // check if snapshot file exists.
-        self.snap_mgr.get_snapshot_for_applying(&key)?;
+        self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
 
         meta.pending_snapshot_regions.push(snap_region);
-        self.queued_snapshot = true;
+        self.ctx.queued_snapshot.insert(region_id);
         meta.pending_cross_snap.remove(&region_id);
 
         Ok(None)
     }
 
-    fn handle_raft_ready(&mut self) {
-        let t = SlowTimer::new();
-        let previous_ready_metrics = self.raft_metrics.ready.clone();
-
-        self.raft_metrics.ready.pending_region += 1;
-
-        let (kv_wb, raft_wb, append_res, sync_log) = {
-            let mut ctx = ReadyContext::new(&mut self.raft_metrics, &mut self.trans);
-            self.peer
-                .handle_raft_ready_append(&mut ctx, &self.pd_scheduler);
-            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
-        };
-
-        if let Some((ref ready, _)) = append_res {
-            if let Some(ref ss) = ready.ss {
-                self.on_role_changed(ss.raft_state)
-            }
+    #[inline]
+    pub fn handle_raft_ready_append(&mut self) {
+        if self.peer.handle_raft_ready_append(self.ctx) {
+            let rs = match self.ctx.ready_res.last().unwrap().0.ss {
+                Some(ref ss) => ss.raft_state,
+                None => return,
+            };
+            self.on_role_changed(rs);
         }
+    }
 
-        if let Some(proposals) = self.peer.take_apply_proposals() {
-            if self
-                .peer
-                .apply_scheduler
-                .schedule(ApplyTask::Proposals(proposals))
-                .is_err()
-            {
-                warn!(
-                    "{} fail to schedule apply tasks, are we shutting down?",
-                    self.peer.tag
-                );
-            }
-
-            // In most cases, if the leader proposes a message, it will also
-            // broadcast the message to other followers, so we should flush the
-            // messages ASAP.
-            self.trans.flush();
-            self.need_flush_trans = false;
-        }
-
-        self.raft_metrics.ready.has_ready_region += append_res.is_some() as u64;
-
-        // apply_snapshot, peer_destroy will clear_meta, so we need write region state first.
-        // otherwise, if program restart between two write, raft log will be removed,
-        // but region state may not changed in disk.
-        fail_point!("raft_before_save");
-        if !kv_wb.is_empty() {
-            // RegionLocalState, ApplyState
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            self.peer
-                .engines
-                .kv
-                .write_opt(kv_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to save append state result: {:?}",
-                        self.peer.tag, e
-                    );
-                });
-        }
-        fail_point!("raft_between_save");
-
-        if !raft_wb.is_empty() {
-            // RaftLocalState, Raft Log Entry
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.peer.cfg.sync_log || sync_log);
-            self.peer
-                .engines
-                .raft
-                .write_opt(raft_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to save raft append result: {:?}",
-                        self.peer.tag, e
-                    );
-                });
-        }
-        fail_point!("raft_after_save");
-
-        let ready_result = append_res.map(|(mut ready, invoke_ctx)| {
-            let is_merging = self.peer.pending_merge_state.is_some();
-            let res = self.peer.post_raft_ready_append(
-                &mut self.raft_metrics,
-                &mut self.trans,
-                &mut ready,
-                invoke_ctx,
-            );
-            if is_merging && res.is_some() {
-                // After applying a snapshot, merge is rollbacked implicitly.
-                self.on_ready_rollback_merge(0, None);
-            }
-            (ready, res)
-        });
-
-        self.raft_metrics
-            .append_log
-            .observe(duration_to_sec(t.elapsed()) as f64);
-
-        slow_log!(
-            t,
-            "{} handle {} ready, {} entries, {} messages and {} \
-             snapshots",
-            self.peer.tag,
-            ready_result.is_some() as u8,
-            self.raft_metrics.ready.append - previous_ready_metrics.append,
-            self.raft_metrics.ready.message - previous_ready_metrics.message,
-            self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot
+    pub fn post_raft_ready_append(
+        &mut self,
+        mut ready: Ready,
+        ctx: InvokeContext,
+        apply_tasks: &mut Vec<Apply>,
+    ) {
+        let is_merging = self.peer.pending_merge_state.is_some();
+        let res = self.peer.post_raft_ready_append(
+            &mut self.ctx.raft_metrics,
+            &mut self.ctx.trans,
+            &mut ready,
+            ctx,
         );
-
-        if let Some((ready, res)) = ready_result {
-            if let Some(apply_task) = self.peer.handle_raft_ready_apply(ready) {
-                if self
-                    .peer
-                    .apply_scheduler
-                    .schedule(ApplyTask::apply(apply_task))
-                    .is_err()
-                {
-                    warn!(
-                        "{} failed to schedule apply task, are we shutting down?",
-                        self.peer.tag
-                    );
-                }
-            }
-            if let Some(apply_result) = res {
-                self.on_ready_apply_snapshot(apply_result);
-            }
+        if is_merging && res.is_some() {
+            // After applying a snapshot, merge is rollbacked implicitly.
+            self.on_ready_rollback_merge(0, None);
         }
-
-        let dur = t.elapsed();
-        if !self.store_stat.is_busy {
-            let election_timeout = Duration::from_millis(
-                self.peer.cfg.raft_base_tick_interval.as_millis()
-                    * self.peer.cfg.raft_election_timeout_ticks as u64,
-            );
-            if dur >= election_timeout {
-                self.store_stat.is_busy = true;
-            }
+        self.peer.handle_raft_ready_apply(ready, apply_tasks);
+        if let Some(apply_res) = res {
+            self.on_ready_apply_snapshot(apply_res);
         }
-
-        self.raft_metrics
-            .process_ready
-            .observe(duration_to_sec(dur) as f64);
-
-        self.trans.flush();
-        self.need_flush_trans = false;
-
-        slow_log!(t, "{} on raft ready", self.peer.tag);
     }
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
@@ -1007,12 +787,12 @@ impl<T: Transport> Peer<T> {
             "{} starts destroy [merged_by_target: {}]",
             self.peer.tag, merged_by_target
         );
-        self.stopped = true;
+        self.peer.stopped = true;
         let region_id = self.region_id();
 
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.peer.is_applying_snapshot());
-        let mut meta = self.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.pending_cross_snap.remove(&region_id);
         // Destroy read delegates.
         let _ = self
@@ -1020,7 +800,7 @@ impl<T: Transport> Peer<T> {
             .read_scheduler
             .schedule(ReadTask::destroy(region_id));
         let task = PdTask::DestroyPeer { region_id };
-        if let Err(e) = self.pd_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("{} failed to notify pd: {}", self.peer.tag, e);
         }
         let is_initialized = self.peer.is_initialized();
@@ -1037,7 +817,8 @@ impl<T: Transport> Peer<T> {
                 e
             );
         }
-        self.router.unregister_mailbox(region_id);
+
+        self.scheduler.stop(region_id);
 
         // Do do the removal when it's merged. As the meta is cleared when committing
         // merge.
@@ -1073,7 +854,7 @@ impl<T: Transport> Peer<T> {
             return;
         }
         {
-            let mut meta = self.store_meta.lock().unwrap();
+            let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(cp.region, &mut self.peer);
         }
         if self.peer.is_leader() {
@@ -1083,7 +864,7 @@ impl<T: Transport> Peer<T> {
                 self.peer.tag,
                 self.peer.region()
             );
-            self.peer.heartbeat_pd(&self.pd_scheduler);
+            self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
         }
 
         let peer_id = cp.peer.get_id();
@@ -1142,19 +923,19 @@ impl<T: Transport> Peer<T> {
         };
         self.peer.last_compacted_idx = task.end_idx;
         self.peer.mut_store().compact_to(task.end_idx);
-        if let Err(e) = self.raftlog_gc_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
             error!("{} failed to schedule compact task: {}", self.peer.tag, e);
         }
     }
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
-        let mut meta = self.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_id = derived.get_id();
         meta.set_region(derived, &mut self.peer);
         self.peer.post_split();
         let is_leader = self.peer.is_leader();
         if is_leader {
-            self.peer.heartbeat_pd(&self.pd_scheduler);
+            self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
             // Notify pd immediately to let it update the region meta.
             info!(
                 "{} notify pd with split count {}",
@@ -1168,7 +949,7 @@ impl<T: Transport> Peer<T> {
                 regions: regions.to_vec(),
             };
 
-            if let Err(e) = self.pd_scheduler.schedule(task) {
+            if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
                 error!("{} failed to notify pd: {}", self.peer.tag, e);
             }
         }
@@ -1211,13 +992,10 @@ impl<T: Transport> Peer<T> {
                         new_region_id, r, new_region
                     );
                 }
-                self.router
-                    .unregister_mailbox(new_region_id)
-                    .unwrap()
-                    .close();
+                self.scheduler.stop(new_region_id);
             }
 
-            let mut new_peer = match Peer::create(self, &new_region) {
+            let mut new_peer = match peer::Peer::create(self, &new_region) {
                 Ok(new_peer) => new_peer,
                 Err(e) => {
                     // peer information is already written into db, can't recover.
@@ -1231,40 +1009,41 @@ impl<T: Transport> Peer<T> {
 
             for peer in new_region.get_peers() {
                 // Add this peer to cache.
-                new_peer.peer.insert_peer_cache(peer.clone());
+                new_peer.insert_peer_cache(peer.clone());
             }
-            let meta_peer = new_peer.peer.peer.clone();
+            let meta_peer = new_peer.peer.clone();
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
-            new_peer.peer.peer_stat = self.peer.peer_stat.clone();
-            let campaigned = new_peer.peer.maybe_campaign(is_leader);
+            new_peer.peer_stat = self.peer.peer_stat.clone();
+            let campaigned = new_peer.maybe_campaign(is_leader);
             new_peer.has_ready = campaigned;
 
             if is_leader {
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
-                new_peer.peer.heartbeat_pd(&self.pd_scheduler);
+                new_peer.heartbeat_pd(&self.ctx.pd_scheduler);
             }
 
-            new_peer.peer.register_delegates();
+            new_peer.register_delegates();
             meta.regions.insert(new_region_id, new_region);
 
+            if new_region_id == last_region_id {
+                // To prevent from big region, the right region needs run split
+                // check again after split.
+                new_peer.size_diff_hint = self.peer.cfg.region_split_check_diff.0;
+            }
+            self.scheduler.schedule(new_peer, None);
             if !campaigned {
                 if let Some(msg) = meta
                     .pending_votes
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let _ = new_peer.on_raft_message(msg);
+                    self.scheduler
+                        .router()
+                        .force_send_peer_message(new_region_id, PeerMsg::RaftMessage(msg))
+                        .unwrap();
                 }
             }
-            if new_region_id == last_region_id {
-                // To prevent from big region, the right region needs run split
-                // check again after split.
-                new_peer.peer.size_diff_hint = self.peer.cfg.region_split_check_diff.0;
-            }
-            self.router
-                .register_mailbox(new_region_id, new_peer.mail_box());
-            new_peer.start(&self.poller);
         }
     }
 
@@ -1279,7 +1058,7 @@ impl<T: Transport> Peer<T> {
     fn validate_merge_target(&self, target_region: &metapb::Region) -> Result<bool> {
         let region_id = target_region.get_id();
         let exist_region = {
-            let meta = self.store_meta.lock().unwrap();
+            let meta = self.ctx.store_meta.lock().unwrap();
             meta.regions.get(&region_id).cloned()
         };
         if let Some(r) = exist_region {
@@ -1382,7 +1161,7 @@ impl<T: Transport> Peer<T> {
         // Please note that, here assumes that the unit of network isolation is store rather than
         // peer. So a quorum stores of souce region should also be the quorum stores of target
         // region. Otherwise we need to enable proposal forwarding.
-        let _ = self.router.send_cmd(req, Callback::None);
+        let _ = self.scheduler.router().send_cmd(req, Callback::None);
         Ok(())
     }
 
@@ -1404,7 +1183,7 @@ impl<T: Transport> Peer<T> {
 
     fn on_check_merge(&mut self) {
         // In case merge is rollback.
-        if !self.stopped && self.peer.pending_merge_state.is_some() {
+        if !self.peer.stopped && self.peer.pending_merge_state.is_some() {
             match self.schedule_merge() {
                 Ok(_) => self.schedule_merge_check_tick(),
                 Err(e) => {
@@ -1420,7 +1199,7 @@ impl<T: Transport> Peer<T> {
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState, merged: bool) {
         {
-            let mut meta = self.store_meta.lock().unwrap();
+            let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(region.clone(), &mut self.peer);
             self.peer.pending_merge_state = Some(state);
             self.notify_prepare_merge(&mut meta);
@@ -1439,8 +1218,8 @@ impl<T: Transport> Peer<T> {
         &mut self,
         region: metapb::Region,
         source: metapb::Region,
-    ) -> Option<oneshot::Receiver<()>> {
-        let mut meta = self.store_meta.lock().unwrap();
+    ) -> Option<OneshotPoller> {
+        let mut meta = self.ctx.store_meta.lock().unwrap();
         let lock_key = (source.get_id(), source.get_region_epoch().get_version());
         match meta.merge_locks.entry(lock_key) {
             // So premerge is executed.
@@ -1448,9 +1227,8 @@ impl<T: Transport> Peer<T> {
                 e.remove();
             }
             Entry::Vacant(v) => {
-                let (tx, mut rx) = oneshot::channel();
-                let _ = rx.poll();
-                v.insert(tx);
+                let (tx, mut rx) = self.scheduler.router().one_shot(region.get_id());
+                v.insert(Some(tx));
                 return Some(rx);
             }
         }
@@ -1482,9 +1260,9 @@ impl<T: Transport> Peer<T> {
                 source,
                 self.peer.region()
             );
-            self.peer.heartbeat_pd(&self.pd_scheduler);
+            self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
         }
-        let _ = self.router.send_peer_message(
+        let _ = self.scheduler.router().send_peer_message(
             source.get_id(),
             PeerMsg::MergeResult {
                 target: self.peer.peer.clone(),
@@ -1509,7 +1287,7 @@ impl<T: Transport> Peer<T> {
         }
         self.peer.pending_merge_state = None;
         if let Some(r) = region {
-            let mut meta = self.store_meta.lock().unwrap();
+            let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(r, &mut self.peer);
             let lock_key = (
                 self.region_id(),
@@ -1520,7 +1298,7 @@ impl<T: Transport> Peer<T> {
         }
         if self.peer.is_leader() {
             info!("{} notify pd with rollback merge {}", self.peer.tag, commit);
-            self.peer.heartbeat_pd(&self.pd_scheduler);
+            self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
         }
     }
 
@@ -1568,7 +1346,7 @@ impl<T: Transport> Peer<T> {
             self.peer.tag, region
         );
 
-        let mut meta = self.store_meta.lock().unwrap();
+        let mut meta = self.ctx.store_meta.lock().unwrap();
 
         debug!(
             "{} ranges {:?} prev_region {:?}",
@@ -1603,12 +1381,12 @@ impl<T: Transport> Peer<T> {
     fn on_ready_result(
         &mut self,
         merged: bool,
-        exec_results: &mut VecDeque<ExecResult>,
+        exec_results: &mut Option<VecDeque<ExecResult>>,
         metrics: &ApplyMetrics,
-    ) -> Option<oneshot::Receiver<()>> {
-        self.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
-        self.store_stat.engine_total_bytes_written += metrics.written_bytes;
-        self.store_stat.engine_total_keys_written += metrics.written_keys;
+    ) -> Option<OneshotPoller> {
+        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
+        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
+        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
 
         self.on_ready_exec_results(merged, exec_results)
     }
@@ -1616,8 +1394,12 @@ impl<T: Transport> Peer<T> {
     fn on_ready_exec_results(
         &mut self,
         merged: bool,
-        exec_results: &mut VecDeque<ExecResult>,
-    ) -> Option<oneshot::Receiver<()>> {
+        exec_results: &mut Option<VecDeque<ExecResult>>,
+    ) -> Option<OneshotPoller> {
+        if exec_results.as_ref().map_or(true, |r| r.is_empty()) {
+            return None;
+        }
+        let exec_results = exec_results.as_mut().unwrap();
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
@@ -1668,7 +1450,7 @@ impl<T: Transport> Peer<T> {
         if msg.get_admin_request().has_prepare_merge() {
             let target_region = msg.get_admin_request().get_prepare_merge().get_target();
             {
-                let meta = self.store_meta.lock().unwrap();
+                let meta = self.ctx.store_meta.lock().unwrap();
                 match meta.regions.get(&target_region.get_id()) {
                     Some(r) => if r != target_region {
                         return Err(box_err!(
@@ -1794,9 +1576,9 @@ impl<T: Transport> Peer<T> {
         bind_term(&mut resp, term);
         if self
             .peer
-            .propose(cb, msg, resp, &mut self.raft_metrics.propose)
+            .propose(cb, msg, resp, &mut self.ctx.raft_metrics.propose)
         {
-            self.has_ready = true;
+            self.peer.has_ready = true;
         }
 
         // TODO: add timeout, if the command is not applied after timeout,
@@ -1809,7 +1591,7 @@ impl<T: Transport> Peer<T> {
         } else {
             Excluded(enc_end_key(self.peer.region()))
         };
-        let meta = self.store_meta.lock().unwrap();
+        let meta = self.ctx.store_meta.lock().unwrap();
         meta.region_ranges
             .range((start, Unbounded::<Key>))
             .next()
@@ -1915,10 +1697,13 @@ impl<T: Transport> Peer<T> {
     #[inline]
     fn schedule_split_region_check_tick(&mut self) {
         if !self
+            .peer
             .tick_tracker
             .contains(TickSchedulerTracker::SPLIT_CHECK)
         {
-            self.tick_tracker.insert(TickSchedulerTracker::SPLIT_CHECK);
+            self.peer
+                .tick_tracker
+                .insert(TickSchedulerTracker::SPLIT_CHECK);
             self.schedule_tick(
                 self.peer.cfg.split_region_check_tick_interval.0,
                 PeerTick::SplitRegionCheck,
@@ -1927,7 +1712,9 @@ impl<T: Transport> Peer<T> {
     }
 
     fn on_split_region_check_tick(&mut self) {
-        self.tick_tracker.remove(TickSchedulerTracker::SPLIT_CHECK);
+        self.peer
+            .tick_tracker
+            .remove(TickSchedulerTracker::SPLIT_CHECK);
         // TODO: avoid frequent scan.
         if !self.peer.is_leader() {
             return;
@@ -1947,7 +1734,7 @@ impl<T: Transport> Peer<T> {
             return;
         }
         let task = SplitCheckTask::new(self.peer.region().clone(), true, CheckPolicy::SCAN);
-        if let Err(e) = self.split_check_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!("{} failed to schedule split check: {}", self.peer.tag, e);
         }
         self.peer.size_diff_hint = 0;
@@ -1973,7 +1760,7 @@ impl<T: Transport> Peer<T> {
             right_derive: self.peer.cfg.right_derive_when_split,
             callback: cb,
         };
-        if let Err(Stopped(t)) = self.pd_scheduler.schedule(task) {
+        if let Err(Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
             error!("{} failed to notify pd to split: Stopped", self.peer.tag);
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
@@ -2041,19 +1828,21 @@ impl<T: Transport> Peer<T> {
         }
 
         let task = SplitCheckTask::new(region.clone(), false, policy);
-        if let Err(e) = self.split_check_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!("{} failed to schedule split check: {}", self.peer.tag, e);
         }
     }
 
     fn on_pd_heartbeat_tick(&mut self) {
-        self.tick_tracker.remove(TickSchedulerTracker::PD_HEARTBEAT);
+        self.peer
+            .tick_tracker
+            .remove(TickSchedulerTracker::PD_HEARTBEAT);
         self.peer.check_peers();
 
         if !self.peer.is_leader() {
             return;
         }
-        self.peer.heartbeat_pd(&self.pd_scheduler);
+        self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
 
         self.schedule_pd_heartbeat_tick();
 
@@ -2063,10 +1852,13 @@ impl<T: Transport> Peer<T> {
     #[inline]
     fn schedule_pd_heartbeat_tick(&mut self) {
         if !self
+            .peer
             .tick_tracker
             .contains(TickSchedulerTracker::PD_HEARTBEAT)
         {
-            self.tick_tracker.insert(TickSchedulerTracker::PD_HEARTBEAT);
+            self.peer
+                .tick_tracker
+                .insert(TickSchedulerTracker::PD_HEARTBEAT);
             self.schedule_tick(
                 self.peer.cfg.pd_heartbeat_tick_interval.0,
                 PeerTick::PdHeartbeat,
@@ -2075,7 +1867,9 @@ impl<T: Transport> Peer<T> {
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
-        self.tick_tracker.remove(TickSchedulerTracker::STALE_PEER);
+        self.peer
+            .tick_tracker
+            .remove(TickSchedulerTracker::STALE_PEER);
         let mut leader_missing = 0;
         if self.peer.pending_remove || self.peer.is_leader() {
             return;
@@ -2124,19 +1918,25 @@ impl<T: Transport> Peer<T> {
                     region: self.region().clone(),
                     merge_source: None,
                 };
-                if let Err(e) = self.pd_scheduler.schedule(task) {
+                if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
                     error!("{} failed to notify pd: {}", self.peer.tag, e)
                 }
             }
         }
         // TODO: fix this metrics.
-        self.raft_metrics.leader_missing = leader_missing;
+        self.ctx.raft_metrics.leader_missing = leader_missing;
     }
 
     #[inline]
     fn schedule_check_peer_stale_state_tick(&mut self) {
-        if !self.tick_tracker.contains(TickSchedulerTracker::STALE_PEER) {
-            self.tick_tracker.insert(TickSchedulerTracker::STALE_PEER);
+        if !self
+            .peer
+            .tick_tracker
+            .contains(TickSchedulerTracker::STALE_PEER)
+        {
+            self.peer
+                .tick_tracker
+                .insert(TickSchedulerTracker::STALE_PEER);
             self.schedule_tick(
                 self.peer.cfg.peer_stale_state_check_interval.0,
                 PeerTick::CheckPeerStaleState,
@@ -2147,7 +1947,7 @@ impl<T: Transport> Peer<T> {
 
 // Consistency Check implementation.
 
-impl<T: Transport> Peer<T> {
+impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
     fn verify_and_store_hash(&mut self, expected_index: u64, expected_hash: Vec<u8>) -> bool {
         if expected_index < self.peer.consistency_state.index {
@@ -2216,7 +2016,7 @@ impl<T: Transport> Peer<T> {
         self.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!("{} schedule {}", self.peer.tag, task);
-        if let Err(e) = self.consistency_check_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.consistency_check_scheduler.schedule(task) {
             error!("{} schedule failed: {:?}", self.peer.tag, e);
         }
     }
@@ -2244,7 +2044,7 @@ impl<T: Transport> Peer<T> {
         }
 
         let task = CleanupSSTTask::DeleteSST { ssts };
-        if let Err(e) = self.cleanup_sst_scheduler.schedule(task) {
+        if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {
             error!("{} schedule to delete ssts: {:?}", self.peer.tag, e);
         }
     }
@@ -2256,7 +2056,7 @@ impl<T: Transport> Peer<T> {
         let is_applying_snap = s.is_applying_snapshot();
         for (key, is_sending) in keys {
             if is_sending {
-                let s = match self.snap_mgr.get_snapshot_for_sending(&key) {
+                let s = match self.ctx.snap_mgr.get_snapshot_for_sending(&key) {
                     Ok(s) => s,
                     Err(e) => {
                         error!(
@@ -2271,7 +2071,7 @@ impl<T: Transport> Peer<T> {
                         "{} snap file {} has been compacted, delete.",
                         self.peer.tag, key
                     );
-                    self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                    self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
                 } else if let Ok(meta) = s.meta() {
                     let modified = match meta.modified() {
                         Ok(m) => m,
@@ -2289,7 +2089,7 @@ impl<T: Transport> Peer<T> {
                                 "{} snap file {} has been expired, delete.",
                                 self.peer.tag, key
                             );
-                            self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                            self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
                         }
                     }
                 }
@@ -2300,7 +2100,7 @@ impl<T: Transport> Peer<T> {
                     "{} snap file {} has been applied, delete.",
                     self.peer.tag, key
                 );
-                let a = match self.snap_mgr.get_snapshot_for_applying(&key) {
+                let a = match self.ctx.snap_mgr.get_snapshot_for_applying(&key) {
                     Ok(a) => a,
                     Err(e) => {
                         error!(
@@ -2310,13 +2110,13 @@ impl<T: Transport> Peer<T> {
                         continue;
                     }
                 };
-                self.snap_mgr.delete_snapshot(&key, a.as_ref(), false);
+                self.ctx.snap_mgr.delete_snapshot(&key, a.as_ref(), false);
             }
         }
     }
 }
 
-impl<T: Transport> Peer<T> {
+impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
     #[inline]
     fn on_tick(&mut self, tick: PeerTick) {
         match tick {
@@ -2330,7 +2130,7 @@ impl<T: Transport> Peer<T> {
     }
 
     fn stop(&mut self) {
-        self.stopped = true;
+        self.peer.stopped = true;
         self.peer.stop();
     }
 
@@ -2344,7 +2144,8 @@ impl<T: Transport> Peer<T> {
                 request,
                 callback,
             } => {
-                self.raft_metrics
+                self.ctx
+                    .raft_metrics
                     .propose
                     .request_wait_time
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
@@ -2381,84 +2182,53 @@ impl<T: Transport> Peer<T> {
                 policy,
             } => self.on_schedule_half_split_region(&region_epoch, policy),
             PeerMsg::MergeResult { target, stale } => self.on_merge_result(target, stale),
+            PeerMsg::Start { state } => self.start(state),
             PeerMsg::BatchRaftSnapCmds { .. } => unreachable!(),
         }
     }
-}
 
-impl<T> AsRef<peer::Peer> for Peer<T> {
-    #[inline]
-    fn as_ref(&self) -> &peer::Peer {
-        &self.peer
+    pub fn poll(&mut self, receiver: &Receiver<PeerMsg>, buf: &mut Vec<PeerMsg>) -> bool {
+        let mut polled = false;
+        if self.peer.pending_merge_apply.is_some() {
+            if !self
+                .peer
+                .pending_merge_apply
+                .as_mut()
+                .unwrap()
+                .poller
+                .waken()
+            {
+                return true;
+            }
+            if !self.resume_handling_pending_apply() {
+                return true;
+            }
+        }
+        while buf.len() < self.peer.cfg.messages_per_tick {
+            match receiver.try_recv() {
+                Ok(msg) => buf.push(msg),
+                Err(TryRecvError::Empty) => {
+                    polled = true;
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.stop();
+                    polled = true;
+                    break;
+                }
+            }
+        }
+        for m in buf.drain(..) {
+            self.on_peer_msg(m);
+        }
+        polled
     }
 }
 
-impl<T: Transport> Future for Peer<T> {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        if self.pending_apply.is_some() {
-            match self.pending_apply.as_mut().unwrap().notifier.poll() {
-                Ok(Async::Ready(())) | Err(_) => {}
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-            }
-            if !self.resume_handling_pending_apply() {
-                return Ok(Async::NotReady);
-            }
-        }
-        let mut msgs;
-        match self.receiver.poll() {
-            Ok(Async::Ready(Some(m))) => {
-                msgs = Vec::with_capacity(self.peer.cfg.messages_per_tick);
-                msgs.push(m);
-            }
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
-            // stop implicitly.
-            Ok(Async::Ready(None)) => {
-                self.stop();
-                return Ok(Async::Ready(()));
-            }
-            _ => unreachable!(),
-        }
-        loop {
-            while msgs.len() < self.peer.cfg.messages_per_tick {
-                match self.receiver.poll() {
-                    Ok(Async::Ready(Some(m))) => msgs.push(m),
-                    Ok(Async::NotReady) => break,
-                    Ok(Async::Ready(None)) => {
-                        self.stop();
-                        return Ok(Async::Ready(()));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            let keep_going = msgs.len() == self.peer.cfg.messages_per_tick;
-            for m in msgs.drain(..) {
-                self.on_peer_msg(m);
-            }
-            // TODO: should stopped be checked first?
-            if self.has_ready {
-                self.handle_raft_ready();
-                self.has_ready = false;
-            }
-            if !self.stopped {
-                if self.queued_snapshot {
-                    let mut meta = self.store_meta.lock().unwrap();
-                    meta.pending_snapshot_regions
-                        .retain(|r| r.get_id() != self.region_id());
-                }
-                if keep_going {
-                    continue;
-                }
-                if self.need_flush_trans {
-                    self.trans.flush();
-                    self.need_flush_trans = false;
-                }
-                return Ok(Async::NotReady);
-            }
-            return Ok(Async::Ready(()));
-        }
+impl<'a, T, C> AsRef<peer::Peer> for Peer<'a, T, C> {
+    #[inline]
+    fn as_ref(&self) -> &peer::Peer {
+        &self.peer
     }
 }
 
@@ -2510,7 +2280,7 @@ fn new_compact_log_request(
     request
 }
 
-impl<T: Transport> Peer<T> {
+impl<'a, T: Transport, C> Peer<'a, T, C> {
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
     // Unlike other commands (write or admin), status commands only show current

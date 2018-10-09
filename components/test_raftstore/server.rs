@@ -50,7 +50,7 @@ type SimulateServerTransport =
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
-    node: Node<TestPdClient>,
+    node: Node<SimulateServerTransport, TestPdClient>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,

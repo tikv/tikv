@@ -61,7 +61,8 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
+use tikv::raftstore::store::fsm::transport::create_router;
+use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -114,7 +115,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Initialize raftstore channels.
-    let (router, rx) = store::create_router(&cfg.raft_store);
+    let (router, rx) = create_router(&cfg.raft_store);
 
     // Create Local Reader.
     let local_reader = Builder::new("local-reader")

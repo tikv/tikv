@@ -37,13 +37,15 @@ use raft::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
+use raftstore::store::fsm::peer::{MergeAsyncWait, TickSchedulerTracker};
+use raftstore::store::fsm::transport::PollContext;
 use raftstore::store::fsm::{ConfigProvider, DestroyPeerJob};
 use raftstore::store::worker::{
     apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
 };
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
-use util::collections::{HashMap, HashSet};
+use util::collections::HashMap;
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureScheduler, Scheduler};
 use util::{escape, MustConsumeVec};
@@ -54,8 +56,6 @@ use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
-
-const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
@@ -150,28 +150,6 @@ impl ProposalQueue {
     }
 }
 
-pub struct ReadyContext<'a, T: 'a> {
-    pub kv_wb: WriteBatch,
-    pub raft_wb: WriteBatch,
-    pub sync_log: bool,
-    pub metrics: &'a mut RaftMetrics,
-    pub trans: &'a mut T,
-    pub ready_res: Option<(Ready, InvokeContext)>,
-}
-
-impl<'a, T> ReadyContext<'a, T> {
-    pub fn new(metrics: &'a mut RaftMetrics, trans: &'a mut T) -> ReadyContext<'a, T> {
-        ReadyContext {
-            kv_wb: WriteBatch::new(),
-            raft_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
-            sync_log: false,
-            metrics,
-            trans,
-            ready_res: None,
-        }
-    }
-}
-
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
     pub struct ProposalContext: u8 {
@@ -262,12 +240,15 @@ pub struct Peer {
     pub read_scheduler: Scheduler<ReadTask>,
 
     pub pending_remove: bool,
+    pub tick_tracker: TickSchedulerTracker,
 
     // The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
     pub pending_merge_state: Option<MergeState>,
+    pub pending_merge_apply: Option<MergeAsyncWait>,
 
-    marked_to_be_checked: bool,
+    pub has_ready: bool,
+    pub stopped: bool,
 
     leader_missing_time: Option<Instant>,
 
@@ -283,7 +264,7 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<T, P: ConfigProvider<T>>(provider: &P, region: &metapb::Region) -> Result<Peer> {
+    pub fn create<P: ConfigProvider>(provider: &P, region: &metapb::Region) -> Result<Peer> {
         let store_id = provider.store_id();
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -307,7 +288,7 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
-    pub fn replicate<T, P: ConfigProvider<T>>(
+    pub fn replicate<P: ConfigProvider>(
         provider: &P,
         region_id: u64,
         peer: metapb::Peer,
@@ -324,7 +305,7 @@ impl Peer {
         Peer::new(provider, &region, peer)
     }
 
-    fn new<T, P: ConfigProvider<T>>(
+    fn new<P: ConfigProvider>(
         provider: &P,
         region: &metapb::Region,
         peer: metapb::Peer,
@@ -339,7 +320,7 @@ impl Peer {
         let sched = provider.snap_scheduler();
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
-        let ps = PeerStorage::new(provider.engines(), region, sched, tag.clone())?;
+        let ps = PeerStorage::new(provider.engines().to_owned(), region, sched, tag.clone())?;
 
         let applied_index = ps.applied_index();
 
@@ -362,7 +343,7 @@ impl Peer {
 
         let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
         let mut peer = Peer {
-            engines: provider.engines(),
+            engines: provider.engines().to_owned(),
             peer,
             region_id: region.get_id(),
             raft_group,
@@ -381,8 +362,11 @@ impl Peer {
             apply_scheduler: provider.apply_scheduler(),
             read_scheduler: provider.read_scheduler(),
             pending_remove: false,
-            marked_to_be_checked: false,
+            tick_tracker: TickSchedulerTracker::empty(),
+            has_ready: false,
+            stopped: false,
             pending_merge_state: None,
+            pending_merge_apply: None,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag,
@@ -440,11 +424,8 @@ impl Peer {
         self.raft_group.raft.raft_log.last_index() + 1
     }
 
-    pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
-        if !self.marked_to_be_checked {
-            self.marked_to_be_checked = true;
-            pending_raft_groups.insert(self.region_id);
-        }
+    pub fn region_id(&self) -> u64 {
+        self.region_id
     }
 
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
@@ -884,14 +865,12 @@ impl Peer {
         Some(region_proposal)
     }
 
-    pub fn handle_raft_ready_append<T: Transport>(
+    pub fn handle_raft_ready_append<T: Transport, C>(
         &mut self,
-        ctx: &mut ReadyContext<T>,
-        scheduler: &FutureScheduler<PdTask>,
-    ) {
-        self.marked_to_be_checked = false;
+        ctx: &mut PollContext<T, C>,
+    ) -> bool {
         if self.pending_remove {
-            return;
+            return false;
         }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -901,13 +880,13 @@ impl Peer {
                 "{} still applying snapshot, skip further handling.",
                 self.tag
             );
-            return;
+            return false;
         }
 
         if !self.pending_messages.is_empty() {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
-            self.send(ctx.trans, messages, &mut ctx.metrics.message)
+            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
                 });
@@ -920,30 +899,30 @@ impl Peer {
                 self.get_store().applied_index(),
                 self.last_applying_idx
             );
-            return;
+            return false;
         }
 
         if !self
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
-            return;
+            return false;
         }
 
         debug!("{} handle raft ready", self.tag);
 
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
-        self.on_role_changed(&ready, scheduler);
+        self.on_role_changed(&ready, &ctx.pd_scheduler);
 
-        self.add_ready_metric(&ready, &mut ctx.metrics.ready);
+        self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
-            self.send(ctx.trans, msgs, &mut ctx.metrics.message)
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message)
                 .unwrap_or_else(|e| {
                     // We don't care that the message is sent failed, so here just log this error.
                     warn!("{} leader send messages err {:?}", self.tag, e);
@@ -959,7 +938,8 @@ impl Peer {
             }
         };
 
-        ctx.ready_res = Some((ready, invoke_ctx));
+        ctx.ready_res.push((ready, invoke_ctx));
+        true
     }
 
     pub fn post_raft_ready_append<T: Transport>(
@@ -1012,8 +992,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) -> Option<Apply> {
-        let mut apply = None;
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -1079,7 +1058,7 @@ impl Peer {
                     self.raft_group.skip_bcast_commit(true);
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
-                apply = Some(Apply::new(self.region_id, self.term(), committed_entries));
+                apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
 
@@ -1092,7 +1071,6 @@ impl Peer {
             self.raft_group.advance_apply(self.last_applying_idx);
         }
         self.proposals.gc();
-        apply
     }
 
     fn apply_reads(&mut self, ready: &Ready) {

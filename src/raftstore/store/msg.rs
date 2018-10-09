@@ -13,6 +13,7 @@
 
 use std::boxed::FnBox;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
@@ -20,10 +21,11 @@ use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{RaftMessage, RegionLocalState};
 
 use raft::SnapshotStatus;
 use raftstore::store::util::KeysInfoFormatter;
+use raftstore::store::Config;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
@@ -211,9 +213,14 @@ pub enum PeerMsg {
     Tick(PeerTick),
     SignificantMsg(SignificantMsg),
     ApplyRes(ApplyTaskRes),
+    Start {
+        state: Option<RegionLocalState>,
+    },
 }
 
 pub enum StoreMsg {
+    Start(metapb::Store, Arc<Config>),
+
     // Redirect to store if region not found.
     RaftMessage(RaftMessage),
 
@@ -271,6 +278,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Tick(t) => write!(fmt, "{:?}", t),
             PeerMsg::SignificantMsg(ref msg) => write!(fmt, "{:?}", msg),
             PeerMsg::ApplyRes(_) => write!(fmt, "ApplyRes"),
+            PeerMsg::Start { ref state } => write!(fmt, "Start {:?}", state),
         }
     }
 }
@@ -314,6 +322,7 @@ impl fmt::Debug for StoreMsg {
                 write!(fmt, "Seek Region from_key {:?}", from_key)
             }
             StoreMsg::Tick(t) => write!(fmt, "{:?}", t),
+            StoreMsg::Start(ref meta, _) => write!(fmt, "Store {}", meta.get_id()),
         }
     }
 }

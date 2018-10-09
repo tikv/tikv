@@ -157,7 +157,7 @@ type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient>>,
+    nodes: HashMap<u64, Node<SimulateChannelTransport, TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
 }
 

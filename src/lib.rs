@@ -21,6 +21,7 @@
 #![feature(integer_atomics)]
 #![feature(duration_as_u128)]
 #![feature(entry_or_default)]
+#![feature(option_replace)]
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]

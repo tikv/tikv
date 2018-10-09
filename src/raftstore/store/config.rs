@@ -122,6 +122,7 @@ pub struct Config {
     pub local_read_batch_size: u64,
 
     pub store_pool_size: usize,
+    pub max_batch_size: usize,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -187,7 +188,8 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
-            store_pool_size: 2,
+            store_pool_size: 4,
+            max_batch_size: 1024,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -330,6 +332,10 @@ impl Config {
         if self.store_pool_size < 2 {
             return Err(box_err!("store-pool-size can't be less than 2"));
         }
+
+        if self.max_batch_size == 0 {
+            return Err(box_err!("batch-max-size can't be 0."));
+        }
         Ok(())
     }
 }
@@ -421,6 +427,10 @@ mod tests {
 
         cfg = Config::new();
         cfg.store_pool_size = 1;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.max_batch_size = 0;
         assert!(cfg.validate().is_err());
     }
 }

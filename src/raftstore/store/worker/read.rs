@@ -23,12 +23,13 @@ use prometheus::local::LocalHistogram;
 use rocksdb::DB;
 use time::Timespec;
 
+use raftstore::store::fsm::transport::BatchSystem;
 use raftstore::store::fsm::ConfigProvider;
 use raftstore::store::msg::{BatchReadCallback, Callback};
 use raftstore::store::util::{self, LeaseState, RemoteLease};
 use raftstore::store::{
     cmd_resp, peer::Peer, PeerMsg, ReadExecutor, ReadResponse, RequestInspector, RequestPolicy,
-    Router, Store, Transport,
+    Router,
 };
 use raftstore::{Error, Reason, Result};
 use util::collections::HashMap;
@@ -236,23 +237,23 @@ pub struct LocalReader {
 }
 
 impl LocalReader {
-    pub fn new<T: Transport, P>(store: &Store<T, P>) -> Self {
+    pub fn new<T, P>(system: &BatchSystem<T, P>, router: Router) -> Self {
         let mut delegates =
-            HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
-        for p in store.get_peers() {
-            let delegate = ReadDelegate::from_peer(p.as_ref());
+            HashMap::with_capacity_and_hasher(system.get_peers().len(), Default::default());
+        for p in system.get_peers() {
+            let delegate = ReadDelegate::from_peer(p);
             info!(
                 "{} init ReadDelegate for peer {:?}",
                 delegate.tag, delegate.peer_id
             );
             delegates.insert(p.region_id(), delegate);
         }
-        let store_id = store.store_id();
+        let store_id = system.store_id();
         LocalReader {
             delegates,
             store_id,
-            kv_engine: store.kv_engine(),
-            ch: store.router(),
+            kv_engine: system.engines().kv.clone(),
+            ch: router,
             metrics: Default::default(),
             tag: format!("[store {}]", store_id),
         }

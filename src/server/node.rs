@@ -14,29 +14,24 @@
 use std::process;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::transport::RaftStoreRouter;
 use super::Result;
-use futures::future::Either;
-use futures::Future;
-use futures_cpupool::Builder;
+use crossbeam_channel::Receiver;
 use import::SSTImporter;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
+use raftstore::store::fsm::transport::{BatchSystem, FsmTypes};
 use raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, Router, SnapManager, Store,
-    StoreMsg, Transport,
+    self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, Router, SnapManager, Transport,
 };
 use server::readpool::ReadPool;
 use server::Config as ServerConfig;
 use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::future::{self, CountDownFuture};
-use util::mpsc::Receiver;
-use util::timer::GLOBAL_TIMER_HANDLE;
 use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -77,18 +72,19 @@ fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result
 
 // Node is a wrapper for raft store.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<T: 'static, C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
-    store_handle: Option<CountDownFuture>,
+    store_handle: Option<BatchSystem<T, C>>,
     router: Router,
 
     pd_client: Arc<C>,
 }
 
-impl<C> Node<C>
+impl<T, C> Node<T, C>
 where
+    T: Transport,
     C: PdClient,
 {
     pub fn new(
@@ -96,7 +92,7 @@ where
         cfg: &ServerConfig,
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
-    ) -> Node<C> {
+    ) -> Node<T, C> {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -126,20 +122,17 @@ where
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
-    pub fn start<T>(
+    pub fn start(
         &mut self,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
-        receiver: Receiver<StoreMsg>,
+        receiver: Receiver<Box<FsmTypes>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-    ) -> Result<()>
-    where
-        T: Transport + 'static,
-    {
+    ) -> Result<()> {
         let bootstrapped = self.check_cluster_bootstrapped()?;
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
@@ -315,7 +308,7 @@ where
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
-    fn start_store<T>(
+    fn start_store(
         &mut self,
         store_id: u64,
         engines: Engines,
@@ -323,13 +316,10 @@ where
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
-        receiver: Receiver<StoreMsg>,
+        receiver: Receiver<Box<FsmTypes>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-    ) -> Result<()>
-    where
-        T: Transport + 'static,
-    {
+    ) -> Result<()> {
         info!("start raft store {} thread", store_id);
 
         if self.store_handle.is_some() {
@@ -340,35 +330,27 @@ where
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
 
-        let (latch, f) = future::count_down_latch();
-        let poller = Builder::new()
-            .pool_size(cfg.store_pool_size)
-            .name_prefix(thd_name!(format!("raftstore_{}-", store.get_id())))
-            .create();
-        let store = match Store::new(
+        let mut system = match BatchSystem::new(
             store,
             cfg,
             engines,
             trans,
             pd_client,
-            snap_mgr,
             pd_worker,
             local_read_worker,
-            self.router.clone(),
-            receiver,
-            coprocessor_host,
+            snap_mgr,
             importer,
-            latch,
-            poller,
+            self.router.clone(),
+            coprocessor_host,
         ) {
-            Err(e) => panic!("construct store {} err {:?}", store_id, e),
-            Ok(s) => s,
+            Ok(system) => system,
+            Err(e) => panic!("construct system {} err {:?}", store_id, e),
         };
-        if let Err(e) = store.start() {
+        if let Err(e) = system.spawn(receiver) {
             panic!("store {} run err {:?}", store_id, e);
         };
 
-        self.store_handle = Some(f);
+        self.store_handle = Some(system);
         Ok(())
     }
 
@@ -379,18 +361,8 @@ where
             Some(f) => f,
         };
 
-        let handle = GLOBAL_TIMER_HANDLE.clone();
-        // TODO: should report error if thread is aborted.
-        loop {
-            self.router.broadcast_shutdown();
-            let timeout = handle
-                .delay(Instant::now() + Duration::from_millis(500))
-                .map_err(|_| ());
-            match f.select2(timeout).wait() {
-                Ok(Either::A(_)) | Err(Either::A(_)) => return Ok(()),
-                Ok(Either::B((_, f2))) | Err(Either::B((_, f2))) => f = f2,
-            }
-        }
+        f.shutdown();
+        Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
