@@ -32,6 +32,7 @@ pub type BoxAdminObserver = Box<AdminObserver + Send + Sync>;
 pub type BoxQueryObserver = Box<QueryObserver + Send + Sync>;
 pub type BoxSplitCheckObserver = Box<SplitCheckObserver + Send + Sync>;
 pub type BoxRoleObserver = Box<RoleObserver + Send + Sync>;
+pub type BoxRegionChangeObserver = Box<RegionChangeObserver + Send + Sync>;
 
 /// Registry contains all registered coprocessors.
 #[derive(Default)]
@@ -40,6 +41,7 @@ pub struct Registry {
     query_observers: Vec<Entry<BoxQueryObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
+    region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     // TODO: add endpoint
 }
 
@@ -71,6 +73,10 @@ impl Registry {
 
     pub fn register_role_observer(&mut self, priority: u32, ro: BoxRoleObserver) {
         push!(priority, ro, self.role_observers);
+    }
+
+    pub fn register_region_change_observer(&mut self, priority: u32, rlo: BoxRegionChangeObserver) {
+        push!(priority, rlo, self.region_change_observers);
     }
 }
 
@@ -242,6 +248,15 @@ impl CoprocessorHost {
         loop_ob!(region, &self.registry.role_observers, on_role_change, role);
     }
 
+    pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent) {
+        loop_ob!(
+            region,
+            &self.registry.region_change_observers,
+            on_region_changed,
+            event
+        );
+    }
+
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
             entry.observer.stop();
@@ -329,6 +344,13 @@ mod test {
         }
     }
 
+    impl RegionChangeObserver for TestCoprocessor {
+        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent) {
+            self.called.fetch_add(8, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
@@ -355,6 +377,8 @@ mod test {
             .register_query_observer(1, Box::new(ob.clone()));
         host.registry
             .register_role_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_region_change_observer(1, Box::new(ob.clone()));
         let region = Region::new();
         let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());
@@ -378,6 +402,9 @@ mod test {
 
         host.on_role_change(&region, StateRole::Leader);
         assert_all!(&[&ob.called], &[28]);
+
+        host.on_region_changed(&region, RegionChangeEvent::Create);
+        assert_all!(&[&ob.called], &[36]);
     }
 
     #[test]
