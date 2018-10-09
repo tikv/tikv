@@ -365,4 +365,13 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         unimplemented!()
     }
+
+    fn sync_regions(
+        &mut self,
+        _ctx: RpcContext,
+        _stream: RequestStream<SyncRegionRequest>,
+        _sink: DuplexSink<SyncRegionResponse>,
+    ) {
+        unimplemented!()
+    }
 }
