@@ -13,24 +13,25 @@
 
 mod checksum;
 pub mod codec;
-mod dag;
+pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
 mod metrics;
 mod readpool_context;
 mod statistics;
+mod tracker;
 mod util;
 
-pub use self::endpoint::err_resp;
+pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use self::readpool_context::Context as ReadPoolContext;
 
-use std::time::Duration;
+use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use util::time::Instant;
+use util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -53,7 +54,7 @@ trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn into_boxed(self) -> Box<RequestHandler>
+    fn into_boxed(self) -> Box<RequestHandler + Send>
     where
         Self: 'static + Sized,
     {
@@ -61,51 +62,104 @@ trait RequestHandler: Send {
     }
 }
 
-#[derive(Debug)]
-pub struct ReqContext {
-    pub context: kvrpcpb::Context,
-    pub table_scan: bool, // Whether is a table scan request.
-    pub txn_start_ts: u64,
-    pub start_time: Instant,
-    pub deadline: Instant,
+#[derive(Debug, Clone, Copy)]
+pub struct Deadline {
+    /// Used to construct the Error when deadline exceeded
+    tag: &'static str,
+
+    start_time: Instant,
+    deadline: Instant,
 }
 
-impl ReqContext {
-    pub fn new(ctx: &kvrpcpb::Context, txn_start_ts: u64, table_scan: bool) -> ReqContext {
+impl Deadline {
+    /// Initialize a deadline that counting from current.
+    pub fn from_now(tag: &'static str, after_duration: Duration) -> Self {
         let start_time = Instant::now_coarse();
-        ReqContext {
-            context: ctx.clone(),
-            table_scan,
-            txn_start_ts,
+        let deadline = start_time + after_duration;
+        Self {
+            tag,
             start_time,
-            deadline: start_time,
+            deadline,
         }
     }
 
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline = self.start_time + request_max_handle_duration;
-    }
-
-    #[inline]
-    pub fn get_scan_tag(&self) -> &'static str {
-        if self.table_scan {
-            "select"
-        } else {
-            "index"
-        }
-    }
-
-    pub fn check_if_outdated(&self) -> Result<()> {
+    /// Returns error if the deadline is exceeded.
+    pub fn check_if_exceeded(&self) -> Result<()> {
         let now = Instant::now_coarse();
         if self.deadline <= now {
             let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.get_scan_tag()));
+            return Err(Error::Outdated(elapsed, self.tag));
         }
         Ok(())
     }
 }
 
-pub use self::dag::{ScanOn, Scanner};
-pub use self::endpoint::{
-    Host as EndPointHost, RequestTask, Task as EndPointTask, DEFAULT_REQUEST_MAX_HANDLE_SECS,
-};
+/// Denotes for a function that builds a `RequestHandler`.
+/// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.
+type RequestHandlerBuilder<Snap> =
+    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler + Send>> + Send>;
+
+/// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
+#[derive(Debug, Clone)]
+pub struct ReqContext {
+    /// The tag of the request
+    pub tag: &'static str,
+
+    /// The rpc context carried in the request
+    pub context: kvrpcpb::Context,
+
+    /// The first range of the request
+    pub first_range: Option<coppb::KeyRange>,
+
+    /// The length of the range
+    pub ranges_len: usize,
+
+    /// The deadline of the request
+    pub deadline: Deadline,
+
+    /// The peer address of the request
+    pub peer: Option<String>,
+
+    /// Whether the request is a descending scan (only applicable to DAG)
+    pub is_desc_scan: Option<bool>,
+
+    /// The transaction start_ts of the request
+    pub txn_start_ts: Option<u64>,
+}
+
+impl ReqContext {
+    pub fn new(
+        tag: &'static str,
+        context: kvrpcpb::Context,
+        ranges: &[coppb::KeyRange],
+        max_handle_duration: Duration,
+        peer: Option<String>,
+        is_desc_scan: Option<bool>,
+        txn_start_ts: Option<u64>,
+    ) -> Self {
+        let deadline = Deadline::from_now(tag, max_handle_duration);
+        Self {
+            tag,
+            context,
+            deadline,
+            peer,
+            is_desc_scan,
+            txn_start_ts,
+            first_range: ranges.first().cloned(),
+            ranges_len: ranges.len(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn default_for_test() -> Self {
+        Self::new(
+            "test",
+            kvrpcpb::Context::new(),
+            &[],
+            Duration::from_secs(10),
+            None,
+            None,
+            None,
+        )
+    }
+}

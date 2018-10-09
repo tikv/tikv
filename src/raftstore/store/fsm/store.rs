@@ -32,7 +32,7 @@ use tokio_timer::timer::Handle;
 
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::util::is_initial_msg;
 use raftstore::Result;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -41,7 +41,7 @@ use util::mpsc::Receiver;
 use util::rocksdb;
 use util::rocksdb::{CompactedEvent, CompactionListener};
 use util::sys as util_sys;
-use util::timer::{Timer, GLOBAL_TIMER_HANDLE};
+use util::timer::GLOBAL_TIMER_HANDLE;
 use util::worker::{Builder as WorkerBuilder, FutureScheduler, FutureWorker, Scheduler, Worker};
 
 use import::SSTImporter;
@@ -59,7 +59,6 @@ use raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask,
     ReadTask, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
-    STALE_PEER_CHECK_INTERVAL,
 };
 use raftstore::store::{
     util, Engines, PeerMsg, SeekRegionCallback, SeekRegionFilter, SnapManager, StoreMsg, StoreTick,
@@ -362,6 +361,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             mailboxes.push((peer.region_id(), peer.mail_box()));
             self.peers.push(peer);
+            self.coprocessor_host
+                .on_region_changed(local_state.get_region(), RegionChangeEvent::Create);
         }
         self.router.register_mailboxes(mailboxes);
 
@@ -478,8 +479,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.use_delete_range,
             self.cfg.clean_stale_peer_delay.0,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
+        let timer = RegionRunner::new_timer();
         box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -1042,6 +1042,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         self.need_flush_trans = true;
     }
+
+    fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
+        let start_key = data_key(start_key);
+        let end_key = data_end_key(end_key);
+
+        let meta = self.meta.lock().unwrap();
+        for (_, region_id) in meta
+            .region_ranges
+            .range((Excluded(start_key), Included(end_key)))
+        {
+            let _ = self
+                .router
+                .send_peer_message(*region_id, PeerMsg::ClearStat);
+        }
+    }
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
@@ -1111,7 +1126,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
 
                 let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
-                    assert_eq!(peer, msg.get_from_peer());
+                    // Maybe the target is promoted from learner to voter, but the follower
+                    // doesn't know it. So we only compare peer id.
+                    assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
                     // Let stale peer decides whether it should wait for merging or just remove
                     // itself.
                     Some(local_state.get_merge_state().get_target().to_owned())
@@ -1238,6 +1255,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 limit,
                 callback,
             } => self.seek_region(&from_key, filter, limit, callback),
+            StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
+                self.clear_region_size_in_range(&start_key, &end_key)
+            }
         }
     }
 }

@@ -22,9 +22,7 @@ use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
-use raftstore::store::{
-    BatchReadCallback, Callback, PeerMsg, ReadTask, Router, SignificantMsg, Transport,
-};
+use raftstore::store::{Callback, PeerMsg, ReadTask, Router, SignificantMsg, StoreMsg, Transport};
 use raftstore::{Error as RaftStoreError, Reason, Result as RaftStoreResult};
 use server::raft_client::RaftClient;
 use server::Result;
@@ -38,13 +36,6 @@ pub trait RaftStoreRouter: Send + Clone {
 
     /// Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()>;
-
-    /// Send a batch of RaftCmdRequests to local store.
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> RaftStoreResult<()>;
 
     fn async_split(
         &self,
@@ -89,6 +80,12 @@ impl ServerRaftStoreRouter {
             local_reader_ch,
         }
     }
+
+    pub fn update_size(&self, start_key: Vec<u8>, end_key: Vec<u8>) {
+        let _ = self
+            .router
+            .send_store_message(StoreMsg::ClearRegionSizeInRange { start_key, end_key });
+    }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
@@ -116,16 +113,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
                 )),
             }
         }
-    }
-
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> RaftStoreResult<()> {
-        self.local_reader_ch
-            .schedule(ReadTask::batch_read(batch, on_finished))
-            .map_err(|e| box_err!(e))
     }
 
     fn async_split(

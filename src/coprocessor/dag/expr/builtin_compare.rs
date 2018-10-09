@@ -190,6 +190,8 @@ impl ScalarFunc {
                 Err(_) => {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                         return Err(e);
+                    } else {
+                        return Ok(None);
                     }
                 }
             }
@@ -243,9 +245,7 @@ impl ScalarFunc {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
-                    _ => if res == None {
-                        res = Some(Cow::Owned(s.into_owned().into_bytes()));
-                    },
+                    _ => return Ok(None),
                 },
             }
         }
@@ -737,7 +737,7 @@ mod test {
         let t5 = b"2012-12-12 12:00:38.12003800000".to_owned().to_vec();
         let t6 = b"2012-12-31 12:00:39.120050".to_owned().to_vec();
         let t7 = b"2018-04-03.invalid".to_owned().to_vec();
-        let t8 = b"2012-12-31 12:00:40.invalid".to_owned().to_vec();
+        let _t8 = b"2012-12-31 12:00:40.invalid".to_owned().to_vec();
 
         let int_cases = vec![
             (vec![Datum::Null, Datum::Null], Datum::Null, Datum::Null),
@@ -875,22 +875,20 @@ mod test {
                     Datum::Bytes(t3.clone()),
                     Datum::Bytes(t4.clone()),
                 ],
-                Datum::Bytes(t3.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Null,
+                Datum::Null,
             ),
             (
                 vec![
                     Datum::Bytes(t1.clone()),
                     Datum::Bytes(t2.clone()),
                     Datum::Bytes(t3.clone()),
-                    Datum::Bytes(t4.clone()),
                     Datum::Bytes(t5.clone()),
                     Datum::Bytes(t6.clone()),
                     Datum::Bytes(t7.clone()),
-                    Datum::Bytes(t8.clone()),
                 ],
-                Datum::Bytes(t6.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Bytes(b"2018-04-03 00:00:00.000000".to_vec()),
+                Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
             ),
         ];
 
@@ -953,7 +951,8 @@ mod test {
         );
 
         {
-            let eval_config = EvalConfig::new()
+            let mut eval_config = EvalConfig::new();
+            eval_config
                 .set_in_insert_stmt(true)
                 .set_strict_sql_mode(true);
             let mut ctx = EvalContext::new(Arc::new(eval_config));

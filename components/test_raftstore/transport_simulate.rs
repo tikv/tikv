@@ -24,7 +24,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use tikv::raftstore::store::{BatchReadCallback, Callback, SignificantMsg, Transport};
+use tikv::raftstore::store::{Callback, SignificantMsg, Transport};
 use tikv::raftstore::{Error, Reason, Result};
 use tikv::server::transport::*;
 use tikv::util::collections::{HashMap, HashSet};
@@ -200,14 +200,6 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
         self.ch.send_command(req, cb)
-    }
-
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> Result<()> {
-        self.ch.send_batch_commands(batch, on_finished)
     }
 
     fn async_split(

@@ -39,9 +39,8 @@ pub use self::fsm::{
     create_router, new_compaction_listener, DestroyPeerJob, Peer, Router, Store, StoreInfo,
 };
 pub use self::msg::{
-    BatchReadCallback, Callback, PeerMsg, PeerTick, ReadCallback, ReadResponse, SeekRegionCallback,
-    SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick, WriteCallback,
-    WriteResponse,
+    Callback, PeerMsg, PeerTick, ReadCallback, ReadResponse, SeekRegionCallback, SeekRegionFilter,
+    SeekRegionResult, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy};
 pub use self::peer_storage::{
