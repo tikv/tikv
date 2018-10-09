@@ -28,6 +28,39 @@ impl ScalarFunc {
         }
     }
 
+    pub fn inet_aton<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let v = Ipv4Addr::from_str(&*input).map(|t| t.octets()).map(|ip| {
+            Some(
+                ((i64::from(ip[0])) << 24)
+                    + ((i64::from(ip[1])) << 16)
+                    + ((i64::from(ip[2])) << 8)
+                    + (i64::from(ip[3])),
+            )
+        });
+        v.or(Ok(None))
+    }
+
+    pub fn inet_ntoa<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_int(ctx, row));
+        if input < 0 || input > i64::from(u32::max_value()) {
+            Ok(None)
+        } else {
+            let v = input as u32;
+            let ipv4_addr =
+                Ipv4Addr::new((v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8);
+            Ok(Some(Cow::Owned(format!("{}", ipv4_addr).into_bytes())))
+        }
+    }
+
     pub fn inet6_aton<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -114,6 +147,60 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(expected);
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_inet_aton() {
+        let cases = vec![
+            (Datum::Bytes(b"0.0.0.0".to_vec()), Datum::I64(0)),
+            (
+                Datum::Bytes(b"255.255.255.255".to_vec()),
+                Datum::I64(4294967295),
+            ),
+            (Datum::Bytes(b"127.0.0.1".to_vec()), Datum::I64(2130706433)),
+            (
+                Datum::Bytes(b"113.14.22.3".to_vec()),
+                Datum::I64(1896748547),
+            ),
+            (Datum::Bytes(b"".to_vec()), Datum::Null),
+            (Datum::Bytes(b"0.0.0.256".to_vec()), Datum::Null),
+            (Datum::Bytes(b"127.0.0,1".to_vec()), Datum::Null),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::InetAton, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_inet_ntoa() {
+        let cases = vec![
+            (Datum::I64(167773449), Datum::Bytes(b"10.0.5.9".to_vec())),
+            (Datum::I64(2063728641), Datum::Bytes(b"123.2.0.1".to_vec())),
+            (Datum::I64(0), Datum::Bytes(b"0.0.0.0".to_vec())),
+            (Datum::I64(545460846593), Datum::Null),
+            (Datum::I64(-1), Datum::Null),
+            (
+                Datum::I64(i64::from(u32::max_value())),
+                Datum::Bytes(b"255.255.255.255".to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::InetNtoa, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
