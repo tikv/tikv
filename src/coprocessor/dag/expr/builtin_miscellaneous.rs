@@ -34,15 +34,36 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let v = Ipv4Addr::from_str(&*input).map(|t| t.octets()).map(|ip| {
-            Some(
-                ((i64::from(ip[0])) << 24)
-                    + ((i64::from(ip[1])) << 16)
-                    + ((i64::from(ip[2])) << 8)
-                    + (i64::from(ip[3])),
-            )
-        });
-        v.or(Ok(None))
+        if input.len() == 0 || input.ends_with('.') {
+            return Ok(None);
+        }
+        let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
+        for c in input.chars() {
+            if c >= '0' && c <= '9' {
+                let digit = c as u64 - '0' as u64;
+                byte_result = byte_result * 10 + digit;
+                if byte_result > 255 {
+                    return Ok(None);
+                }
+            } else if c == '.' {
+                dot_count += 1;
+                if dot_count > 3 {
+                    return Ok(None);
+                }
+                result = (result << 8) + byte_result;
+                byte_result = 0;
+            } else {
+                return Ok(None);
+            }
+        }
+
+        if dot_count == 1 {
+            result <<= 16;
+        }
+        if dot_count == 2 {
+            result <<= 8;
+        }
+        Ok(Some(((result << 8) + byte_result) as i64))
     }
 
     pub fn inet_ntoa<'a, 'b: 'a>(
@@ -164,6 +185,13 @@ mod test {
                 Datum::Bytes(b"113.14.22.3".to_vec()),
                 Datum::I64(1896748547),
             ),
+            (Datum::Bytes(b"1".to_vec()), Datum::I64(1)),
+            (Datum::Bytes(b"0.1.2".to_vec()), Datum::I64(65538)),
+            (Datum::Bytes(b"0.1.2.3.4".to_vec()), Datum::Null),
+            (Datum::Bytes(b"0.1.2..3".to_vec()), Datum::Null),
+            (Datum::Bytes(b".0.1.2.3".to_vec()), Datum::Null),
+            (Datum::Bytes(b"0.1.2.3.".to_vec()), Datum::Null),
+            (Datum::Bytes(b"1.-2.3.4".to_vec()), Datum::Null),
             (Datum::Bytes(b"".to_vec()), Datum::Null),
             (Datum::Bytes(b"0.0.0.256".to_vec()), Datum::Null),
             (Datum::Bytes(b"127.0.0,1".to_vec()), Datum::Null),
