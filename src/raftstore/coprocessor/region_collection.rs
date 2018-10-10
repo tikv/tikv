@@ -125,7 +125,9 @@ fn register_raftstore_event_sender(
         .register_region_change_observer(1, box event_sender.clone());
 }
 
-/// `RegionCollectionWorker` is the underlying runner of `RegionCollection`.
+/// `RegionCollectionWorker` is the underlying runner of `RegionCollection`. It listens on events
+/// sent by the `EventSender` and maintains the collection of all regions. Role of each region
+/// are also tracked.
 struct RegionCollectionWorker {
     self_store_id: u64,
     // region_id -> (Region, State)
@@ -324,6 +326,9 @@ pub struct RegionCollection {
 }
 
 impl RegionCollection {
+    /// Create a new `RegionCollection` and register to `host`.
+    /// `RegionCollection` doesn't need, and should not be created more than once. If it's needed
+    /// in different places, just clone it, and their contents are shared.
     pub fn new(host: &mut CoprocessorHost, self_store_id: u64) -> Self {
         let worker = WorkerBuilder::new("region-collection-worker")
             .pending_capacity(CHANNEL_BUFFER_SIZE)
@@ -340,6 +345,7 @@ impl RegionCollection {
         }
     }
 
+    /// Start the `RegionCollection`. It should be started before raftstore.
     pub fn start(&self) {
         self.worker
             .lock()
@@ -348,6 +354,7 @@ impl RegionCollection {
             .unwrap();
     }
 
+    /// Stop the `RegionCollection`. It should be stopped after raftstore.
     pub fn stop(&self) {
         self.worker.lock().unwrap().stop().unwrap().join().unwrap();
     }
