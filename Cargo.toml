@@ -83,6 +83,7 @@ num-traits = "0.2"
 hex = "0.3"
 rust-crypto = "^0.2"
 cop_datatype = { path = "components/cop_datatype" }
+smallvec = { version = "0.6", features = ["union"] }
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }

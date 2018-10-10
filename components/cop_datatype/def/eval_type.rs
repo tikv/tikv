@@ -22,7 +22,7 @@ pub enum EvalType {
     Int,
     Real,
     Decimal,
-    String,
+    Bytes,
     DateTime,
     Duration,
     Json,
@@ -58,7 +58,7 @@ impl ::std::convert::TryFrom<::FieldTypeTp> for EvalType {
             | ::FieldTypeTp::LongBlob
             | ::FieldTypeTp::Blob
             | ::FieldTypeTp::VarString
-            | ::FieldTypeTp::String => EvalType::String,
+            | ::FieldTypeTp::String => EvalType::Bytes,
             _ => {
                 // Note: In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
                 return Err(::Error::UnsupportedType(tp.to_string()));
