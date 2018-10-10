@@ -146,8 +146,22 @@ fn test_region_collection_impl(cluster: &mut Cluster<NodeCluster>, c: &RegionCol
     assert_eq!(role3, StateRole::Follower);
 
     // Remove peer
+    check_region_ranges(
+        &dump(c),
+        &[(&b""[..], &b"k1"[..]), (b"k1", b"k4"), (b"k4", b"")],
+    );
+
     pd_client.must_remove_peer(region3.get_id(), find_peer(&region3, 1).unwrap().clone());
-    let regions_after_removing = dump(c);
+
+    let mut regions_after_removing = Vec::new();
+    // It seems region_collection is a little delayed than raftstore...
+    for _ in 0..100 {
+        regions_after_removing = dump(c);
+        if regions_after_removing.len() == 2 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
     check_region_ranges(
         &regions_after_removing,
         &[(&b""[..], &b"k1"[..]), (b"k4", b"")],
