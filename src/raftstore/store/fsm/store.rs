@@ -694,6 +694,22 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
         }
         self.ctx.need_flush_trans = true;
     }
+
+    fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
+        let start_key = data_key(start_key);
+        let end_key = data_end_key(end_key);
+
+        let meta = self.ctx.store_meta.lock().unwrap();
+        for (_, region_id) in meta
+            .region_ranges
+            .range((Excluded(start_key), Included(end_key)))
+        {
+            let _ = self
+                .scheduler
+                .router()
+                .send_peer_message(*region_id, PeerMsg::ClearStat);
+        }
+    }
 }
 
 impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
@@ -764,7 +780,9 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
                 );
 
                 let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
-                    assert_eq!(peer, msg.get_from_peer());
+                    // Maybe the target is promoted from learner to voter, but the follower
+                    // doesn't know it. So we only compare peer id.
+                    assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
                     // Let stale peer decides whether it should wait for merging or just remove
                     // itself.
                     Some(local_state.get_merge_state().get_target().to_owned())
@@ -894,6 +912,9 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
                 callback,
             } => self.seek_region(&from_key, filter, limit, callback),
             StoreMsg::Start(meta, cfg) => self.start(meta, cfg),
+            StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
+                self.clear_region_size_in_range(&start_key, &end_key)
+            }
         }
     }
 

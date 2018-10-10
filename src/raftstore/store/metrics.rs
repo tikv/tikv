@@ -216,4 +216,11 @@ lazy_static! {
 
     pub static ref RAFTSTORE_CHANNEL_FULL: IntCounter =
         register_int_counter!("tikv_raftstore_channel_full", "Total number of raftstore channel full error").unwrap();
+
+    pub static ref RAFT_INVALID_PROPOSAL_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_raft_invalid_proposal_total",
+            "Total number of raft invalid proposal.",
+            &["type"]
+        ).unwrap();
 }

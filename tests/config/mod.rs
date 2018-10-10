@@ -122,6 +122,7 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: 12,
         raft_log_gc_size_limit: ReadableSize::kb(1),
+        raft_entry_cache_life_time: ReadableDuration::secs(12),
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),

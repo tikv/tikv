@@ -57,7 +57,6 @@ pub enum SeekRegionResult {
 
 pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
-pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
 
 pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
 pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
@@ -67,7 +66,6 @@ pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-///  - `BatchRead`: callbacks for a batch read request.
 pub enum Callback {
     /// No callback.
     None,
@@ -75,8 +73,6 @@ pub enum Callback {
     Read(ReadCallback),
     /// Write callback.
     Write(WriteCallback),
-    /// Batch read callbacks.
-    BatchRead(BatchReadCallback),
 }
 
 impl Callback {
@@ -94,7 +90,6 @@ impl Callback {
                 let resp = WriteResponse { response: resp };
                 write(resp);
             }
-            Callback::BatchRead(_) => unreachable!(),
         }
     }
 
@@ -105,14 +100,6 @@ impl Callback {
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
-
-    pub fn invoke_batch_read(self, args: Vec<Option<ReadResponse>>) {
-        match self {
-            Callback::BatchRead(batch_read) => batch_read(args),
-            Callback::None => (),
-            other => panic!("expect Callback::BatchRead(..), got {:?}", other),
-        }
-    }
 }
 
 impl fmt::Debug for Callback {
@@ -121,7 +108,6 @@ impl fmt::Debug for Callback {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
-            Callback::BatchRead(_) => write!(fmt, "Callback::BatchRead(..)"),
         }
     }
 }
@@ -167,12 +153,6 @@ pub enum PeerMsg {
         callback: Callback,
     },
 
-    BatchRaftSnapCmds {
-        send_time: Instant,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: Callback,
-    },
-
     SplitRegion {
         region_epoch: RegionEpoch,
         // It's an encoded key.
@@ -216,6 +196,7 @@ pub enum PeerMsg {
     Start {
         state: Option<RegionLocalState>,
     },
+    ClearStat,
 }
 
 pub enum StoreMsg {
@@ -242,6 +223,12 @@ pub enum StoreMsg {
     },
 
     Tick(StoreTick),
+    // Clear region size and keys for all regions in the range, so we can force them to re-calculate
+    // their size later.
+    ClearRegionSizeInRange {
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for PeerMsg {
@@ -249,7 +236,6 @@ impl fmt::Debug for PeerMsg {
         match *self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             PeerMsg::RaftCmd { .. } => write!(fmt, "Raft Command"),
-            PeerMsg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
             PeerMsg::ComputeHashResult { index, ref hash } => write!(
                 fmt,
                 "ComputeHashResult [index: {}, hash: {}]",
@@ -279,6 +265,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::SignificantMsg(ref msg) => write!(fmt, "{:?}", msg),
             PeerMsg::ApplyRes(_) => write!(fmt, "ApplyRes"),
             PeerMsg::Start { ref state } => write!(fmt, "Start {:?}", state),
+            PeerMsg::ClearStat => write!(fmt, "ClearStat"),
         }
     }
 }
@@ -289,17 +276,6 @@ impl PeerMsg {
             send_time: Instant::now(),
             request,
             callback,
-        }
-    }
-
-    pub fn new_batch_raft_snapshot_cmd(
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> PeerMsg {
-        PeerMsg::BatchRaftSnapCmds {
-            send_time: Instant::now(),
-            batch,
-            on_finished: Callback::BatchRead(on_finished),
         }
     }
 
@@ -321,6 +297,14 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::SeekRegion { ref from_key, .. } => {
                 write!(fmt, "Seek Region from_key {:?}", from_key)
             }
+            StoreMsg::ClearRegionSizeInRange {
+                ref start_key,
+                ref end_key,
+            } => write!(
+                fmt,
+                "Clear Region size in range {:?} to {:?}",
+                start_key, end_key
+            ),
             StoreMsg::Tick(t) => write!(fmt, "{:?}", t),
             StoreMsg::Start(ref meta, _) => write!(fmt, "Store {}", meta.get_id()),
         }

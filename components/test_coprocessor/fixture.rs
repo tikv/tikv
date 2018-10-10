@@ -16,12 +16,12 @@ use super::*;
 use kvproto::kvrpcpb::Context;
 
 use tikv::coprocessor::codec::Datum;
-use tikv::coprocessor::{EndPointHost, EndPointTask, ReadPoolContext};
+use tikv::coprocessor::{Endpoint, ReadPoolContext};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::Config;
 use tikv::storage::engine::{self, RocksEngine};
 use tikv::storage::{Engine, ALL_CFS, TEMP_DIR};
-use tikv::util::worker::{Builder as WorkerBuilder, FutureWorker, Worker};
+use tikv::util::worker::FutureWorker;
 
 /// An example table for test purpose.
 #[derive(Clone)]
@@ -68,7 +68,7 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<E>, Worker<EndPointTask<E>>) {
+) -> (Store<E>, Endpoint<E>) {
     init_data_with_details(
         ctx,
         engine,
@@ -88,7 +88,7 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
     read_pool_cfg: &readpool::Config,
-) -> (Store<E>, Worker<EndPointTask<E>>) {
+) -> (Store<E>, Endpoint<E>) {
     let mut store = Store::new(engine);
 
     store.begin();
@@ -107,20 +107,15 @@ pub fn init_data_with_details<E: Engine>(
     let pool = ReadPool::new("readpool", read_pool_cfg, || {
         || ReadPoolContext::new(pd_worker.scheduler())
     });
-    let mut end_point = WorkerBuilder::new("test-select-worker")
-        .batch_size(5)
-        .create();
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), cfg, pool);
-    end_point.start(runner).unwrap();
-
-    (store, end_point)
+    let cop = Endpoint::new(cfg, store.get_engine(), pool);
+    (store, cop)
 }
 
 pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
@@ -129,6 +124,6 @@ pub fn init_data_with_commit(
 pub fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
-) -> (Store<RocksEngine>, Worker<EndPointTask<RocksEngine>>) {
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     init_data_with_commit(tbl, vals, true)
 }

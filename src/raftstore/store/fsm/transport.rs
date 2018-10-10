@@ -26,7 +26,7 @@ use pd::{PdClient, PdRunner, PdTask};
 use protobuf;
 use raft::Ready;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Iterable, Mutable, Peekable};
 use raftstore::store::fsm::store::{Store, StoreCore};
 use raftstore::store::keys::{self, enc_end_key};
@@ -37,7 +37,6 @@ use raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask,
     ReadTask, RegionProposal, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
-    STALE_PEER_CHECK_INTERVAL,
 };
 use raftstore::store::{
     peer, Callback, Config, Engines, PeerMsg, SnapManager, StoreMsg, Transport,
@@ -57,7 +56,7 @@ use util::mpsc;
 use util::rocksdb;
 use util::sys as util_sys;
 use util::time::{duration_to_sec, SlowTimer};
-use util::timer::{Timer, GLOBAL_TIMER_HANDLE};
+use util::timer::GLOBAL_TIMER_HANDLE;
 use util::worker::{FutureScheduler, FutureWorker, Scheduler as WorkerScheduler, Worker};
 use util::Either;
 
@@ -1339,7 +1338,13 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
         let timer = LocalReader::new_timer();
         box_try!(self.local_reader.start_with_timer(reader, timer));
 
-        scheduler.schedule_all(mem::replace(&mut self.peers, vec![]));
+        let peers = mem::replace(&mut self.peers, vec![]);
+        let regions: Vec<_> = peers.iter().map(|r| r.0.region().to_owned()).collect();
+        scheduler.schedule_all(peers);
+        for r in regions {
+            self.coprocessor_host
+                .on_region_changed(&r, RegionChangeEvent::Create);
+        }
 
         self.snap_manager.init()?;
 
@@ -1358,8 +1363,7 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
             self.cfg.use_delete_range,
             self.cfg.clean_stale_peer_delay.0,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
+        let timer = RegionRunner::new_timer();
         box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
