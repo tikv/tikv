@@ -388,11 +388,13 @@ mod test {
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
                 expr.set_val(bs);
-                (expr.mut_field_type() as &mut FieldTypeAccessor).set_tp(tp);
-                (expr.mut_field_type() as &mut FieldTypeAccessor).set_flag(flag);
-                (expr.mut_field_type() as &mut FieldTypeAccessor).set_flen(flen);
+                expr.mut_field_type()
+                    .as_mut_accessor()
+                    .set_tp(tp)
+                    .set_flag(flag)
+                    .set_flen(flen)
+                    .set_collation(collate);
                 expr.mut_field_type().set_charset(charset);
-                (expr.mut_field_type() as &mut FieldTypeAccessor).set_collation(collate);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
             d => panic!("unsupport datum: {:?}", d),
@@ -414,7 +416,9 @@ mod test {
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
                 buf.encode_u64(u).unwrap();
                 expr.set_val(buf);
-                (expr.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+                expr.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
@@ -444,8 +448,9 @@ mod test {
             Datum::Time(t) => {
                 expr.set_tp(ExprType::MysqlTime);
                 let mut ft = FieldType::new();
-                (&mut ft as &mut FieldTypeAccessor).set_tp(t.get_time_type().into());
-                (&mut ft as &mut FieldTypeAccessor).set_decimal(isize::from(t.get_fsp()));
+                ft.as_mut_accessor()
+                    .set_tp(t.get_time_type().into())
+                    .set_decimal(isize::from(t.get_fsp()));
                 expr.set_field_type(ft);
                 let u = t.to_packed_u64();
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
@@ -505,9 +510,9 @@ mod test {
                 .mut_field_type()
                 .set_charset(charset::CHARSET_UTF8.to_owned());
             let mut ex = scalar_func_expr(sig, &[col_expr]);
-            (ex.mut_field_type() as &mut FieldTypeAccessor)
-                .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
-            (ex.mut_field_type() as &mut FieldTypeAccessor)
+            ex.mut_field_type()
+                .as_mut_accessor()
+                .set_decimal(cop_datatype::UNSPECIFIED_LENGTH)
                 .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();
@@ -531,7 +536,9 @@ mod test {
             let col_expr = col_expr(0);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
             if flag.is_some() {
-                (ex.mut_field_type() as &mut FieldTypeAccessor).set_flag(flag.unwrap());
+                ex.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(flag.unwrap());
             }
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();

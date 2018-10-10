@@ -104,23 +104,39 @@ bitflags! {
 pub trait FieldTypeAccessor {
     fn tp(&self) -> FieldTypeTp;
 
-    fn set_tp(&mut self, tp: FieldTypeTp);
+    fn set_tp(&mut self, tp: FieldTypeTp) -> &mut FieldTypeAccessor;
 
     fn flag(&self) -> FieldTypeFlag;
 
-    fn set_flag(&mut self, flag: FieldTypeFlag);
+    fn set_flag(&mut self, flag: FieldTypeFlag) -> &mut FieldTypeAccessor;
 
     fn flen(&self) -> isize;
 
-    fn set_flen(&mut self, flen: isize);
+    fn set_flen(&mut self, flen: isize) -> &mut FieldTypeAccessor;
 
     fn decimal(&self) -> isize;
 
-    fn set_decimal(&mut self, decimal: isize);
+    fn set_decimal(&mut self, decimal: isize) -> &mut FieldTypeAccessor;
 
     fn collation(&self) -> Collation;
 
-    fn set_collation(&mut self, collation: Collation);
+    fn set_collation(&mut self, collation: Collation) -> &mut FieldTypeAccessor;
+
+    /// Convert reference to `FieldTypeAccessor` interface.
+    fn as_accessor(&self) -> &FieldTypeAccessor
+    where
+        Self: Sized,
+    {
+        self as &FieldTypeAccessor
+    }
+
+    /// Convert mutable reference to `FieldTypeAccessor` interface.
+    fn as_mut_accessor(&mut self) -> &mut FieldTypeAccessor
+    where
+        Self: Sized,
+    {
+        self as &mut FieldTypeAccessor
+    }
 
     /// Whether this type is a hybrid type, which can represent different types of value in
     /// specific context.
@@ -197,8 +213,9 @@ impl FieldTypeAccessor for FieldType {
     }
 
     #[inline]
-    fn set_tp(&mut self, tp: FieldTypeTp) {
+    fn set_tp(&mut self, tp: FieldTypeTp) -> &mut FieldTypeAccessor {
         FieldType::set_tp(self, tp as i32);
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -207,8 +224,9 @@ impl FieldTypeAccessor for FieldType {
     }
 
     #[inline]
-    fn set_flag(&mut self, flag: FieldTypeFlag) {
+    fn set_flag(&mut self, flag: FieldTypeFlag) -> &mut FieldTypeAccessor {
         FieldType::set_flag(self, flag.bits());
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -217,8 +235,9 @@ impl FieldTypeAccessor for FieldType {
     }
 
     #[inline]
-    fn set_flen(&mut self, flen: isize) {
+    fn set_flen(&mut self, flen: isize) -> &mut FieldTypeAccessor {
         FieldType::set_flen(self, flen as i32);
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -227,8 +246,9 @@ impl FieldTypeAccessor for FieldType {
     }
 
     #[inline]
-    fn set_decimal(&mut self, decimal: isize) {
+    fn set_decimal(&mut self, decimal: isize) -> &mut FieldTypeAccessor {
         FieldType::set_decimal(self, decimal as i32);
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -237,8 +257,9 @@ impl FieldTypeAccessor for FieldType {
     }
 
     #[inline]
-    fn set_collation(&mut self, collation: Collation) {
+    fn set_collation(&mut self, collation: Collation) -> &mut FieldTypeAccessor {
         FieldType::set_collate(self, collation as i32);
+        self as &mut FieldTypeAccessor
     }
 }
 
@@ -249,8 +270,9 @@ impl FieldTypeAccessor for ColumnInfo {
     }
 
     #[inline]
-    fn set_tp(&mut self, tp: FieldTypeTp) {
+    fn set_tp(&mut self, tp: FieldTypeTp) -> &mut FieldTypeAccessor {
         ColumnInfo::set_tp(self, tp as i32);
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -259,8 +281,9 @@ impl FieldTypeAccessor for ColumnInfo {
     }
 
     #[inline]
-    fn set_flag(&mut self, flag: FieldTypeFlag) {
+    fn set_flag(&mut self, flag: FieldTypeFlag) -> &mut FieldTypeAccessor {
         ColumnInfo::set_flag(self, flag.bits() as i32);
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -269,8 +292,9 @@ impl FieldTypeAccessor for ColumnInfo {
     }
 
     #[inline]
-    fn set_flen(&mut self, flen: isize) {
+    fn set_flen(&mut self, flen: isize) -> &mut FieldTypeAccessor {
         ColumnInfo::set_columnLen(self, flen as i32);
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -279,8 +303,9 @@ impl FieldTypeAccessor for ColumnInfo {
     }
 
     #[inline]
-    fn set_decimal(&mut self, decimal: isize) {
+    fn set_decimal(&mut self, decimal: isize) -> &mut FieldTypeAccessor {
         ColumnInfo::set_decimal(self, decimal as i32);
+        self as &mut FieldTypeAccessor
     }
 
     #[inline]
@@ -289,7 +314,8 @@ impl FieldTypeAccessor for ColumnInfo {
     }
 
     #[inline]
-    fn set_collation(&mut self, collation: Collation) {
+    fn set_collation(&mut self, collation: Collation) -> &mut FieldTypeAccessor {
         ColumnInfo::set_collation(self, collation as i32);
+        self as &mut FieldTypeAccessor
     }
 }

@@ -122,8 +122,10 @@ mod test {
         let mut c = col_expr(0);
         let mut field_tp = FieldType::new();
         let flen = 16;
-        (&mut field_tp as &mut FieldTypeAccessor).set_tp(FieldTypeTp::String);
-        (&mut field_tp as &mut FieldTypeAccessor).set_flen(flen);
+        field_tp
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::String)
+            .set_flen(flen);
         c.set_field_type(field_tp);
         let e = Expression::build(&mut ctx, c).unwrap();
         // test without pad_char_to_full_length
@@ -209,7 +211,7 @@ mod test {
         for tp in hybrid_cases {
             let mut c = col_expr(0);
             let mut field_tp = FieldType::new();
-            (&mut field_tp as &mut FieldTypeAccessor).set_tp(tp);
+            field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
             let e = Expression::build(&mut ctx, c).unwrap();
             let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
@@ -219,7 +221,7 @@ mod test {
         for tp in in_hybrid_cases {
             let mut c = col_expr(0);
             let mut field_tp = FieldType::new();
-            (&mut field_tp as &mut FieldTypeAccessor).set_tp(tp);
+            field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
             let e = Expression::build(&mut ctx, c).unwrap();
             let res = e.eval_string(&mut ctx, &row);

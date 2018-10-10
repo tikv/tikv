@@ -24,7 +24,7 @@ use tikv::coprocessor::codec::mysql::*;
 
 fn field_type(tp: FieldTypeTp) -> FieldType {
     let mut fp = FieldType::new();
-    (&mut fp as &mut FieldTypeAccessor).set_tp(tp);
+    fp.as_mut_accessor().set_tp(tp);
     fp
 }
 
