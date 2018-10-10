@@ -82,8 +82,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         loop {
             let res = engine.seek_region(&key, box |_, _| true, 100).unwrap();
             match res {
-                SeekRegionResult::Found { local_peer, region } => {
-                    assert_eq!(local_peer.get_store_id(), node_id);
+                SeekRegionResult::Found(region) => {
                     key = region.get_end_key().to_vec();
                     sought_regions.push(region);
                     // Break on the last region
@@ -100,8 +99,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         // Test end_key is exclusive
         let res = engine.seek_region(b"k1", box |_, _| true, 100).unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[1]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
@@ -112,8 +110,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
             .seek_region(b"", box |r, _| r.get_end_key() == b"k9", 5)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[4]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
@@ -142,8 +139,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
             .seek_region(b"", box |r, _| r.get_end_key().is_empty(), 6)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[5]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
@@ -161,8 +157,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
             .seek_region(b"k6\xff\xff\xff\xff\xff", box |_, _| true, 1)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[3]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
@@ -171,8 +166,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
             .seek_region(b"\xff\xff\xff\xff\xff\xff\xff\xff", box |_, _| true, 1)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[5]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
@@ -202,7 +196,7 @@ fn test_region_collection_seek_region() {
         .sim
         .wl()
         .post_create_coprocessor_host(box move |id, host| {
-            let p = RegionCollection::new(host, id);
+            let p = RegionCollection::new(host);
             p.start();
             tx.send((id, p)).unwrap()
         });

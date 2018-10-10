@@ -42,13 +42,8 @@ pub struct WriteResponse {
 
 #[derive(Debug)]
 pub enum SeekRegionResult {
-    Found {
-        local_peer: metapb::Peer,
-        region: metapb::Region,
-    },
-    LimitExceeded {
-        next_key: Vec<u8>,
-    },
+    Found(metapb::Region),
+    LimitExceeded { next_key: Vec<u8> },
     Ended,
 }
 
