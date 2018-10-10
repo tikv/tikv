@@ -15,11 +15,10 @@ use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
 };
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
 use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
-use raftstore::store::util;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -129,7 +128,6 @@ fn register_raftstore_event_sender(
 /// sent by the `EventSender` and maintains the collection of all regions. Role of each region
 /// are also tracked.
 struct RegionCollectionWorker {
-    self_store_id: u64,
     // region_id -> (Region, State)
     regions: HashMap<u64, (Region, StateRole)>,
     // region_id -> prefixed end key ('z' + key)
@@ -137,9 +135,8 @@ struct RegionCollectionWorker {
 }
 
 impl RegionCollectionWorker {
-    fn new(self_store_id: u64) -> Self {
+    fn new() -> Self {
         Self {
-            self_store_id,
             regions: HashMap::default(),
             region_ranges: BTreeMap::default(),
         }
@@ -251,12 +248,7 @@ impl RegionCollectionWorker {
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
             let (region, role) = &self.regions[region_id];
             if filter(region, *role) {
-                callback(SeekRegionResult::Found {
-                    local_peer: util::find_peer(region, self.self_store_id)
-                        .cloned()
-                        .unwrap_or_else(Peer::default),
-                    region: region.clone(),
-                });
+                callback(SeekRegionResult::Found(region.clone()));
                 return;
             }
 
@@ -320,7 +312,6 @@ impl Runnable<RegionCollectionMsg> for RegionCollectionWorker {
 /// `RegionCollection` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionCollection {
-    self_store_id: u64,
     worker: Arc<Mutex<Worker<RegionCollectionMsg>>>,
     scheduler: Scheduler<RegionCollectionMsg>,
 }
@@ -329,7 +320,7 @@ impl RegionCollection {
     /// Create a new `RegionCollection` and register to `host`.
     /// `RegionCollection` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost, self_store_id: u64) -> Self {
+    pub fn new(host: &mut CoprocessorHost) -> Self {
         let worker = WorkerBuilder::new("region-collection-worker")
             .pending_capacity(CHANNEL_BUFFER_SIZE)
             .create();
@@ -339,7 +330,6 @@ impl RegionCollection {
 
         let scheduler = worker.scheduler();
         Self {
-            self_store_id,
             worker: Arc::new(Mutex::new(worker)),
             scheduler,
         }
@@ -350,7 +340,7 @@ impl RegionCollection {
         self.worker
             .lock()
             .unwrap()
-            .start(RegionCollectionWorker::new(self.self_store_id))
+            .start(RegionCollectionWorker::new())
             .unwrap();
     }
 
@@ -532,7 +522,7 @@ mod tests {
 
     #[test]
     fn test_basic_updating() {
-        let mut c = RegionCollectionWorker::new(0);
+        let mut c = RegionCollectionWorker::new();
         let init_regions = &[
             new_region(1, b"", b"k1"),
             new_region(2, b"k1", b"k9"),
@@ -589,7 +579,7 @@ mod tests {
     /// This is to ensure the collection is correct, no matter what the events' order to happen is.
     /// Values in `seq` and of `derive_index` start from 1.
     fn test_split_impl(derive_index: usize, seq: &[usize]) {
-        let mut c = RegionCollectionWorker::new(0);
+        let mut c = RegionCollectionWorker::new();
         let init_regions = &[
             new_region(1, b"", b"k1"),
             new_region(2, b"k1", b"k9"),
@@ -642,7 +632,7 @@ mod tests {
     }
 
     fn test_merge_impl(to_left: bool, update_first: bool) {
-        let mut c = RegionCollectionWorker::new(0);
+        let mut c = RegionCollectionWorker::new();
         let init_regions = &[
             new_region(1, b"", b"k1"),
             new_region(2, b"k1", b"k2"),

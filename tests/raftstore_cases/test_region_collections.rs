@@ -183,7 +183,7 @@ fn test_node_cluster_region_collection() {
         .wl()
         .post_create_coprocessor_host(box move |id, host| {
             if id == 1 {
-                let c = RegionCollection::new(host, id);
+                let c = RegionCollection::new(host);
                 tx.send(c).unwrap();
             }
         });

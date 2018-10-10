@@ -958,10 +958,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
             let peer = &self.region_peers[region_id];
             if filter(peer.region(), peer.raft_group.raft.state) {
-                callback(SeekRegionResult::Found {
-                    local_peer: peer.peer.clone(),
-                    region: peer.region().clone(),
-                });
+                callback(SeekRegionResult::Found(peer.region().clone()));
                 return;
             }
 
