@@ -154,10 +154,11 @@ impl ScalarFunc {
             return Ok(Some(Cow::Owned(b"".to_vec())));
         }
         let len = s.chars().count();
-        if len > i as usize {
+        let i = i as usize;
+        if len > i {
             let idx = s
                 .char_indices()
-                .nth(len - i as usize)
+                .nth(len - i)
                 .map(|(idx, _)| idx)
                 .unwrap_or_else(|| s.len());
             return Ok(Some(Cow::Owned(s[idx..].to_string().into_bytes())));
