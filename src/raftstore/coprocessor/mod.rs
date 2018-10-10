@@ -22,12 +22,14 @@ pub mod config;
 pub mod dispatcher;
 mod error;
 mod metrics;
+pub mod region_collection;
 mod split_check;
 pub mod split_observer;
 
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
+pub use self::region_collection::RegionCollection;
 pub use self::split_check::{
     HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
     TableCheckObserver,
