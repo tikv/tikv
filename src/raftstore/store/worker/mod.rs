@@ -63,5 +63,8 @@ pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::read::{LocalReader, Progress as ReadProgress, Task as ReadTask};
-pub use self::region::{Runner as RegionRunner, Task as RegionTask, STALE_PEER_CHECK_INTERVAL};
+pub use self::region::{
+    Runner as RegionRunner, Task as RegionTask, PENDING_APPLY_CHECK_INTERVAL,
+    STALE_PEER_CHECK_INTERVAL,
+};
 pub use self::split_check::{KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask};

@@ -21,9 +21,7 @@ use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
-use raftstore::store::{
-    BatchReadCallback, Callback, Msg as StoreMsg, ReadTask, SignificantMsg, Transport,
-};
+use raftstore::store::{Callback, Msg as StoreMsg, ReadTask, SignificantMsg, Transport};
 use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
 use server::raft_client::RaftClient;
 use server::Result;
@@ -47,15 +45,6 @@ pub trait RaftStoreRouter: Send + Clone {
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
-    }
-
-    // Send a batch of RaftCmdRequests to local store.
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     // Send significant message. We should guarantee that the message can't be dropped.
@@ -132,14 +121,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
-    }
-
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
