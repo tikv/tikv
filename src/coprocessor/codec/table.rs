@@ -454,7 +454,7 @@ mod test {
 
     fn new_col_info(tp: FieldTypeTp) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        (&mut col_info as &mut FieldTypeAccessor).set_tp(tp);
+        col_info.as_mut_accessor().set_tp(tp);
         col_info
     }
 

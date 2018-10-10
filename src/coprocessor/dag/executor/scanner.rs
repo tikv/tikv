@@ -203,7 +203,7 @@ pub mod test {
 
     pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        (&mut col_info as &mut FieldTypeAccessor).set_tp(tp);
+        col_info.as_mut_accessor().set_tp(tp);
         col_info.set_column_id(cid);
         col_info
     }

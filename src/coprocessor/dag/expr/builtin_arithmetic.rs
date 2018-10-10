@@ -586,7 +586,9 @@ mod test {
             let mut op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
-                (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
 
             let got = op.eval(&mut ctx, &[]).unwrap();
@@ -998,7 +1000,9 @@ mod test {
             let mut op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
-                (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
 
             let got = op.eval(&mut ctx, &[]).unwrap_err();
@@ -1032,7 +1036,9 @@ mod test {
                 &mut ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             ).unwrap();
-            (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+            op.mut_field_type()
+                .as_mut_accessor()
+                .set_flag(FieldTypeFlag::UNSIGNED);
 
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -1053,7 +1059,9 @@ mod test {
                 &mut ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             ).unwrap();
-            (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+            op.mut_field_type()
+                .as_mut_accessor()
+                .set_flag(FieldTypeFlag::UNSIGNED);
 
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());

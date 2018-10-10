@@ -503,7 +503,9 @@ mod test {
             let arg = datum_expr(arg);
             let mut f = scalar_func_expr(sig, &[arg]);
             if sig == ScalarFuncSig::AbsUInt {
-                (f.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+                f.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
@@ -585,12 +587,14 @@ mod test {
                 .flag()
                 .contains(FieldTypeFlag::UNSIGNED)
             {
-                (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
             if sig == ScalarFuncSig::CeilIntToDec || sig == ScalarFuncSig::CeilDecToDec {
-                (op.mut_field_type() as &mut FieldTypeAccessor)
-                    .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
-                (op.mut_field_type() as &mut FieldTypeAccessor)
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                     .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
             }
             let got = op.eval(&mut ctx, &[]).unwrap();
@@ -659,12 +663,14 @@ mod test {
                 .flag()
                 .contains(FieldTypeFlag::UNSIGNED)
             {
-                (op.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
             if sig == ScalarFuncSig::FloorIntToDec || sig == ScalarFuncSig::FloorDecToDec {
-                (op.mut_field_type() as &mut FieldTypeAccessor)
-                    .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
-                (op.mut_field_type() as &mut FieldTypeAccessor)
+                op.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                     .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
             }
             let got = op.eval(&mut ctx, &[]).unwrap();
@@ -1613,7 +1619,9 @@ mod test {
             let is_unsigned = x.get_field_type().flag().contains(FieldTypeFlag::UNSIGNED);
             let mut f = scalar_func_expr(sig, &[x, d]);
             if is_unsigned {
-                (f.mut_field_type() as &mut FieldTypeAccessor).set_flag(FieldTypeFlag::UNSIGNED);
+                f.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();

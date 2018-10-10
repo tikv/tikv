@@ -16,7 +16,8 @@ use std::fmt;
 /// Function implementations' parameter data types.
 ///
 /// It is similar to the `EvalType` in TiDB, but doesn't provide type `Timestamp`, which is
-/// handled by the same type as `DateTime` here instead of a new type.
+/// handled by the same type as `DateTime` here instead of a new type. Also, `String` is
+/// called `Bytes` here to be less confusing.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum EvalType {
     Int,

@@ -743,7 +743,7 @@ mod test {
     pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);
         let mut fp = FieldType::new();
-        (&mut fp as &mut FieldTypeAccessor).set_tp(tp);
+        fp.as_mut_accessor().set_tp(tp);
         if tp == FieldTypeTp::String {
             fp.set_charset(charset::CHARSET_UTF8.to_owned());
         }
@@ -836,7 +836,9 @@ mod test {
             let col_expr = col_expr(0, tp);
             let mut exp = scalar_func_expr(sig, &[col_expr]);
             if flag.is_some() {
-                (exp.mut_field_type() as &mut FieldTypeAccessor).set_flag(flag.unwrap());
+                exp.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(flag.unwrap());
             }
             let e = Expression::build(&mut ctx, exp).unwrap();
             let res = e.eval_int(&mut ctx, &col).unwrap();
@@ -1000,8 +1002,10 @@ mod test {
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, tp);
             let mut exp = scalar_func_expr(sig, &[col_expr]);
-            (exp.mut_field_type() as &mut FieldTypeAccessor).set_flen(flen);
-            (exp.mut_field_type() as &mut FieldTypeAccessor).set_decimal(decimal);
+            exp.mut_field_type()
+                .as_mut_accessor()
+                .set_flen(flen)
+                .set_decimal(decimal);
             let e = Expression::build(&mut ctx, exp).unwrap();
             let res = e.eval_real(&mut ctx, &col).unwrap();
             assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
@@ -1136,8 +1140,10 @@ mod test {
         for (sig, tp, col, flen, decimal, expect) in cases {
             let col_expr = col_expr(0, tp);
             let mut exp = scalar_func_expr(sig, &[col_expr]);
-            (exp.mut_field_type() as &mut FieldTypeAccessor).set_flen(flen);
-            (exp.mut_field_type() as &mut FieldTypeAccessor).set_decimal(decimal);
+            exp.mut_field_type()
+                .as_mut_accessor()
+                .set_flen(flen)
+                .set_decimal(decimal);
             let e = Expression::build(&mut ctx, exp).unwrap();
             let res = e.eval_decimal(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), expect);
@@ -1289,11 +1295,12 @@ mod test {
         for (sig, tp, charset, to_tp, col, flen, exp) in cases {
             let col_expr = col_expr(0, tp);
             let mut ex = scalar_func_expr(sig, &[col_expr]);
-            (ex.mut_field_type() as &mut FieldTypeAccessor).set_flen(flen);
-            (ex.mut_field_type() as &mut FieldTypeAccessor)
+            ex.mut_field_type()
+                .as_mut_accessor()
+                .set_flen(flen)
                 .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
             if to_tp.is_some() {
-                (ex.mut_field_type() as &mut FieldTypeAccessor).set_tp(to_tp.unwrap());
+                ex.mut_field_type().as_mut_accessor().set_tp(to_tp.unwrap());
             }
             ex.mut_field_type().set_charset(String::from(charset));
             let e = Expression::build(&mut ctx, ex).unwrap();
@@ -1468,8 +1475,10 @@ mod test {
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
             let col_expr = col_expr(0, tp);
             let mut ex = scalar_func_expr(sig, &[col_expr]);
-            (ex.mut_field_type() as &mut FieldTypeAccessor).set_decimal(isize::from(to_fsp));
-            (ex.mut_field_type() as &mut FieldTypeAccessor).set_tp(to_tp);
+            ex.mut_field_type()
+                .as_mut_accessor()
+                .set_decimal(isize::from(to_fsp))
+                .set_tp(to_tp);
             let e = Expression::build(&mut ctx, ex).unwrap();
 
             let res = e.eval_time(&mut ctx, col).unwrap();
@@ -1631,7 +1640,9 @@ mod test {
         for (sig, tp, col, to_fsp, exp) in cases {
             let col_expr = col_expr(0, tp);
             let mut ex = scalar_func_expr(sig, &[col_expr]);
-            (ex.mut_field_type() as &mut FieldTypeAccessor).set_decimal(isize::from(to_fsp));
+            ex.mut_field_type()
+                .as_mut_accessor()
+                .set_decimal(isize::from(to_fsp));
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
@@ -1677,7 +1688,10 @@ mod test {
         for (flag, cols, exp) in cases {
             let mut col_expr = col_expr(0, FieldTypeTp::LongLong);
             if flag.is_some() {
-                (col_expr.mut_field_type() as &mut FieldTypeAccessor).set_flag(flag.unwrap());
+                col_expr
+                    .mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(flag.unwrap());
             }
             let ex = scalar_func_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
             let e = Expression::build(&mut ctx, ex).unwrap();
@@ -1757,7 +1771,7 @@ mod test {
             if by_parse {
                 let mut flag = ex.get_field_type().flag();
                 flag |= FieldTypeFlag::PARSE_TO_JSON;
-                (ex.mut_field_type() as &mut FieldTypeAccessor).set_flag(flag);
+                ex.mut_field_type().as_mut_accessor().set_flag(flag);
             }
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
@@ -1888,7 +1902,7 @@ mod test {
         for (flag, cols, exp) in cases {
             let mut col_expr = col_expr(0, FieldTypeTp::NewDecimal);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
-            (ex.mut_field_type() as &mut FieldTypeAccessor).set_flag(flag);
+            ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
             // test with overflow as warning
             let mut ctx =
@@ -1936,7 +1950,7 @@ mod test {
         for (flag, cols, exp, warnings_cnt) in cases {
             let mut col_expr = col_expr(0, FieldTypeTp::String);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
-            (ex.mut_field_type() as &mut FieldTypeAccessor).set_flag(flag);
+            ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
             let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
             let e = Expression::build(&mut ctx, ex.clone()).unwrap();
