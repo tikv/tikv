@@ -22,22 +22,24 @@ use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResu
 use raftstore::store::util;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 use std::usize;
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
 use util::collections::HashMap;
+use util::escape;
 use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 
 /// `RegionCollection` is used to collect all regions on this TiKV into a collection so that other
-/// parts of TiKV can get region information from it. It registers several observers to raftstore,
-/// which is named `EventSender`, and it simply send some specific types of events throw a channel.
+/// parts of TiKV can get region information from it. It registers a observer to raftstore, which
+/// is named `EventSender`, and it simply send some specific types of events through a channel.
 /// In the mean time, `RegionCollectionWorker` keeps fetching messages from the channel, and mutate
 /// the collection according tho the messages. When an accessor method of `RegionCollection` is
 /// called, it also simply send a message to `RegionCollectionWorker`, and the result will be send
 /// back through as soon as it's finished.
+/// In fact, the channel mentioned above is actually a `util::worker::Worker`.
 
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
@@ -48,15 +50,11 @@ enum RaftStoreEvent {
     RoleChange { region: Region, role: StateRole },
 }
 
-impl Display for RaftStoreEvent {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        Debug::fmt(self, f)
-    }
-}
+type RegionsMap = HashMap<u64, (Region, StateRole)>;
+type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 
 /// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
 /// done by sending commands to the thread.
-#[derive(Debug)]
 enum RegionCollectionMsg {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
@@ -65,23 +63,19 @@ enum RegionCollectionMsg {
         limit: u32,
         callback: SeekRegionCallback,
     },
-}
-
-// So we can derive `Debug` on `RegionCollectionMsg`
-impl Debug for SeekRegionFilter {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "<filter>")
-    }
-}
-impl Debug for SeekRegionCallback {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "<callback>")
-    }
+    /// Get all contents from the collection. Only used for testing.
+    DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
 
 impl Display for RegionCollectionMsg {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        Debug::fmt(self, f)
+        match self {
+            RegionCollectionMsg::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
+            RegionCollectionMsg::SeekRegion { from, limit, .. } => {
+                write!(f, "SeekRegion(from: {}, limit: {})", escape(from), limit)
+            }
+            RegionCollectionMsg::DebugDump(_) => write!(f, "DebugDump"),
+        }
     }
 }
 
@@ -313,6 +307,10 @@ impl Runnable<RegionCollectionMsg> for RegionCollectionWorker {
             } => {
                 self.handle_seek_region(from, filter, limit, callback);
             }
+            RegionCollectionMsg::DebugDump(tx) => {
+                tx.send((self.regions.clone(), self.region_ranges.clone()))
+                    .unwrap();
+            }
         }
     }
 }
@@ -352,6 +350,15 @@ impl RegionCollection {
 
     pub fn stop(&self) {
         self.worker.lock().unwrap().stop().unwrap().join().unwrap();
+    }
+
+    /// Get all content from the collection. Only used for testing.
+    pub fn debug_dump(&self) -> (RegionsMap, RegionRangesMap) {
+        let (tx, rx) = mpsc::channel();
+        self.scheduler
+            .schedule(RegionCollectionMsg::DebugDump(tx))
+            .unwrap();
+        rx.recv().unwrap()
     }
 }
 
