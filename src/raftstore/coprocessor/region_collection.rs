@@ -523,19 +523,6 @@ mod tests {
         assert_eq!(c.regions[&region.get_id()].1, role);
     }
 
-    // fn print(c: &RegionCollectionWorker) {
-    //     use storage::Key;
-    //     eprintln!("regions:");
-    //     for (k, v) in &c.regions {
-    //         eprintln!("  {}: {:?}", k, v);
-    //     }
-    //     eprintln!("ranges:");
-    //     for (k, v) in &c.region_ranges {
-    //         eprintln!("  {}: {:?}", Key::from_encoded_slice(k), v)
-    //     }
-    //     eprintln!("");
-    // }
-
     #[test]
     fn test_basic_updating() {
         let mut c = RegionCollectionWorker::new(0);
