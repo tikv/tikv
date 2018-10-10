@@ -43,7 +43,7 @@ use raftstore::store::{
 };
 use rocksdb::{WriteBatch, WriteOptions};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::mpsc::{SendError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -60,6 +60,11 @@ use util::timer::GLOBAL_TIMER_HANDLE;
 use util::worker::{FutureScheduler, FutureWorker, Scheduler as WorkerScheduler, Worker};
 use util::Either;
 
+// TODO: remove this once memory leak is fixed.
+const NOTIFYSTATE_NOTIFIED: usize = 0;
+const NOTIFYSTATE_PENDING: usize = 1;
+const NOTIFYSTATE_CLOSED: usize = 2;
+
 pub enum FsmTypes {
     Empty,
     Peer(Box<PeerFsm>),
@@ -67,7 +72,7 @@ pub enum FsmTypes {
 }
 
 struct State {
-    notified: AtomicBool,
+    notified: AtomicUsize,
     ptr: AtomicPtr<FsmTypes>,
 }
 
@@ -75,7 +80,7 @@ impl State {
     #[inline]
     fn new(fsm: Box<FsmTypes>) -> State {
         State {
-            notified: AtomicBool::new(false),
+            notified: AtomicUsize::new(NOTIFYSTATE_PENDING),
             ptr: AtomicPtr::new(Box::into_raw(fsm)),
         }
     }
@@ -115,11 +120,21 @@ impl State {
     #[inline]
     fn release_fsm(&self, fsm: Box<FsmTypes>) {
         let previous = self.ptr.swap(Box::into_raw(fsm), Ordering::AcqRel);
-        let mut previous_notified = true;
+        let mut previous_notified = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
-            previous_notified = self.notified.swap(false, Ordering::AcqRel);
-            if previous_notified {
-                return;
+            previous_notified = self.notified.compare_and_swap(
+                NOTIFYSTATE_NOTIFIED,
+                NOTIFYSTATE_PENDING,
+                Ordering::AcqRel,
+            );
+            match previous_notified {
+                NOTIFYSTATE_NOTIFIED => return,
+                NOTIFYSTATE_CLOSED => {
+                    let ptr = self.ptr.swap(ptr::null_mut(), Ordering::AcqRel);
+                    unsafe { Box::from_raw(ptr) };
+                    return;
+                }
+                _ => {}
             }
         }
         panic!(
@@ -130,8 +145,10 @@ impl State {
 
     #[inline]
     fn maybe_catch_fsm(&self) -> Option<Box<FsmTypes>> {
-        if self.notified.swap(true, Ordering::AcqRel) {
-            return None;
+        match self.notified.swap(NOTIFYSTATE_NOTIFIED, Ordering::AcqRel) {
+            NOTIFYSTATE_NOTIFIED => return None,
+            NOTIFYSTATE_PENDING => {}
+            _ => return None,
         }
 
         let p = self.ptr.swap(ptr::null_mut(), Ordering::AcqRel);
@@ -139,6 +156,19 @@ impl State {
             Some(unsafe { Box::from_raw(p) })
         } else {
             unreachable!()
+        }
+    }
+
+    #[inline]
+    fn close(&self) {
+        match self.notified.swap(NOTIFYSTATE_CLOSED, Ordering::AcqRel) {
+            NOTIFYSTATE_NOTIFIED | NOTIFYSTATE_CLOSED => return,
+            _ => {}
+        }
+
+        let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
+        if !ptr.is_null() {
+            unsafe { Box::from_raw(ptr) };
         }
     }
 }
@@ -216,6 +246,7 @@ impl<M> MailBox<M> {
     #[inline]
     fn close(&self) {
         self.sender.close();
+        self.state.close();
     }
 }
 
@@ -237,7 +268,7 @@ pub struct OneshotNotifier {
 
 impl Drop for OneshotNotifier {
     fn drop(&mut self) {
-        self.waken.store(true, Ordering::Acquire);
+        self.waken.store(true, Ordering::Release);
         self.mail_box
             .state
             .notify_peer(&self.mail_box, &self.scheduler);
@@ -314,7 +345,7 @@ impl Router {
         let (tx, _) = mpsc::loose_bounded(10);
         let (bs, _) = crossbeam_channel::unbounded();
         let state = State::new(Box::new(FsmTypes::Empty));
-        state.notified.store(true, Ordering::SeqCst);
+        state.notified.store(NOTIFYSTATE_NOTIFIED, Ordering::SeqCst);
         let store_box = MailBox {
             sender: tx,
             state: Arc::new(state),
@@ -328,7 +359,7 @@ impl Router {
     #[cfg(test)]
     pub fn register_mailbox(&self, region_id: u64, sender: mpsc::LooseBoundedSender<PeerMsg>) {
         let state = State::new(Box::new(FsmTypes::Empty));
-        state.notified.store(true, Ordering::SeqCst);
+        state.notified.store(NOTIFYSTATE_NOTIFIED, Ordering::SeqCst);
         let mut mail_boxes = self.mailboxes.lock().unwrap();
         mail_boxes.insert(
             region_id,
@@ -964,7 +995,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
             if !self.ctx.queued_snapshot.is_empty() {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 meta.pending_snapshot_regions
-                    .retain(|r| self.ctx.queued_snapshot.contains(&r.get_id()));
+                    .retain(|r| !self.ctx.queued_snapshot.contains(&r.get_id()));
                 self.ctx.queued_snapshot.clear();
             }
 
@@ -975,6 +1006,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     batches.remove_peer(r);
                 }
             }
+            self.ctx.raft_metrics.flush();
             if batches.fsm_holders.is_empty() {
                 batch_size = cmp::min(batch_size + 1, self.cfg.max_batch_size);
                 self.scheduler.fetch_batch(&mut batches, batch_size);

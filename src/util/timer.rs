@@ -13,11 +13,13 @@
 
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
-use std::sync::mpsc;
-use std::thread::Builder;
+use std::sync::atomic::{self, AtomicBool};
+use std::sync::{mpsc, Arc};
+use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use tokio_timer::{self, timer::Handle};
 use util::time::Instant;
+use util::Either;
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -88,23 +90,56 @@ impl<T> Ord for TimeoutTask<T> {
     }
 }
 
+pub struct TokioTimer {
+    keep_going: Arc<AtomicBool>,
+    handle: Either<Handle, mpsc::Receiver<Handle>>,
+    th: Option<JoinHandle<()>>,
+}
+
+impl TokioTimer {
+    pub fn new(name: String) -> TokioTimer {
+        let (tx, rx) = mpsc::channel();
+        let keep_going = Arc::new(AtomicBool::new(true));
+        let keep_going2 = keep_going.clone();
+        let th = Builder::new()
+            .name(name)
+            .spawn(move || {
+                let mut timer = tokio_timer::Timer::default();
+                let _ = tx.send(timer.handle());
+                while keep_going2.load(atomic::Ordering::Relaxed) {
+                    timer.turn(Some(Duration::from_secs(1))).unwrap();
+                }
+            })
+            .unwrap();
+        TokioTimer {
+            keep_going,
+            handle: Either::Right(rx),
+            th: Some(th),
+        }
+    }
+
+    pub fn handle(&mut self) -> Handle {
+        let h = match self.handle {
+            Either::Left(ref h) => return h.clone(),
+            Either::Right(ref rx) => rx.recv().unwrap(),
+        };
+        self.handle = Either::Left(h.clone());
+        h
+    }
+
+    pub fn stop(&mut self) {
+        self.keep_going.store(false, atomic::Ordering::Relaxed);
+        self.th.take().unwrap().join().unwrap();
+    }
+}
+
 lazy_static! {
     pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer();
 }
 
 fn start_global_timer() -> Handle {
-    let (tx, rx) = mpsc::channel();
-    Builder::new()
-        .name(thd_name!("timer"))
-        .spawn(move || {
-            let mut timer = tokio_timer::Timer::default();
-            tx.send(timer.handle()).unwrap();
-            loop {
-                timer.turn(None).unwrap();
-            }
-        })
-        .unwrap();
-    rx.recv().unwrap()
+    let mut timer = TokioTimer::new(thd_name!("timer"));
+    timer.handle()
 }
 
 #[cfg(test)]

@@ -159,7 +159,7 @@ impl SplitCheckObserver for SizeCheckObserver {
         // send it to rafastore to update region approximate size
         let res = PeerMsg::RegionApproximateSize { size: region_size };
         if let Err(e) = self.ch.lock().unwrap().send_peer_message(region_id, res) {
-            warn!(
+            debug!(
                 "[region {}] failed to send approximate region size: {}",
                 region_id, e
             );

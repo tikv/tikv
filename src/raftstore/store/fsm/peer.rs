@@ -1745,6 +1745,11 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         }
 
         self.schedule_split_region_check_tick();
+
+        if self.ctx.split_check_scheduler.pending() as u64 > self.peer.cfg.split_check_limit {
+            return;
+        }
+
         // When restart, the approximate size will be None. The
         // split check will first check the region size, and then
         // check whether the region should split.  This should

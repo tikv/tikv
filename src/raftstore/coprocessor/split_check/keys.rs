@@ -144,7 +144,7 @@ impl SplitCheckObserver for KeysCheckObserver {
 
         let res = PeerMsg::RegionApproximateKeys { keys: region_keys };
         if let Err(e) = self.ch.lock().unwrap().send_peer_message(region_id, res) {
-            warn!(
+            debug!(
                 "[region {}] failed to send approximate region keys: {}",
                 region_id, e
             );

@@ -185,7 +185,7 @@ fn test_node_merge_prerequisites_check() {
 /// Test if stale peer will be handled properly after merge.
 #[test]
 fn test_node_check_merged_message() {
-    // ::test_util::init_log();
+    // let _g = ::test_util::init_log();
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -250,7 +250,6 @@ fn test_node_check_merged_message() {
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     left = pd_client.get_region(b"k1").unwrap();
     pd_client.must_add_peer(left.get_id(), new_peer(3, 5));
-    left = pd_client.get_region(b"k1").unwrap();
     pd_client.must_merge(middle.get_id(), left.get_id());
     pd_client.must_merge(right.get_id(), left.get_id());
     cluster.must_delete(b"k3");

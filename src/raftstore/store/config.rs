@@ -57,6 +57,7 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
+    pub split_check_limit: u64,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
@@ -159,6 +160,7 @@ impl Default for Config {
             raft_log_gc_size_limit: split_size * 3 / 4,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             split_region_check_tick_interval: ReadableDuration::secs(10),
+            split_check_limit: 100,
             region_split_check_diff: split_size / 16,
             clean_stale_peer_delay: ReadableDuration::minutes(10),
             region_compact_check_interval: ReadableDuration::minutes(5),

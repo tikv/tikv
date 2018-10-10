@@ -231,7 +231,11 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
         } else {
             0
         };
-        if total_bytes_declined < self.core.cfg.as_ref().unwrap().region_split_check_diff.0
+        if self
+            .core
+            .cfg
+            .as_ref()
+            .map_or(true, |c| c.region_split_check_diff.0 > total_bytes_declined)
             || total_bytes_declined * 10 < event.total_input_bytes
         {
             return;
