@@ -21,6 +21,7 @@ use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use pd::PdClient;
+use raft::StateRole;
 use raftstore::store::keys;
 use raftstore::store::msg::Msg as RaftStoreMsg;
 use raftstore::store::util::delete_all_in_range_cf;
@@ -847,7 +848,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             loop {
                 let res = self.region_info_provider.seek_region(
                     key.as_encoded(),
-                    box |peer| peer.is_leader(),
+                    box |_, role| role == StateRole::Leader,
                     GC_SEEK_REGION_LIMIT,
                 );
                 if let Ok(r) = res {
