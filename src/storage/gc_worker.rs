@@ -24,7 +24,7 @@ use pd::PdClient;
 use raft::StateRole;
 use raftstore::store::keys;
 use raftstore::store::msg::Msg as RaftStoreMsg;
-use raftstore::store::util::delete_all_in_range_cf;
+use raftstore::store::util::{delete_all_in_range_cf, find_peer};
 use raftstore::store::SeekRegionResult;
 use rocksdb::rocksdb::DB;
 use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
@@ -555,7 +555,7 @@ impl GCManagerContext {
     }
 }
 
-fn make_context(peer: metapb::Peer, mut region: metapb::Region) -> Context {
+fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.take_region_epoch());
@@ -598,6 +598,9 @@ struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
     region_info_provider: R,
     safe_point_provider: S,
 
+    /// Used to find which peer of a region is on this TiKV.
+    self_store_id: u64,
+
     poll_safe_point_interval: Duration,
 
     /// If this is set, safe_point will be checked before doing GC on every region while working.
@@ -619,6 +622,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     pub fn new(
         region_info_provider: R,
         safe_point_provider: S,
+        self_store_id: u64,
         worker_scheduler: worker::Scheduler<GCTask>,
         poll_safe_point_interval: Duration,
         on_gc_finished: Option<Box<Fn() + Send>>,
@@ -627,6 +631,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         GCManager {
             region_info_provider,
             safe_point_provider,
+            self_store_id,
             poll_safe_point_interval,
             always_check_safe_point,
             safe_point: 0,
@@ -858,10 +863,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             }
 
             match result {
-                SeekRegionResult::Found {
-                    local_peer,
-                    mut region,
-                } => {
+                SeekRegionResult::Found(mut region) => {
                     // It might be ok to leave other fields default
                     let end_key = Key::from_encoded(region.take_end_key());
                     // Determine if it's the last region
@@ -870,8 +872,20 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     } else {
                         Some(end_key)
                     };
-                    let ctx = make_context(local_peer, region);
-                    return Ok((Some(ctx), end_key));
+
+                    if let Some(peer) = find_peer(&region, self.self_store_id).cloned() {
+                        let ctx = make_context(region, peer);
+                        return Ok((Some(ctx), end_key));
+                    }
+
+                    // `region` doesn't contains such a peer. Ignore it and continue.
+                    match end_key {
+                        Some(k) => key = k,
+                        None => {
+                            // Ended
+                            return Ok((None, None));
+                        }
+                    }
                 }
                 SeekRegionResult::Ended => return Ok((None, None)),
                 // Seek again from `next_key`
@@ -934,10 +948,12 @@ impl<E: Engine> GCWorker<E> {
         &self,
         safe_point_provider: S,
         region_info_provider: R,
+        self_store_id: u64,
     ) -> Result<()> {
         self.start_auto_gc_with(
             safe_point_provider,
             region_info_provider,
+            self_store_id,
             Duration::from_secs(POLL_SAFE_POINT_INTERVAL_SECS),
             None,
         )
@@ -947,6 +963,7 @@ impl<E: Engine> GCWorker<E> {
         &self,
         safe_point_provider: S,
         region_info_provider: R,
+        self_store_id: u64,
         poll_safe_point_interval: Duration,
         on_gc_finished: Option<Box<Fn() + Send>>,
     ) -> Result<()> {
@@ -955,6 +972,7 @@ impl<E: Engine> GCWorker<E> {
         let new_handle = GCManager::new(
             region_info_provider,
             safe_point_provider,
+            self_store_id,
             self.worker_scheduler.clone(),
             poll_safe_point_interval,
             on_gc_finished,
@@ -1082,10 +1100,10 @@ mod tests {
                     region.set_id(*region_id);
                     region.set_start_key(start_key.clone());
                     region.set_end_key(end_key.clone());
-                    Ok(SeekRegionResult::Found {
-                        local_peer: metapb::Peer::default(),
-                        region,
-                    })
+                    let mut p = metapb::Peer::default();
+                    p.set_id(1);
+                    region.mut_peers().push(p);
+                    Ok(SeekRegionResult::Found(region))
                 }
                 None => Ok(SeekRegionResult::Ended),
             }
@@ -1126,6 +1144,7 @@ mod tests {
                 MockSafePointProvider {
                     rx: safe_point_receiver,
                 },
+                1,
                 worker.scheduler(),
                 Duration::from_millis(100),
                 None,
@@ -1217,7 +1236,7 @@ mod tests {
         region.set_region_epoch(epoch.clone());
         region.set_id(789);
 
-        let ctx = make_context(peer.clone(), region.clone());
+        let ctx = make_context(region.clone(), peer.clone());
         assert_eq!(ctx.get_region_id(), region.get_id());
         assert_eq!(ctx.get_peer(), &peer);
         assert_eq!(ctx.get_region_epoch(), &epoch);

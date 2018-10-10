@@ -291,6 +291,8 @@ fn test_auto_gc() {
             let tx = finish_signal_tx.clone();
             storage.start_test_auto_gc(
                 Arc::clone(&pd_client),
+                engine.clone(),
+                *id,
                 Some(box move || tx.send(()).unwrap()),
             );
             (*id, storage)

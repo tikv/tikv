@@ -44,18 +44,6 @@ impl SyncStorage<RocksEngine> {
     }
 }
 
-impl<E: Engine + RegionInfoProvider> SyncStorage<E> {
-    pub fn start_test_auto_gc<S: GCSafePointProvider>(
-        &mut self,
-        safe_point_provider: S,
-        on_finished: Option<Box<Fn() + Send>>,
-    ) {
-        self.store
-            .start_test_auto_gc(safe_point_provider, on_finished)
-            .unwrap();
-    }
-}
-
 impl<E: Engine> SyncStorage<E> {
     pub fn from_engine(
         engine: E,
@@ -81,6 +69,23 @@ impl<E: Engine> SyncStorage<E> {
 
     pub fn start(&mut self, config: &Config) {
         self.store.start(config).unwrap();
+    }
+
+    pub fn start_test_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &mut self,
+        safe_point_provider: S,
+        region_info_provider: R,
+        self_store_id: u64,
+        on_finished: Option<Box<Fn() + Send>>,
+    ) {
+        self.store
+            .start_test_auto_gc(
+                safe_point_provider,
+                region_info_provider,
+                self_store_id,
+                on_finished,
+            )
+            .unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E> {

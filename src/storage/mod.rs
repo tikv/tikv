@@ -415,26 +415,6 @@ impl Storage<RocksEngine> {
     }
 }
 
-impl<E: Engine + RegionInfoProvider> Storage<E> {
-    pub fn start_auto_gc<S: GCSafePointProvider>(&self, safe_point_provider: S) -> Result<()> {
-        self.gc_worker
-            .start_auto_gc(safe_point_provider, self.engine.clone())
-    }
-
-    pub fn start_test_auto_gc<S: GCSafePointProvider>(
-        &self,
-        safe_point_provider: S,
-        on_gc_finished: Option<Box<Fn() + Send>>,
-    ) -> Result<()> {
-        self.gc_worker.start_auto_gc_with(
-            safe_point_provider,
-            self.engine.clone(),
-            Duration::from_millis(100),
-            on_gc_finished,
-        )
-    }
-}
-
 impl<E: Engine> Storage<E> {
     pub fn from_engine(
         engine: E,
@@ -480,6 +460,32 @@ impl<E: Engine> Storage<E> {
         worker.start(scheduler)?;
         self.gc_worker.start()?;
         Ok(())
+    }
+
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &self,
+        safe_point_provider: S,
+        region_info_provider: R,
+        self_store_id: u64,
+    ) -> Result<()> {
+        self.gc_worker
+            .start_auto_gc(safe_point_provider, region_info_provider, self_store_id)
+    }
+
+    pub fn start_test_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &self,
+        safe_point_provider: S,
+        region_info_provider: R,
+        self_store_id: u64,
+        on_gc_finished: Option<Box<Fn() + Send>>,
+    ) -> Result<()> {
+        self.gc_worker.start_auto_gc_with(
+            safe_point_provider,
+            region_info_provider,
+            self_store_id,
+            Duration::from_millis(100),
+            on_gc_finished,
+        )
     }
 
     pub fn stop(&mut self) -> Result<()> {
