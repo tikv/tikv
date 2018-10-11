@@ -396,7 +396,7 @@ impl NumberCodec {
     /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
     #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
-        // This efficient implementation is ported from facebook/folly.
+        // This efficient implementation is ported and modified from facebook/folly.
         // Copyright 2013-present Facebook, Inc.
 
         #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
@@ -407,62 +407,19 @@ impl NumberCodec {
             if ::std::intrinsics::likely(len >= MAX_VARINT64_LENGTH) {
                 // Fast path
                 let mut b: u64;
-                b = *ptr as u64;
-                val = b & 0x7f;
-                if ::std::intrinsics::likely(b < 0x80) {
-                    return Ok((val, 1));
+                let mut shift = 0;
+                // Compiler will do loop unrolling for us.
+                for i in 1..=9 {
+                    b = *ptr as u64;
+                    val |= (b & 0x7f) << shift;
+                    if b < 0x80 {
+                        return Ok((val, i));
+                    }
+                    ptr = ptr.offset(1);
+                    shift += 7;
                 }
-                ptr = ptr.offset(1);
                 b = *ptr as u64;
-                val |= (b & 0x7f) << 7;
-                if b < 0x80 {
-                    return Ok((val, 2));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x7f) << 14;
-                if b < 0x80 {
-                    return Ok((val, 3));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x7f) << 21;
-                if b < 0x80 {
-                    return Ok((val, 4));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x7f) << 28;
-                if b < 0x80 {
-                    return Ok((val, 5));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x7f) << 35;
-                if b < 0x80 {
-                    return Ok((val, 6));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x7f) << 42;
-                if b < 0x80 {
-                    return Ok((val, 7));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x7f) << 49;
-                if b < 0x80 {
-                    return Ok((val, 8));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x7f) << 56;
-                if b < 0x80 {
-                    return Ok((val, 9));
-                }
-                ptr = ptr.offset(1);
-                b = *ptr as u64;
-                val |= (b & 0x01) << 63;
+                val |= (b & 0x01) << shift;
                 Ok((val, 10))
             } else {
                 let ptr_end = buf.as_ptr().offset(len as isize);
