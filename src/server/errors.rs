@@ -21,6 +21,7 @@ use grpc::Error as GrpcError;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
+use coprocessor::Error as CoprocessorError;
 use pd::Error as PdError;
 use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
@@ -97,6 +98,12 @@ quick_error!{
         }
         Sink {
             description("failed to poll from mpsc receiver")
+        }
+        Coprocessor(err: CoprocessorError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
         }
         Canceled(err: Canceled) {
             from()
