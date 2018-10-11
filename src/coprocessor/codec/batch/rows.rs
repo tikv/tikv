@@ -355,20 +355,20 @@ mod tests {
                         .unwrap();
 
                     let mut col_info = ColumnInfo::new();
-                    (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::Long);
+                    col_info.as_mut_accessor().set_tp(FieldTypeTp::Long);
                     col_info.set_default_val(default_value);
                     col_info
                 },
                 {
                     // Column 2: Double, Default value NULL
                     let mut col_info = ColumnInfo::new();
-                    (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::Double);
+                    col_info.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     col_info
                 },
                 {
                     // Column 3: VarChar, Default value NULL
                     let mut col_info = ColumnInfo::new();
-                    (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::VarChar);
+                    col_info.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
                     col_info
                 },
             ];
@@ -577,7 +577,7 @@ mod benches {
 
         let col_info = {
             let mut col_info = ::tipb::schema::ColumnInfo::new();
-            (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::LongLong);
+            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
         let tz = Tz::utc();
@@ -608,7 +608,7 @@ mod benches {
 
         let col_info = {
             let mut col_info = ::tipb::schema::ColumnInfo::new();
-            (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::LongLong);
+            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
         let tz = Tz::utc();
@@ -640,7 +640,7 @@ mod benches {
 
         let col_info = {
             let mut col_info = ::tipb::schema::ColumnInfo::new();
-            (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::LongLong);
+            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
         let tz = Tz::utc();

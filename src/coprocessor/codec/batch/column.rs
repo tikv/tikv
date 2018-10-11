@@ -786,7 +786,7 @@ mod benches {
 
         let col_info = {
             let mut col_info = ::tipb::schema::ColumnInfo::new();
-            (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::LongLong);
+            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
         let tz = Tz::utc();
@@ -819,7 +819,7 @@ mod benches {
 
         let col_info = {
             let mut col_info = ::tipb::schema::ColumnInfo::new();
-            (&mut col_info as &mut FieldTypeAccessor).set_tp(FieldTypeTp::LongLong);
+            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
         let eval_ctx = EvalContext::default();
