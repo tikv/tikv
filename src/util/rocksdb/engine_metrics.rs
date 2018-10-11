@@ -947,25 +947,19 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
                 .set(pending_compaction_bytes as i64);
         }
 
-        // Compression ratio at levels
         let opts = engine.get_options_cf(handle);
         for level in 0..opts.get_num_levels() {
+            // Compression ratio at levels
             if let Some(v) = rocksdb::get_engine_compression_ratio_at_level(engine, handle, level) {
-                let level_str = level.to_string();
                 STORE_ENGINE_COMPRESSION_RATIO_VEC
-                    .with_label_values(&[name, cf, &level_str])
+                    .with_label_values(&[name, cf, &level.to_string()])
                     .set(v);
             }
-        }
 
-        // Num files at levels
-        let opts = engine.get_options_cf(handle);
-        for level in 0..opts.get_num_levels() {
-            let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
-            let level_str = level.to_string();
-            if let Some(v) = engine.get_property_int_cf(handle, &prop) {
+            // Num files at levels
+            if let Some(v) = rocksdb::get_cf_num_files_at_level(engine, handle, level) {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
-                    .with_label_values(&[name, cf, &level_str])
+                    .with_label_values(&[name, cf, &level.to_string()])
                     .set(v as i64);
             }
         }

@@ -1951,8 +1951,7 @@ mod benches {
     fn bench_decode_varint_small_number_codec_fast_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         b.iter(|| {
-            let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
             test::black_box(bytes);
         });
@@ -1963,8 +1962,7 @@ mod benches {
     fn bench_decode_varint_small_number_codec_slow_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0];
         b.iter(|| {
-            let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
             test::black_box(bytes);
         });
@@ -2032,8 +2030,7 @@ mod benches {
         let mut buf: Vec<u8> = vec![0; 10];
         buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
         b.iter(|| {
-            let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
             test::black_box(bytes);
         });
@@ -2044,8 +2041,7 @@ mod benches {
     fn bench_decode_varint_normal_number_codec_slow_path(b: &mut test::Bencher) {
         let buf: Vec<u8> = VARINT_ENCODED.to_vec();
         b.iter(|| {
-            let (v, bytes) =
-                super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
             test::black_box(bytes);
         });
