@@ -93,6 +93,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IfNullDuration
             | ScalarFuncSig::IfNullJson
             | ScalarFuncSig::Left
+            | ScalarFuncSig::Right
             | ScalarFuncSig::LogicalAnd
             | ScalarFuncSig::LogicalOr
             | ScalarFuncSig::LogicalXor
@@ -273,6 +274,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenJson
             | ScalarFuncSig::CaseWhenReal
             | ScalarFuncSig::CaseWhenString
+            | ScalarFuncSig::Concat
             | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
@@ -328,7 +330,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
             | ScalarFuncSig::Compress
-            | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::ConnectionID
             | ScalarFuncSig::Conv
@@ -413,7 +414,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
-            | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
@@ -899,10 +899,12 @@ dispatch_call! {
         JsonUnquoteSig => json_unquote,
 
         Left => left,
+        Right => right,
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
         Bin => bin,
+        Concat => concat,
         LTrim => ltrim,
         RTrim => rtrim,
         Reverse => reverse,
@@ -1054,6 +1056,7 @@ mod test {
                     ScalarFuncSig::IfNullDuration,
                     ScalarFuncSig::IfNullJson,
                     ScalarFuncSig::Left,
+                    ScalarFuncSig::Right,
                     ScalarFuncSig::LogicalAnd,
                     ScalarFuncSig::LogicalOr,
                     ScalarFuncSig::LogicalXor,
@@ -1245,6 +1248,7 @@ mod test {
                     ScalarFuncSig::CaseWhenReal,
                     ScalarFuncSig::CaseWhenString,
                     ScalarFuncSig::CaseWhenTime,
+                    ScalarFuncSig::Concat,
                 ],
                 1,
                 usize::MAX,
@@ -1330,7 +1334,6 @@ mod test {
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,
             ScalarFuncSig::Compress,
-            ScalarFuncSig::Concat,
             ScalarFuncSig::ConcatWS,
             ScalarFuncSig::ConnectionID,
             ScalarFuncSig::Conv,
@@ -1415,7 +1418,6 @@ mod test {
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
-            ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
