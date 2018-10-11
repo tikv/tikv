@@ -501,7 +501,7 @@ mod tests {
         for (src_len, dest_len) in cases {
             let src = vec![0; src_len];
             let mut dest = vec![0; dest_len];
-            let result = ::std::panic::catch_unwind(move || {
+            let result = ::panic_hook::recover_safe(move || {
                 let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
             });
             assert!(result.is_err());
@@ -686,7 +686,7 @@ mod tests {
             {
                 let src = src.clone();
                 let mut dest = vec![0; src.len() - 1];
-                let result = ::std::panic::catch_unwind(move || {
+                let result = ::panic_hook::recover_safe(move || {
                     let _ = MemComparableByteCodec::try_decode_first(
                         src.as_slice(),
                         dest.as_mut_slice(),

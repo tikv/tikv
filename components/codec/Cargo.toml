@@ -9,6 +9,7 @@ path = "lib.rs"
 [dependencies]
 byteorder = "1.2"
 quick-error = "1.2"
+panic_hook = { path = "../panic_hook" }
 
 [dev-dependencies]
 protobuf = "2.0"

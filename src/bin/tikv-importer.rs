@@ -52,7 +52,7 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util::panic_hook;
+use tikv::util as tikv_util;
 
 fn main() {
     let matches = App::new("TiKV Importer")
@@ -101,7 +101,7 @@ fn main() {
 
     let config = setup_config(&matches);
     let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    tikv_util::set_exit_hook(false, Some(guard));
 
     initial_metric(&config.metric, None);
     util::print_tikv_info();
