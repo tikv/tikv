@@ -472,6 +472,23 @@ mod test {
         expr
     }
 
+    pub fn eval_func(sig: ScalarFuncSig, args: &[Datum]) -> super::Result<Datum> {
+        eval_func_with(sig, args, |_, _| {})
+    }
+
+    pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr]) -> ()>(
+        sig: ScalarFuncSig,
+        args: &[Datum],
+        func: F,
+    ) -> super::Result<Datum> {
+        let mut ctx = EvalContext::default();
+        let args: Vec<Expr> = args.iter().map(|arg| datum_expr(arg.clone())).collect();
+        let f = scalar_func_expr(sig, &args);
+        let mut op = Expression::build(&mut ctx, f).unwrap();
+        func(&mut op, &args);
+        op.eval(&mut ctx, &[])
+    }
+
     #[test]
     fn test_expression_eval() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
