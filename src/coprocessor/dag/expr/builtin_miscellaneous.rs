@@ -59,8 +59,7 @@ impl ScalarFunc {
 
         if dot_count == 1 {
             result <<= 16;
-        }
-        if dot_count == 2 {
+        } else if dot_count == 2 {
             result <<= 8;
         }
         Ok(Some(((result << 8) + byte_result) as i64))
