@@ -1903,9 +1903,10 @@ mod benches {
         });
     }
 
-    /// Decode u64 < 128 in VarInt using `NumberCodec`. The buffer size >= 10.
+    /// Decode u64 < 128 in VarInt using `NumberCodec`.
+    /// The buffer size >= 10.
     #[bench]
-    fn bench_decode_varint_small_number_codec_fast_path(b: &mut test::Bencher) {
+    fn bench_decode_varint_small_number_codec_large_buffer(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         b.iter(|| {
             let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
@@ -1914,9 +1915,10 @@ mod benches {
         });
     }
 
-    /// Decode u64 < 128 in VarInt using `NumberCodec`. The buffer size < 10.
+    /// Decode u64 < 128 in VarInt using `NumberCodec`.
+    /// The buffer size < 10.
     #[bench]
-    fn bench_decode_varint_small_number_codec_slow_path(b: &mut test::Bencher) {
+    fn bench_decode_varint_small_number_codec_small_buffer(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0];
         b.iter(|| {
             let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
@@ -1971,7 +1973,7 @@ mod benches {
 
     /// Decode u64 < 128 in VarInt using original TiKV implementation.
     #[bench]
-    fn bench_decode_varint_small_original_fast_path(b: &mut test::Bencher) {
+    fn bench_decode_varint_small_original_small_buffer(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![60, 0, 0];
         b.iter(|| {
             let mut slice = test::black_box(buf.as_slice());
@@ -1981,9 +1983,10 @@ mod benches {
         });
     }
 
-    /// Decode normal u64 in VarInt using `NumberCodec`. The buffer size >= 10.
+    /// Decode normal u64 in VarInt using `NumberCodec`.
+    /// The buffer size >= 10.
     #[bench]
-    fn bench_decode_varint_normal_number_codec_fast_path(b: &mut test::Bencher) {
+    fn bench_decode_varint_normal_number_codec_large_buffer(b: &mut test::Bencher) {
         let mut buf: Vec<u8> = vec![0; 10];
         buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
         b.iter(|| {
@@ -1993,9 +1996,10 @@ mod benches {
         });
     }
 
-    /// Decode normal u64 in VarInt using `NumberCodec`. The buffer size < 10.
+    /// Decode normal u64 in VarInt using `NumberCodec`.
+    /// The buffer size < 10.
     #[bench]
-    fn bench_decode_varint_normal_number_codec_slow_path(b: &mut test::Bencher) {
+    fn bench_decode_varint_normal_number_codec_small_buffer(b: &mut test::Bencher) {
         let buf: Vec<u8> = VARINT_ENCODED.to_vec();
         b.iter(|| {
             let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
@@ -2004,9 +2008,23 @@ mod benches {
         });
     }
 
-    /// Decode normal u64 in VarInt using original TiKV implementation. The buffer size >= 10.
+    /// Decode normal u64 in VarInt using `NumberCodec`.
+    /// The buffer size < 10 and has extra data.
     #[bench]
-    fn bench_decode_varint_normal_original_fast_path(b: &mut test::Bencher) {
+    fn bench_decode_varint_normal_number_codec_small_buffer_with_extra(b: &mut test::Bencher) {
+        let mut buf: Vec<u8> = VARINT_ENCODED.to_vec();
+        buf.push(0xF0);
+        b.iter(|| {
+            let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
+            test::black_box(v);
+            test::black_box(bytes);
+        });
+    }
+
+    /// Decode normal u64 in VarInt using original TiKV implementation.
+    /// The buffer size >= 10.
+    #[bench]
+    fn bench_decode_varint_normal_original_large_buffer(b: &mut test::Bencher) {
         let mut buf: Vec<u8> = vec![0; 10];
         buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
         b.iter(|| {
@@ -2017,10 +2035,25 @@ mod benches {
         });
     }
 
-    /// Decode normal u64 in VarInt using original TiKV implementation. The buffer size < 10.
+    /// Decode normal u64 in VarInt using original TiKV implementation.
+    /// The buffer size < 10.
     #[bench]
-    fn bench_decode_varint_normal_original_slow_path(b: &mut test::Bencher) {
+    fn bench_decode_varint_normal_original_small_buffer(b: &mut test::Bencher) {
         let buf: Vec<u8> = VARINT_ENCODED.to_vec();
+        b.iter(|| {
+            let mut slice = test::black_box(buf.as_slice());
+            let v = decode_var_u64_original(&mut slice).unwrap();
+            test::black_box(v);
+            test::black_box(&slice);
+        });
+    }
+
+    /// Decode normal u64 in VarInt using original TiKV implementation.
+    /// The buffer size < 10 and has extra data.
+    #[bench]
+    fn bench_decode_varint_normal_original_small_buffer_with_extra(b: &mut test::Bencher) {
+        let mut buf: Vec<u8> = VARINT_ENCODED.to_vec();
+        buf.push(0xF0);
         b.iter(|| {
             let mut slice = test::black_box(buf.as_slice());
             let v = decode_var_u64_original(&mut slice).unwrap();
