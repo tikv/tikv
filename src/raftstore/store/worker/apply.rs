@@ -2054,6 +2054,8 @@ pub struct Runner {
     sync_log: bool,
     use_delete_range: bool,
     tag: String,
+    applies: Vec<Vec<Apply>>,
+    props: Vec<Vec<RegionProposal>>,
 }
 
 impl Runner {
@@ -2077,40 +2079,44 @@ impl Runner {
             sync_log,
             use_delete_range,
             tag: format!("[store {}]", system.store_id()),
+            applies: vec![],
+            props: vec![],
         }
     }
 
-    fn handle_applies(&mut self, applys: Vec<Apply>) {
+    fn handle_applies(&mut self) {
         let t = SlowTimer::new();
 
         let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
-            .apply_res_capacity(applys.len())
+            .apply_res_capacity(self.applies.len() * self.applies[0].len())
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
-        for apply in applys {
-            if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
-                continue;
-            }
-            let mut delegate = match self.delegates.get_mut(&apply.region_id) {
-                None => {
-                    error!("[region {}] is missing", apply.region_id);
+        for applys in self.applies.drain(..) {
+            for apply in applys {
+                if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
                     continue;
                 }
-                Some(e) => e.take().unwrap(),
-            };
-            delegate.metrics = ApplyMetrics::default();
-            delegate.term = apply.term;
+                let mut delegate = match self.delegates.get_mut(&apply.region_id) {
+                    None => {
+                        error!("[region {}] is missing", apply.region_id);
+                        continue;
+                    }
+                    Some(e) => e.take().unwrap(),
+                };
+                delegate.metrics = ApplyMetrics::default();
+                delegate.term = apply.term;
 
-            {
-                let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
-                delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
-            }
+                {
+                    let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
+                    delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
+                }
 
-            if delegate.pending_remove {
-                delegate.destroy();
-                self.delegates.remove(&apply.region_id);
-            } else {
-                *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
+                if delegate.pending_remove {
+                    delegate.destroy();
+                    self.delegates.remove(&apply.region_id);
+                } else {
+                    *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
+                }
             }
         }
 
@@ -2147,34 +2153,40 @@ impl Runner {
         );
     }
 
-    fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
+    fn handle_proposals(&mut self) {
         let mut propose_num = 0;
-        for region_proposal in proposals {
-            propose_num += region_proposal.props.len();
-            let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
-                Some(d) => d.as_mut().unwrap(),
-                None => {
-                    for p in region_proposal.props {
-                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                        notify_region_removed(region_proposal.region_id, region_proposal.id, cmd);
+        for proposals in self.props.drain(..) {
+            for region_proposal in proposals {
+                propose_num += region_proposal.props.len();
+                let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
+                    Some(d) => d.as_mut().unwrap(),
+                    None => {
+                        for p in region_proposal.props {
+                            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                            notify_region_removed(
+                                region_proposal.region_id,
+                                region_proposal.id,
+                                cmd,
+                            );
+                        }
+                        continue;
                     }
-                    continue;
-                }
-            };
-            assert_eq!(delegate.id, region_proposal.id);
-            for p in region_proposal.props {
-                let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                if p.is_conf_change {
-                    if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                        // if it loses leadership before conf change is replicated, there may be
-                        // a stale pending conf change before next conf change is applied. If it
-                        // becomes leader again with the stale pending conf change, will enter
-                        // this block, so we notify leadership may have been changed.
-                        notify_stale_command(&delegate.tag, delegate.term, cmd);
+                };
+                assert_eq!(delegate.id, region_proposal.id);
+                for p in region_proposal.props {
+                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                    if p.is_conf_change {
+                        if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
+                            // if it loses leadership before conf change is replicated, there may be
+                            // a stale pending conf change before next conf change is applied. If it
+                            // becomes leader again with the stale pending conf change, will enter
+                            // this block, so we notify leadership may have been changed.
+                            notify_stale_command(&delegate.tag, delegate.term, cmd);
+                        }
+                        delegate.pending_cmds.set_conf_change(cmd);
+                    } else {
+                        delegate.pending_cmds.append_normal(cmd);
                     }
-                    delegate.pending_cmds.set_conf_change(cmd);
-                } else {
-                    delegate.pending_cmds.append_normal(cmd);
                 }
             }
         }
@@ -2216,20 +2228,40 @@ impl Runner {
             p.as_mut().unwrap().clear_pending_commands();
         }
     }
+
+    fn flush_batch_messages(&mut self) {
+        if !self.props.is_empty() {
+            self.handle_proposals();
+        }
+        if !self.applies.is_empty() {
+            self.handle_applies();
+        }
+    }
 }
 
 impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
-        match task {
-            Task::Applies(a) => {
-                let elapsed = duration_to_sec(a.start.elapsed());
-                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
-                self.handle_applies(a.vec);
+    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
+        for task in tasks.drain(..) {
+            match task {
+                Task::Applies(a) => {
+                    let elapsed = duration_to_sec(a.start.elapsed());
+                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+                    self.applies.push(a.vec);
+                }
+                Task::Proposals(p) => {
+                    self.props.push(p);
+                }
+                Task::Registration(s) => {
+                    self.flush_batch_messages();
+                    self.handle_registration(s)
+                }
+                Task::Destroy(d) => {
+                    self.flush_batch_messages();
+                    self.handle_destroy(d)
+                }
             }
-            Task::Proposals(props) => self.handle_proposals(props),
-            Task::Registration(s) => self.handle_registration(s),
-            Task::Destroy(d) => self.handle_destroy(d),
         }
+        self.flush_batch_messages();
     }
 
     fn shutdown(&mut self) {
@@ -2290,6 +2322,8 @@ mod tests {
             sync_log: false,
             tag: "".to_owned(),
             use_delete_range: true,
+            applies: vec![],
+            props: vec![],
         }
     }
 
@@ -2359,7 +2393,7 @@ mod tests {
         reg.apply_state.set_applied_index(3);
         reg.term = 4;
         reg.applied_index_term = 5;
-        runner.run(Task::Registration(reg.clone()));
+        runner.run_batch(&mut vec![Task::Registration(reg.clone())]);
         assert!(runner.delegates.get(&2).is_some());
         {
             let delegate = &runner.delegates[&2].as_ref().unwrap();
@@ -2382,7 +2416,7 @@ mod tests {
             }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run_batch(&mut vec![Task::Proposals(vec![region_proposal])]);
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
@@ -2401,7 +2435,7 @@ mod tests {
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run_batch(&mut vec![Task::Proposals(vec![region_proposal])]);
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].as_ref().unwrap().pending_cmds.normals;
@@ -2419,7 +2453,7 @@ mod tests {
 
         let p = Proposal::new(true, 4, 0, Callback::None);
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        runner.run(Task::Proposals(vec![region_proposal]));
+        runner.run_batch(&mut vec![Task::Proposals(vec![region_proposal])]);
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2]
@@ -2433,26 +2467,26 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::applies(vec![Apply::new(
+        runner.run_batch(&mut vec![Task::applies(vec![Apply::new(
             1,
             1,
             vec![new_entry(2, 3, None)],
-        )]));
+        )])]);
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
-        runner.run(Task::applies(vec![Apply::new(2, 11, vec![])]));
+        runner.run_batch(&mut vec![Task::applies(vec![Apply::new(2, 11, vec![])])]);
         // empty entries should be ignored.
         assert!(rx.try_recv().is_err());
         assert_eq!(runner.delegates[&2].as_ref().unwrap().term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(engines.kv.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::applies(vec![Apply::new(
+        runner.run_batch(&mut vec![Task::applies(vec![Apply::new(
             2,
             11,
             vec![new_entry(5, 4, None)],
-        )]));
+        )])]);
         let apply_res = match rx.try_recv() {
             Ok(PeerMsg::ApplyRes(TaskRes::Apply(res))) => res,
             e => panic!("unexpected apply result: {:?}", e),
@@ -2476,7 +2510,7 @@ mod tests {
             assert_eq!(apply_state, delegate.apply_state);
         }
 
-        runner.run(Task::destroy(2));
+        runner.run_batch(&mut vec![Task::destroy(2)]);
         let destroy_res = match rx.try_recv() {
             Ok(PeerMsg::ApplyRes(TaskRes::Destroy(d))) => d,
             e => panic!("expected destroy result, but got {:?}", e),
