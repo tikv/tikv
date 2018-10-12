@@ -425,6 +425,25 @@ impl ScalarFunc {
         };
         Ok(Some(r))
     }
+
+    #[inline]
+    pub fn truncate_decimal(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<Decimal>>> {
+        let x = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            (d as u64).min(127) as i8
+        } else if d >= 0 {
+            d.min(127) as i8
+        } else {
+            d.max(-128) as i8
+        };
+        let r: Result<Decimal> = x.into_owned().round(d, RoundMode::Truncate).into();
+        r.map(|t| Some(Cow::Owned(t)))
+    }
 }
 
 fn get_rand(arg: Option<u64>) -> XorShiftRng {
@@ -1242,6 +1261,51 @@ mod test {
         ];
         for (x, d, exp) in tests {
             let got = eval_func(ScalarFuncSig::TruncateReal, &[x, d]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_truncate_decimal() {
+        let tests = vec![
+            (str2dec("-1.23"), Datum::I64(0), str2dec("-1")),
+            (str2dec("-1.23"), Datum::I64(1), str2dec("-1.2")),
+            (str2dec("-11.23"), Datum::I64(-1), str2dec("-10")),
+            (str2dec("1.58"), Datum::I64(0), str2dec("1")),
+            (str2dec("1.58"), Datum::I64(1), str2dec("1.5")),
+            (str2dec("23.298"), Datum::I64(-1), str2dec("20")),
+            (str2dec("23.298"), Datum::I64(-100), str2dec("0")),
+            (str2dec("23.298"), Datum::I64(100), str2dec("23.298")),
+            (str2dec("23.298"), Datum::I64(200), str2dec("23.298")),
+            (str2dec("23.298"), Datum::I64(-200), str2dec("0")),
+            (
+                str2dec("23.298"),
+                Datum::U64(u64::max_value()),
+                str2dec("23.298"),
+            ),
+            (
+                str2dec("1.999999999999999999999999999999"),
+                Datum::I64(31),
+                str2dec("1.999999999999999999999999999999"),
+            ),
+            (
+                str2dec("99999999999999999999999999999999999999999999999999999999999999999"),
+                Datum::I64(-66),
+                str2dec("0"),
+            ),
+            (
+                str2dec("99999999999999999999999999999999999.999999999999999999999999999999"),
+                Datum::I64(31),
+                str2dec("99999999999999999999999999999999999.999999999999999999999999999999"),
+            ),
+            (
+                str2dec("99999999999999999999999999999999999.999999999999999999999999999999"),
+                Datum::I64(-36),
+                str2dec("0"),
+            ),
+        ];
+        for (x, d, exp) in tests {
+            let got = eval_func(ScalarFuncSig::TruncateDecimal, &[x, d]).unwrap();
             assert_eq!(got, exp);
         }
     }
