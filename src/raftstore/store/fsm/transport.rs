@@ -32,6 +32,7 @@ use raftstore::store::fsm::store::{Store, StoreCore};
 use raftstore::store::keys::{self, enc_end_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::RAFTSTORE_CHANNEL_FULL;
+use raftstore::store::metrics::*;
 use raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
@@ -940,7 +941,9 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
         let mut store_msgs = Vec::with_capacity(self.cfg.messages_per_tick);
         let mut exhausted_peers = Vec::with_capacity(self.cfg.messages_per_tick);
         let mut previous_metrics = self.ctx.raft_metrics.clone();
+        let batch_size_observer = POLL_BATCH_SIZE.local();
         self.scheduler.fetch_batch(&mut batches, batch_size);
+        batch_size_observer.observe(batches.fsm_holders.len() as f64);
         while !batches.fsm_holders.is_empty() {
             if batches.store.is_some() {
                 let to_release = {
@@ -1009,7 +1012,9 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
             self.ctx.raft_metrics.flush();
             if batches.fsm_holders.is_empty() {
                 batch_size = cmp::min(batch_size + 1, self.cfg.max_batch_size);
+                batch_size_observer.flush();
                 self.scheduler.fetch_batch(&mut batches, batch_size);
+                batch_size_observer.observe(batches.fsm_holders.len() as f64);
             } else {
                 batch_size = cmp::max(1, batch_size - 1);
             }

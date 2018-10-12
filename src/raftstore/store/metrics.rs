@@ -223,4 +223,10 @@ lazy_static! {
             "Total number of raft invalid proposal.",
             &["type"]
         ).unwrap();
+
+    pub static ref POLL_BATCH_SIZE: Histogram = register_histogram!(
+        "tikv_raftstore_poll_batch_size",
+        "The size of a poll batch.",
+        exponential_buckets(1.0, 2.0, 13).unwrap()
+    ).unwrap();
 }
