@@ -168,15 +168,16 @@ impl RegionCollectionWorker {
 
             // If the end_key changed, the old item in `region_ranges` should be removed.
             // However it shouldn't be removed if it was already updated by another region. In this
-            // case, the old_end_key
+            // case, let `old_end_key = old_region.get_end_key`, then
+            // `self.region_ranges[old_end_key]` should be another region's id.
             if old_region.get_end_key() != region.get_end_key() {
                 // The region's end_key has changed.
                 // Remove the old entry in `self.region_ranges` if it haven't been updated by
                 // other items in `regions`.
                 let old_end_key = data_end_key(old_region.get_end_key());
                 if let Some(old_id) = self.region_ranges.get(&old_end_key).cloned() {
-                    // If they don't equal, we shouldn't remove it because it was updated by another
-                    // region.
+                    // If they are not equal, we shouldn't remove it because it was updated by
+                    // another region.
                     if old_id == region.get_id() {
                         self.region_ranges.remove(&old_end_key);
                     }
@@ -487,7 +488,7 @@ mod tests {
             region.get_id()
         );
         // If end_key is updated and the region_id corresponding to the `old_end_key` doesn't equals
-        // to `region.id`, it shouldn't be removed since it was used by another region.
+        // to `region_id`, it shouldn't be removed since it was used by another region.
         if old_end_key.as_slice() != region.get_end_key() {
             assert!(
                 c.region_ranges
