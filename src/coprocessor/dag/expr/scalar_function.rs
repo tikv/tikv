@@ -239,6 +239,8 @@ impl ScalarFunc {
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
+            | ScalarFuncSig::InetAton
+            | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::HexIntArg
@@ -370,8 +372,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::InetAton
-            | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::Instr
@@ -793,6 +793,7 @@ dispatch_call! {
         ASCII => ascii,
         IsIPv4 => is_ipv4,
         IsIPv6 => is_ipv6,
+        InetAton => inet_aton,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -912,6 +913,7 @@ dispatch_call! {
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
         UnHex => un_hex,
+        InetNtoa => inet_ntoa,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
@@ -1376,8 +1378,6 @@ mod test {
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::InetAton,
-            ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
             ScalarFuncSig::Instr,
