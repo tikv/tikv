@@ -2237,8 +2237,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     replicated_idx = p.matched;
                 }
                 if let Some(last_heartbeat) = peer.peer_heartbeats.get(peer_id) {
-                    if alive_cache_idx > p.matched
-                        && p.matched >= truncated_idx
+                    if alive_cache_idx > p.matched && p.matched >= truncated_idx
                         && *last_heartbeat > cache_alive_limit
                     {
                         alive_cache_idx = p.matched;
