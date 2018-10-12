@@ -498,7 +498,7 @@ mod test {
     ///         op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
     ///     }
     /// }).unwrap();
-    ///assert_eq!(got, exp);
+    /// assert_eq!(got, exp);
     /// ```
     pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr]) -> ()>(
         sig: ScalarFuncSig,
