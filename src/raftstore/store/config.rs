@@ -334,8 +334,8 @@ impl Config {
         }
 
         // For now, stop a store will block the thread, so it's better to use more than 2 threads.
-        if self.store_pool_size < 2 {
-            return Err(box_err!("store-pool-size can't be less than 2"));
+        if self.store_pool_size < 1 {
+            return Err(box_err!("store-pool-size can't be less than 1"));
         }
 
         if self.max_batch_size == 0 {
@@ -432,7 +432,7 @@ mod tests {
 
         cfg = Config::new();
         cfg.store_pool_size = 1;
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
 
         cfg = Config::new();
         cfg.max_batch_size = 0;
