@@ -472,20 +472,44 @@ mod test {
         expr
     }
 
+    /// dispatch ScalarFuncSig with the args, return the result by calling eval.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let got = eval_func(ScalarFuncSig::TruncateInt, &[Datum::I64(1028), Datum::I64(-2)]).unwrap();
+    /// assert_eq!(got, Datum::I64(1000));
+    /// ```
     pub fn eval_func(sig: ScalarFuncSig, args: &[Datum]) -> super::Result<Datum> {
         eval_func_with(sig, args, |_, _| {})
     }
 
+    /// dispatch ScalarFuncSig with the args, return the result by calling eval.
+    /// f is used to setup the Expression before calling eval, like the set flag of the FieldType.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let x = Datum::U64(18446744073709551615);
+    /// let d = Datum::I64(-2);
+    /// let exp = Datum::U64(18446744073709551600);
+    /// let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
+    ///     if mysql::has_unsigned_flag(args[0].get_field_type().get_flag()) {
+    ///         op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+    ///     }
+    /// }).unwrap();
+    ///assert_eq!(got, exp);
+    /// ```
     pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr]) -> ()>(
         sig: ScalarFuncSig,
         args: &[Datum],
-        func: F,
+        f: F,
     ) -> super::Result<Datum> {
         let mut ctx = EvalContext::default();
         let args: Vec<Expr> = args.iter().map(|arg| datum_expr(arg.clone())).collect();
-        let f = scalar_func_expr(sig, &args);
-        let mut op = Expression::build(&mut ctx, f).unwrap();
-        func(&mut op, &args);
+        let expr = scalar_func_expr(sig, &args);
+        let mut op = Expression::build(&mut ctx, expr).unwrap();
+        f(&mut op, &args);
         op.eval(&mut ctx, &[])
     }
 
