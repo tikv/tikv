@@ -116,9 +116,10 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundWithFracInt
             | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::DateFormatSig
-            | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::TruncateReal => (2, 2),
+            | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateReal
+            | ScalarFuncSig::TruncateDecimal => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -474,7 +475,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim1Arg
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Trim3Args
-            | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
@@ -868,6 +868,8 @@ dispatch_call! {
         RoundDec => round_dec,
         RoundWithFracDec => round_with_frac_dec,
 
+        TruncateDecimal => truncate_decimal,
+
         IfNullDecimal => if_null_decimal,
         IfDecimal => if_decimal,
 
@@ -1076,6 +1078,7 @@ mod test {
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::TruncateInt,
                     ScalarFuncSig::TruncateReal,
+                    ScalarFuncSig::TruncateDecimal,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
                     ScalarFuncSig::RoundWithFracDec,
@@ -1478,7 +1481,6 @@ mod test {
             ScalarFuncSig::Trim1Arg,
             ScalarFuncSig::Trim2Args,
             ScalarFuncSig::Trim3Args,
-            ScalarFuncSig::TruncateDecimal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,
