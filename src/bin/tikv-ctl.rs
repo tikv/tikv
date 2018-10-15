@@ -746,8 +746,7 @@ impl DebugExecutor for Debugger {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        #[allow(deprecated)]
-        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        let stream = stream::iter_result(iter).map_err(|e| e.to_string());
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
@@ -1799,8 +1798,7 @@ fn get_module_type(module: &str) -> MODULE {
 }
 
 fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
-    const HEX_PREFIX: &str = "0x";
-    if key.starts_with(HEX_PREFIX) {
+    if key.starts_with("0x") || key.starts_with("0X") {
         return key[2..].from_hex();
     }
     key.from_hex()
@@ -1982,4 +1980,17 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
         ))
     }
     list
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_hex;
+
+    #[test]
+    fn test_from_hex() {
+        let result = vec![0x74];
+        assert_eq!(from_hex("74").unwrap(), result);
+        assert_eq!(from_hex("0x74").unwrap(), result);
+        assert_eq!(from_hex("0X74").unwrap(), result);
+    }
 }

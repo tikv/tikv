@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, slice};
+use std::{cmp, mem, slice, u64};
 
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
@@ -36,7 +36,7 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::worker::{
     apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
@@ -53,7 +53,7 @@ use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, 
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
-use super::util::{self, check_region_epoch, Lease, LeaseState};
+use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::{DestroyPeerJob, Store};
 
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
@@ -250,6 +250,8 @@ pub struct Peer {
     // Index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     pub last_compacted_idx: u64,
+    // The index of the latest urgent proposal index.
+    last_urgent_proposal_idx: u64,
     // The index of the latest committed split command.
     last_committed_split_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
@@ -393,6 +395,7 @@ impl Peer {
             tag,
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
+            last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
@@ -415,13 +418,18 @@ impl Peer {
         Ok(peer)
     }
 
-    pub fn register_delegates(&self) {
+    /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
+    /// Also trigger `RegionChangeEvent::Create` here.
+    pub fn activate(&self) {
         self.apply_scheduler
             .schedule(ApplyTask::register(self))
             .unwrap();
         self.read_scheduler
             .schedule(ReadTask::register(self))
             .unwrap();
+
+        self.coprocessor_host
+            .on_region_changed(self.region(), RegionChangeEvent::Create);
     }
 
     #[inline]
@@ -539,7 +547,14 @@ impl Peer {
         }
         self.mut_store().set_region(region.clone());
         let progress = ReadProgress::region(region);
+        // Always update read delegate's region to avoid stale region info after a follower
+        // becomeing a leader.
         self.maybe_update_read_progress(progress);
+
+        if !self.pending_remove {
+            self.coprocessor_host
+                .on_region_changed(self.region(), RegionChangeEvent::Update);
+        }
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -993,7 +1008,7 @@ impl Peer {
         }
 
         if apply_snap_result.is_some() {
-            self.register_delegates();
+            self.activate();
         }
 
         apply_snap_result
@@ -1049,7 +1064,7 @@ impl Peer {
                         // We committed prepare merge, to prevent unsafe read index,
                         // we must record its index.
                         self.last_committed_prepare_merge_idx = entry.get_index();
-                        // After prepare_mrege is committed, the leader can not know
+                        // After prepare_merge is committed, the leader can not know
                         // when the target region merges majority of this region, also
                         // it can not know when the target region writes new values.
                         // To prevent unsafe local read, we suspect its leader lease.
@@ -1060,6 +1075,11 @@ impl Peer {
             }
             if !committed_entries.is_empty() {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
+                if self.last_applying_idx >= self.last_urgent_proposal_idx {
+                    // Urgent requests are flushed, make it lazy again.
+                    self.raft_group.skip_bcast_commit(true);
+                    self.last_urgent_proposal_idx = u64::MAX;
+                }
                 apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
@@ -1155,7 +1175,8 @@ impl Peer {
         }
         self.pending_reads.gc();
 
-        if progress_to_be_updated {
+        // Only leaders need to update applied_index_term.
+        if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
             self.maybe_update_read_progress(progress);
         }
@@ -1196,11 +1217,12 @@ impl Peer {
     }
 
     fn maybe_update_read_progress(&self, progress: ReadProgress) {
-        if self.is_leader() {
-            let update = ReadTask::update(self.region_id, progress);
-            debug!("{} update {}", self.tag, update);
-            self.read_scheduler.schedule(update).unwrap();
+        if self.pending_remove {
+            return;
         }
+        let update = ReadTask::update(self.region_id, progress);
+        debug!("{} update {}", self.tag, update);
+        self.read_scheduler.schedule(update).unwrap();
     }
 
     pub fn maybe_campaign(
@@ -1251,6 +1273,7 @@ impl Peer {
         metrics.all += 1;
 
         let mut is_conf_change = false;
+        let is_urgent = is_request_urgent(&req);
 
         let policy = self.inspect(&req);
         let res = match policy {
@@ -1277,6 +1300,12 @@ impl Peer {
                 false
             }
             Ok(idx) => {
+                if is_urgent {
+                    self.last_urgent_proposal_idx = idx;
+                    // Eager flush to make urgent proposal be applied on all nodes as soon as
+                    // possible.
+                    self.raft_group.skip_bcast_commit(false);
+                }
                 let meta = ProposalMeta {
                     index: idx,
                     term: self.term(),
@@ -1776,17 +1805,7 @@ impl Peer {
             self.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
-        ).execute(&req, self.region())
-            .unwrap_or_else(|e| {
-                match e {
-                    Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
-                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
-                }
-                ReadResponse {
-                    response: cmd_resp::new_error(e),
-                    snapshot: None,
-                }
-            });
+        ).execute(&req, self.region());
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -1886,16 +1905,11 @@ impl Peer {
         // Heartbeat message for the store of that peer to check whether to create a new peer
         // when receiving these messages, or just to wait for a pending region split to perform
         // later.
-        if self.get_store().is_initialized()
-            && (msg_type == MessageType::MsgRequestVote ||
-            // the peer has not been known to this leader, it may exist or not.
-            (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX))
-        {
+        if self.get_store().is_initialized() && is_initial_msg(&msg) {
             let region = self.region();
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
-
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
@@ -2100,13 +2114,15 @@ impl ReadExecutor {
         Ok(resp)
     }
 
-    pub fn execute(
-        &mut self,
-        msg: &RaftCmdRequest,
-        region: &metapb::Region,
-    ) -> Result<ReadResponse> {
+    pub fn execute(&mut self, msg: &RaftCmdRequest, region: &metapb::Region) -> ReadResponse {
         if self.check_epoch {
-            check_region_epoch(msg, region, true)?;
+            if let Err(e) = check_region_epoch(msg, region, true) {
+                debug!("[region {}] stale epoch err: {:?}", region.get_id(), e);
+                return ReadResponse {
+                    response: cmd_resp::new_error(e),
+                    snapshot: None,
+                };
+            }
         }
         self.maybe_update_snapshot();
         let mut need_snapshot = false;
@@ -2115,7 +2131,20 @@ impl ReadExecutor {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => self.do_get(req, region)?,
+                CmdType::Get => match self.do_get(req, region) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(
+                            "[region {}] execute raft command err: {:?}",
+                            region.get_id(),
+                            e
+                        );
+                        return ReadResponse {
+                            response: cmd_resp::new_error(e),
+                            snapshot: None,
+                        };
+                    }
+                },
                 CmdType::Snap => {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
@@ -2141,7 +2170,7 @@ impl ReadExecutor {
         } else {
             None
         };
-        Ok(ReadResponse { response, snapshot })
+        ReadResponse { response, snapshot }
     }
 }
 
@@ -2172,6 +2201,28 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     }
 
     msg.get_header().get_sync_log()
+}
+
+/// We enable follower lazy commit to get a better performance.
+/// But it may not be appropriate for some requests. This function
+/// checks whether the request should be committed on all followers
+/// as soon as possible.
+fn is_request_urgent(req: &RaftCmdRequest) -> bool {
+    if !req.has_admin_request() {
+        return false;
+    }
+
+    match req.get_admin_request().get_cmd_type() {
+        AdminCmdType::Split
+        | AdminCmdType::BatchSplit
+        | AdminCmdType::ChangePeer
+        | AdminCmdType::ComputeHash
+        | AdminCmdType::VerifyHash
+        | AdminCmdType::PrepareMerge
+        | AdminCmdType::CommitMerge
+        | AdminCmdType::RollbackMerge => true,
+        _ => false,
+    }
 }
 
 fn make_transfer_leader_response() -> RaftCmdResponse {
@@ -2208,6 +2259,31 @@ mod tests {
                 tp
             );
         }
+    }
+
+    #[test]
+    fn test_urgent() {
+        let urgent_types = [
+            AdminCmdType::Split,
+            AdminCmdType::BatchSplit,
+            AdminCmdType::ChangePeer,
+            AdminCmdType::ComputeHash,
+            AdminCmdType::VerifyHash,
+            AdminCmdType::PrepareMerge,
+            AdminCmdType::CommitMerge,
+            AdminCmdType::RollbackMerge,
+        ];
+        for tp in AdminCmdType::values() {
+            let mut req = RaftCmdRequest::new();
+            req.mut_admin_request().set_cmd_type(*tp);
+            assert_eq!(
+                is_request_urgent(&req),
+                urgent_types.contains(tp),
+                "{:?}",
+                tp
+            );
+        }
+        assert!(!is_request_urgent(&RaftCmdRequest::new()));
     }
 
     #[test]

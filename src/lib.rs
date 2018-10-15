@@ -13,11 +13,13 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(try_from)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
+#![feature(duration_as_u128)]
 #![feature(entry_or_default)]
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen)]
@@ -40,6 +42,7 @@ extern crate crc;
 extern crate crossbeam;
 #[macro_use]
 extern crate crossbeam_channel;
+extern crate crypto;
 #[macro_use]
 extern crate fail;
 extern crate fnv;
@@ -52,6 +55,7 @@ extern crate grpcio as grpc;
 extern crate hex;
 extern crate indexmap;
 extern crate kvproto;
+
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
@@ -70,6 +74,7 @@ extern crate raft;
 extern crate rand;
 extern crate regex;
 extern crate rocksdb;
+extern crate rustc_serialize;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;

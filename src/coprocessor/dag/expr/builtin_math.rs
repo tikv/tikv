@@ -12,12 +12,14 @@
 // limitations under the License.
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::Datum;
+use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
+use coprocessor::codec::{mysql, Datum};
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
+use rand::{Rng, SeedableRng, XorShiftRng};
 use std::borrow::Cow;
 use std::{f64, i64};
+use time;
 
 impl ScalarFunc {
     #[inline]
@@ -110,8 +112,88 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn log2(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let res = n.log2();
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn log10(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let res = n.log10();
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn log_1_arg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let res = n.ln();
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn log_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let base = try_opt!(self.children[0].eval_real(ctx, row));
+        let n = try_opt!(self.children[1].eval_real(ctx, row));
+        let res = n.log(base);
+        if res.is_finite() {
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
     pub fn pi(&self, _ctx: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
         Ok(Some(f64::consts::PI))
+    }
+
+    #[inline]
+    pub fn rand(&self, _: &mut EvalContext, _: &[Datum]) -> Result<Option<f64>> {
+        let mut cus_rng = self.cus_rng.rng.borrow_mut();
+        if cus_rng.is_none() {
+            let mut rand = get_rand(None);
+            let res = rand.gen::<f64>();
+            *cus_rng = Some(rand);
+            Ok(Some(res))
+        } else {
+            let rand = cus_rng.as_mut().unwrap();
+            let res = rand.gen::<f64>();
+            Ok(Some(res))
+        }
+    }
+
+    #[inline]
+    pub fn rand_with_seed(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let seed = match self.children[0].eval_int(ctx, row)? {
+            Some(v) => Some(v as u64),
+            _ => None,
+        };
+
+        let mut cus_rng = self.cus_rng.rng.borrow_mut();
+        if cus_rng.is_none() {
+            let mut rand = get_rand(seed);
+            let res = rand.gen::<f64>();
+            *cus_rng = Some(rand);
+            Ok(Some(res))
+        } else {
+            let rand = cus_rng.as_mut().unwrap();
+            let res = rand.gen::<f64>();
+            Ok(Some(res))
+        }
     }
 
     #[inline]
@@ -120,6 +202,75 @@ impl ScalarFunc {
         let mut digest = crc32::Digest::new(crc32::IEEE);
         digest.write(&d);
         Ok(Some(i64::from(digest.sum32())))
+    }
+
+    #[inline]
+    pub fn round_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        self.children[0].eval_int(ctx, row)
+    }
+
+    #[inline]
+    pub fn round_dec<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let number = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let result: Result<Decimal> = number
+            .into_owned()
+            .round(DEFAULT_FSP, RoundMode::HalfEven)
+            .into();
+        result.map(|t| Some(Cow::Owned(t)))
+    }
+
+    #[inline]
+    pub fn round_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let number = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(number.round()))
+    }
+
+    #[inline]
+    pub fn round_with_frac_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let number = try_opt!(self.children[0].eval_int(ctx, row));
+        let digits = try_opt!(self.children[1].eval_int(ctx, row));
+
+        if digits >= 0 {
+            Ok(Some(number))
+        } else {
+            let power = 10.0_f64.powi(-digits as i32);
+            let frac = number as f64 / power;
+            Ok(Some((frac.round() * power) as i64))
+        }
+    }
+
+    #[inline]
+    pub fn round_with_frac_real(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<f64>> {
+        let number = try_opt!(self.children[0].eval_real(ctx, row));
+        let digits = try_opt!(self.children[1].eval_int(ctx, row));
+
+        let power = 10.0_f64.powi(-digits as i32);
+        let frac = number / power;
+        Ok(Some(frac.round() * power))
+    }
+
+    #[inline]
+    pub fn round_with_frac_dec<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Decimal>>> {
+        let number = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let digits = try_opt!(self.children[1].eval_int(ctx, row));
+
+        let result: Result<Decimal> = number
+            .into_owned()
+            .round(digits as i8, RoundMode::HalfEven)
+            .into();
+        result.map(|t| Some(Cow::Owned(t)))
     }
 
     #[inline]
@@ -170,6 +321,12 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn sin(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(n.sin()))
+    }
+
+    #[inline]
     pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let y = try_opt!(self.children[1].eval_real(ctx, row));
@@ -179,14 +336,145 @@ impl ScalarFunc {
         }
         Ok(Some(pow))
     }
+
+    #[inline]
+    pub fn asin(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if n >= -1f64 && n <= 1f64 {
+            Ok(Some(n.asin()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn acos(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
+        if n >= -1f64 && n <= 1f64 {
+            Ok(Some(n.acos()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn cot(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        let tan = n.tan();
+        if tan != 0.0 {
+            let cot = 1.0 / tan;
+            if !cot.is_infinite() && !cot.is_nan() {
+                return Ok(Some(cot));
+            }
+        }
+        Err(Error::overflow("DOUBLE", &format!("cot({})", n)))
+    }
+
+    #[inline]
+    pub fn degrees(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let n = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(n.to_degrees()))
+    }
+
+    #[inline]
+    pub fn truncate_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let x = try_opt!(self.children[0].eval_int(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            0
+        } else {
+            d
+        };
+        if d >= 0 {
+            Ok(Some(x))
+        } else if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag()) {
+            if d < -19 {
+                return Ok(Some(0));
+            }
+            let x = x as u64;
+            let shift = 10_u64.pow(-d as u32);
+            Ok(Some((x / shift * shift) as i64))
+        } else {
+            if d < -18 {
+                return Ok(Some(0));
+            }
+            let shift = 10_i64.pow(-d as u32);
+            Ok(Some(x / shift * shift))
+        }
+    }
+
+    #[inline]
+    pub fn truncate_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let x = try_opt!(self.children[0].eval_real(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            (d as u64).min(i32::max_value() as u64) as i32
+        } else if d >= 0 {
+            d.min(i64::from(i32::max_value())) as i32
+        } else {
+            d.max(i64::from(i32::min_value())) as i32
+        };
+        let m = 10_f64.powi(d);
+        let tmp = x * m;
+        let r = if tmp == 0_f64 {
+            0_f64
+        } else if tmp.is_infinite() {
+            x
+        } else {
+            tmp.trunc() / m
+        };
+        Ok(Some(r))
+    }
+
+    #[inline]
+    pub fn truncate_decimal(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<Decimal>>> {
+        let x = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            (d as u64).min(127) as i8
+        } else if d >= 0 {
+            d.min(127) as i8
+        } else {
+            d.max(-128) as i8
+        };
+        let r: Result<Decimal> = x.into_owned().round(d, RoundMode::Truncate).into();
+        r.map(|t| Some(Cow::Owned(t)))
+    }
+}
+
+fn get_rand(arg: Option<u64>) -> XorShiftRng {
+    let seed = match arg {
+        Some(v) => v,
+        None => {
+            let current_time = time::get_time();
+            let nsec = current_time.nsec as u64;
+            let sec = (current_time.sec * 1000000000) as u64;
+            sec + nsec
+        }
+    };
+
+    let seeds: [u32; 4] = [
+        (seed & 0x0000_0000_0000_FFFF) as u32,
+        ((seed & 0x0000_0000_FFFF_0000) >> 16) as u32,
+        ((seed & 0x0000_FFFF_0000_0000) >> 32) as u32,
+        ((seed & 0xFFFF_0000_0000_0000) >> 48) as u32,
+    ];
+
+    let rng: XorShiftRng = SeedableRng::from_seed(seeds);
+    rng
 }
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::sync::Arc;
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;
@@ -355,7 +643,7 @@ mod test {
             ),
         ];
         // for ceil decimal to int.
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let mut op =
@@ -373,11 +661,216 @@ mod test {
     }
 
     #[test]
+    fn test_log2() {
+        let tests = vec![
+            (ScalarFuncSig::Log2, Datum::F64(16_f64), 4_f64),
+            (
+                ScalarFuncSig::Log2,
+                Datum::F64(5_f64),
+                2.321928094887362_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Log2, Datum::F64(-1.234_f64), Datum::Null),
+            (ScalarFuncSig::Log2, Datum::F64(0_f64), Datum::Null),
+            (ScalarFuncSig::Log2, Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_log10() {
+        let tests = vec![
+            (ScalarFuncSig::Log10, Datum::F64(100_f64), 2_f64),
+            (
+                ScalarFuncSig::Log10,
+                Datum::F64(101_f64),
+                2.0043213737826426_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Log10, Datum::F64(-0.23323_f64), Datum::Null),
+            (ScalarFuncSig::Log10, Datum::F64(0_f64), Datum::Null),
+            (ScalarFuncSig::Log10, Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_log_1_arg() {
+        let tests = vec![
+            (ScalarFuncSig::Log1Arg, Datum::F64(f64::consts::E), 1.0_f64),
+            (
+                ScalarFuncSig::Log1Arg,
+                Datum::F64(100_f64),
+                4.605170185988092_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Log1Arg, Datum::F64(-1.0_f64), Datum::Null),
+            (ScalarFuncSig::Log1Arg, Datum::F64(0_f64), Datum::Null),
+            (ScalarFuncSig::Log1Arg, Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_log_2_args() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(10.0_f64),
+                Datum::F64(100.0_f64),
+                2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(2.0_f64),
+                Datum::F64(1.0_f64),
+                0.0_f64,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(0.5_f64),
+                Datum::F64(0.25_f64),
+                2.0_f64,
+            ),
+        ];
+
+        let tests_invalid_f64 = vec![
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(-0.23323_f64),
+                Datum::F64(2.0_f64),
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::Null,
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::F64(2.0_f64),
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                ScalarFuncSig::Log2Args,
+                Datum::Null,
+                Datum::F64(2.0_f64),
+                Datum::Null,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1, exp) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        for (sig, arg0, arg1, exp) in tests_invalid_f64 {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
     fn test_pi() {
         let mut ctx = EvalContext::default();
         let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::PI, &[])).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::F64(f64::consts::PI));
+    }
+
+    #[test]
+    fn test_rand() {
+        let mut ctx = EvalContext::default();
+        let arg = datum_expr(Datum::Null);
+        let op = scalar_func_expr(ScalarFuncSig::Rand, &[arg]);
+
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval_real(&mut ctx, &[]).unwrap();
+
+        assert_eq!(got.is_some(), true);
+        assert_eq!(got.unwrap() < 1.0, true);
+        assert_eq!(got.unwrap() >= 0.0, true);
+    }
+
+    #[test]
+    fn test_rand_with_seed() {
+        let seed: i64 = 20160101;
+        let mut ctx = EvalContext::default();
+
+        for _ in 1..3 {
+            let arg = datum_expr(Datum::I64(seed));
+            let op = scalar_func_expr(ScalarFuncSig::RandWithSeed, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval_real(&mut ctx, &[]).unwrap();
+
+            assert_eq!(got.is_some(), true);
+            assert_eq!(got.unwrap().to_bits(), (0.4545469470152683f64).to_bits());
+        }
     }
 
     #[test]
@@ -400,6 +893,163 @@ mod test {
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::I64(exp);
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round() {
+        let tests = vec![
+            (ScalarFuncSig::RoundInt, Datum::I64(1), Datum::I64(1)),
+            (
+                ScalarFuncSig::RoundInt,
+                Datum::I64(i64::MAX),
+                Datum::I64(i64::MAX),
+            ),
+            (
+                ScalarFuncSig::RoundInt,
+                Datum::I64(i64::MIN),
+                Datum::I64(i64::MIN),
+            ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("123.456"),
+                str2dec("123.000"),
+            ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("123.656"),
+                str2dec("124.000"),
+            ),
+            (
+                ScalarFuncSig::RoundDec,
+                str2dec("-123.456"),
+                str2dec("-123.000"),
+            ),
+            (ScalarFuncSig::RouldReal, Datum::F64(3.45), Datum::F64(3f64)),
+            (
+                ScalarFuncSig::RouldReal,
+                Datum::F64(-3.45),
+                Datum::F64(-3f64),
+            ),
+            (
+                ScalarFuncSig::RouldReal,
+                Datum::F64(f64::MAX),
+                Datum::F64(f64::MAX),
+            ),
+            (
+                ScalarFuncSig::RouldReal,
+                Datum::F64(f64::MIN),
+                Datum::F64(f64::MIN),
+            ),
+        ];
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let expr = scalar_func_expr(sig, &[arg.clone()]);
+            let op = Expression::build(&mut ctx, expr).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_frac() {
+        let tests = vec![
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(23),
+                Datum::I64(2),
+                Datum::I64(23),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(23),
+                Datum::I64(-1),
+                Datum::I64(20),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-27),
+                Datum::I64(-1),
+                Datum::I64(-30),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-27),
+                Datum::I64(-2),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-27),
+                Datum::I64(-2),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("150.000"),
+                Datum::I64(2),
+                str2dec("150.00"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("150.257"),
+                Datum::I64(1),
+                str2dec("150.3"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("153.257"),
+                Datum::I64(-1),
+                str2dec("150"),
+            ),
+        ];
+
+        let real_tests = vec![
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(-1.298_f64),
+                Datum::I64(1),
+                -1.3_f64,
+            ),
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(-1.298_f64),
+                Datum::I64(0),
+                -1.0_f64,
+            ),
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(23.298_f64),
+                Datum::I64(2),
+                23.30_f64,
+            ),
+            (
+                ScalarFuncSig::RoundWithFracReal,
+                Datum::F64(23.298_f64),
+                Datum::I64(-1),
+                20.0_f64,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg0, arg1, exp) in tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        for (sig, arg0, arg1, exp) in real_tests {
+            let arg0 = datum_expr(arg0);
+            let arg1 = datum_expr(arg1);
+            let f = scalar_func_expr(sig, &[arg0, arg1]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
         }
     }
 
@@ -451,7 +1101,7 @@ mod test {
             (ScalarFuncSig::Cos, Datum::F64(f64::consts::PI), -1f64),
             (ScalarFuncSig::Cos, Datum::F64(-f64::consts::PI), -1f64),
         ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new().set_ignore_truncate(true)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (sig, arg, exp) in tests {
             let arg = datum_expr(arg);
             let expr = scalar_func_expr(sig, &[arg.clone()]);
@@ -572,6 +1222,35 @@ mod test {
     }
 
     #[test]
+    fn test_sin() {
+        let tests = vec![
+            (ScalarFuncSig::Sin, Datum::F64(0.0_f64), 0.0_f64),
+            (ScalarFuncSig::Sin, Datum::F64(PI / 4.0_f64), FRAC_1_SQRT_2),
+            (ScalarFuncSig::Sin, Datum::F64(PI / 2.0_f64), 1.0_f64),
+            (ScalarFuncSig::Sin, Datum::F64(PI), 0.0_f64),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Sin, Datum::F64(f64::INFINITY)),
+            (ScalarFuncSig::Sin, Datum::F64(f64::NAN)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!(got.f64().is_nan());
+        }
+    }
+
+    #[test]
     fn test_pow() {
         let tests = vec![
             (
@@ -615,6 +1294,431 @@ mod test {
             let op = Expression::build(&mut ctx, f).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_asin() {
+        let tests = vec![
+            (ScalarFuncSig::Asin, Datum::F64(0.0_f64), 0.0_f64),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(1f64),
+                f64::consts::PI / 2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(-1f64),
+                -f64::consts::PI / 2.0_f64,
+            ),
+            (
+                ScalarFuncSig::Asin,
+                Datum::F64(f64::consts::SQRT_2 / 2.0_f64),
+                f64::consts::PI / 4.0_f64,
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Asin, Datum::F64(f64::INFINITY), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(f64::NAN), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(2f64), Datum::Null),
+            (ScalarFuncSig::Asin, Datum::F64(-2f64), Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_acos() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Acos,
+                Datum::F64(0f64),
+                f64::consts::PI / 2.0_f64,
+            ),
+            (ScalarFuncSig::Acos, Datum::F64(1f64), 0.0_f64),
+            (ScalarFuncSig::Acos, Datum::F64(-1f64), f64::consts::PI),
+            (
+                ScalarFuncSig::Acos,
+                Datum::F64(f64::consts::SQRT_2 / 2.0_f64),
+                f64::consts::PI / 4.0_f64,
+            ),
+        ];
+        let tests_invalid_f64 = vec![
+            (ScalarFuncSig::Acos, Datum::F64(f64::INFINITY), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(f64::NAN), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(2f64), Datum::Null),
+            (ScalarFuncSig::Acos, Datum::F64(-2f64), Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+        for (sig, arg, exp) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_cot() {
+        let tests = vec![
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(-1.0),
+                -0.6420926159343308_f64,
+            ),
+            (ScalarFuncSig::Cot, Datum::F64(1.0), 0.6420926159343308_f64),
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(f64::consts::PI / 4.0_f64),
+                1.0_f64 / f64::tan(f64::consts::PI / 4.0_f64),
+            ),
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(f64::consts::PI / 2.0_f64),
+                1.0_f64 / f64::tan(f64::consts::PI / 2.0_f64),
+            ),
+            (
+                ScalarFuncSig::Cot,
+                Datum::F64(f64::consts::PI),
+                1.0_f64 / f64::tan(f64::consts::PI),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+
+        // for overflow
+        let tests_invalid_f64 = vec![(ScalarFuncSig::Cot, Datum::F64(0.0))];
+
+        for (sig, arg) in tests_invalid_f64 {
+            let arg = datum_expr(arg);
+            let mut f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_degrees() {
+        let tests = vec![
+            (ScalarFuncSig::Degrees, Datum::F64(0.0), -0.0_f64),
+            (
+                ScalarFuncSig::Degrees,
+                Datum::F64(1.0),
+                57.29577951308232_f64,
+            ),
+            (
+                ScalarFuncSig::Degrees,
+                Datum::F64(f64::consts::PI),
+                180.0_f64,
+            ),
+            (
+                ScalarFuncSig::Degrees,
+                Datum::F64(-f64::consts::PI / 2.0_f64),
+                -90.0_f64,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (sig, arg, exp) in tests {
+            let arg = datum_expr(arg);
+            let f = scalar_func_expr(sig, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert!((got.f64() - exp).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_truncate_int() {
+        let tests = vec![
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(0),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(5),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(-2),
+                Datum::I64(1000),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(309),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::I64(i64::min_value()),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::I64(1028),
+                Datum::U64(u64::max_value()),
+                Datum::I64(1028),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::U64(18446744073709551615),
+                Datum::I64(-2),
+                Datum::U64(18446744073709551600),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::U64(18446744073709551615),
+                Datum::I64(-20),
+                Datum::U64(0),
+            ),
+            (
+                ScalarFuncSig::TruncateInt,
+                Datum::U64(18446744073709551615),
+                Datum::I64(2),
+                Datum::U64(18446744073709551615),
+            ),
+        ];
+        check_truncate_data(tests);
+    }
+
+    #[test]
+    fn test_truncate_real() {
+        let tests = vec![
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(-1.23),
+                Datum::I64(0),
+                Datum::F64(-1.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(1.58),
+                Datum::I64(0),
+                Datum::F64(1.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(1.298),
+                Datum::I64(1),
+                Datum::F64(1.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(-1),
+                Datum::F64(120.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(100),
+                Datum::F64(123.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(-100),
+                Datum::F64(0.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(i64::max_value()),
+                Datum::F64(123.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::I64(i64::min_value()),
+                Datum::F64(0.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(123.2),
+                Datum::U64(u64::max_value()),
+                Datum::F64(123.2),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(-1.23),
+                Datum::I64(0),
+                Datum::F64(-1.0),
+            ),
+            (
+                ScalarFuncSig::TruncateReal,
+                Datum::F64(1.797693134862315708145274237317043567981e+308),
+                Datum::I64(2),
+                Datum::F64(1.797693134862315708145274237317043567981e+308),
+            ),
+        ];
+        check_truncate_data(tests);
+    }
+
+    #[test]
+    fn test_truncate_decimal() {
+        let tests = vec![
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("-1.23".parse().unwrap()),
+                Datum::I64(0),
+                Datum::Dec(Decimal::from(-1)),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("-1.23".parse().unwrap()),
+                Datum::I64(1),
+                Datum::Dec("-1.2".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("-11.23".parse().unwrap()),
+                Datum::I64(-1),
+                Datum::Dec("-10".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("1.58".parse().unwrap()),
+                Datum::I64(0),
+                Datum::Dec("1".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("1.58".parse().unwrap()),
+                Datum::I64(1),
+                Datum::Dec("1.5".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(-1),
+                Datum::Dec("20".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(-100),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(100),
+                Datum::Dec("23.298".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(200),
+                Datum::Dec("23.298".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(-200),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::U64(u64::max_value()),
+                Datum::Dec("23.298".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("1.999999999999999999999999999999".parse().unwrap()),
+                Datum::I64(31),
+                Datum::Dec("1.999999999999999999999999999999".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec(
+                    "99999999999999999999999999999999999999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+                Datum::I64(-66),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec(
+                    "99999999999999999999999999999999999.999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+                Datum::I64(31),
+                Datum::Dec(
+                    "99999999999999999999999999999999999.999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec(
+                    "99999999999999999999999999999999999.999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+                Datum::I64(-36),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+        ];
+        check_truncate_data(tests);
+    }
+
+    fn check_truncate_data(tests: Vec<(ScalarFuncSig, Datum, Datum, Datum)>) {
+        let mut ctx = EvalContext::default();
+        for (sig, x, d, exp) in tests {
+            let x = datum_expr(x);
+            let d = datum_expr(d);
+            let is_unsigned = mysql::has_unsigned_flag(x.get_field_type().get_flag());
+            let mut f = scalar_func_expr(sig, &[x, d]);
+            if is_unsigned {
+                f.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
+            }
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

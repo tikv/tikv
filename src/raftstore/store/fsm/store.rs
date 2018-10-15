@@ -18,7 +18,7 @@ use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver as StdReceiver};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{thread, u64};
 use time;
 
@@ -29,24 +29,19 @@ use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use raft::eraftpb::MessageType;
-use raft::INVALID_INDEX;
 
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::util::KeysInfoFormatter;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use raftstore::store::util::{is_initial_msg, KeysInfoFormatter};
 use raftstore::Result;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::{HashMap, HashSet};
-use util::rocksdb;
 use util::rocksdb::{CompactedEvent, CompactionListener};
-use util::sys as util_sys;
 use util::time::{duration_to_sec, SlowTimer};
-use util::timer::Timer;
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Scheduler, Worker};
-use util::RingQueue;
+use util::{rocksdb, sys as util_sys, RingQueue};
 
 use import::SSTImporter;
 use raftstore::store::config::Config;
@@ -62,7 +57,7 @@ use raftstore::store::transport::Transport;
 use raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask,
-    SplitCheckRunner, STALE_PEER_CHECK_INTERVAL,
+    SplitCheckRunner,
 };
 use raftstore::store::{
     util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
@@ -245,6 +240,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
+            self.coprocessor_host
+                .on_region_changed(region, RegionChangeEvent::Create);
             Ok(true)
         })?;
 
@@ -425,8 +422,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.cfg.use_delete_range,
             self.cfg.clean_stale_peer_delay.0,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(STALE_PEER_CHECK_INTERVAL), ());
+        let timer = RegionRunner::new_timer();
         box_try!(self.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -559,12 +555,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(true);
         }
 
-        let message = msg.get_message();
-        let msg_type = message.get_msg_type();
-        if msg_type != MessageType::MsgRequestVote
-            && msg_type != MessageType::MsgRequestPreVote
-            && (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX)
-        {
+        if !is_initial_msg(msg.get_message()) {
+            let msg_type = msg.get_message().get_msg_type();
             debug!(
                 "target peer {:?} doesn't exist, stale message {:?}.",
                 target, msg_type
@@ -582,7 +574,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
-                if util::is_first_vote_msg(msg) {
+                if util::is_first_vote_msg(msg.get_message()) {
                     self.pending_votes.push(msg.to_owned());
                 }
                 self.raft_metrics.message_dropped.region_overlap += 1;
@@ -996,6 +988,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         callback(SeekRegionResult::Ended);
     }
+
+    fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
+        let start_key = data_key(start_key);
+        let end_key = data_end_key(end_key);
+
+        for (_, region_id) in self
+            .region_ranges
+            .range((Excluded(start_key), Included(end_key)))
+        {
+            let peer = self.region_peers.get_mut(region_id).unwrap();
+
+            peer.approximate_size = None;
+            peer.approximate_keys = None;
+        }
+    }
 }
 
 pub fn register_timer<T: Transport, C: PdClient>(
@@ -1039,18 +1046,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     .request_wait_time
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
                 self.propose_raft_command(request, callback)
-            }
-            // For now, it is only called by batch snapshot.
-            Msg::BatchRaftSnapCmds {
-                send_time,
-                batch,
-                on_finished,
-            } => {
-                self.raft_metrics
-                    .propose
-                    .request_wait_time
-                    .observe(duration_to_sec(send_time.elapsed()) as f64);
-                self.propose_batch_raft_snapshot_command(batch, on_finished);
             }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);
@@ -1097,6 +1092,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 limit,
                 callback,
             } => self.seek_region(&from_key, filter, limit, callback),
+            Msg::ClearRegionSizeInRange { start_key, end_key } => {
+                self.clear_region_size_in_range(&start_key, &end_key)
+            }
         }
     }
 
@@ -1116,6 +1114,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(event_loop),
             Tick::CleanupImportSST => self.on_cleanup_import_sst_tick(event_loop),
         }
+        RAFT_EVENT_DURATION
+            .with_label_values(&[timeout.tag()])
+            .observe(duration_to_sec(t.elapsed()) as f64);
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
 

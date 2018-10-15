@@ -18,6 +18,7 @@ use std::io::prelude::*;
 use std::sync::Mutex;
 
 use slog::{self, Drain, OwnedKVList, Record};
+use slog_scope::GlobalLoggerGuard;
 use time;
 
 use tikv;
@@ -66,7 +67,7 @@ impl Drop for CaseTraceLogger {
 }
 
 // A help function to initial logger.
-pub fn init_log() {
+pub fn init_log() -> GlobalLoggerGuard {
     let output = env::var("LOG_FILE").ok();
     let level = tikv::util::logger::get_level_by_string(
         &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
@@ -83,5 +84,5 @@ pub fn init_log() {
     //
     // let drain = slog_async::Async::new(drain).build().fuse();
     let logger = slog::Logger::root_typed(drain, slog_o!());
-    let _ = tikv::util::logger::init_log_for_tikv_only(logger, level);
+    tikv::util::logger::init_log_for_tikv_only(logger, level).unwrap()
 }

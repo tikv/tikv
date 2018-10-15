@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::mpsc::channel;
-use std::thread;
-
 use kvproto::kvrpcpb::Context;
 
 use test_raftstore::*;
@@ -49,7 +46,6 @@ fn test_raftkv() {
     cf(&ctx, &storage);
     empty_write(&ctx, &storage);
     wrong_context(&ctx, &storage);
-    empty_batch_snapshot(&storage);
     // TODO: test multiple node
 }
 
@@ -83,54 +79,6 @@ fn test_read_leader_in_lease() {
 
     // leader still in lease, check if can read on leader
     assert_eq!(can_read(&ctx, &storage, k2, v2), true);
-}
-
-#[test]
-fn test_batch_snapshot() {
-    let count = 3;
-    let mut cluster = new_server_cluster(0, count);
-    // Set election timeout and max leader lease to 3s.
-    // Large max leader lease stabilizes the test.
-    let election_timeout = configure_for_lease_read(&mut cluster, Some(300), Some(10));
-    cluster.run();
-
-    let key = b"key";
-    // make sure leader has been elected.
-    assert_eq!(cluster.must_get(key), None);
-
-    let region = cluster.get_region(b"");
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
-    let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
-
-    let mut ctx = Context::new();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
-
-    let size = 3;
-    let batch = vec![ctx.clone(); size];
-    let snapshots = must_batch_snapshot(batch, &storage);
-    assert_eq!(size, snapshots.len());
-    for s in snapshots {
-        assert!(s.is_some());
-    }
-    // sleep util leader lease is expired.
-    thread::sleep(election_timeout);
-    let batch = vec![ctx; size];
-    let snapshots = must_batch_snapshot(batch, &storage);
-    assert_eq!(size, snapshots.len());
-    for s in snapshots {
-        assert!(s.is_none());
-    }
-}
-
-fn must_batch_snapshot<E: Engine>(batch: Vec<Context>, engine: &E) -> BatchResults<E::Snap> {
-    let (tx, rx) = channel();
-    let on_finished = box move |snapshots| {
-        tx.send(snapshots).unwrap();
-    };
-    engine.async_batch_snapshot(batch, on_finished).unwrap();
-    rx.recv().unwrap()
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
@@ -330,11 +278,4 @@ fn wrong_context<E: Engine>(ctx: &Context, engine: &E) {
     let mut ctx = ctx.to_owned();
     ctx.set_region_id(region_id + 1);
     assert!(engine.write(&ctx, vec![]).is_err());
-}
-
-fn empty_batch_snapshot<E: Engine>(engine: &E) {
-    let on_finished = box move |_| {};
-    engine
-        .async_batch_snapshot(vec![], on_finished)
-        .unwrap_err();
 }

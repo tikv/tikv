@@ -27,13 +27,13 @@ use protobuf::RepeatedField;
 
 use super::metrics::*;
 use super::{
-    BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify,
-    RegionInfoProvider, ScanMode, Snapshot,
+    Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, RegionInfoProvider,
+    ScanMode, Snapshot,
 };
 use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
 use raftstore::store::engine::Peekable;
-use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
+use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use raftstore::store::{
     Msg as StoreMsg, RegionIterator, RegionSnapshot, SeekRegionFilter, SeekRegionResult,
 };
@@ -178,37 +178,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         RaftKv { router }
     }
 
-    fn batch_call_snap_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchCallback<CmdRes>,
-    ) -> Result<()> {
-        let batch_size = batch.len();
-        let mut counts = Vec::with_capacity(batch_size);
-        for req in &batch {
-            let count = req.get_requests().len();
-            counts.push(count);
-        }
-        let on_finished: store::BatchReadCallback =
-            Box::new(move |resps: Vec<Option<store::ReadResponse>>| {
-                assert_eq!(batch_size, resps.len());
-                let mut cmd_resps = Vec::with_capacity(resps.len());
-                for (count, resp) in counts.into_iter().zip(resps) {
-                    match resp {
-                        Some(resp) => {
-                            let (cb_ctx, cmd_res) = on_read_result(resp, count);
-                            cmd_resps.push(Some((cb_ctx, cmd_res.map_err(Error::into))));
-                        }
-                        None => cmd_resps.push(None),
-                    }
-                }
-                on_finished(cmd_resps);
-            });
-
-        self.router.send_batch_commands(batch, on_finished)?;
-        Ok(())
-    }
-
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
         let mut header = RaftRequestHeader::new();
         header.set_region_id(ctx.get_region_id());
@@ -268,23 +237,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
                 }),
             )
             .map_err(From::from)
-    }
-
-    fn batch_exec_snap_requests(
-        &self,
-        batch: Vec<(Context, Vec<Request>)>,
-        on_finished: BatchCallback<CmdRes>,
-    ) -> Result<()> {
-        let batch = batch.into_iter().map(|(ctx, reqs)| {
-            let header = self.new_request_header(&ctx);
-            let mut cmd = RaftCmdRequest::new();
-            cmd.set_header(header);
-            cmd.set_requests(RepeatedField::from_vec(reqs));
-
-            cmd
-        });
-
-        self.batch_call_snap_commands(batch.collect(), on_finished)
     }
 }
 
@@ -405,68 +357,6 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()
         })
-    }
-
-    fn async_batch_snapshot(
-        &self,
-        batch: Vec<Context>,
-        on_finished: BatchCallback<Self::Snap>,
-    ) -> engine::Result<()> {
-        fail_point!("raftkv_async_batch_snapshot");
-        if batch.is_empty() {
-            return Err(engine::Error::EmptyRequest);
-        }
-
-        let batch_size = batch.len();
-        ASYNC_REQUESTS_COUNTER_VEC
-            .snapshot
-            .all
-            .inc_by(batch_size as i64);
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.snapshot.start_coarse_timer();
-
-        let on_finished: BatchCallback<CmdRes> = box move |cmd_resps: super::BatchResults<_>| {
-            req_timer.observe_duration();
-            assert_eq!(batch_size, cmd_resps.len());
-            let mut snapshots = Vec::with_capacity(cmd_resps.len());
-            for resp in cmd_resps {
-                match resp {
-                    Some((cb_ctx, Ok(CmdRes::Resp(r)))) => {
-                        snapshots.push(Some((
-                            cb_ctx,
-                            Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
-                        )));
-                    }
-                    Some((cb_ctx, Ok(CmdRes::Snap(s)))) => {
-                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                        snapshots.push(Some((cb_ctx, Ok(s))));
-                    }
-                    Some((cb_ctx, Err(e))) => {
-                        let status_kind = get_status_kind_from_engine_error(&e);
-                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                        snapshots.push(Some((cb_ctx, Err(e))));
-                    }
-                    None => snapshots.push(None),
-                }
-            }
-            on_finished(snapshots);
-        };
-
-        let batch = batch.into_iter().map(|ctx| {
-            let mut req = Request::new();
-            req.set_cmd_type(CmdType::Snap);
-
-            (ctx, vec![req])
-        });
-
-        self.batch_exec_snap_requests(batch.collect(), on_finished)
-            .map_err(|e| {
-                let status_kind = get_status_kind_from_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .snapshot
-                    .get(status_kind)
-                    .inc_by(batch_size as i64);
-                e.into()
-            })
     }
 }
 

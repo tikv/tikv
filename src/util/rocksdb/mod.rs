@@ -39,7 +39,7 @@ use util::file::{calc_crc32, copy_and_sync};
 use util::rocksdb;
 use util::rocksdb::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_TOTAL_SST_FILES_SIZE,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 
 pub use rocksdb::CFHandle;
@@ -165,7 +165,7 @@ fn check_and_open(
 
     let cf_descs = if !existed.is_empty() {
         // panic if OPTIONS not found for existing instance?
-        let (_, tmp) = load_latest_options(path, &Env::default(), false)
+        let (_, tmp) = load_latest_options(path, &Env::default(), true)
             .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
             .unwrap_or_else(|| panic!("couldn't find the OPTIONS file"));
         tmp
@@ -279,6 +279,11 @@ pub fn get_engine_compression_ratio_at_level(
         }
     }
     None
+}
+
+pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
+    let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
+    engine.get_property_int_cf(handle, &prop)
 }
 
 pub fn auto_compactions_is_disabled(engine: &DB) -> bool {
