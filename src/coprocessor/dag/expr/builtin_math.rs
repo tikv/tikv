@@ -425,6 +425,25 @@ impl ScalarFunc {
         };
         Ok(Some(r))
     }
+
+    #[inline]
+    pub fn truncate_decimal(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<Decimal>>> {
+        let x = try_opt!(self.children[0].eval_decimal(ctx, row));
+        let d = try_opt!(self.children[1].eval_int(ctx, row));
+        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            (d as u64).min(127) as i8
+        } else if d >= 0 {
+            d.min(127) as i8
+        } else {
+            d.max(-128) as i8
+        };
+        let r: Result<Decimal> = x.into_owned().round(d, RoundMode::Truncate).into();
+        r.map(|t| Some(Cow::Owned(t)))
+    }
 }
 
 fn get_rand(arg: Option<u64>) -> XorShiftRng {
@@ -451,7 +470,7 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
@@ -1569,6 +1588,119 @@ mod test {
                 Datum::F64(1.797693134862315708145274237317043567981e+308),
                 Datum::I64(2),
                 Datum::F64(1.797693134862315708145274237317043567981e+308),
+            ),
+        ];
+        check_truncate_data(tests);
+    }
+
+    #[test]
+    fn test_truncate_decimal() {
+        let tests = vec![
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("-1.23".parse().unwrap()),
+                Datum::I64(0),
+                Datum::Dec(Decimal::from(-1)),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("-1.23".parse().unwrap()),
+                Datum::I64(1),
+                Datum::Dec("-1.2".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("-11.23".parse().unwrap()),
+                Datum::I64(-1),
+                Datum::Dec("-10".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("1.58".parse().unwrap()),
+                Datum::I64(0),
+                Datum::Dec("1".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("1.58".parse().unwrap()),
+                Datum::I64(1),
+                Datum::Dec("1.5".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(-1),
+                Datum::Dec("20".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(-100),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(100),
+                Datum::Dec("23.298".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(200),
+                Datum::Dec("23.298".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::I64(-200),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("23.298".parse().unwrap()),
+                Datum::U64(u64::max_value()),
+                Datum::Dec("23.298".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec("1.999999999999999999999999999999".parse().unwrap()),
+                Datum::I64(31),
+                Datum::Dec("1.999999999999999999999999999999".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec(
+                    "99999999999999999999999999999999999999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+                Datum::I64(-66),
+                Datum::Dec("0".parse().unwrap()),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec(
+                    "99999999999999999999999999999999999.999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+                Datum::I64(31),
+                Datum::Dec(
+                    "99999999999999999999999999999999999.999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+            ),
+            (
+                ScalarFuncSig::TruncateDecimal,
+                Datum::Dec(
+                    "99999999999999999999999999999999999.999999999999999999999999999999"
+                        .parse()
+                        .unwrap(),
+                ),
+                Datum::I64(-36),
+                Datum::Dec("0".parse().unwrap()),
             ),
         ];
         check_truncate_data(tests);
