@@ -66,7 +66,7 @@ use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
-use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
@@ -243,8 +243,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Start auto gc
-    // TODO: call `start_auto_gc` only when it's enabled in configs.
-    if let Err(e) = storage.start_auto_gc(pd_client, region_collection.clone(), node.id()) {
+    let auto_gc_cfg = AutoGCConfig::new(pd_client, region_collection.clone(), node.id());
+    if let Err(e) = storage.start_auto_gc(auto_gc_cfg) {
         fatal!("failed to start auto_gc on storage, error: {:?}", e);
     }
 

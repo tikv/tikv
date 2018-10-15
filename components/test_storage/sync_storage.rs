@@ -21,8 +21,8 @@ use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
 use tikv::storage::{
-    self, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider, Result,
-    Storage, Value,
+    self, AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options,
+    RegionInfoProvider, Result, Storage, Value,
 };
 use tikv::util::collections::HashMap;
 
@@ -71,21 +71,11 @@ impl<E: Engine> SyncStorage<E> {
         self.store.start(config).unwrap();
     }
 
-    pub fn start_test_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
         &mut self,
-        safe_point_provider: S,
-        region_info_provider: R,
-        self_store_id: u64,
-        on_finished: Option<Box<Fn() + Send>>,
+        cfg: AutoGCConfig<S, R>,
     ) {
-        self.store
-            .start_test_auto_gc(
-                safe_point_provider,
-                region_info_provider,
-                self_store_id,
-                on_finished,
-            )
-            .unwrap();
+        self.store.start_auto_gc(cfg).unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E> {

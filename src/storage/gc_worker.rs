@@ -482,6 +482,56 @@ fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: u64) -> R
     wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap()
 }
 
+/// The configurations of the Automatic GC
+pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
+    pub safe_point_provider: S,
+    pub region_info_provider: R,
+
+    /// Used to find which peer of a region is on this TiKV, so that we can compose a `Context`.
+    pub self_store_id: u64,
+
+    pub poll_safe_point_interval: Duration,
+
+    /// If this is set, safe_point will be checked before doing GC on every region while working.
+    /// Otherwise safe_point will be only checked when `poll_safe_point_interval` has past since
+    /// last checking.
+    pub always_check_safe_point: bool,
+
+    /// This will be called when a round GC has finished and goes back to idle state.
+    pub on_gc_finished: Option<Box<Fn() + Send>>,
+}
+
+impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
+    /// Create a new config. Fields that are not mentioned in these params will be set to default.
+    pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
+        Self {
+            safe_point_provider,
+            region_info_provider,
+            self_store_id,
+            poll_safe_point_interval: Duration::from_secs(POLL_SAFE_POINT_INTERVAL_SECS),
+            always_check_safe_point: false,
+            on_gc_finished: None,
+        }
+    }
+
+    /// Create a config that is better for tests. The poll interval is as short as 0.1s and during
+    /// GC it will never skip checking safe point.
+    pub fn new_test_cfg(
+        safe_point_provider: S,
+        region_info_provider: R,
+        self_store_id: u64,
+    ) -> Self {
+        Self {
+            safe_point_provider,
+            region_info_provider,
+            self_store_id,
+            poll_safe_point_interval: Duration::from_millis(100),
+            always_check_safe_point: true,
+            on_gc_finished: None,
+        }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 enum GCManagerError {
     Stopped,
@@ -563,6 +613,7 @@ fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
     ctx
 }
 
+#[inline]
 fn set_status_metrics(state: &str) {
     for s in &[STATE_INIT, STATE_IDLE, STATE_WORKING] {
         AUTO_GC_STATUS_GAUGE_VEC
@@ -595,49 +646,25 @@ impl GCManagerHandle {
 
 /// `GCManager` scans regions and does gc automatically.
 struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
-    region_info_provider: R,
-    safe_point_provider: S,
-
-    /// Used to find which peer of a region is on this TiKV.
-    self_store_id: u64,
-
-    poll_safe_point_interval: Duration,
-
-    /// If this is set, safe_point will be checked before doing GC on every region while working.
-    /// Otherwise safe_point will be only checked when `poll_safe_point_interval` has past since
-    /// last checking.
-    always_check_safe_point: bool,
+    cfg: AutoGCConfig<S, R>,
 
     safe_point: u64,
 
     worker_scheduler: worker::Scheduler<GCTask>,
 
     gc_worker_context: GCManagerContext,
-
-    /// This will be called when a round GC has finished and goes back to idle state.
-    on_gc_finished: Option<Box<Fn() + Send>>,
 }
 
 impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     pub fn new(
-        region_info_provider: R,
-        safe_point_provider: S,
-        self_store_id: u64,
+        cfg: AutoGCConfig<S, R>,
         worker_scheduler: worker::Scheduler<GCTask>,
-        poll_safe_point_interval: Duration,
-        on_gc_finished: Option<Box<Fn() + Send>>,
-        always_check_safe_point: bool,
     ) -> GCManager<S, R> {
         GCManager {
-            region_info_provider,
-            safe_point_provider,
-            self_store_id,
-            poll_safe_point_interval,
-            always_check_safe_point,
+            cfg,
             safe_point: 0,
             worker_scheduler,
             gc_worker_context: GCManagerContext::new(),
-            on_gc_finished,
         }
     }
 
@@ -676,7 +703,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             set_status_metrics(STATE_WORKING);
             self.work()?;
 
-            if let Some(on_finished) = self.on_gc_finished.as_ref() {
+            if let Some(on_finished) = self.cfg.on_gc_finished.as_ref() {
                 on_finished();
             }
         }
@@ -757,7 +784,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
     #[inline]
     fn need_update_safe_point(&self, timer: &Instant) -> bool {
-        timer.elapsed() >= self.poll_safe_point_interval || self.always_check_safe_point
+        timer.elapsed() >= self.cfg.poll_safe_point_interval || self.cfg.always_check_safe_point
     }
 
     fn gc_once(&mut self, from_key: Key) -> GCManagerResult<Option<Key>> {
@@ -798,7 +825,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     }
 
     fn try_update_safe_point(&mut self) -> bool {
-        let safe_point = match self.safe_point_provider.get_safe_point() {
+        let safe_point = match self.cfg.safe_point_provider.get_safe_point() {
             Ok(res) => res,
             // Return false directly so we will check it a while later
             Err(e) => {
@@ -833,7 +860,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             }
 
             self.gc_worker_context
-                .sleep_or_stop(self.poll_safe_point_interval)?;
+                .sleep_or_stop(self.cfg.poll_safe_point_interval)?;
         }
     }
 
@@ -851,7 +878,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             // Loop until successfully invoking seek_region
             // TODO: Sould there be any better error handling?
             loop {
-                let res = self.region_info_provider.seek_region(
+                let res = self.cfg.region_info_provider.seek_region(
                     key.as_encoded(),
                     box |_, role| role == StateRole::Leader,
                     GC_SEEK_REGION_LIMIT,
@@ -873,7 +900,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                         Some(end_key)
                     };
 
-                    if let Some(peer) = find_peer(&region, self.self_store_id).cloned() {
+                    if let Some(peer) = find_peer(&region, self.cfg.self_store_id).cloned() {
                         let ctx = make_context(region, peer);
                         return Ok((Some(ctx), end_key));
                     }
@@ -946,38 +973,11 @@ impl<E: Engine> GCWorker<E> {
 
     pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
         &self,
-        safe_point_provider: S,
-        region_info_provider: R,
-        self_store_id: u64,
-    ) -> Result<()> {
-        self.start_auto_gc_with(
-            safe_point_provider,
-            region_info_provider,
-            self_store_id,
-            Duration::from_secs(POLL_SAFE_POINT_INTERVAL_SECS),
-            None,
-        )
-    }
-
-    pub fn start_auto_gc_with<S: GCSafePointProvider, R: RegionInfoProvider>(
-        &self,
-        safe_point_provider: S,
-        region_info_provider: R,
-        self_store_id: u64,
-        poll_safe_point_interval: Duration,
-        on_gc_finished: Option<Box<Fn() + Send>>,
+        cfg: AutoGCConfig<S, R>,
     ) -> Result<()> {
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GCManager::new(
-            region_info_provider,
-            safe_point_provider,
-            self_store_id,
-            self.worker_scheduler.clone(),
-            poll_safe_point_interval,
-            on_gc_finished,
-            false,
-        ).start()?;
+        let new_handle = GCManager::new(cfg, self.worker_scheduler.clone()).start()?;
         *handle = Some(new_handle);
         Ok(())
     }
@@ -1139,17 +1139,17 @@ mod tests {
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
-            let gc_manager = GCManager::new(
-                MockRegionInfoProvider { regions },
+            let mut cfg = AutoGCConfig::new(
                 MockSafePointProvider {
                     rx: safe_point_receiver,
                 },
+                MockRegionInfoProvider { regions },
                 1,
-                worker.scheduler(),
-                Duration::from_millis(100),
-                None,
-                true,
             );
+            cfg.poll_safe_point_interval = Duration::from_millis(100);
+            cfg.always_check_safe_point = true;
+
+            let gc_manager = GCManager::new(cfg, worker.scheduler());
             Self {
                 gc_manager: Some(gc_manager),
                 worker,

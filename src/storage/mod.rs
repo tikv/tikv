@@ -26,7 +26,6 @@ use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use std::u64;
 use util;
 use util::collections::HashMap;
@@ -48,7 +47,7 @@ pub use self::engine::{
     FlowStatistics, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
     Statistics, StatisticsSummary, TEMP_DIR,
 };
-pub use self::gc_worker::GCSafePointProvider;
+pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -464,28 +463,9 @@ impl<E: Engine> Storage<E> {
 
     pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
         &self,
-        safe_point_provider: S,
-        region_info_provider: R,
-        self_store_id: u64,
+        cfg: AutoGCConfig<S, R>,
     ) -> Result<()> {
-        self.gc_worker
-            .start_auto_gc(safe_point_provider, region_info_provider, self_store_id)
-    }
-
-    pub fn start_test_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
-        &self,
-        safe_point_provider: S,
-        region_info_provider: R,
-        self_store_id: u64,
-        on_gc_finished: Option<Box<Fn() + Send>>,
-    ) -> Result<()> {
-        self.gc_worker.start_auto_gc_with(
-            safe_point_provider,
-            region_info_provider,
-            self_store_id,
-            Duration::from_millis(100),
-            on_gc_finished,
-        )
+        self.gc_worker.start_auto_gc(cfg)
     }
 
     pub fn stop(&mut self) -> Result<()> {

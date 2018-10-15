@@ -22,8 +22,8 @@ use test_raftstore::*;
 use test_storage::*;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
-use tikv::storage::{self, Mutation};
-use tikv::storage::{engine, mvcc, txn, Engine, Key};
+use tikv::storage::{self, AutoGCConfig, Engine, Key, Mutation};
+use tikv::storage::{engine, mvcc, txn};
 use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
@@ -289,12 +289,10 @@ fn test_auto_gc() {
             config.gc_ratio_threshold = 0.9;
             let mut storage = SyncStorage::from_engine(engine.clone(), &config, read_pool);
             let tx = finish_signal_tx.clone();
-            storage.start_test_auto_gc(
-                Arc::clone(&pd_client),
-                engine.clone(),
-                *id,
-                Some(box move || tx.send(()).unwrap()),
-            );
+
+            let mut cfg = AutoGCConfig::new_test_cfg(Arc::clone(&pd_client), engine.clone(), *id);
+            cfg.on_gc_finished = Some(box move || tx.send(()).unwrap());
+            storage.start_auto_gc(cfg);
             (*id, storage)
         })
         .collect();
