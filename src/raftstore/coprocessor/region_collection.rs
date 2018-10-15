@@ -11,6 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+use std::collections::Bound::{Excluded, Unbounded};
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::sync::{mpsc, Arc, Mutex};
+use std::usize;
+
 use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
@@ -19,11 +25,6 @@ use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
 use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Unbounded};
-use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::{mpsc, Arc, Mutex};
-use std::usize;
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
 use util::collections::HashMap;
 use util::escape;
@@ -130,7 +131,7 @@ fn register_raftstore_event_sender(
 struct RegionCollectionWorker {
     // region_id -> (Region, State)
     regions: HashMap<u64, (Region, StateRole)>,
-    // region_id -> prefixed end key ('z' + key)
+    // 'z' + end_key -> region_id
     region_ranges: BTreeMap<Vec<u8>, u64>,
 }
 
