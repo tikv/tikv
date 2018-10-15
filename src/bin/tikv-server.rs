@@ -72,7 +72,7 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -386,7 +386,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    tikv_util::set_exit_hook(false, Some(guard));
 
     // Print version information.
     util::print_tikv_info();
