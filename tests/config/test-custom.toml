@@ -110,6 +110,7 @@ merge-max-log-gap = 3
 merge-check-tick-interval = "11s"
 use-delete-range = true
 cleanup-import-sst-interval = "12m"
+apply-pool-size = 3
 local-read-batch-size = 33
 store-pool-size = 4
 max-batch-size = 23

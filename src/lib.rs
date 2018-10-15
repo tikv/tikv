@@ -58,6 +58,7 @@ extern crate grpcio as grpc;
 extern crate hex;
 extern crate indexmap;
 extern crate kvproto;
+
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
@@ -75,6 +76,7 @@ extern crate raft;
 extern crate rand;
 extern crate regex;
 extern crate rocksdb;
+extern crate rustc_serialize;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;

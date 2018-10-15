@@ -144,6 +144,9 @@ quick_error!{
             description(err.description())
             display("Snapshot {}", err)
         }
+        Canceled {
+            description("Channel canceled")
+        }
     }
 }
 

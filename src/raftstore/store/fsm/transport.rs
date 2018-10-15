@@ -1368,6 +1368,8 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
             self.router.clone(),
             self.cfg.sync_log,
             self.cfg.use_delete_range,
+            self.cfg.apply_pool_size,
+            self.apply_scheduler(),
         );
         box_try!(self.apply_worker.start(apply_runner));
 
