@@ -1101,7 +1101,7 @@ mod tests {
                     region.set_start_key(start_key.clone());
                     region.set_end_key(end_key.clone());
                     let mut p = metapb::Peer::default();
-                    p.set_id(1);
+                    p.set_store_id(1);
                     region.mut_peers().push(p);
                     Ok(SeekRegionResult::Found(region))
                 }
