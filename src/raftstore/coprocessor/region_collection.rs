@@ -330,7 +330,6 @@ impl RegionCollection {
 
         register_raftstore_event_sender(host, scheduler.clone());
 
-        let scheduler = worker.scheduler();
         Self {
             worker: Arc::new(Mutex::new(worker)),
             scheduler,
