@@ -1,0 +1,7 @@
+[package]
+name = "panic_hook"
+version = "0.0.1"
+publish = false
+
+[lib]
+path = "lib.rs"
