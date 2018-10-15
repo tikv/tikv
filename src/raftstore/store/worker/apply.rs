@@ -1011,10 +1011,12 @@ impl ApplyDelegate {
 
         match change_type {
             ConfChangeType::AddNode => {
+                let _id = self.id;
+                let _region_id = self.region_id();
                 let add_ndoe_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        { self.id == 2 && self.region_id() == 1 },
+                        { _id == 2 && _region_id == 1 },
                         |_| {}
                     )
                 };
