@@ -410,10 +410,8 @@ mod tests {
             assert_eq!(end, idx);
         }
 
-        let (raw_name, end) = get_thread_name("(@#)").unwrap();
-        let name = sanitize_thread_name(1, raw_name);
-        assert_eq!(sanitize_thread_name(1, "@#"), "1");
-
+        let (raw_name, _) = get_thread_name("(@#)").unwrap();
+        assert_eq!(sanitize_thread_name(1, raw_name), "1");
         assert!(get_thread_name("invalid_stat").is_err());
     }
 
@@ -431,7 +429,7 @@ mod tests {
             utime,
             stime,
         } = get_thread_stat_internal(sample).unwrap();
-        assert_eq!(name, "test_thd");
+        assert_eq!(name, "test thd");
         assert_eq!(state, "S");
         assert_eq!(utime as i64, 839);
         assert_eq!(stime as i64, 138);
