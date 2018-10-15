@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
-use tikv::raftstore::coprocessor::RegionCollection;
+use tikv::raftstore::coprocessor::{RegionCollection, RegionInfo};
 use tikv::raftstore::store::keys::data_end_key;
 use tikv::raftstore::store::util::{find_peer, new_peer};
 use tikv::util::HandyRwLock;
@@ -30,7 +30,12 @@ fn dump(c: &RegionCollection) -> Vec<(Region, StateRole)> {
 
     let mut res = Vec::new();
     for (end_key, id) in region_ranges {
-        let (ref region, role) = regions[&id];
+        let RegionInfo {
+            ref region,
+            role,
+            outdated,
+        } = regions[&id];
+        assert!(!outdated);
         assert_eq!(end_key, data_end_key(region.get_end_key()));
         assert_eq!(id, region.get_id());
         res.push((region.clone(), role));

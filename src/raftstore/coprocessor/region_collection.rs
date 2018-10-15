@@ -50,7 +50,24 @@ enum RaftStoreEvent {
     RoleChange { region: Region, role: StateRole },
 }
 
-type RegionsMap = HashMap<u64, (Region, StateRole)>;
+#[derive(Clone, Debug)]
+pub struct RegionInfo {
+    pub region: Region,
+    pub role: StateRole,
+    pub outdated: bool,
+}
+
+impl RegionInfo {
+    pub fn new(region: Region, role: StateRole, outdated: bool) -> Self {
+        Self {
+            region,
+            role,
+            outdated,
+        }
+    }
+}
+
+type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 
 /// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
@@ -130,7 +147,7 @@ fn register_raftstore_event_sender(
 /// are also tracked.
 struct RegionCollectionWorker {
     // region_id -> (Region, State)
-    regions: HashMap<u64, (Region, StateRole)>,
+    regions: HashMap<u64, RegionInfo>,
     // 'z' + end_key -> region_id
     region_ranges: BTreeMap<Vec<u8>, u64>,
 }
@@ -157,13 +174,16 @@ impl RegionCollectionWorker {
         self.region_ranges
             .insert(data_end_key(region.get_end_key()), region.get_id());
         // TODO: Should we set it follower?
-        self.regions
-            .insert(region.get_id(), (region, StateRole::Follower));
+        self.regions.insert(
+            region.get_id(),
+            RegionInfo::new(region, StateRole::Follower, false),
+        );
     }
 
     fn handle_update_region(&mut self, region: Region) {
         let mut is_new_region = true;
-        if let Some((ref mut old_region, _)) = self.regions.get_mut(&region.get_id()) {
+        if let Some(ref mut old_region_info) = self.regions.get_mut(&region.get_id()) {
+            let old_region = &mut old_region_info.region;
             is_new_region = false;
             assert_eq!(old_region.get_id(), region.get_id());
 
@@ -196,8 +216,10 @@ impl RegionCollectionWorker {
             );
             // If it's a new region, set it to follower state.
             // TODO: Should we set it follower?
-            self.regions
-                .insert(region.get_id(), (region.clone(), StateRole::Follower));
+            self.regions.insert(
+                region.get_id(),
+                RegionInfo::new(region.clone(), StateRole::Follower, false),
+            );
         }
 
         // If the end_key changed or the region didn't exist previously, insert a new item;
@@ -208,7 +230,8 @@ impl RegionCollectionWorker {
     }
 
     fn handle_destroy_region(&mut self, region: Region) {
-        if let Some((removed_region, _)) = self.regions.remove(&region.get_id()) {
+        if let Some(removed_region_info) = self.regions.remove(&region.get_id()) {
+            let removed_region = removed_region_info.region;
             assert_eq!(removed_region.get_id(), region.get_id());
             let end_key = data_end_key(removed_region.get_end_key());
 
@@ -233,7 +256,7 @@ impl RegionCollectionWorker {
             self.handle_create_region(region);
         }
 
-        let role = &mut self.regions.get_mut(&region_id).unwrap().1;
+        let role = &mut self.regions.get_mut(&region_id).unwrap().role;
         *role = new_role;
     }
 
@@ -248,8 +271,12 @@ impl RegionCollectionWorker {
 
         let from_key = data_key(&from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
-            let (region, role) = &self.regions[region_id];
-            if filter(region, *role) {
+            let RegionInfo {
+                region,
+                role,
+                outdated,
+            } = &self.regions[region_id];
+            if !outdated && filter(region, *role) {
                 callback(SeekRegionResult::Found(region.clone()));
                 return;
             }
@@ -418,11 +445,16 @@ mod tests {
         if is_regions_equal {
             for (expect_region, expect_role) in regions {
                 is_regions_equal = is_regions_equal
-                    && c.regions
-                        .get(&expect_region.get_id())
-                        .map_or(false, |(region, role)| {
-                            expect_region == region && expect_role == role
-                        });
+                    && c.regions.get(&expect_region.get_id()).map_or(
+                        false,
+                        |RegionInfo {
+                             region,
+                             role,
+                             outdated,
+                         }| {
+                            !*outdated && expect_region == region && expect_role == role
+                        },
+                    );
 
                 if !is_regions_equal {
                     break;
@@ -469,7 +501,7 @@ mod tests {
 
         c.handle_create_region(region.clone());
 
-        assert_eq!(&c.regions[&region.get_id()].0, region);
+        assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
             c.region_ranges[&data_end_key(region.get_end_key())],
             region.get_id()
@@ -478,11 +510,11 @@ mod tests {
 
     fn must_update_region(c: &mut RegionCollectionWorker, region: &Region) {
         assert!(c.regions.get(&region.get_id()).is_some());
-        let old_end_key = c.regions[&region.get_id()].0.get_end_key().to_vec();
+        let old_end_key = c.regions[&region.get_id()].region.get_end_key().to_vec();
 
         c.handle_update_region(region.clone());
 
-        assert_eq!(&c.regions[&region.get_id()].0, region);
+        assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
             c.region_ranges[&data_end_key(region.get_end_key())],
             region.get_id()
@@ -499,7 +531,7 @@ mod tests {
     }
 
     fn must_destroy_region(c: &mut RegionCollectionWorker, id: u64) {
-        let end_key = c.regions[&id].0.get_end_key().to_vec();
+        let end_key = c.regions[&id].region.get_end_key().to_vec();
 
         c.handle_destroy_region(new_region(id, b"", b""));
 
@@ -518,7 +550,7 @@ mod tests {
 
         c.handle_role_change(region.clone(), role);
 
-        assert_eq!(c.regions[&region.get_id()].1, role);
+        assert_eq!(c.regions[&region.get_id()].role, role);
     }
 
     #[test]
