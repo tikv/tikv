@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.8]
+### Bug Fix
+* Fix the issue that the memory consumed by Raftstore `EntryCache` keeps increasing when a node goes down [3529](https://github.com/tikv/tikv/pull/3529)
+
 ## [2.0.7]
 ### Improvements
 * Enable dynamic-level-bytes by default to reduce space amplification
