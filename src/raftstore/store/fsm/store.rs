@@ -1107,6 +1107,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(event_loop),
             Tick::CleanupImportSST => self.on_cleanup_import_sst_tick(event_loop),
         }
+        RAFT_EVENT_DURATION
+            .with_label_values(&[timeout.tag()])
+            .observe(duration_to_sec(t.elapsed()) as f64);
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
 
