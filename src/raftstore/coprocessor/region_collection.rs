@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 use std::usize;
@@ -22,8 +23,11 @@ use super::{
 };
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::store::keys::data_end_key;
+use raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
+use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
+use storage::engine::{RegionInfoProvider, Result as EngineResult};
 use util::collections::HashMap;
+use util::escape;
 use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
@@ -69,6 +73,12 @@ type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 /// done by sending commands to the thread.
 enum RegionCollectionMsg {
     RaftStoreEvent(RaftStoreEvent),
+    SeekRegion {
+        from: Vec<u8>,
+        filter: SeekRegionFilter,
+        limit: u32,
+        callback: SeekRegionCallback,
+    },
     /// Get all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -77,6 +87,9 @@ impl Display for RegionCollectionMsg {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         match self {
             RegionCollectionMsg::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
+            RegionCollectionMsg::SeekRegion { from, limit, .. } => {
+                write!(f, "SeekRegion(from: {}, limit: {})", escape(from), limit)
+            }
             RegionCollectionMsg::DebugDump(_) => write!(f, "DebugDump"),
         }
     }
@@ -284,6 +297,40 @@ impl RegionCollectionWorker {
         }
     }
 
+    fn handle_seek_region(
+        &self,
+        from_key: Vec<u8>,
+        filter: SeekRegionFilter,
+        mut limit: u32,
+        callback: SeekRegionCallback,
+    ) {
+        assert!(limit > 0);
+
+        let from_key = data_key(&from_key);
+        for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
+            let RegionInfo { region, role } = &self.regions[region_id];
+            if filter(region, *role) {
+                callback(SeekRegionResult::Found(region.clone()));
+                return;
+            }
+
+            limit -= 1;
+            if limit == 0 {
+                // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
+                // than `LimitExceeded`.
+                if end_key.as_slice() >= DATA_MAX_KEY {
+                    break;
+                }
+
+                callback(SeekRegionResult::LimitExceeded {
+                    next_key: origin_key(end_key).to_vec(),
+                });
+                return;
+            }
+        }
+        callback(SeekRegionResult::Ended);
+    }
+
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
             RaftStoreEvent::CreateRegion { region } => {
@@ -307,6 +354,14 @@ impl Runnable<RegionCollectionMsg> for RegionCollectionWorker {
         match task {
             RegionCollectionMsg::RaftStoreEvent(event) => {
                 self.handle_raftstore_event(event);
+            }
+            RegionCollectionMsg::SeekRegion {
+                from,
+                filter,
+                limit,
+                callback,
+            } => {
+                self.handle_seek_region(from, filter, limit, callback);
             }
             RegionCollectionMsg::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -362,6 +417,41 @@ impl RegionCollection {
             .schedule(RegionCollectionMsg::DebugDump(tx))
             .unwrap();
         rx.recv().unwrap()
+    }
+}
+
+impl RegionInfoProvider for RegionCollection {
+    fn seek_region(
+        &self,
+        from: &[u8],
+        filter: SeekRegionFilter,
+        limit: u32,
+    ) -> EngineResult<SeekRegionResult> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionCollectionMsg::SeekRegion {
+            from: from.to_vec(),
+            filter,
+            limit,
+            callback: box move |res| {
+                tx.send(res).unwrap_or_else(|e| {
+                    panic!(
+                        "region collection failed to send result back to caller: {:?}",
+                        e
+                    )
+                })
+            },
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collection: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive seek region result from region collection: {:?}",
+                        e
+                    )
+                })
+            })
     }
 }
 
