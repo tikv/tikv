@@ -164,8 +164,8 @@ impl RegionCollectionWorker {
     /// operation is caused by a stale message. Then this function should fail.
     ///
     /// Returns a bool value indicating whether checking succeeded.
-    fn check_end_key_collision(&mut self, region_id: u64, version: u64, end_key: &Vec<u8>) -> bool {
-        if let Some(collided_region_id) = self.region_ranges.get(&end_key).cloned() {
+    fn check_end_key_collision(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
+        if let Some(collided_region_id) = self.region_ranges.get(end_key).cloned() {
             // There is already another region with the same end_key
             assert_ne!(collided_region_id, region_id);
 
