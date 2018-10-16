@@ -50,8 +50,6 @@
 # addr = "127.0.0.1:20160"
 # set advertise listening address for client communication, if not set, use addr instead.
 # advertise-addr = ""
-# notify capacity, 40960 is suitable for about 7000 regions.
-# notify-capacity = 40960
 
 # compression type for grpc channel, available values are none, deflate and gzip.
 # grpc-compression-type = "none"
