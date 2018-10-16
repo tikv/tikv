@@ -30,12 +30,7 @@ fn dump(c: &RegionCollection) -> Vec<(Region, StateRole)> {
 
     let mut res = Vec::new();
     for (end_key, id) in region_ranges {
-        let RegionInfo {
-            ref region,
-            role,
-            outdated,
-        } = regions[&id];
-        assert!(!outdated);
+        let RegionInfo { ref region, role } = regions[&id];
         assert_eq!(end_key, data_end_key(region.get_end_key()));
         assert_eq!(id, region.get_id());
         res.push((region.clone(), role));

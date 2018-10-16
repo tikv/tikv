@@ -54,16 +54,11 @@ enum RaftStoreEvent {
 pub struct RegionInfo {
     pub region: Region,
     pub role: StateRole,
-    pub outdated: bool,
 }
 
 impl RegionInfo {
-    pub fn new(region: Region, role: StateRole, outdated: bool) -> Self {
-        Self {
-            region,
-            role,
-            outdated,
-        }
+    pub fn new(region: Region, role: StateRole) -> Self {
+        Self { region, role }
     }
 }
 
@@ -162,13 +157,11 @@ impl RegionCollectionWorker {
 
     fn handle_create_region(&mut self, region: Region) {
         if self.regions.get(&region.get_id()).is_some() {
-            warn!(
+            panic!(
                 "region_collection: trying to create new region {} but it already exists. \
                  try to update it.",
                 region.get_id(),
             );
-            self.handle_update_region(region);
-            return;
         }
 
         self.region_ranges
@@ -176,7 +169,7 @@ impl RegionCollectionWorker {
         // TODO: Should we set it follower?
         self.regions.insert(
             region.get_id(),
-            RegionInfo::new(region, StateRole::Follower, false),
+            RegionInfo::new(region, StateRole::Follower),
         );
     }
 
@@ -218,7 +211,7 @@ impl RegionCollectionWorker {
             // TODO: Should we set it follower?
             self.regions.insert(
                 region.get_id(),
-                RegionInfo::new(region.clone(), StateRole::Follower, false),
+                RegionInfo::new(region.clone(), StateRole::Follower),
             );
         }
 
@@ -271,12 +264,8 @@ impl RegionCollectionWorker {
 
         let from_key = data_key(&from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
-            let RegionInfo {
-                region,
-                role,
-                outdated,
-            } = &self.regions[region_id];
-            if !outdated && filter(region, *role) {
+            let RegionInfo { region, role } = &self.regions[region_id];
+            if filter(region, *role) {
                 callback(SeekRegionResult::Found(region.clone()));
                 return;
             }
@@ -447,12 +436,8 @@ mod tests {
                 is_regions_equal = is_regions_equal
                     && c.regions.get(&expect_region.get_id()).map_or(
                         false,
-                        |RegionInfo {
-                             region,
-                             role,
-                             outdated,
-                         }| {
-                            !*outdated && expect_region == region && expect_role == role
+                        |RegionInfo { region, role }| {
+                            expect_region == region && expect_role == role
                         },
                     );
 
