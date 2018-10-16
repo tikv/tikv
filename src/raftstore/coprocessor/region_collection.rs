@@ -159,25 +159,41 @@ impl RegionCollectionWorker {
         }
     }
 
+    /// Check if the end_key has collided with another region. If so, try to clean it.
+    /// If the collided region has a greater version than the current one, it means that the current
+    /// operation is caused by a stale message. Then this function should fail.
+    ///
+    /// Returns a bool value indicating whether checking succeeded.
+    fn check_end_key_collision(&mut self, region_id: u64, version: u64, end_key: &Vec<u8>) -> bool {
+        if let Some(collided_region_id) = self.region_ranges.get(&end_key).cloned() {
+            // There is already another region with the same end_key
+            assert_ne!(collided_region_id, region_id);
+
+            let collided_region_version = self.regions[&collided_region_id]
+                .region
+                .get_region_epoch()
+                .get_version();
+            if version < collided_region_version {
+                // Another region is the actual new region. Now we are trying to create a region
+                // because of a old message. Fail.
+                return false;
+            }
+            // Another region is stale. Remove it.
+            self.regions.remove(&collided_region_id);
+        }
+        true
+    }
+
     fn handle_create_region(&mut self, region: Region) {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
-        if let Some(old_region_id) = self.region_ranges.get(&end_key).cloned() {
-            // There is already another region with the same end_key
-            assert_ne!(old_region_id, region_id);
-
-            let old_region_version = self.regions[&old_region_id]
-                .region
-                .get_region_epoch()
-                .get_version();
-            if region.get_region_epoch().get_version() < old_region_version {
-                // Another region is the actual new region. Now we are trying to create a region
-                // because of a old message. Ignore it.
-                return;
-            }
-            // Another region is stale. Remove it.
-            self.regions.remove(&old_region_id);
+        if !self.check_end_key_collision(
+            region_id,
+            region.get_region_epoch().get_version(),
+            &end_key,
+        ) {
+            return;
         }
 
         // Create new region
@@ -229,20 +245,13 @@ impl RegionCollectionWorker {
             // However, if the new_end_key has already mapped to another region, we should only
             // keep the one with higher `version`.
             let end_key = data_end_key(region.get_end_key());
-            if let Some(collided_region_id) = self.region_ranges.get(&end_key).cloned() {
-                assert_ne!(collided_region_id, region.get_id());
-
-                let collided_region_version = self.regions[&collided_region_id]
-                    .region
-                    .get_region_epoch()
-                    .get_version();
-                if region.get_region_epoch().get_version() < collided_region_version {
-                    // The update is caused by a stale message. Do not update. The region should
-                    // be deleted.
-                    self.regions.remove(&region.get_id());
-                    return;
-                }
-                self.regions.remove(&collided_region_id);
+            if !self.check_end_key_collision(
+                region.get_id(),
+                region.get_region_epoch().get_version(),
+                &end_key,
+            ) {
+                self.regions.remove(&region.get_id());
+                return;
             }
             // Insert new entry to `region_ranges`.
             self.region_ranges.insert(end_key, region.get_id());
