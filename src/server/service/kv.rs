@@ -1515,7 +1515,7 @@ fn future_cop<E: Engine>(
     peer: Option<String>,
 ) -> impl Future<Item = Response, Error = Error> {
     cop.parse_and_handle_unary_request(req, peer)
-        .then(|r| future::ok::<_, _>(r.unwrap()))
+        .map_err(|_| unreachable!())
 }
 
 fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
