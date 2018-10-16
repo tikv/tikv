@@ -82,6 +82,7 @@ pub struct Config {
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
+    pub enable_load_statistics: bool,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -132,6 +133,7 @@ impl Default for Config {
             ),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
+            enable_load_statistics: true,
         }
     }
 }

@@ -12,6 +12,7 @@
 // limitations under the License.
 use std::iter::{self, FromIterator};
 use std::mem;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 
@@ -28,8 +29,7 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use kvproto::tikvpb_grpc;
 use protobuf::RepeatedField;
-use tokio::executor::thread_pool;
-use tokio::runtime::{self, Runtime, TaskExecutor};
+use tokio::runtime::{Runtime, TaskExecutor};
 
 use coprocessor::Endpoint;
 use raftstore::store::{Callback, Msg as StoreMessage};
@@ -60,8 +60,10 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
 
-    // A helper thread for super batch.
-    batch_commands_runtime: Arc<Runtime>,
+    // A helper thread for super batch. It's used to collect responses for batch_commands
+    // interface.
+    helper_runtime: Arc<Runtime>,
+    in_heavy_load: Arc<AtomicBool>,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
@@ -70,22 +72,16 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
+        helper_runtime: Arc<Runtime>,
+        in_heavy_load: Arc<AtomicBool>,
     ) -> Self {
-        let mut tp_builder = thread_pool::Builder::new();
-        tp_builder.pool_size(1).name_prefix("super-batch");
-        let batch_commands_runtime = Arc::new(
-            runtime::Builder::new()
-                .threadpool_builder(tp_builder)
-                .build()
-                .unwrap(),
-        );
-
         Service {
             storage,
             cop,
             ch,
             snap_scheduler,
-            batch_commands_runtime,
+            helper_runtime,
+            in_heavy_load,
         }
     }
 
@@ -164,7 +160,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         unimplemented!();
     }
 
-    fn kv_cleanup(&mut self, ctx: RpcContext, req: CleanupRequest, sink: UnarySink<CleanupResponse>) {
+    fn kv_cleanup(
+        &mut self,
+        ctx: RpcContext,
+        req: CleanupRequest,
+        sink: UnarySink<CleanupResponse>,
+    ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
         let future = future_cleanup(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -716,7 +717,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         sink: DuplexSink<BatchCommandsResponse>,
     ) {
         let (tx, rx) = unbounded();
-        let executor = self.batch_commands_runtime.executor();
+        let executor = self.helper_runtime.executor();
 
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
@@ -745,7 +746,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             request_handler.map_err(|e| error!("error when receiving super-batch requests: {}", e)),
         );
 
-        let response_retriever = BatchCommandsRetriever::new(rx)
+        let response_retriever = BatchCommandsRetriever::new(rx, Arc::clone(&self.in_heavy_load))
             .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
             .map(|r| (r, WriteFlags::default().buffer_hint(false)))
             .map_err(|e| {
@@ -925,13 +926,18 @@ fn handle_batch_commands_request<E: Engine>(
 // TODO: wait 2ms to avoid little batch.
 struct BatchCommandsRetriever {
     receiver: Receiver<(u64, BatchCommandsResponse_Response)>,
+    in_heavy_load: Arc<AtomicBool>,
     current_resp: BatchCommandsResponse,
 }
 
 impl BatchCommandsRetriever {
-    fn new(rx: Receiver<(u64, BatchCommandsResponse_Response)>) -> Self {
+    fn new(
+        rx: Receiver<(u64, BatchCommandsResponse_Response)>,
+        in_heavy_load: Arc<AtomicBool>,
+    ) -> Self {
         BatchCommandsRetriever {
             receiver: rx,
+            in_heavy_load,
             current_resp: BatchCommandsResponse::default(),
         }
     }
@@ -971,7 +977,8 @@ impl Stream for BatchCommandsRetriever {
             return Ok(Async::NotReady);
         }
 
-        let resp = mem::replace(&mut self.current_resp, BatchCommandsResponse::default());
+        let mut resp = mem::replace(&mut self.current_resp, BatchCommandsResponse::default());
+        resp.set_in_heavy_load(self.in_heavy_load.load(Ordering::SeqCst));
         Ok(Async::Ready(Some(resp)))
     }
 }
