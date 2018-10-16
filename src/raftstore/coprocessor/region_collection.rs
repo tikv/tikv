@@ -40,6 +40,10 @@ const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 /// called, it also simply send a message to `RegionCollectionWorker`, and the result will be send
 /// back through as soon as it's finished.
 /// In fact, the channel mentioned above is actually a `util::worker::Worker`.
+///
+/// **Caution**: Note that the information in `RegionCollection` is not perfectly precise. Some
+/// regions may be absent while merging or splitting is in progress. Also, `RegionCollection` may
+/// slightly lag actual regions on the TiKV.
 
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
@@ -156,70 +160,102 @@ impl RegionCollectionWorker {
     }
 
     fn handle_create_region(&mut self, region: Region) {
-        if self.regions.get(&region.get_id()).is_some() {
-            panic!(
-                "region_collection: trying to create new region {} but it already exists. \
-                 try to update it.",
-                region.get_id(),
-            );
+        let end_key = data_end_key(region.get_end_key());
+        let region_id = region.get_id();
+
+        if let Some(old_region_id) = self.region_ranges.get(&end_key).cloned() {
+            // There is already another region with the same end_key
+            assert_ne!(old_region_id, region_id);
+
+            let old_region_version = self.regions[&old_region_id]
+                .region
+                .get_region_epoch()
+                .get_version();
+            if region.get_region_epoch().get_version() < old_region_version {
+                // Another region is the actual new region. Now we are trying to create a region
+                // because of a old message. Ignore it.
+                return;
+            }
+            // Another region is stale. Remove it.
+            self.regions.remove(&old_region_id);
         }
 
-        self.region_ranges
-            .insert(data_end_key(region.get_end_key()), region.get_id());
+        // Create new region
+        self.region_ranges.insert(end_key, region.get_id());
+
         // TODO: Should we set it follower?
-        self.regions.insert(
-            region.get_id(),
-            RegionInfo::new(region, StateRole::Follower),
-        );
+        if self
+            .regions
+            .insert(
+                region.get_id(),
+                RegionInfo::new(region, StateRole::Follower),
+            )
+            .is_some()
+        {
+            panic!(
+                "region_collection: trying to create new region {} but it already exists.",
+                region_id,
+            );
+        }
     }
 
     fn handle_update_region(&mut self, region: Region) {
-        let mut is_new_region = true;
+        let mut need_create_new_region = true;
+        let mut end_key_updated = false;
+
         if let Some(ref mut old_region_info) = self.regions.get_mut(&region.get_id()) {
+            need_create_new_region = false;
+
             let old_region = &mut old_region_info.region;
-            is_new_region = false;
             assert_eq!(old_region.get_id(), region.get_id());
 
             // If the end_key changed, the old item in `region_ranges` should be removed.
-            // However it shouldn't be removed if it was already updated by another region. In this
-            // case, let `old_end_key = old_region.get_end_key`, then
-            // `self.region_ranges[old_end_key]` should be another region's id.
             if old_region.get_end_key() != region.get_end_key() {
+                end_key_updated = true;
                 // The region's end_key has changed.
-                // Remove the old entry in `self.region_ranges` if it haven't been updated by
-                // other items in `regions`.
+                // Remove the old entry in `self.region_ranges`.
                 let old_end_key = data_end_key(old_region.get_end_key());
-                if let Some(old_id) = self.region_ranges.get(&old_end_key).cloned() {
-                    // If they are not equal, we shouldn't remove it because it was updated by
-                    // another region.
-                    if old_id == region.get_id() {
-                        self.region_ranges.remove(&old_end_key);
-                    }
-                }
+
+                let old_id = self.region_ranges.remove(&old_end_key).unwrap();
+                assert_eq!(old_id, region.get_id());
             }
 
             // If the region already exists, update it and keep the original role.
             *old_region = region.clone();
         }
 
-        if is_new_region {
-            warn!(
-                "region_collection: trying to update region {} but it doesn't exist.",
-                region.get_id()
-            );
-            // If it's a new region, set it to follower state.
-            // TODO: Should we set it follower?
-            self.regions.insert(
-                region.get_id(),
-                RegionInfo::new(region.clone(), StateRole::Follower),
-            );
+        if end_key_updated {
+            // If the region already exists, then `region_ranges` need to be updated.
+            // However, if the new_end_key has already mapped to another region, we should only
+            // keep the one with higher `version`.
+            let end_key = data_end_key(region.get_end_key());
+            if let Some(collided_region_id) = self.region_ranges.get(&end_key).cloned() {
+                assert_ne!(collided_region_id, region.get_id());
+
+                let collided_region_version = self.regions[&collided_region_id]
+                    .region
+                    .get_region_epoch()
+                    .get_version();
+                if region.get_region_epoch().get_version() < collided_region_version {
+                    // The update is caused by a stale message. Do not update. The region should
+                    // be deleted.
+                    self.regions.remove(&region.get_id());
+                    return;
+                }
+                self.regions.remove(&collided_region_id);
+            }
+            // Insert new entry to `region_ranges`.
+            self.region_ranges.insert(end_key, region.get_id());
         }
 
-        // If the end_key changed or the region didn't exist previously, insert a new item;
-        // otherwise, update the old item. All regions in param `regions` must have unique
-        // end_keys, so it won't conflict with each other.
-        self.region_ranges
-            .insert(data_end_key(region.get_end_key()), region.get_id());
+        if need_create_new_region {
+            warn!(
+                "region_collection: trying to update region {} but it doesn't exist. create it.",
+                region.get_id()
+            );
+            // It's a new region. Create it.
+            self.handle_create_region(region);
+        }
     }
 
     fn handle_destroy_region(&mut self, region: Region) {
@@ -228,14 +264,12 @@ impl RegionCollectionWorker {
             assert_eq!(removed_region.get_id(), region.get_id());
             let end_key = data_end_key(removed_region.get_end_key());
 
-            // The entry may be updated by other regions.
-            if let Some(id) = self.region_ranges.get(&end_key).cloned() {
-                if id == region.get_id() {
-                    self.region_ranges.remove(&end_key);
-                }
-            }
+            let removed_id = self.region_ranges.remove(&end_key).unwrap();
+            assert_eq!(removed_id, region.get_id());
         } else {
-            warn!(
+            // It's possible that the region is already removed because it's end_key is used by
+            // another newer region.
+            debug!(
                 "region_collection: destroying region {} but it doesn't exist",
                 region.get_id()
             )
@@ -494,8 +528,10 @@ mod tests {
     }
 
     fn must_update_region(c: &mut RegionCollectionWorker, region: &Region) {
-        assert!(c.regions.get(&region.get_id()).is_some());
-        let old_end_key = c.regions[&region.get_id()].region.get_end_key().to_vec();
+        let old_end_key = c
+            .regions
+            .get(&region.get_id())
+            .map(|r| r.region.get_end_key().to_vec());
 
         c.handle_update_region(region.clone());
 
@@ -506,28 +542,32 @@ mod tests {
         );
         // If end_key is updated and the region_id corresponding to the `old_end_key` doesn't equals
         // to `region_id`, it shouldn't be removed since it was used by another region.
-        if old_end_key.as_slice() != region.get_end_key() {
-            assert!(
-                c.region_ranges
-                    .get(&data_end_key(&old_end_key))
-                    .map_or(true, |id| *id != region.get_id())
-            );
+        if let Some(old_end_key) = old_end_key {
+            if old_end_key.as_slice() != region.get_end_key() {
+                assert!(
+                    c.region_ranges
+                        .get(&data_end_key(&old_end_key))
+                        .map_or(true, |id| *id != region.get_id())
+                );
+            }
         }
     }
 
     fn must_destroy_region(c: &mut RegionCollectionWorker, id: u64) {
-        let end_key = c.regions[&id].region.get_end_key().to_vec();
+        let end_key = c.regions.get(&id).map(|r| r.region.get_end_key().to_vec());
 
         c.handle_destroy_region(new_region(id, b"", b""));
 
         assert!(c.regions.get(&id).is_none());
         // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
         // removed since it was used by another region.
-        assert!(
-            c.region_ranges
-                .get(&data_end_key(&end_key))
-                .map_or(true, |r| *r != id)
-        );
+        if let Some(end_key) = end_key {
+            assert!(
+                c.region_ranges
+                    .get(&data_end_key(&end_key))
+                    .map_or(true, |r| *r != id)
+            );
+        }
     }
 
     fn must_change_role(c: &mut RegionCollectionWorker, region: &Region, role: StateRole) {
