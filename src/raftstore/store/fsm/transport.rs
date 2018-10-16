@@ -825,7 +825,7 @@ struct Poller<T, C: 'static> {
     scheduler: Scheduler,
     cfg: Arc<Config>,
     ctx: PollContext<T, C>,
-    timer: Option<SlowTimer>,
+    timer: SlowTimer,
 }
 
 impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
@@ -897,8 +897,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
             }
         }
 
-        let t = self.timer.take().unwrap();
-        let dur = t.elapsed();
+        let dur = self.timer.elapsed();
         if !self.ctx.is_busy {
             let election_timeout = Duration::from_millis(
                 self.cfg.raft_base_tick_interval.as_millis()
@@ -912,17 +911,13 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
         self.ctx
             .raft_metrics
             .append_log
-            .observe(duration_to_sec(t.elapsed()) as f64);
-
-        self.ctx
-            .raft_metrics
-            .process_ready
             .observe(duration_to_sec(dur) as f64);
 
         self.ctx.trans.flush();
+        self.ctx.need_flush_trans = false;
 
         slow_log!(
-            t,
+            self.timer,
             "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
              snapshots",
             self.tag,
@@ -945,6 +940,8 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
         self.scheduler.fetch_batch(&mut batches, batch_size);
         batch_size_observer.observe(batches.fsm_holders.len() as f64);
         while !batches.fsm_holders.is_empty() {
+            self.timer = SlowTimer::new();
+            let mut has_ready = false;
             if batches.store.is_some() {
                 let to_release = {
                     let mut s = batches.store.as_mut().unwrap();
@@ -963,9 +960,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                 let mut peer = Peer::new(&mut p.peer, &mut self.ctx, &self.scheduler);
                 let polled = peer.poll(&p.receiver, &mut msgs);
                 if peer.peer.has_ready && !peer.peer.stopped {
-                    if self.timer.is_none() {
-                        self.timer = Some(SlowTimer::new());
-                    }
+                    has_ready = true;
                     if let Some(p) = peer.peer.take_apply_proposals() {
                         if pending_proposals.capacity() == 0 {
                             pending_proposals = Vec::with_capacity(pending_cnt);
@@ -982,7 +977,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     exhausted_peers.push((i, false));
                 }
             }
-            if self.timer.is_some() {
+            if has_ready {
                 self.handle_raft_ready(
                     pending_cnt,
                     &mut batches.peers,
@@ -1009,6 +1004,10 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     batches.remove_peer(r);
                 }
             }
+            self.ctx
+                .raft_metrics
+                .process_ready
+                .observe(duration_to_sec(self.timer.elapsed()) as f64);
             self.ctx.raft_metrics.flush();
             if batches.fsm_holders.is_empty() {
                 batch_size = cmp::min(batch_size + 1, self.cfg.max_batch_size);
@@ -1446,7 +1445,7 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
                 tag: self.tag.clone(),
                 cfg: self.cfg.clone(),
                 ctx: self.poll_context(),
-                timer: None,
+                timer: SlowTimer::new(),
             };
             self.workers.push(
                 thread::Builder::new()
