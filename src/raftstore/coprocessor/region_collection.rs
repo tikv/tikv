@@ -283,8 +283,9 @@ impl RegionCollectionWorker {
             self.handle_create_region(region);
         }
 
-        let role = &mut self.regions.get_mut(&region_id).unwrap().role;
-        *role = new_role;
+        if let Some(r) = self.regions.get_mut(&region_id) {
+            r.role = new_role;
+        }
     }
 
     fn handle_seek_region(
@@ -449,11 +450,12 @@ impl RegionInfoProvider for RegionCollection {
 mod tests {
     use super::*;
 
-    fn new_region(id: u64, start_key: &[u8], end_key: &[u8]) -> Region {
+    fn new_region(id: u64, start_key: &[u8], end_key: &[u8], version: u64) -> Region {
         let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key.to_vec());
         region.set_end_key(end_key.to_vec());
+        region.mut_region_epoch().set_version(version);
         region
     }
 
@@ -535,11 +537,20 @@ mod tests {
 
         c.handle_update_region(region.clone());
 
-        assert_eq!(&c.regions[&region.get_id()].region, region);
-        assert_eq!(
-            c.region_ranges[&data_end_key(region.get_end_key())],
-            region.get_id()
-        );
+        if let Some(r) = c.regions.get(&region.get_id()) {
+            assert_eq!(r.region, *region);
+            assert_eq!(
+                c.region_ranges[&data_end_key(region.get_end_key())],
+                region.get_id()
+            );
+        } else {
+            let another_region_id = c.region_ranges[&data_end_key(region.get_end_key())];
+            let version = c.regions[&another_region_id]
+                .region
+                .get_region_epoch()
+                .get_version();
+            assert!(region.get_region_epoch().get_version() < version);
+        }
         // If end_key is updated and the region_id corresponding to the `old_end_key` doesn't equals
         // to `region_id`, it shouldn't be removed since it was used by another region.
         if let Some(old_end_key) = old_end_key {
@@ -556,7 +567,7 @@ mod tests {
     fn must_destroy_region(c: &mut RegionCollectionWorker, id: u64) {
         let end_key = c.regions.get(&id).map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_destroy_region(new_region(id, b"", b""));
+        c.handle_destroy_region(new_region(id, b"", b"", 1));
 
         assert!(c.regions.get(&id).is_none());
         // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
@@ -571,52 +582,56 @@ mod tests {
     }
 
     fn must_change_role(c: &mut RegionCollectionWorker, region: &Region, role: StateRole) {
-        assert!(c.regions.get(&region.get_id()).is_some());
-
         c.handle_role_change(region.clone(), role);
 
-        assert_eq!(c.regions[&region.get_id()].role, role);
+        if let Some(r) = c.regions.get(&region.get_id()) {
+            assert_eq!(r.role, role);
+        }
     }
 
     #[test]
     fn test_basic_updating() {
         let mut c = RegionCollectionWorker::new();
         let init_regions = &[
-            new_region(1, b"", b"k1"),
-            new_region(2, b"k1", b"k9"),
-            new_region(3, b"k9", b""),
+            new_region(1, b"", b"k1", 1),
+            new_region(2, b"k1", b"k9", 1),
+            new_region(3, b"k9", b"", 1),
         ];
 
         must_load_regions(&mut c, init_regions);
 
         // end_key changed
-        must_update_region(&mut c, &new_region(2, b"k2", b"k8"));
+        must_update_region(&mut c, &new_region(2, b"k2", b"k8", 2));
         // end_key changed (previous end_key is empty)
-        must_update_region(&mut c, &new_region(3, b"k9", b"k99"));
+        must_update_region(&mut c, &new_region(3, b"k9", b"k99", 2));
         // end_key not changed
-        must_update_region(&mut c, &new_region(1, b"k0", b"k1"));
+        must_update_region(&mut c, &new_region(1, b"k0", b"k1", 2));
         check_collection(
             &c,
             &[
-                (new_region(1, b"k0", b"k1"), StateRole::Follower),
-                (new_region(2, b"k2", b"k8"), StateRole::Follower),
-                (new_region(3, b"k9", b"k99"), StateRole::Follower),
+                (new_region(1, b"k0", b"k1", 2), StateRole::Follower),
+                (new_region(2, b"k2", b"k8", 2), StateRole::Follower),
+                (new_region(3, b"k9", b"k99", 2), StateRole::Follower),
             ],
         );
 
-        must_change_role(&mut c, &new_region(1, b"k0", b"k1"), StateRole::Candidate);
-        must_create_region(&mut c, &new_region(5, b"k99", b""));
-        must_change_role(&mut c, &new_region(2, b"k2", b"k8"), StateRole::Leader);
-        must_update_region(&mut c, &new_region(2, b"k3", b"k7"));
-        must_create_region(&mut c, &new_region(4, b"k1", b"k3"));
+        must_change_role(
+            &mut c,
+            &new_region(1, b"k0", b"k1", 2),
+            StateRole::Candidate,
+        );
+        must_create_region(&mut c, &new_region(5, b"k99", b"", 2));
+        must_change_role(&mut c, &new_region(2, b"k2", b"k8", 2), StateRole::Leader);
+        must_update_region(&mut c, &new_region(2, b"k3", b"k7", 3));
+        must_create_region(&mut c, &new_region(4, b"k1", b"k3", 3));
         check_collection(
             &c,
             &[
-                (new_region(1, b"k0", b"k1"), StateRole::Candidate),
-                (new_region(4, b"k1", b"k3"), StateRole::Follower),
-                (new_region(2, b"k3", b"k7"), StateRole::Leader),
-                (new_region(3, b"k9", b"k99"), StateRole::Follower),
-                (new_region(5, b"k99", b""), StateRole::Follower),
+                (new_region(1, b"k0", b"k1", 2), StateRole::Candidate),
+                (new_region(4, b"k1", b"k3", 3), StateRole::Follower),
+                (new_region(2, b"k3", b"k7", 3), StateRole::Leader),
+                (new_region(3, b"k9", b"k99", 2), StateRole::Follower),
+                (new_region(5, b"k99", b"", 2), StateRole::Follower),
             ],
         );
 
@@ -625,9 +640,9 @@ mod tests {
         check_collection(
             &c,
             &[
-                (new_region(1, b"k0", b"k1"), StateRole::Candidate),
-                (new_region(2, b"k3", b"k7"), StateRole::Leader),
-                (new_region(5, b"k99", b""), StateRole::Follower),
+                (new_region(1, b"k0", b"k1", 2), StateRole::Candidate),
+                (new_region(2, b"k3", b"k7", 3), StateRole::Leader),
+                (new_region(5, b"k99", b"", 2), StateRole::Follower),
             ],
         );
     }
@@ -639,18 +654,18 @@ mod tests {
     fn test_split_impl(derive_index: usize, seq: &[usize]) {
         let mut c = RegionCollectionWorker::new();
         let init_regions = &[
-            new_region(1, b"", b"k1"),
-            new_region(2, b"k1", b"k9"),
-            new_region(3, b"k9", b""),
+            new_region(1, b"", b"k1", 1),
+            new_region(2, b"k1", b"k9", 1),
+            new_region(3, b"k9", b"", 1),
         ];
         must_load_regions(&mut c, init_regions);
 
         let mut final_regions = vec![
-            new_region(1, b"", b"k1"),
-            new_region(4, b"k1", b"k3"),
-            new_region(5, b"k3", b"k6"),
-            new_region(6, b"k6", b"k9"),
-            new_region(3, b"k9", b""),
+            new_region(1, b"", b"k1", 1),
+            new_region(4, b"k1", b"k3", 2),
+            new_region(5, b"k3", b"k6", 2),
+            new_region(6, b"k6", b"k9", 2),
+            new_region(3, b"k9", b"", 1),
         ];
         // `derive_index` starts from 1
         final_regions[derive_index].set_id(2);
@@ -692,10 +707,10 @@ mod tests {
     fn test_merge_impl(to_left: bool, update_first: bool) {
         let mut c = RegionCollectionWorker::new();
         let init_regions = &[
-            new_region(1, b"", b"k1"),
-            new_region(2, b"k1", b"k2"),
-            new_region(3, b"k2", b"k3"),
-            new_region(4, b"k3", b""),
+            new_region(1, b"", b"k1", 1),
+            new_region(2, b"k1", b"k2", 1),
+            new_region(3, b"k2", b"k3", 1),
+            new_region(4, b"k3", b"", 1),
         ];
         must_load_regions(&mut c, init_regions);
 
@@ -706,6 +721,7 @@ mod tests {
         };
         updating_region.set_start_key(b"k1".to_vec());
         updating_region.set_end_key(b"k3".to_vec());
+        updating_region.mut_region_epoch().set_version(2);
 
         if update_first {
             must_update_region(&mut c, &updating_region);
@@ -716,9 +732,9 @@ mod tests {
         }
 
         let final_regions = &[
-            (new_region(1, b"", b"k1"), StateRole::Follower),
+            (new_region(1, b"", b"k1", 1), StateRole::Follower),
             (updating_region, StateRole::Follower),
-            (new_region(4, b"k3", b""), StateRole::Follower),
+            (new_region(4, b"k3", b"", 1), StateRole::Follower),
         ];
         check_collection(&c, final_regions);
     }
@@ -729,5 +745,50 @@ mod tests {
         test_merge_impl(false, true);
         test_merge_impl(true, false);
         test_merge_impl(true, true);
+    }
+
+    #[test]
+    fn test_extreme_cases() {
+        let mut c = RegionCollectionWorker::new();
+        let init_regions = &[
+            new_region(1, b"", b"k1", 1),
+            new_region(2, b"k1", b"k9", 1),
+            new_region(3, b"k9", b"", 1),
+        ];
+        must_load_regions(&mut c, init_regions);
+
+        // While splitting, region 4 created but region 2 still has an `update` event which haven't
+        // been handled.
+        must_create_region(&mut c, &new_region(4, b"k5", b"k9", 2));
+        must_update_region(&mut c, &new_region(2, b"k1", b"k9", 1));
+        must_change_role(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Leader);
+        must_update_region(&mut c, &new_region(2, b"k1", b"k5", 2));
+        // TODO: In fact, region 2's role should be follower. However because it's revious state was
+        // removed while creating updating region 4, it can't be successfully updated. Fortunately
+        // this case may hardly happen so it can be fixed later.
+        check_collection(
+            &c,
+            &[
+                (new_region(1, b"", b"k1", 1), StateRole::Follower),
+                (new_region(2, b"k1", b"k5", 2), StateRole::Follower),
+                (new_region(4, b"k5", b"k9", 2), StateRole::Follower),
+                (new_region(3, b"k9", b"", 1), StateRole::Follower),
+            ],
+        );
+
+        // While merging, region 2 expanded and covered region 4 but region 4 still has an `update`
+        // event which haven't been handled.
+        must_update_region(&mut c, &new_region(2, b"k1", b"k9", 3));
+        must_update_region(&mut c, &new_region(4, b"k5", b"k9", 2));
+        must_change_role(&mut c, &new_region(4, b"k5", b"k9", 2), StateRole::Leader);
+        must_destroy_region(&mut c, 4);
+        check_collection(
+            &c,
+            &[
+                (new_region(1, b"", b"k1", 1), StateRole::Follower),
+                (new_region(2, b"k1", b"k9", 3), StateRole::Follower),
+                (new_region(3, b"k9", b"", 1), StateRole::Follower),
+            ],
+        );
     }
 }
