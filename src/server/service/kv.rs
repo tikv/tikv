@@ -90,7 +90,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
     }
 
     fn send_fail_status<M>(
-        &self,
+        &mut self,
         ctx: RpcContext,
         sink: UnarySink<M>,
         err: Error,
@@ -102,7 +102,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E> {
-    fn kv_get(&self, ctx: RpcContext, req: GetRequest, sink: UnarySink<GetResponse>) {
+    fn kv_get(&mut self, ctx: RpcContext, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -115,7 +115,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn kv_scan(&self, ctx: RpcContext, req: ScanRequest, sink: UnarySink<ScanResponse>) {
+    fn kv_scan(&mut self, ctx: RpcContext, req: ScanRequest, sink: UnarySink<ScanResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
         let future = future_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -129,7 +129,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn kv_prewrite(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: PrewriteRequest,
         sink: UnarySink<PrewriteResponse>,
@@ -146,7 +146,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn kv_commit(&self, ctx: RpcContext, req: CommitRequest, sink: UnarySink<CommitResponse>) {
+    fn kv_commit(&mut self, ctx: RpcContext, req: CommitRequest, sink: UnarySink<CommitResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
 
         let future = future_commit(&self.storage, req)
@@ -160,11 +160,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn kv_import(&self, _: RpcContext, _: ImportRequest, _: UnarySink<ImportResponse>) {
+    fn kv_import(&mut self, _: RpcContext, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
 
-    fn kv_cleanup(&self, ctx: RpcContext, req: CleanupRequest, sink: UnarySink<CleanupResponse>) {
+    fn kv_cleanup(&mut self, ctx: RpcContext, req: CleanupRequest, sink: UnarySink<CleanupResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
         let future = future_cleanup(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -178,7 +178,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn kv_batch_get(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: BatchGetRequest,
         sink: UnarySink<BatchGetResponse>,
@@ -196,7 +196,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn kv_batch_rollback(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: BatchRollbackRequest,
         sink: UnarySink<BatchRollbackResponse>,
@@ -216,7 +216,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn kv_scan_lock(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: ScanLockRequest,
         sink: UnarySink<ScanLockResponse>,
@@ -234,7 +234,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn kv_resolve_lock(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: ResolveLockRequest,
         sink: UnarySink<ResolveLockResponse>,
@@ -251,7 +251,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn kv_gc(&self, ctx: RpcContext, req: GCRequest, sink: UnarySink<GCResponse>) {
+    fn kv_gc(&mut self, ctx: RpcContext, req: GCRequest, sink: UnarySink<GCResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -266,7 +266,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
     // WARNING: Currently this API may leave some dirty keys in TiKV. Be careful using this API.
     fn kv_delete_range(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: DeleteRangeRequest,
         sink: UnarySink<DeleteRangeResponse>,
@@ -283,7 +283,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn raw_get(&self, ctx: RpcContext, req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
+    fn raw_get(&mut self, ctx: RpcContext, req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
         let future = future_raw_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -297,7 +297,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn raw_batch_get(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RawBatchGetRequest,
         sink: UnarySink<RawBatchGetResponse>,
@@ -315,7 +315,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn raw_scan(&self, ctx: RpcContext, req: RawScanRequest, sink: UnarySink<RawScanResponse>) {
+    fn raw_scan(&mut self, ctx: RpcContext, req: RawScanRequest, sink: UnarySink<RawScanResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
 
         let future = future_raw_scan(&self.storage, req)
@@ -330,7 +330,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn raw_batch_scan(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RawBatchScanRequest,
         sink: UnarySink<RawBatchScanResponse>,
@@ -348,7 +348,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn raw_put(&self, ctx: RpcContext, req: RawPutRequest, sink: UnarySink<RawPutResponse>) {
+    fn raw_put(&mut self, ctx: RpcContext, req: RawPutRequest, sink: UnarySink<RawPutResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
         let future = future_raw_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -362,7 +362,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn raw_batch_put(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RawBatchPutRequest,
         sink: UnarySink<RawBatchPutResponse>,
@@ -381,7 +381,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn raw_delete(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RawDeleteRequest,
         sink: UnarySink<RawDeleteResponse>,
@@ -399,7 +399,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn raw_batch_delete(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RawBatchDeleteRequest,
         sink: UnarySink<RawBatchDeleteResponse>,
@@ -418,7 +418,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn raw_delete_range(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RawDeleteRangeRequest,
         sink: UnarySink<RawDeleteRangeResponse>,
@@ -437,7 +437,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn unsafe_destroy_range(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
@@ -477,7 +477,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
+    fn coprocessor(&mut self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
             .map_err(Error::from)
@@ -492,7 +492,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn coprocessor_stream(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: Request,
         sink: ServerStreamingSink<Response>,
@@ -523,7 +523,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn raft(
-        &self,
+        &mut self,
         ctx: RpcContext,
         stream: RequestStream<RaftMessage>,
         _: ClientStreamingSink<Done>,
@@ -542,7 +542,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn snapshot(
-        &self,
+        &mut self,
         ctx: RpcContext,
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
@@ -559,7 +559,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn mvcc_get_by_key(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: MvccGetByKeyRequest,
         sink: UnarySink<MvccGetByKeyResponse>,
@@ -603,7 +603,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn mvcc_get_by_start_ts(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: MvccGetByStartTsRequest,
         sink: UnarySink<MvccGetByStartTsResponse>,
@@ -652,7 +652,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn split_region(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
@@ -710,7 +710,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     }
 
     fn batch_commands(
-        &self,
+        &mut self,
         ctx: RpcContext,
         stream: RequestStream<BatchCommandsRequest>,
         sink: DuplexSink<BatchCommandsResponse>,
