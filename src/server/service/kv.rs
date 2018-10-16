@@ -728,7 +728,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             let request_ids = req.take_request_ids().into_iter();
             let requests = req.take_requests().into_vec();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-            for (id, req) in request_ids.zip(requests) {
+            for (id, req) in request_ids
+                .zip(requests)
+                .filter_map(|(i, req)| req.cmd.map(|r| (i, r)))
+            {
                 handle_batch_commands_request(
                     &storage,
                     &cop,
@@ -786,140 +789,139 @@ fn handle_batch_commands_request<E: Engine>(
     peer: String,
     executor: &TaskExecutor,
     id: u64,
-    req: BatchCommandsRequest_Request,
+    req: BatchCommandsRequest_Request_oneof_cmd,
     tx: Sender<(u64, BatchCommandsResponse_Response)>,
 ) {
-    match req.cmd {
-        Some(BatchCommandsRequest_Request_oneof_cmd::Get(req)) => {
+    match req {
+        BatchCommandsRequest_Request_oneof_cmd::Get(req) => {
             let resp = future_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Get)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Scan(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::Scan(req) => {
             let resp = future_scan(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Scan)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Prewrite(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::Prewrite(req) => {
             let resp = future_prewrite(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Prewrite)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Commit(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::Commit(req) => {
             let resp = future_commit(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Commit)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Import(_)) => {
+        BatchCommandsRequest_Request_oneof_cmd::Import(_) => {
             panic!("unimplemented");
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Cleanup(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::Cleanup(req) => {
             let resp = future_cleanup(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Cleanup)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::BatchGet(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::BatchGet(req) => {
             let resp = future_batch_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::BatchGet)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::BatchRollback(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::BatchRollback(req) => {
             let resp = future_batch_rollback(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::BatchRollback)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::ScanLock(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::ScanLock(req) => {
             let resp = future_scan_lock(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::ScanLock)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::ResolveLock(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::ResolveLock(req) => {
             let resp = future_resolve_lock(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::ResolveLock)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::GC(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::GC(req) => {
             let resp = future_gc(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::GC)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::DeleteRange(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::DeleteRange(req) => {
             let resp = future_delete_range(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::DeleteRange)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawGet(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawGet(req) => {
             let resp = future_raw_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawGet)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchGet(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawBatchGet(req) => {
             let resp = future_raw_batch_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchGet)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawPut(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawPut(req) => {
             let resp = future_raw_put(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawPut)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_put.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchPut(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawBatchPut(req) => {
             let resp = future_raw_batch_put(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchPut)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawDelete(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawDelete(req) => {
             let resp = future_raw_delete(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawDelete)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchDelete(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawBatchDelete(req) => {
             let resp = future_raw_batch_delete(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchDelete)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawScan(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawScan(req) => {
             let resp = future_raw_scan(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawScan)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_scan.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawDeleteRange(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawDeleteRange(req) => {
             let resp = future_raw_delete_range(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawDeleteRange)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchScan(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::RawBatchScan(req) => {
             let resp = future_raw_batch_scan(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchScan)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Coprocessor(req)) => {
+        BatchCommandsRequest_Request_oneof_cmd::Coprocessor(req) => {
             let resp = future_cop(&cop, req, Some(peer))
                 .map(BatchCommandsResponse_Response_oneof_cmd::Coprocessor)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(executor, id, resp, tx);
         }
-        None => panic!("invalid super batch request"),
     }
 }
 
