@@ -20,6 +20,8 @@ extern crate rand;
 #[cfg(test)]
 extern crate test;
 
+extern crate panic_hook;
+
 mod buffer;
 mod error;
 
