@@ -215,6 +215,7 @@ dependencies = [
 name = "codec"
 version = "0.0.1"
 dependencies = [
+ "panic_hook 0.0.1",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -935,6 +936,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "panic_hook"
+version = "0.0.1"
+
+[[package]]
 name = "parking_lot"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1547,6 +1552,7 @@ dependencies = [
  "murmur3 0.4.0 (git+https://github.com/pingcap/murmur3.git)",
  "nix 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "num 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "panic_hook 0.0.1",
  "prometheus 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus-static-metric 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
