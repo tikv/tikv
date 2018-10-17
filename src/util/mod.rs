@@ -37,7 +37,6 @@ pub mod jemalloc;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod panic_hook;
 pub mod rocksdb;
 pub mod security;
 pub mod sys;
@@ -421,6 +420,68 @@ impl<T> Drop for MustConsumeVec<T> {
     }
 }
 
+/// Exit the whole process when panic.
+pub fn set_exit_hook(panic_abort: bool, guard: Option<::slog_scope::GlobalLoggerGuard>) {
+    use std::panic;
+    use std::process;
+    use std::sync::Mutex;
+
+    // HACK! New a backtrace ahead for caching necessary elf sections of this
+    // tikv-server, in case it can not open more files during panicking
+    // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
+    //
+    // Crate backtrace caches debug info in a static variable `STATE`,
+    // and the `STATE` lives forever once it has been created.
+    // See more: https://github.com/alexcrichton/backtrace-rs/blob/\
+    //           597ad44b131132f17ed76bf94ac489274dd16c7f/\
+    //           src/symbolize/libbacktrace.rs#L126-L159
+    // Caching is slow, spawn it in another thread to speed up.
+    thread::Builder::new()
+        .name(thd_name!("backtrace-loader"))
+        .spawn(::backtrace::Backtrace::new)
+        .unwrap();
+
+    // Hold the guard.
+    let log_guard = Mutex::new(guard);
+
+    let orig_hook = panic::take_hook();
+    panic::set_hook(box move |info: &panic::PanicInfo| {
+        if log_enabled!(::log::LogLevel::Error) {
+            let msg = match info.payload().downcast_ref::<&'static str>() {
+                Some(s) => *s,
+                None => match info.payload().downcast_ref::<String>() {
+                    Some(s) => &s[..],
+                    None => "Box<Any>",
+                },
+            };
+            let thread = thread::current();
+            let name = thread.name().unwrap_or("<unnamed>");
+            let loc = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()));
+            let bt = ::backtrace::Backtrace::new();
+            error!(
+                "thread '{}' panicked '{}' at {:?}\n{:?}",
+                name,
+                msg,
+                loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                bt
+            );
+        } else {
+            orig_hook(info);
+        }
+
+        // To collect remaining logs, drop the guard before exit.
+        drop(log_guard.lock().unwrap().take());
+
+        if panic_abort {
+            process::abort();
+        } else {
+            process::exit(1);
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,7 +654,7 @@ mod tests {
 
     #[test]
     fn test_resource_leak() {
-        let res = recover_safe!(|| {
+        let res = ::panic_hook::recover_safe(|| {
             let mut v = MustConsumeVec::new("test");
             v.push(2);
         });

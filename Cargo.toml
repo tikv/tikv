@@ -72,7 +72,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.3", features = [ "secure" ] }
+grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.3"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
@@ -82,6 +82,7 @@ num = "0.2"
 num-traits = "0.2"
 hex = "0.3"
 rust-crypto = "^0.2"
+panic_hook = { path = "components/panic_hook" }
 cop_datatype = { path = "components/cop_datatype" }
 
 [replace]
@@ -132,6 +133,7 @@ members = [
   "components/test_coprocessor",
   "components/test_util",
   "components/codec",
+  "components/panic_hook",
   "components/cop_datatype",
 ]
 
