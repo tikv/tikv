@@ -222,6 +222,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create region collection
     let region_collection = RegionCollection::new(&mut coprocessor_host);
+    region_collection.start();
 
     node.start(
         event_loop,
