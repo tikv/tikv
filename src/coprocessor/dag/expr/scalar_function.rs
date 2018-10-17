@@ -276,7 +276,8 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenReal
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
-            | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
+            | ScalarFuncSig::CaseWhenTime
+            | ScalarFuncSig::Radians => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
             | ScalarFuncSig::JsonRemoveSig
@@ -407,7 +408,6 @@ impl ScalarFunc {
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
-            | ScalarFuncSig::Radians
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
@@ -820,6 +820,7 @@ dispatch_call! {
         Rand => rand,
         RandWithSeed => rand_with_seed,
         TruncateReal => truncate_real,
+        Radians => radians,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -1212,6 +1213,7 @@ mod test {
                     ScalarFuncSig::SHA1,
                     ScalarFuncSig::Cot,
                     ScalarFuncSig::Degrees,
+                    ScalarFuncSig::Radians,
                 ],
                 1,
                 1,
@@ -1413,7 +1415,6 @@ mod test {
             ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
-            ScalarFuncSig::Radians,
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
