@@ -444,6 +444,12 @@ impl ScalarFunc {
         let r: Result<Decimal> = x.into_owned().round(d, RoundMode::Truncate).into();
         r.map(|t| Some(Cow::Owned(t)))
     }
+
+    #[inline]
+    pub fn radians(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        let x = try_opt!(self.children[0].eval_real(ctx, row));
+        Ok(Some(x * f64::consts::PI / 180_f64))
+    }
 }
 
 fn get_rand(arg: Option<u64>) -> XorShiftRng {
@@ -1306,6 +1312,21 @@ mod test {
         ];
         for (x, d, exp) in tests {
             let got = eval_func(ScalarFuncSig::TruncateDecimal, &[x, d]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_radians() {
+        let tests = vec![
+            (Datum::F64(0_f64), Datum::F64(0_f64)),
+            (Datum::F64(180_f64), Datum::F64(PI)),
+            (Datum::F64(-360_f64), Datum::F64(-2_f64 * PI)),
+            (Datum::Null, Datum::Null),
+            (Datum::F64(f64::INFINITY), Datum::F64(f64::INFINITY)),
+        ];
+        for (arg, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Radians, &[arg]).unwrap();
             assert_eq!(got, exp);
         }
     }
