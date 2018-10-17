@@ -497,9 +497,6 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 
 #[cfg(test)]
 mod test {
-    use coprocessor::codec::mysql::types;
-    use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::dag::expr::test::{check_overflow, eval_func, eval_func_with, str2dec};
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::{f64, i64, u64};
 
@@ -507,8 +504,7 @@ mod test {
     use tipb::expression::ScalarFuncSig;
 
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use coprocessor::dag::expr::test::{check_overflow, eval_func, eval_func_with, str2dec};
 
     #[test]
     fn test_abs() {
@@ -1271,8 +1267,14 @@ mod test {
         ];
         for (x, d, exp) in tests {
             let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
-                if mysql::has_unsigned_flag(args[0].get_field_type().get_flag()) {
-                    op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+                if args[0]
+                    .get_field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    op.mut_field_type()
+                        .as_mut_accessor()
+                        .set_flag(FieldTypeFlag::UNSIGNED);
                 }
             }).unwrap();
             assert_eq!(got, exp);
