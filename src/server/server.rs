@@ -92,7 +92,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
 
         // A helper thread (or pool) for transport layer.
         let mut tp_builder = thread_pool::Builder::new();
-        tp_builder.pool_size(1).name_prefix("transport-helper");
+        let pool_size = cfg.helper_threadpool_size;
+        tp_builder
+            .pool_size(pool_size)
+            .name_prefix("transport-helper");
         let helper_runtime = Arc::new(
             RuntimeBuilder::new()
                 .threadpool_builder(tp_builder)

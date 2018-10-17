@@ -93,6 +93,9 @@
 # heavy load threshold.
 # heavy-load-threshold = 0.6
 
+# helper threadpool size
+helper-threadpool-size = 2
+
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 
