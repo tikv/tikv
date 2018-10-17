@@ -178,6 +178,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             start_time: time::get_time(),
             is_busy: false,
             store_stat: StoreStat::default(),
+            entry_cache_gc_handler: Default::default(),
         };
         s.init()?;
         Ok(s)

@@ -54,6 +54,14 @@ use import::SSTImporter;
 
 type Key = Vec<u8>;
 
+pub struct EntryCacheGcHandler {
+    // In order to reduce the times of memory allocations while putting element into `gc_vec`.
+    // In stress test, the numbers of entry cache needed to be reclaimed are similar. So, just
+    // record this info.
+    pub last_gc_vec_len: usize,
+    pub last_compact_gc_vec_len: usize,
+}
+
 pub struct Store<T, C: 'static> {
     cfg: Rc<Config>,
     engines: Engines,
@@ -108,4 +116,6 @@ pub struct Store<T, C: 'static> {
     pending_votes: RingQueue<RaftMessage>,
 
     store_stat: StoreStat,
+
+    entry_cache_gc_handler: EntryCacheGcHandler,
 }

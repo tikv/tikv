@@ -18,27 +18,43 @@ use util::worker::Runnable;
 use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
 use std::fmt::{self, Display, Formatter};
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-pub struct Task {
+pub struct BaseRaftLogGcTask {
     pub raft_engine: Arc<DB>,
     pub region_id: u64,
     pub start_idx: u64,
     pub end_idx: u64,
 }
 
-pub struct TaskRes {
+pub enum Task {
+    RaftLogGc(BaseRaftLogGcTask),
+    EntryCacheGc(EntryGcTask),
+}
+
+pub struct RaftLogGcTaskRes {
     pub collected: u64,
 }
 
-impl Display for Task {
+impl Display for BaseRaftLogGcTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
             "GC Raft Log Task [region: {}, from: {}, to: {}]",
             self.region_id, self.start_idx, self.end_idx
         )
+    }
+}
+
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Task::RaftLogGc(ref t) => t.fmt(f),
+            Task::EntryCacheGc(ref t) => t.fmt(f),
+        }
     }
 }
 
@@ -55,11 +71,11 @@ quick_error! {
 }
 
 pub struct Runner {
-    ch: Option<Sender<TaskRes>>,
+    ch: Option<Sender<RaftLogGcTaskRes>>,
 }
 
 impl Runner {
-    pub fn new(ch: Option<Sender<TaskRes>>) -> Runner {
+    pub fn new(ch: Option<Sender<RaftLogGcTaskRes>>) -> Runner {
         Runner { ch }
     }
 
@@ -100,13 +116,11 @@ impl Runner {
         self.ch
             .as_ref()
             .unwrap()
-            .send(TaskRes { collected })
+            .send(RaftLogGcTaskRes { collected })
             .unwrap();
     }
-}
 
-impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
+    fn run_raft_log_gc_task(&mut self, task: BaseRaftLogGcTask) {
         debug!(
             "[region {}] execute gc log to {}",
             task.region_id, task.end_idx
@@ -126,6 +140,47 @@ impl Runnable<Task> for Runner {
                 self.report_collected(n);
             }
         }
+    }
+}
+
+impl Runnable<Task> for Runner {
+    fn run(&mut self, task: Task) {
+        match task {
+            Task::EntryCacheGc(_) => {}
+            Task::RaftLogGc(t) => {
+                self.run_raft_log_gc_task(t);
+            }
+        }
+    }
+}
+
+pub type EntryGcKey = Vec<Vec<u8>>;
+
+pub struct EntryGcTask(EntryGcKey);
+
+impl EntryGcTask {
+    pub fn new(key: EntryGcKey) -> Self {
+        EntryGcTask(key)
+    }
+}
+
+impl Deref for EntryGcTask {
+    type Target = EntryGcKey;
+
+    fn deref(&self) -> &<Self as Deref>::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for EntryGcTask {
+    fn deref_mut(&mut self) -> &mut <Self as Deref>::Target {
+        &mut self.0
+    }
+}
+
+impl Display for EntryGcTask {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Reclaim {} Vec<u8>", self.len())
     }
 }
 
@@ -158,7 +213,7 @@ mod test {
 
         let tbls = vec![
             (
-                Task {
+                BaseRaftLogGcTask {
                     raft_engine: Arc::clone(&raft_db),
                     region_id,
                     start_idx: 0,
@@ -169,7 +224,7 @@ mod test {
                 (10, 100),
             ),
             (
-                Task {
+                BaseRaftLogGcTask {
                     raft_engine: Arc::clone(&raft_db),
                     region_id,
                     start_idx: 0,
@@ -180,7 +235,7 @@ mod test {
                 (50, 100),
             ),
             (
-                Task {
+                BaseRaftLogGcTask {
                     raft_engine: Arc::clone(&raft_db),
                     region_id,
                     start_idx: 50,
@@ -191,7 +246,7 @@ mod test {
                 (50, 100),
             ),
             (
-                Task {
+                BaseRaftLogGcTask {
                     raft_engine: Arc::clone(&raft_db),
                     region_id,
                     start_idx: 50,
@@ -204,7 +259,7 @@ mod test {
         ];
 
         for (task, expected_collectd, not_exist_range, exist_range) in tbls {
-            runner.run(task);
+            runner.run(Task::RaftLogGc(task));
             let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(res.collected, expected_collectd);
             raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);

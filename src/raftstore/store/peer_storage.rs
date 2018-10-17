@@ -214,7 +214,10 @@ impl EntryCache {
         }
     }
 
-    pub fn compact_to(&mut self, idx: u64) {
+    pub fn compact_to<F>(&mut self, idx: u64, mut entry_gc_fn: F)
+    where
+        F: FnMut(Entry) -> (),
+    {
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
         if cache_first_idx > idx {
             return;
@@ -222,8 +225,12 @@ impl EntryCache {
         let cache_last_idx = self.cache.back().unwrap().get_index();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
         // if neccessary.
-        self.cache
-            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
+        for entry in self
+            .cache
+            .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize)
+        {
+            entry_gc_fn(entry);
+        }
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
         {
             // So the peer storage doesn't have much writes since the proposal of compaction,
@@ -815,14 +822,21 @@ impl PeerStorage {
         Ok(last_index)
     }
 
-    pub fn compact_to(&mut self, idx: u64) {
-        self.cache.compact_to(idx);
+    #[inline]
+    pub fn compact_to<F>(&mut self, idx: u64, entry_gc_fn: F)
+    where
+        F: FnMut(Entry) -> (),
+    {
+        self.cache.compact_to(idx, entry_gc_fn);
     }
 
-    pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
+    pub fn maybe_gc_cache<F>(&mut self, replicated_idx: u64, apply_idx: u64, entry_gc_fn: F)
+    where
+        F: FnMut(Entry) -> (),
+    {
         if replicated_idx == apply_idx {
             // The region is inactive, clear the cache immediately.
-            self.cache.compact_to(apply_idx + 1);
+            self.cache.compact_to(apply_idx + 1, entry_gc_fn);
         } else {
             let cache_first_idx = match self.cache.first_index() {
                 None => return,
@@ -832,7 +846,7 @@ impl PeerStorage {
                 // Catching up log requires accessing fs already, let's optimize for
                 // the common case.
                 // Maybe gc to second least replicated_idx is better.
-                self.cache.compact_to(apply_idx + 1);
+                self.cache.compact_to(apply_idx + 1, entry_gc_fn);
             }
         }
     }
@@ -1978,13 +1992,13 @@ mod test {
         validate_cache(&store, &exp_res);
 
         // compact
-        store.compact_to(cap + 10);
+        store.compact_to(cap + 10, |_| {});
         exp_res = (cap + 10..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
 
         // compact shrink
         assert!(store.cache.cache.capacity() >= cap as usize);
-        store.compact_to(cap * 2);
+        store.compact_to(cap * 2, |_| {});
         exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
         assert!(store.cache.cache.capacity() < cap as usize);
@@ -1999,10 +2013,10 @@ mod test {
         assert!(store.cache.cache.capacity() < cap as usize);
 
         // compact all
-        store.compact_to(cap + 2);
+        store.compact_to(cap + 2, |_| {});
         validate_cache(&store, &[]);
         // invalid compaction should be ignored.
-        store.compact_to(cap);
+        store.compact_to(cap, |_| {});
     }
 
     #[test]
