@@ -38,7 +38,7 @@ pub fn setup_for_ci() {
     if env::var("PANIC_ABORT").is_ok() {
         // Panics as aborts, it's helpful for debugging,
         // but also stops tests immediately.
-        tikv::util::panic_hook::set_exit_hook(true, guard);
+        tikv::util::set_exit_hook(true, guard);
     } else if let Some(guard) = guard {
         // Do not reset the global logger.
         guard.cancel_reset();

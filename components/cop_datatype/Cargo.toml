@@ -4,9 +4,6 @@ version = "0.0.1"
 publish = false
 description = "TiKV Coprocessor data types"
 
-[lib]
-path = "lib.rs"
-
 [dependencies]
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 bitflags = "1.0"

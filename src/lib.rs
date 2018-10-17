@@ -118,6 +118,7 @@ extern crate derive_more;
 extern crate smallvec;
 
 extern crate cop_datatype;
+extern crate panic_hook;
 
 #[macro_use]
 pub mod util;

@@ -101,24 +101,6 @@ macro_rules! box_err {
     });
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(doc_markdown))]
-/// Recover from panicable closure.
-///
-/// Please note that this macro assume the closure is able to be forced to implement `UnwindSafe`.
-/// Also see https://doc.rust-lang.org/std/panic/struct.AssertUnwindSafe.html
-// Maybe we should define a recover macro too.
-#[macro_export]
-macro_rules! recover_safe {
-    ($e:expr) => {{
-        use std::panic::{catch_unwind, AssertUnwindSafe};
-        use $crate::util::panic_hook;
-        panic_hook::mute();
-        let res = catch_unwind(AssertUnwindSafe($e));
-        panic_hook::unmute();
-        res
-    }};
-}
-
 /// Log slow operations with warn!.
 macro_rules! slow_log {
     ($t:expr, $($arg:tt)*) => {{
