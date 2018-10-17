@@ -20,7 +20,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
 
-use storage::{Key, Snapshot, SnapshotStore};
+use storage::{Key, Store};
 use util::collections::HashSet;
 
 use coprocessor::codec::table;
@@ -28,9 +28,10 @@ use coprocessor::util;
 use coprocessor::*;
 
 use super::{Executor, ExecutorMetrics, Row};
+use super::{ScanOn, Scanner};
 
-pub struct TableScanExecutor<S: Snapshot> {
-    store: SnapshotStore<S>,
+pub struct TableScanExecutor<S: Store> {
+    store: S,
     desc: bool,
     col_ids: HashSet<i64>,
     columns: Arc<Vec<ColumnInfo>>,
@@ -39,18 +40,18 @@ pub struct TableScanExecutor<S: Snapshot> {
     current_range: Option<KeyRange>,
     // The `KeyRange` scaned between `start_scan` and `stop_scan`.
     scan_range: KeyRange,
-    scanner: Option<dag::Scanner<S>>,
+    scanner: Option<Scanner<S>>,
     // The number of scan keys for each range.
     counts: Option<Vec<i64>>,
     metrics: ExecutorMetrics,
     first_collect: bool,
 }
 
-impl<S: Snapshot> TableScanExecutor<S> {
+impl<S: Store> TableScanExecutor<S> {
     pub fn new(
         mut meta: TableScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<S>,
+        store: S,
         collect: bool,
     ) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
@@ -110,10 +111,10 @@ impl<S: Snapshot> TableScanExecutor<S> {
         Ok(None)
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<dag::Scanner<S>> {
-        dag::Scanner::new(
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<S>> {
+        Scanner::new(
             &self.store,
-            dag::ScanOn::Table,
+            ScanOn::Table,
             self.desc,
             self.col_ids.is_empty(),
             range,
@@ -121,7 +122,7 @@ impl<S: Snapshot> TableScanExecutor<S> {
     }
 }
 
-impl<S: Snapshot> Executor for TableScanExecutor<S> {
+impl<S: Store> Executor for TableScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {

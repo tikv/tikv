@@ -79,7 +79,10 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
     // handle_index is used to handle `AnalyzeIndexReq`,
     // it would build a histogram and count-min sketch of index values.
-    fn handle_index(req: AnalyzeIndexReq, scanner: &mut IndexScanExecutor<S>) -> Result<Vec<u8>> {
+    fn handle_index(
+        req: AnalyzeIndexReq,
+        scanner: &mut IndexScanExecutor<SnapshotStore<S>>,
+    ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CMSketch::new(
             req.get_cmsketch_depth() as usize,
@@ -151,7 +154,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<S>,
+    data: TableScanExecutor<SnapshotStore<S>>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,

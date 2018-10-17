@@ -16,7 +16,7 @@ use kvproto::coprocessor::KeyRange;
 use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
 use storage::txn::Result;
-use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
+use storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
 use util::escape;
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
@@ -27,65 +27,59 @@ pub enum ScanOn {
     Index,
 }
 
-fn create_range_scanner<S: Snapshot>(
-    store: &SnapshotStore<S>,
-    scan_mode: ScanMode,
+fn create_range_scanner<S: Store>(
+    store: &S,
+    asc: bool,
     key_only: bool,
     range: &KeyRange,
-) -> Result<StoreScanner<S>> {
+) -> Result<S::Scanner> {
     let lower_bound = Some(Key::from_raw(range.get_start()));
     let upper_bound = Some(Key::from_raw(range.get_end()));
-    store.scanner(scan_mode, key_only, lower_bound, upper_bound)
+    store.scanner(asc, key_only, lower_bound, upper_bound)
 }
 
 // `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
-pub struct Scanner<S: Snapshot> {
-    scan_mode: ScanMode,
+pub struct Scanner<S: Store> {
+    asc: bool,
     scan_on: ScanOn,
     key_only: bool,
     last_scanned_key: Vec<u8>,
-    scanner: StoreScanner<S>,
+    scanner: S::Scanner,
     range: KeyRange,
     no_more: bool,
     /// `reset_range` may re-initialize a StoreScanner, so we need to backlog statistics.
     statistics_backlog: Statistics,
 }
 
-impl<S: Snapshot> Scanner<S> {
+impl<S: Store> Scanner<S> {
     pub fn new(
-        store: &SnapshotStore<S>,
+        store: &S,
         scan_on: ScanOn,
         desc: bool,
         key_only: bool,
         range: KeyRange,
     ) -> Result<Self> {
-        let scan_mode = if desc {
-            ScanMode::Backward
-        } else {
-            ScanMode::Forward
-        };
-
         Ok(Self {
-            scan_mode,
+            asc: !desc,
             scan_on,
             key_only,
             last_scanned_key: Vec::with_capacity(MIN_KEY_BUFFER_CAPACITY),
-            scanner: create_range_scanner(store, scan_mode, key_only, &range)?,
+            scanner: create_range_scanner(store, !desc, key_only, &range)?,
             range,
             no_more: false,
             statistics_backlog: Statistics::default(),
         })
     }
 
-    pub fn reset_range(&mut self, range: KeyRange, store: &SnapshotStore<S>) -> Result<()> {
+    pub fn reset_range(&mut self, range: KeyRange, store: &S) -> Result<()> {
         // TODO: Recreating range scanner is a time consuming operation. We need to provide
         // operation to reset range for scanners.
         self.range = range;
         self.no_more = false;
         self.last_scanned_key.clear();
         self.statistics_backlog.add(&self.scanner.take_statistics());
-        self.scanner = create_range_scanner(store, self.scan_mode, self.key_only, &self.range)?;
+        self.scanner = create_range_scanner(store, self.asc, self.key_only, &self.range)?;
         Ok(())
     }
 
@@ -127,25 +121,21 @@ impl<S: Snapshot> Scanner<S> {
         assert!(!self.no_more);
         if self.last_scanned_key.is_empty() {
             // Happens when new() -> start_scan().
-            match self.scan_mode {
-                ScanMode::Forward => range.set_start(self.range.get_start().to_owned()),
-                ScanMode::Backward => range.set_end(self.range.get_end().to_owned()),
-                _ => unreachable!(),
+            if self.asc {
+                range.set_start(self.range.get_start().to_owned());
+            } else {
+                range.set_end(self.range.get_end().to_owned());
             }
         } else {
             // Happens when new() -> start_scan() -> next_row() ... -> stop_scan() -> start_scan().
-            match self.scan_mode {
-                ScanMode::Forward => {
-                    // In `stop_scan`, we will `next(last_scanned_key)`, so we don't need to next()
-                    // again here.
-                    range.set_start(self.last_scanned_key.clone())
-                }
-                ScanMode::Backward => {
-                    // In `stop_scan`, we have already truncated to row key, so we don't need to
-                    // do it again here.
-                    range.set_end(self.last_scanned_key.clone())
-                }
-                _ => unreachable!(),
+            if self.asc {
+                // In `stop_scan`, we will `next(last_scanned_key)`, so we don't need to next()
+                // again here.
+                range.set_start(self.last_scanned_key.clone());
+            } else {
+                // In `stop_scan`, we have already truncated to row key, so we don't need to
+                // do it again here.
+                range.set_end(self.last_scanned_key.clone());
             }
         }
     }
@@ -156,22 +146,18 @@ impl<S: Snapshot> Scanner<S> {
         }
         // `next_row()` should have been called when calling `stop_scan()` after `start_scan()`.
         assert!(!self.last_scanned_key.is_empty());
-        match self.scan_mode {
-            ScanMode::Forward => {
-                // Make range_end exclusive. Note that next `start_scan` will also use this
-                // key as the range_start.
-                util::convert_to_prefix_next(&mut self.last_scanned_key);
-                range.set_end(self.last_scanned_key.clone());
+        if self.asc {
+            // Make range_end exclusive. Note that next `start_scan` will also use this
+            // key as the range_start.
+            util::convert_to_prefix_next(&mut self.last_scanned_key);
+            range.set_end(self.last_scanned_key.clone());
+        } else {
+            // TODO: We may don't need `truncate_as_row_key`. Needs investigation.
+            if self.scan_on == ScanOn::Table {
+                let row_key_len = truncate_as_row_key(&self.last_scanned_key).unwrap().len();
+                self.last_scanned_key.truncate(row_key_len);
             }
-            ScanMode::Backward => {
-                // TODO: We may don't need `truncate_as_row_key`. Needs investigation.
-                if self.scan_on == ScanOn::Table {
-                    let row_key_len = truncate_as_row_key(&self.last_scanned_key).unwrap().len();
-                    self.last_scanned_key.truncate(row_key_len);
-                }
-                range.set_start(self.last_scanned_key.clone());
-            }
-            _ => unreachable!(),
+            range.set_start(self.last_scanned_key.clone());
         }
         true
     }
@@ -448,7 +434,7 @@ pub mod test {
             }
 
             let has_more = scanner.stop_scan(&mut range);
-            if has_more || scanner.scan_mode == ScanMode::Forward {
+            if has_more || scanner.asc {
                 assert_eq!(
                     range.get_start(),
                     table::encode_row_key(table_id, expect_start_pk).as_slice()
@@ -456,7 +442,7 @@ pub mod test {
             } else {
                 assert_eq!(expect_start_pk, -1);
             }
-            if has_more || scanner.scan_mode == ScanMode::Backward {
+            if has_more || !scanner.asc {
                 assert_eq!(
                     range.get_end(),
                     table::encode_row_key(table_id, expect_end_pk).as_slice()
