@@ -182,7 +182,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         // Start load statistics if need.
         if cfg.enable_load_statistics {
             let in_heavy_load = Arc::clone(&self.in_heavy_load);
-            let mut load_stats = GrpcThreadLoadStatistics::new(4, in_heavy_load);
+            let threshold = cfg.heavy_load_threshold;
+            let mut load_stats = GrpcThreadLoadStatistics::new(4, threshold, in_heavy_load);
             let executor = self.helper_runtime.executor();
             executor.spawn(
                 Interval::new(Instant::now(), Duration::from_secs(1))

@@ -87,6 +87,12 @@
 # should be set based on your disk performance
 # snap-max-write-bytes-per-sec = "100MB"
 
+# enable load statistics or not.
+# enable-load-statistics = true
+
+# heavy load threshold.
+# heavy-load-threshold = 0.6
+
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 
