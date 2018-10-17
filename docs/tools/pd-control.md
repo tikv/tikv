@@ -87,7 +87,7 @@ Usage:
 }
 ```
 
-### `config [show | set \<option\> \<value\>]`
+### `config [show | set <option> <value>]`
 
 Use this command to view or modify the configuration information.
 
@@ -197,19 +197,19 @@ Usage:
     >> config set leader-schedule-limit 4         // 4 tasks of leader scheduling at the same time at most
     ```
 
-- `region-schedule-limit` controls the number of tasks scheduling the Region at the same time. This value affects the speed of Region balance. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the Region scheduling has a large load, so do not set it to a too large value.
+- `region-schedule-limit` controls the number of tasks scheduling the Region at the same time. This value affects the speed of Region balance. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the Region scheduling has a large load, so do not set a too large value.
 
     ```bash
     >> config set region-schedule-limit 2         // 2 tasks of Region scheduling at the same time at most
     ```
 
-- `replica-schedule-limit` controls the number of tasks scheduling the replica at the same time. This value affects the scheduling speed when the node is down or removed. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the replica scheduling has a large load, so do not set it to a too large value.
+- `replica-schedule-limit` controls the number of tasks scheduling the replica at the same time. This value affects the scheduling speed when the node is down or removed. A larger value means a higher speed and setting the value to 0 closes the scheduling. Usually the replica scheduling has a large load, so do not set a too large value.
 
     ```bash
     >> config set replica-schedule-limit 4        // 4 tasks of replica scheduling at the same time at most
     ```
 
-- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set it to a too large value.
+- `merge-schedule-limit` controls the number of Region Merge scheduling tasks. Setting the value to 0 closes Region Merge. Usually the Merge scheduling has a large load, so do not set a too large value.
 
     ```bash
     >> config set merge-schedule-limit 16       // 16 tasks of Merge scheduling at the same time at most
@@ -266,7 +266,7 @@ The configuration above is global. You can also tune the configuration by config
 
 - `disable-namespace-relocation` is used to disable Region relocation to the store of its namespace. When you set it to `true`, PD does not move Regions to stores where they belong to.
 
-### `config delete namespace \<name\> [\<option\>]`
+### `config delete namespace <name> [<option>]`
 
 Use this command to delete the configuration of namespace.
 
@@ -292,7 +292,18 @@ Usage:
 
 ```bash
 >> health                                // Display the health information
-{"health": "true"}
+[
+  {
+    "name": "pd",
+    "member_id": 13195394291058371180,
+    "client_urls": [
+      "http://127.0.0.1:2379"
+      ......
+    ],
+    "health": true
+  }
+  ......
+]
 ```
 
 ### `hot [read | write | store]`
@@ -307,7 +318,7 @@ Usage:
 >> hot store                            // Display hot spot for all the read and write operations
 ```
 
-### `label [store \<name\> \<value\>]`
+### `label [store <name> <value>]`
 
 Use this command to view the label information of the cluster.
 
@@ -318,7 +329,7 @@ Usage:
 >> label store zone cn                  // Display all stores including the "zone":"cn" label
 ```
 
-### `member [delete | leader_priority | leader [show | resign | transfer \<member_name\>]]`
+### `member [delete | leader_priority | leader [show | resign | transfer <member_name>]]`
 
 Use this command to view the PD members, remove a specified member, or configure the priority of leader.
 
@@ -349,7 +360,7 @@ Success!
 
 ### `operator [show | add | remove]`
 
-Use this command to view and control the scheduling operation.
+Use this command to view and control the scheduling operation, split a Region, or merge Regions.
 
 Usage:
 
@@ -359,7 +370,7 @@ Usage:
 >> operator show leader                                 // Display all leader operators
 >> operator show region                                 // Display all Region operators
 >> operator add add-peer 1 2                            // Add a replica of Region 1 on store 2
->> operator remove remove-peer 1 2                      // Remove a replica of Region 1 on store 2
+>> operator add remove-peer 1 2                         // Remove a replica of Region 1 on store 2
 >> operator add transfer-leader 1 2                     // Schedule the leader of Region 1 to store 2
 >> operator add transfer-region 1 2 3 4                 // Schedule Region 1 to stores 2,3,4
 >> operator add transfer-peer 1 2 3                     // Schedule the replica of Region 1 on store 2 to store 3
@@ -368,6 +379,8 @@ Usage:
 >> operator add split-region 1 --policy=scan            // Split Region 1 into two Regions in halves, based on accurate scan value
 >> operator remove 1                                    // Remove the scheduling operation of Region 1
 ```
+
+The splitting of Regions starts from the position as close as possible to the middle. You can locate this position using two strategies, namely "scan" and "approximate". The difference between them is that the former determines the middle key by scanning the Region, and the latter obtains the approximate position by checking the statistics recorded in the SST file. Generally, the former is more accurate, while the latter consumes less I/O and can be completed faster.
 
 ### `ping`
 
@@ -380,7 +393,7 @@ Usage:
 time: 43.12698ms
 ```
 
-### `region \<region_id\> [--jq="<query string>"]`
+### `region <region_id> [--jq="<query string>"]`
 
 Use this command to view the region information. For a jq formatted output, see [jq-formatted-json-output-usage](#jq-formatted-json-output-usage).
 
@@ -405,7 +418,7 @@ Usage:
 }
 ```
 
-### `region key [--format=raw|pb|proto|protobuf] \<key\>`
+### `region key [--format=raw|pb|proto|protobuf] <key>`
 
 Use this command to query the region that a specific key resides in. It supports the raw and protobuf formats.
 
@@ -433,7 +446,7 @@ Protobuf format usage:
 }
 ```
 
-### `region sibling \<region_id\>`
+### `region sibling <region_id>`
 
 Use this command to check the adjacent Regions of a specific Region.
 
@@ -445,6 +458,91 @@ Usage:
   "count": 2,
   "regions": [......],
 }
+```
+
+### `region store <store_id>`
+
+Use this command to list all Regions of a specific store.
+
+Usage:
+
+```bash
+>> region store 2
+{
+  "count": 10,
+  "regions": [......],
+}
+```
+
+### `region topread [limit]`
+
+Use this command to list Regions with top read flow. The default value of the limit is 16.
+
+Usage:
+
+```bash
+>> region topread
+{
+  "count": 16,
+  "regions": [......],
+}
+```
+
+### `region topwrite [limit]`
+
+Use this command to list Regions with top write flow. The default value of the limit is 16.
+
+Usage:
+
+```bash
+>> region topwrite
+{
+  "count": 16,
+  "regions": [......],
+}
+```
+
+### `region topconfver [limit]`
+
+Use this command to list Regions with top conf version. The default value of the limit is 16.
+
+Usage:
+
+```bash
+>> region topconfver
+{
+  "count": 16,
+  "regions": [......],
+}
+```
+
+### `region topversion [limit]`
+
+Use this command to list Regions with top version. The default value of the limit is 16.
+
+Usage:
+
+```bash
+>> region topversion
+{
+  "count": 16,
+  "regions": [......],
+}
+```
+
+### `region topsize [limit]`
+
+Use this command to list Regions with top approximate size. The default value of the limit is 16.
+
+Usage:
+
+```bash
+>> region topsize
+{
+   "count": 16,
+   "regions": [......],
+}
+
 ```
 
 ### `region check [miss-peer | extra-peer | down-peer | pending-peer | incorrect-ns]`
@@ -484,7 +582,7 @@ Usage:
 >> scheduler remove grant-leader-scheduler-1  // Remove the corresponding scheduler
 ```
 
-### `store [delete | label | weight] \<store_id\>  [--jq="<query string>"]`
+### `store [delete | label | weight] <store_id>  [--jq="<query string>"]`
 
 Use this command to view the store information or remove a specified store. For a jq formatted output, see [jq-formatted-json-output-usage](#jq-formatted-json-output-usage).
 
