@@ -116,9 +116,10 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundWithFracInt
             | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::DateFormatSig
-            | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::TruncateReal => (2, 2),
+            | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::TruncateReal
+            | ScalarFuncSig::TruncateDecimal => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -238,6 +239,8 @@ impl ScalarFunc {
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
+            | ScalarFuncSig::InetAton
+            | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::HexIntArg
@@ -273,7 +276,8 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenReal
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
-            | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
+            | ScalarFuncSig::CaseWhenTime
+            | ScalarFuncSig::Radians => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
             | ScalarFuncSig::JsonRemoveSig
@@ -369,8 +373,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
             | ScalarFuncSig::Hour
-            | ScalarFuncSig::InetAton
-            | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::Instr
@@ -406,7 +408,6 @@ impl ScalarFunc {
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
-            | ScalarFuncSig::Radians
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
@@ -474,7 +475,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim1Arg
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Trim3Args
-            | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
@@ -793,6 +793,7 @@ dispatch_call! {
         ASCII => ascii,
         IsIPv4 => is_ipv4,
         IsIPv6 => is_ipv6,
+        InetAton => inet_aton,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -819,6 +820,7 @@ dispatch_call! {
         Rand => rand,
         RandWithSeed => rand_with_seed,
         TruncateReal => truncate_real,
+        Radians => radians,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -867,6 +869,8 @@ dispatch_call! {
         RoundDec => round_dec,
         RoundWithFracDec => round_with_frac_dec,
 
+        TruncateDecimal => truncate_decimal,
+
         IfNullDecimal => if_null_decimal,
         IfDecimal => if_decimal,
 
@@ -910,6 +914,7 @@ dispatch_call! {
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
         UnHex => un_hex,
+        InetNtoa => inet_ntoa,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
@@ -1074,6 +1079,7 @@ mod test {
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::TruncateInt,
                     ScalarFuncSig::TruncateReal,
+                    ScalarFuncSig::TruncateDecimal,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
                     ScalarFuncSig::RoundWithFracDec,
@@ -1207,6 +1213,7 @@ mod test {
                     ScalarFuncSig::SHA1,
                     ScalarFuncSig::Cot,
                     ScalarFuncSig::Degrees,
+                    ScalarFuncSig::Radians,
                 ],
                 1,
                 1,
@@ -1373,8 +1380,6 @@ mod test {
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
             ScalarFuncSig::Hour,
-            ScalarFuncSig::InetAton,
-            ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
             ScalarFuncSig::Instr,
@@ -1410,7 +1415,6 @@ mod test {
             ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
-            ScalarFuncSig::Radians,
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
@@ -1478,7 +1482,6 @@ mod test {
             ScalarFuncSig::Trim1Arg,
             ScalarFuncSig::Trim2Args,
             ScalarFuncSig::Trim3Args,
-            ScalarFuncSig::TruncateDecimal,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,

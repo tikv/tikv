@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-const SIGN_MARK: u64 = 0x8000000000000000;
+const SIGN_MARK: u64 = 1 << 63;
 
 #[inline]
 pub fn encode_i64_to_comparable_u64(v: i64) -> u64 {

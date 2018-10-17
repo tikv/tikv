@@ -3,9 +3,6 @@ name = "codec"
 version = "0.0.1"
 publish = false
 
-[lib]
-path = "lib.rs"
-
 [dependencies]
 byteorder = "1.2"
 quick-error = "1.2"

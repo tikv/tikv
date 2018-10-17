@@ -72,7 +72,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.3", features = [ "secure" ] }
+grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.3"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
