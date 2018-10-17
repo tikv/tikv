@@ -975,9 +975,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             });
 
             self.entry_cache_gc_handler.last_compact_gc_vec_len = gc_vec.len();
-            self.raftlog_gc_worker
+            if let Err(e) = self
+                .raftlog_gc_worker
                 .schedule(RaftlogGcTask::EntryCacheGc(EntryGcTask::new(gc_vec)))
-                .is_ok();
+            {
+                error!(
+                    "[region {}] failed to schedule entry cache gc task: {}",
+                    region_id, e
+                );
+            }
         }
         if let Err(e) = self
             .raftlog_gc_worker
@@ -1735,9 +1741,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Update last_gc_vec_len
         self.entry_cache_gc_handler.last_gc_vec_len = gc_vec.len();
 
-        self.raftlog_gc_worker
+        if let Err(e) = self
+            .raftlog_gc_worker
             .schedule(RaftlogGcTask::EntryCacheGc(EntryGcTask::new(gc_vec)))
-            .is_ok();
+        {
+            error!("failed to schedule entry cache gc task: {}", e);
+        }
 
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
         self.register_raft_gc_log_tick(event_loop);
