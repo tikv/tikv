@@ -250,6 +250,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::SHA1
             | ScalarFuncSig::MD5
+            | ScalarFuncSig::Radians
             | ScalarFuncSig::Exp => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -277,8 +278,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenReal
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
-            | ScalarFuncSig::CaseWhenTime
-            | ScalarFuncSig::Radians => (1, usize::MAX),
+            | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
             | ScalarFuncSig::JsonRemoveSig
