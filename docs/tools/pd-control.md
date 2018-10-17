@@ -19,11 +19,15 @@ As a command line tool of PD, PD Control obtains the state information of the cl
 
 Single-command mode:
 
-    ./pd-ctl store -d -u http://127.0.0.1:2379
+```bash
+./pd-ctl store -d -u http://127.0.0.1:2379
+```
 
 Interactive mode:
 
-    ./pd-ctl -u http://127.0.0.1:2379
+```bash
+./pd-ctl -u http://127.0.0.1:2379
+```
 
 Use environment variables:
 
@@ -298,11 +302,11 @@ Usage:
     "member_id": 13195394291058371180,
     "client_urls": [
       "http://127.0.0.1:2379"
-      ......
+      ...
     ],
     "health": true
   }
-  ......
+  ...
 ]
 ```
 
@@ -338,9 +342,9 @@ Usage:
 ```bash
 >> member                               // Display the information of all members
 {
-  "members": [......],
-  "leader": {......},
-  "etcd_leader": {......},
+  "members": [...],
+  "leader": {...},
+  "etcd_leader": {...},
 }
 >> member delete name pd2               // Delete "pd2"
 Success!
@@ -353,9 +357,9 @@ Success!
   "id": 9724873857558226554
 }
 >> member leader resign // Move leader away from the current member
-......
+...
 >> member leader transfer pd3 // Migrate leader to a specified member
-......
+...
 ```
 
 ### `operator [show | add | remove]`
@@ -403,17 +407,17 @@ Usage:
 >> region                               //　Display the information of all regions
 {
   "count": 1,
-  "regions": [......]
+  "regions": [...]
 }
 
 >> region 2                             // Display the information of the region with the id of 2
 {
   "region": {
       "id": 2,
-      ......
+      ...
   }
   "leader": {
-      ......
+      ...
   }
 }
 ```
@@ -429,7 +433,7 @@ Raw format usage (default):
 {
   "region": {
     "id": 2,
-    ......
+    ...
   }
 }
 ```
@@ -441,7 +445,7 @@ Protobuf format usage:
 {
   "region": {
     "id": 2,
-    ......
+    ...
   }
 }
 ```
@@ -456,7 +460,7 @@ Usage:
 >> region sibling 2
 {
   "count": 2,
-  "regions": [......],
+  "regions": [...],
 }
 ```
 
@@ -470,7 +474,7 @@ Usage:
 >> region store 2
 {
   "count": 10,
-  "regions": [......],
+  "regions": [...],
 }
 ```
 
@@ -484,7 +488,7 @@ Usage:
 >> region topread
 {
   "count": 16,
-  "regions": [......],
+  "regions": [...],
 }
 ```
 
@@ -498,7 +502,7 @@ Usage:
 >> region topwrite
 {
   "count": 16,
-  "regions": [......],
+  "regions": [...],
 }
 ```
 
@@ -512,7 +516,7 @@ Usage:
 >> region topconfver
 {
   "count": 16,
-  "regions": [......],
+  "regions": [...],
 }
 ```
 
@@ -526,7 +530,7 @@ Usage:
 >> region topversion
 {
   "count": 16,
-  "regions": [......],
+  "regions": [...],
 }
 ```
 
@@ -540,7 +544,7 @@ Usage:
 >> region topsize
 {
    "count": 16,
-   "regions": [......],
+   "regions": [...],
 }
 
 ```
@@ -563,7 +567,7 @@ Usage:
 >> region miss-peer
 {
   "count": 2,
-  "regions": [......],
+  "regions": [...],
 }
 ```
 
@@ -595,9 +599,9 @@ Usage:
   "stores": [...]
 }
 >> store 1                      // Get the store with the store id of 1
-  ......
+  ...
 >> store delete 1               // Delete the store with the store id of 1
-  ......
+  ...
 >> store label 1 zone cn        // Set the value of the label with the "zone" key to "cn" for the store with the store id of 1
 >> store weight 1 5 10          // Set the leader weight to 5 and region weight to 10 for the store with the store id of 1
 ```
