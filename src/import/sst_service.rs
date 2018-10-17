@@ -71,7 +71,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
 
 impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
@@ -100,7 +100,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
     /// Receive SST from client and save the file for later ingesting.
     fn upload(
-        &self,
+        &mut self,
         ctx: RpcContext,
         stream: RequestStream<UploadRequest>,
         sink: ClientStreamingSink<UploadResponse>,
@@ -154,7 +154,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     /// If the ingestion fails because the region is not found or the epoch does
     /// not match, the remaining files will eventually be cleaned up by
     /// CleanupSSTWorker.
-    fn ingest(&self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
+    fn ingest(&mut self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
@@ -194,7 +194,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         )
     }
 
-    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+    fn compact(&mut self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
         let label = "compact";
         let timer = Instant::now_coarse();
         let engine = Arc::clone(&self.engine);

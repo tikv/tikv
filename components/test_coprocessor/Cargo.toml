@@ -3,9 +3,6 @@ name = "test_coprocessor"
 version = "0.0.1"
 publish = false
 
-[lib]
-path = "lib.rs"
-
 [dependencies]
 tikv = { path = "../../" }
 protobuf = "~2.0"
