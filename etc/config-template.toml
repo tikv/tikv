@@ -50,10 +50,6 @@
 # addr = "127.0.0.1:20160"
 # set advertise listening address for client communication, if not set, use addr instead.
 # advertise-addr = ""
-# notify capacity, 40960 is suitable for about 7000 regions.
-# notify-capacity = 40960
-# maximum number of messages can be processed in one tick.
-# messages-per-tick = 4096
 
 # compression type for grpc channel, available values are none, deflate and gzip.
 # grpc-compression-type = "none"
@@ -96,9 +92,6 @@
 
 # notify capacity of scheduler's channel
 # scheduler-notify-capacity = 10240
-
-# maximum number of messages can be processed in one tick
-# scheduler-messages-per-tick = 1024
 
 # the number of slots in scheduler latches, concurrency control for write.
 # scheduler-concurrency = 2048000
