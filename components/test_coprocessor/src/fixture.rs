@@ -48,9 +48,9 @@ impl ProductTable {
             .index_key(idx_id)
             .build();
         let table = TableBuilder::new()
-            .add_col(id)
-            .add_col(name)
-            .add_col(count)
+            .add_col(id.clone())
+            .add_col(name.clone())
+            .add_col(count.clone())
             .build();
 
         ProductTable {
@@ -68,7 +68,7 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<E>, Endpoint<E>) {
+) -> (MvccTransactionalStore<E>, Endpoint<E>) {
     init_data_with_details(
         ctx,
         engine,
@@ -88,16 +88,16 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
     read_pool_cfg: &readpool::Config,
-) -> (Store<E>, Endpoint<E>) {
-    let mut store = Store::new(engine);
+) -> (MvccTransactionalStore<E>, Endpoint<E>) {
+    let mut store = MvccTransactionalStore::new(engine);
 
     store.begin();
     for &(id, name, count) in vals {
         store
             .insert_into(&tbl.table)
-            .set(tbl.id, Datum::I64(id))
-            .set(tbl.name, name.map(|s| s.as_bytes()).into())
-            .set(tbl.count, Datum::I64(count))
+            .set(&tbl.id, Datum::I64(id))
+            .set(&tbl.name, name.map(|s| s.as_bytes()).into())
+            .set(&tbl.count, Datum::I64(count))
             .execute_with_ctx(ctx.clone());
     }
     if commit {
@@ -115,7 +115,7 @@ pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
+) -> (MvccTransactionalStore<RocksEngine>, Endpoint<RocksEngine>) {
     let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
@@ -124,6 +124,6 @@ pub fn init_data_with_commit(
 pub fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
-) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
+) -> (MvccTransactionalStore<RocksEngine>, Endpoint<RocksEngine>) {
     init_data_with_commit(tbl, vals, true)
 }

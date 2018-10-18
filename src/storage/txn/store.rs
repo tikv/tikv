@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+use std::ops::Bound;
+
 use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::mvcc::{
@@ -181,25 +184,17 @@ impl<S: Snapshot> Scanner for StoreScanner<S> {
     }
 }
 
-#[cfg(test)]
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::ops::Bound;
-
 /// A Store that reads on fixtures.
-#[cfg(test)]
 pub struct FixtureStore {
     data: BTreeMap<Key, Result<Vec<u8>>>,
 }
 
-#[cfg(test)]
 impl FixtureStore {
     pub fn new(data: BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore { data }
     }
 }
 
-#[cfg(test)]
 impl Store for FixtureStore {
     type Scanner = FixtureStoreScanner;
 
@@ -273,12 +268,10 @@ impl Store for FixtureStore {
 }
 
 /// A Scanner that scans on fixtures.
-#[cfg(test)]
 pub struct FixtureStoreScanner {
     data: ::std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
 }
 
-#[cfg(test)]
 impl Scanner for FixtureStoreScanner {
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {

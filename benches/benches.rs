@@ -27,6 +27,7 @@ extern crate tempdir;
 extern crate test;
 extern crate tipb;
 
+extern crate test_coprocessor;
 extern crate test_storage;
 extern crate test_util;
 extern crate tikv;
