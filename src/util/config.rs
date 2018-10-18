@@ -525,7 +525,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                     if unit >= last_unit {
                         return Err(E::invalid_value(
                             Unexpected::Str(dur_str),
-                            &"d, h, m, s, ms should occur in giving order.",
+                            &"d, h, m, s, ms should occur in given order.",
                         ));
                     }
                     // do we need to check 12h360m?
