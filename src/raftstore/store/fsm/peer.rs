@@ -838,7 +838,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.region_peers
                     .get_mut(&region_id)
                     .unwrap()
-                    .handle_raft_ready_apply(ready, &mut apply_tasks);
+                    .handle_raft_ready_apply(ready, &mut apply_tasks, &mut self.raft_metrics);
                 if let Some(apply_result) = res {
                     self.on_ready_apply_snapshot(apply_result);
                 }
