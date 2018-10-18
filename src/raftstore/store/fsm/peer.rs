@@ -40,6 +40,7 @@ use storage::CF_RAFT;
 use util::escape;
 use util::mpsc::Receiver;
 use util::time::duration_to_sec;
+use util::time::SlowTimer;
 use util::worker::{Scheduler, Stopped};
 
 use super::Key;
@@ -2148,6 +2149,7 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
 impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
     #[inline]
     fn on_tick(&mut self, tick: PeerTick) {
+        let t = SlowTimer::new();
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::SplitRegionCheck => self.on_split_region_check_tick(),
@@ -2156,6 +2158,10 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             PeerTick::CheckMerge => self.on_check_merge(),
             PeerTick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
         }
+        RAFT_EVENT_DURATION
+            .with_label_values(&[tick.tag()])
+            .observe(duration_to_sec(t.elapsed()) as f64);
+        slow_log!(t, "{} handle timeout {:?}", self.peer.tag, tick);
     }
 
     fn stop(&mut self) {

@@ -132,6 +132,34 @@ pub enum StoreTick {
     ConsistencyCheck,
 }
 
+impl StoreTick {
+    #[inline]
+    pub fn tag(self) -> &'static str {
+        match self {
+            StoreTick::CompactCheck => "compact_check",
+            StoreTick::PdStoreHeartbeat => "pd_store_heartbeat",
+            StoreTick::SnapGc => "snap_gc",
+            StoreTick::CompactLockCf => "compact_lock_cf",
+            StoreTick::ConsistencyCheck => "consistency_check",
+            StoreTick::CleanupImportSST => "cleanup_import_sst",
+        }
+    }
+}
+
+impl PeerTick {
+    #[inline]
+    pub fn tag(self) -> &'static str {
+        match self {
+            PeerTick::Raft => "raft",
+            PeerTick::RaftLogGc => "raft_log_gc",
+            PeerTick::SplitRegionCheck => "split_region_check",
+            PeerTick::PdHeartbeat => "pd_heartbeat",
+            PeerTick::CheckMerge => "check_merge",
+            PeerTick::CheckPeerStaleState => "check_peer_stale_state",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum SignificantMsg {
     SnapshotStatus {

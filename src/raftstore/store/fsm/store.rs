@@ -35,6 +35,8 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::mpsc::Receiver;
 use util::rocksdb;
 use util::rocksdb::{CompactedEvent, CompactionListener};
+use util::time::duration_to_sec;
+use util::time::SlowTimer;
 use util::worker::Scheduler;
 
 use raftstore::store::config::Config;
@@ -888,6 +890,7 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
     }
 
     fn on_store_tick(&mut self, tick: StoreTick) {
+        let t = SlowTimer::new();
         match tick {
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
@@ -896,6 +899,10 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
         }
+        RAFT_EVENT_DURATION
+            .with_label_values(&[tick.tag()])
+            .observe(duration_to_sec(t.elapsed()) as f64);
+        slow_log!(t, "{} handle timeout {:?}", self.core.tag, tick);
     }
 
     fn on_store_msg(&mut self, msg: StoreMsg) {

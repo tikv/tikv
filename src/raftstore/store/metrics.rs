@@ -229,4 +229,12 @@ lazy_static! {
         "The size of a poll batch.",
         exponential_buckets(1.0, 2.0, 13).unwrap()
     ).unwrap();
+
+    pub static ref RAFT_EVENT_DURATION: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_event_duration",
+            "Duration of raft store events.",
+            &["type"],
+            exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
+        ).unwrap();
 }
