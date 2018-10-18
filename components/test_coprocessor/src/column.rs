@@ -13,8 +13,8 @@
 
 use super::*;
 
-use tipb::schema::ColumnInfo;
 use tikv::coprocessor::codec::{datum, Datum};
+use tipb::schema::ColumnInfo;
 
 pub const TYPE_VAR_CHAR: i32 = 1;
 pub const TYPE_LONG: i32 = 2;

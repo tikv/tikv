@@ -14,25 +14,23 @@
 extern crate criterion;
 
 extern crate test_coprocessor;
-extern crate tipb;
 extern crate tikv;
+extern crate tipb;
 
 use criterion::{black_box, Bencher, Criterion};
 
 use tipb::executor::TableScan;
 
+use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::dag::executor::{Executor, TableScanExecutor};
-use test_coprocessor::*;
 
 fn bench_table_scan_primary_key(b: &mut Bencher) {
     let id = ColumnBuilder::new()
         .col_type(TYPE_LONG)
         .primary_key(true)
         .build();
-    let foo = ColumnBuilder::new()
-        .col_type(TYPE_LONG)
-        .build();
+    let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
     let table = TableBuilder::new()
         .add_col(id.clone())
         .add_col(foo.clone())
@@ -54,20 +52,23 @@ fn bench_table_scan_primary_key(b: &mut Bencher) {
     meta.set_desc(false);
     meta.mut_columns().push(id.get_column_info());
 
-    b.iter_with_setup(|| {
-        let mut executor = TableScanExecutor::new(
-            meta.clone(),
-            vec![table.get_select_range()],
-            store.clone().into_fixture_store(),
-            false,
-        ).unwrap();
-        // There is a step of building scanner in the first `next()` which cost time,
-        // so we next() before hand.
-        executor.next().unwrap();
-        executor
-    }, |mut executor| {
-        black_box(executor.next().unwrap());
-    });
+    b.iter_with_setup(
+        || {
+            let mut executor = TableScanExecutor::new(
+                meta.clone(),
+                vec![table.get_select_range()],
+                store.clone().into_fixture_store(),
+                false,
+            ).unwrap();
+            // There is a step of building scanner in the first `next()` which cost time,
+            // so we next() before hand.
+            executor.next().unwrap();
+            executor
+        },
+        |mut executor| {
+            black_box(executor.next().unwrap());
+        },
+    );
 }
 
 fn main() {

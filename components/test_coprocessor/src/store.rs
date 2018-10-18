@@ -20,7 +20,7 @@ use kvproto::kvrpcpb::Context;
 use test_storage::SyncStorage;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::{self, Engine, Key, Mutation, FixtureStore};
+use tikv::storage::{self, Engine, FixtureStore, Key, Mutation};
 use tikv::util::worker::FutureWorker;
 
 pub struct Insert<'a, S: Store + 'a> {
