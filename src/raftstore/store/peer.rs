@@ -1147,12 +1147,16 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
+            let now = monotonic_coarse_now();
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
+                        raft_metrics
+                            .commit_log
+                            .observe(duration_to_sec((now - propose_time).to_std().unwrap()));
                         self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
                         lease_to_be_updated = false;
                     }
