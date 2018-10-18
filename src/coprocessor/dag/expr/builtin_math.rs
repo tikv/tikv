@@ -456,7 +456,7 @@ impl ScalarFunc {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let r = x.exp();
         if r.is_infinite() || r.is_nan() {
-            return Ok(Some(0_f64));
+            return Err(Error::overflow("DOUBLE", &format!("exp({})", x)));
         }
         Ok(Some(r))
     }
@@ -1348,12 +1348,16 @@ mod test {
             (Datum::F64(1.23_f64), Datum::F64(3.4212295362896734)),
             (Datum::F64(-1.23_f64), Datum::F64(0.2922925776808594)),
             (Datum::F64(0_f64), Datum::F64(1_f64)),
-            (Datum::F64(100000_f64), Datum::F64(0_f64)),
-            (Datum::F64(f64::NAN), Datum::F64(0_f64)),
         ];
         for (x, expected) in tests {
             let got = eval_func(ScalarFuncSig::Exp, &[x]).unwrap();
             assert_eq!(got, expected);
+        }
+
+        let overflow_tests = vec![Datum::F64(100000_f64), Datum::F64(f64::NAN)];
+        for x in overflow_tests {
+            let got = eval_func(ScalarFuncSig::Exp, &[x]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
     }
 }
