@@ -18,7 +18,7 @@ use crc::{crc32, Hasher32};
 use num::traits::Pow;
 use rand::{Rng, SeedableRng, XorShiftRng};
 use std::borrow::Cow;
-use std::{f64, i64};
+use std::{f64, i64, u64};
 use time;
 
 impl ScalarFunc {
@@ -460,6 +460,92 @@ impl ScalarFunc {
         }
         Ok(Some(r))
     }
+
+    #[inline]
+    pub fn conv<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let n = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let mut from_base = try_opt!(self.children[1].eval_int(ctx, row));
+        let mut to_base = try_opt!(self.children[2].eval_int(ctx, row));
+
+        let mut negative = false;
+        let mut signed = false;
+        let mut ignore_sign = false;
+
+        if from_base < 0 {
+            from_base = -from_base;
+            signed = true;
+        }
+        if to_base < 0 {
+            to_base = -to_base;
+            ignore_sign = true;
+        }
+        if from_base > 36 || from_base < 2 || to_base > 36 || to_base < 2 {
+            return Ok(None);
+        }
+
+        let mut n = n.trim();
+        if n.starts_with('-') {
+            negative = true;
+            n = n.get(1..).unwrap();
+        } else if n.starts_with('+') {
+            n = n.get(1..).unwrap();
+        }
+        let n = n
+            .chars()
+            .take_while(|c| c.is_digit(from_base as u32))
+            .collect::<String>();
+        if n.is_empty() {
+            return Ok(Some(Cow::Owned(b"0".to_vec())));
+        }
+
+        let mut value = u64::from_str_radix(&n, from_base as u32).unwrap();
+        if signed {
+            value = if negative {
+                value.min(-i64::min_value() as u64)
+            } else {
+                value.min(i64::max_value() as u64)
+            };
+        }
+        let mut value = value as i64;
+        if negative {
+            value = -value;
+        }
+        if value < 0 {
+            negative = true
+        } else {
+            negative = false
+        }
+
+        if negative && ignore_sign {
+            value = -value;
+        }
+        let mut r = format_radix(value as u64, to_base as u32);
+        if negative && ignore_sign {
+            r.insert(0, '-');
+        }
+        Ok(Some(Cow::Owned(r.into_bytes())))
+    }
+}
+
+fn format_radix(mut x: u64, radix: u32) -> String {
+    let mut r = vec![];
+    loop {
+        let m = x % u64::from(radix);
+        x /= u64::from(radix);
+        r.push(
+            ::std::char::from_digit(m as u32, radix)
+                .unwrap()
+                .to_ascii_uppercase(),
+        );
+        if x == 0 {
+            break;
+        }
+    }
+    r.iter().rev().collect::<String>()
 }
 
 fn get_rand(arg: Option<u64>) -> XorShiftRng {
@@ -1358,6 +1444,51 @@ mod test {
         for x in overflow_tests {
             let got = eval_func(ScalarFuncSig::Exp, &[x]).unwrap_err();
             assert!(check_overflow(got).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_conv() {
+        let tests = vec![
+            ("a", 16, 2, "1010"),
+            ("6E", 18, 8, "172"),
+            ("-17", 10, -18, "-H"),
+            ("  -17", 10, -18, "-H"),
+            ("-17", 10, 18, "2D3FGB0B9CG4BD1H"),
+            ("+18aZ", 7, 36, "1"),
+            ("  +18aZ", 7, 36, "1"),
+            ("18446744073709551615", -10, 16, "7FFFFFFFFFFFFFFF"),
+            ("12F", -10, 16, "C"),
+            ("  FF ", 16, 10, "255"),
+            ("TIDB", 10, 8, "0"),
+            ("aa", 10, 2, "0"),
+            (" A", -10, 16, "0"),
+            ("a6a", 10, 8, "0"),
+            ("16九a", 10, 8, "20"),
+            ("+", 10, 8, "0"),
+            ("-", 10, 8, "0"),
+        ];
+        for (n, f, t, e) in tests {
+            let n = Datum::Bytes(n.as_bytes().to_vec());
+            let f = Datum::I64(f);
+            let t = Datum::I64(t);
+            let e = Datum::Bytes(e.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Conv, &[n, f, t]).unwrap();
+            assert_eq!(got, e);
+        }
+
+        let invalid_tests = vec![
+            (Datum::Null, Datum::I64(10), Datum::I64(10), Datum::Null),
+            (
+                Datum::Bytes(b"a6a".to_vec()),
+                Datum::I64(1),
+                Datum::I64(8),
+                Datum::Null,
+            ),
+        ];
+        for (n, f, t, e) in invalid_tests {
+            let got = eval_func(ScalarFuncSig::Conv, &[n, f, t]).unwrap();
+            assert_eq!(got, e);
         }
     }
 }
