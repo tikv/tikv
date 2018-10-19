@@ -17,12 +17,28 @@ extern crate chrono;
 extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
+extern crate libc;
+#[macro_use]
+extern crate log;
 extern crate protobuf;
 extern crate raft;
 extern crate rocksdb;
 extern crate rustc_serialize;
+#[macro_use]
 extern crate tikv;
 extern crate toml;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
+#[cfg(unix)]
+extern crate nix;
+#[cfg(unix)]
+extern crate signal;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
+
+mod util;
 
 use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
 use std::cmp::Ordering;
@@ -877,9 +893,11 @@ impl DebugExecutor for Debugger {
 
 fn main() {
     let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
+    let version_info = util::tikv_version_info();
 
     let mut app = App::new("TiKV Ctl")
-        .author("PingCAP")
+        .long_version(version_info.as_ref())
+        .author("TiKV Org.")
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")

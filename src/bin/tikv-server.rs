@@ -267,7 +267,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 fn main() {
     let matches = App::new("TiKV")
         .long_version(util::tikv_version_info().as_ref())
-        .author("PingCAP Inc. <info@pingcap.com>")
+        .author("TiKV Org.")
         .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(
             Arg::with_name("config")
