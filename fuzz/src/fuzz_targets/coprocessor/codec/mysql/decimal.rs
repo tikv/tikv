@@ -2,20 +2,10 @@
 #[macro_use]
 extern crate libfuzzer_sys;
 extern crate tikv;
+extern crate tikv_fuzz;
 
-use std::mem;
 use tikv::coprocessor::codec::mysql::decimal::{Decimal, RoundMode};
-
-fn make_u64<I>(iter: &mut I) -> u64
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 8];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
+use tikv_fuzz::util::number_maker::make_u64;
 
 fn fuzz<I>(lhs: &Decimal, rhs: &Decimal, iter: &mut I)
 where

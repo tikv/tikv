@@ -2,20 +2,10 @@
 #[macro_use]
 extern crate libfuzzer_sys;
 extern crate tikv;
+extern crate tikv_fuzz;
 
-use std::mem;
 use tikv::util::codec::number::*;
-
-fn make_u64<I>(iter: &mut I) -> u64
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 8];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
+use tikv_fuzz::util::number_maker::{make_f64, make_i32, make_i64, make_u16, make_u32, make_u64};
 
 fn fuzz_number_u64_encode(data: &[u8]) {
     if data.is_empty() {
@@ -35,17 +25,6 @@ fn fuzz_number_u64_decode(data: &[u8]) {
     let _ = decode_u64(&mut buf.as_slice());
     let _ = decode_u64_desc(&mut buf.as_slice());
     let _ = decode_u64_le(&mut buf.as_slice());
-}
-
-fn make_i64<I>(iter: &mut I) -> i64
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 8];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
 }
 
 fn fuzz_number_i64_encode(data: &[u8]) {
@@ -68,17 +47,6 @@ fn fuzz_number_i64_decode(data: &[u8]) {
     let _ = decode_i64_le(&mut buf.as_slice());
 }
 
-fn make_f64<I>(iter: &mut I) -> f64
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 8];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_f64_encode(data: &[u8]) {
     if data.is_empty() {
         return;
@@ -98,17 +66,6 @@ fn fuzz_number_f64_decode(data: &[u8]) {
     let _ = decode_f64_le(&mut buf.as_slice());
 }
 
-fn make_u32<I>(iter: &mut I) -> u32
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 4];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_u32_encode(data: &[u8]) {
     if data.is_empty() {
         return;
@@ -126,17 +83,6 @@ fn fuzz_number_u32_decode(data: &[u8]) {
     let _ = decode_u32_le(&mut buf.as_slice());
 }
 
-fn make_i32<I>(iter: &mut I) -> i32
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 4];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_i32_encode(data: &[u8]) {
     if data.is_empty() {
         return;
@@ -150,17 +96,6 @@ fn fuzz_number_i32_encode(data: &[u8]) {
 fn fuzz_number_i32_decode(data: &[u8]) {
     let buf = data.to_owned();
     let _ = decode_i32_le(&mut buf.as_slice());
-}
-
-fn make_u16<I>(iter: &mut I) -> u16
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 2];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
 }
 
 fn fuzz_number_u16_encode(data: &[u8]) {
