@@ -249,7 +249,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Cot
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::SHA1
-            | ScalarFuncSig::MD5 => (1, 1),
+            | ScalarFuncSig::MD5
+            | ScalarFuncSig::Radians
+            | ScalarFuncSig::Exp => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -276,8 +278,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenReal
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
-            | ScalarFuncSig::CaseWhenTime
-            | ScalarFuncSig::Radians => (1, usize::MAX),
+            | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
             | ScalarFuncSig::JsonRemoveSig
@@ -352,7 +353,6 @@ impl ScalarFunc {
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
-            | ScalarFuncSig::Exp
             | ScalarFuncSig::ExportSet3Arg
             | ScalarFuncSig::ExportSet4Arg
             | ScalarFuncSig::ExportSet5Arg
@@ -821,6 +821,7 @@ dispatch_call! {
         RandWithSeed => rand_with_seed,
         TruncateReal => truncate_real,
         Radians => radians,
+        Exp => exp,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -1214,6 +1215,7 @@ mod test {
                     ScalarFuncSig::Cot,
                     ScalarFuncSig::Degrees,
                     ScalarFuncSig::Radians,
+                    ScalarFuncSig::Exp,
                 ],
                 1,
                 1,
@@ -1359,7 +1361,6 @@ mod test {
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
-            ScalarFuncSig::Exp,
             ScalarFuncSig::ExportSet3Arg,
             ScalarFuncSig::ExportSet4Arg,
             ScalarFuncSig::ExportSet5Arg,
