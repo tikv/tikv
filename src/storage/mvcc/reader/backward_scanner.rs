@@ -180,10 +180,33 @@ impl<S: Snapshot> BackwardScanner<S> {
                     self.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
+
+                if self.write_cursor.valid() {
+                    let key = self.write_cursor.key(&mut self.statistics.write);
+                    if key >= self.upper_bound.as_ref().unwrap().as_encoded().as_slice() {
+                        panic!(
+                            "backward_scanner write cursor key {:?} out of upper_bound {:?}",
+                            key,
+                            self.upper_bound.as_ref().unwrap().as_encoded()
+                        );
+                    }
+                }
+
                 self.lock_cursor.reverse_seek(
                     self.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.lock,
                 )?;
+
+                if self.lock_cursor.valid() {
+                    let key = self.lock_cursor.key(&mut self.statistics.lock);
+                    if key >= self.upper_bound.as_ref().unwrap().as_encoded().as_slice() {
+                        panic!(
+                            "backward_scanner lock cursor key {:?} out of upper_bound {:?}",
+                            key,
+                            self.upper_bound.as_ref().unwrap().as_encoded()
+                        );
+                    }
+                }
             } else {
                 self.write_cursor.seek_to_last(&mut self.statistics.write);
                 self.lock_cursor.seek_to_last(&mut self.statistics.lock);
@@ -234,6 +257,29 @@ impl<S: Snapshot> BackwardScanner<S> {
                 // the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
+
+            if self.upper_bound.is_some()
+                && current_user_key.as_encoded() >= self.upper_bound.as_ref().unwrap().as_encoded()
+            {
+                if has_lock {
+                    warn!(
+                        "backward_scanner lock key {:?}",
+                        self.lock_cursor.key(&mut self.statistics.lock)
+                    );
+                }
+                if has_write {
+                    warn!(
+                        "backward_scanner lock key {:?}",
+                        self.write_cursor.key(&mut self.statistics.write)
+                    );
+                }
+                panic!(
+                    "backward_scanner exceed upper_bound when scanning \
+                     current_user_key {:?}, upper_bound {:?}",
+                    current_user_key.as_encoded(),
+                    self.upper_bound.as_ref().unwrap().as_encoded()
+                );
+            }
 
             let mut result = Ok(None);
             let mut get_ts = self.ts;
