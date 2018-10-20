@@ -1759,10 +1759,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             callback: cb,
         };
         if let Err(Stopped(t)) = self.pd_worker.schedule(task) {
-            error!("{} failed to notify pd to split: Stopped", peer.tag);
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
-                    callback.invoke_with_response(new_error(box_err!("failed to split: Stopped")));
+                    callback.invoke_with_response(new_error(box_err!(
+                        "{} failed to notify pd to split: Stopped",
+                        peer.tag
+                    )));
                 }
                 _ => unreachable!(),
             }
@@ -1776,7 +1778,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         split_keys: &[Vec<u8>],
     ) -> Result<()> {
         if split_keys.is_empty() {
-            error!("[region {} no split key is specified.", region_id);
             return Err(box_err!(
                 "[region {}] no split key is specified.",
                 region_id
@@ -1784,7 +1785,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         for key in split_keys {
             if key.is_empty() {
-                error!("[region {}] split key should not be empty!!!", region_id);
                 return Err(box_err!(
                     "[region {}] split key should not be empty",
                     region_id

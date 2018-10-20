@@ -1400,11 +1400,12 @@ impl Peer {
         // Check the request itself is valid or not.
         match (change_type, peer.get_is_learner()) {
             (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
-                warn!(
+                return Err(box_err!(
                     "{} conf change type: {:?}, but got peer {:?}",
-                    self.tag, change_type, peer
-                );
-                return Err(box_err!("invalid conf change request"));
+                    self.tag,
+                    change_type,
+                    peer
+                ));
             }
             _ => {}
         }
@@ -1413,11 +1414,11 @@ impl Peer {
             && !self.cfg.allow_remove_leader
             && peer.get_id() == self.peer_id()
         {
-            warn!(
+            return Err(box_err!(
                 "{} rejects remove leader request {:?}",
-                self.tag, change_peer
-            );
-            return Err(box_err!("ignore remove leader"));
+                self.tag,
+                change_peer
+            ));
         }
 
         let mut status = self.raft_group.status();
@@ -1461,14 +1462,10 @@ impl Peer {
             .with_label_values(&["conf_change", "reject_unsafe"])
             .inc();
 
-        info!(
+        Err(box_err!(
             "{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
              quorum after change {}",
-            self.tag, change_peer, total, healthy, quorum_after_change
-        );
-        Err(box_err!(
-            "unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
-             change {}",
+            self.tag,
             change_peer,
             total,
             healthy,
@@ -1759,7 +1756,6 @@ impl Peer {
             return Err(box_err!("peer in merging mode, can't do proposal."));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
-            info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!(
                 "{} there is a pending conf change, try later",
                 self.tag

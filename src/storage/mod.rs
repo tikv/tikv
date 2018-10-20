@@ -463,7 +463,6 @@ impl<E: Engine> Storage<E> {
     pub fn stop(&mut self) -> Result<()> {
         let mut worker = self.worker.lock().unwrap();
         if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("send quit cmd to scheduler failed, error:{:?}", e);
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
 

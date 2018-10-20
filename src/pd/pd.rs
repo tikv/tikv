@@ -312,14 +312,12 @@ impl<T: PdClient> Runner<T> {
                             callback,
                         };
                         if let Err(Stopped(t)) = scheduler.schedule(task) {
-                            error!(
-                                "[region {}] {} failed to notify pd to split: Stopped",
-                                region_id, peer_id
-                            );
                             match t {
                                 Task::AskSplit { callback, .. } => {
                                     callback.invoke_with_response(new_error(box_err!(
-                                        "failed to split: Stopped"
+                                        "[region {}] {} failed to notify pd to split: Stopped",
+                                        region_id,
+                                        peer_id
                                     )));
                                 }
                                 _ => unreachable!(),

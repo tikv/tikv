@@ -978,12 +978,9 @@ impl ApplyDelegate {
                 if let Some(p) = util::find_peer_mut(&mut region, store_id) {
                     exists = true;
                     if !p.get_is_learner() || p.get_id() != peer.get_id() {
-                        error!(
-                            "{} can't add duplicated peer {:?} to region {:?}",
-                            self.tag, peer, self.region
-                        );
                         return Err(box_err!(
-                            "can't add duplicated peer {:?} to region {:?}",
+                            "{} can't add duplicated peer {:?} to region {:?}",
+                            self.tag,
                             peer,
                             self.region
                         ));
@@ -1012,12 +1009,9 @@ impl ApplyDelegate {
                 if let Some(p) = util::remove_peer(&mut region, store_id) {
                     // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
-                        error!(
-                            "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
-                            self.tag, peer, p
-                        );
                         return Err(box_err!(
-                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            self.tag,
                             peer,
                             p
                         ));
@@ -1028,12 +1022,9 @@ impl ApplyDelegate {
                         self.pending_remove = true;
                     }
                 } else {
-                    error!(
-                        "{} remove missing peer {:?} from region {:?}",
-                        self.tag, peer, self.region
-                    );
                     return Err(box_err!(
-                        "remove missing peer {:?} from region {:?}",
+                        "{} remove missing peer {:?} from region {:?}",
+                        self.tag,
                         peer,
                         self.region
                     ));
@@ -1055,12 +1046,9 @@ impl ApplyDelegate {
                     .inc();
 
                 if util::find_peer(&region, store_id).is_some() {
-                    error!(
-                        "{} can't add duplicated learner {:?} to region {:?}",
-                        self.tag, peer, self.region
-                    );
                     return Err(box_err!(
-                        "can't add duplicated learner {:?} to region {:?}",
+                        "{} can't add duplicated learner {:?} to region {:?}",
+                        self.tag,
                         peer,
                         self.region
                     ));
@@ -1546,14 +1534,11 @@ impl ApplyDelegate {
         let compact_term = req.get_compact_log().get_compact_term();
         // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
-            info!(
+            // old format compact log command, safe to ignore.
+            return Err(box_err!(
                 "{} compact term missing in {:?}, skip.",
                 self.tag,
                 req.get_compact_log()
-            );
-            // old format compact log command, safe to ignore.
-            return Err(box_err!(
-                "command format is outdated, please upgrade leader."
             ));
         }
 

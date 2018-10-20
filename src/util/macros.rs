@@ -92,8 +92,8 @@ macro_rules! box_try {
 #[macro_export]
 macro_rules! box_err {
     ($e:expr) => ({
-        use std::error::Error;
-        let e: Box<Error + Sync + Send> = format!("[{}:{}]: {}", file!(), line!(),  $e).into();
+        error!("{}", $e);
+        let e: Box<::std::error::Error + Sync + Send> = format!("[{}:{}]: {}", file!(), line!(), $e).into();
         e.into()
     });
     ($f:tt, $($arg:expr),+) => ({

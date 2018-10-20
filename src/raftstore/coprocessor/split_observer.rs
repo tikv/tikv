@@ -128,12 +128,11 @@ impl AdminObserver for SplitObserver {
                 }
                 let mut request = vec![req.take_split()];
                 if let Err(e) = self.on_split(ctx, &mut request) {
-                    error!(
+                    return Err(box_err!(
                         "[region {}] failed to handle split req: {:?}",
                         ctx.region().get_id(),
                         e
-                    );
-                    return Err(box_err!(e));
+                    ));
                 }
                 // self.on_split() makes sure request is not empty, or it will return error.
                 // so directly unwrap here.
@@ -149,12 +148,11 @@ impl AdminObserver for SplitObserver {
                 }
                 let mut requests = req.mut_splits().take_requests().into_vec();
                 if let Err(e) = self.on_split(ctx, &mut requests) {
-                    error!(
+                    return Err(box_err!(
                         "[region {}] failed to handle split req: {:?}",
                         ctx.region().get_id(),
                         e
-                    );
-                    return Err(box_err!(e));
+                    ));
                 }
                 req.mut_splits()
                     .set_requests(RepeatedField::from_vec(requests));

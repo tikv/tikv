@@ -631,8 +631,7 @@ impl Snap {
             cf_file.kv_count += 1;
             Ok(())
         } else {
-            let e = box_err!("can't find sst writer");
-            Err(RaftStoreError::Snapshot(e))
+            Err(RaftStoreError::Snapshot(box_err!("can't find sst writer")))
         }
     }
 
