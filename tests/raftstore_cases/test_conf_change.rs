@@ -702,7 +702,7 @@ fn test_conf_change_remove_leader() {
         res.get_header()
             .get_error()
             .get_message()
-            .contains("ignore remove leader"),
+            .contains("rejects remove leader"),
         "{:?}",
         res
     );
