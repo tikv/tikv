@@ -386,7 +386,8 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    // Abort on panicking
+    panic_hook::set_exit_hook(true, Some(guard));
 
     // Print version information.
     util::print_tikv_info();

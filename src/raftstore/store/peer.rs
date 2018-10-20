@@ -2067,7 +2067,9 @@ impl ReadExecutor {
         // TODO: the get_get looks weird, maybe we should figure out a better name later.
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, region)?;
+        if util::check_key_in_region(key, region).is_err() {
+            panic!("key not in region: key: {:?}, region: {:?}", key, region)
+        }
 
         let mut resp = Response::new();
         let snapshot = self.snapshot.as_ref().unwrap();

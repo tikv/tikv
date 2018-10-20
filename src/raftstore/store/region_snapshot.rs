@@ -132,13 +132,23 @@ impl Clone for RegionSnapshot {
 
 impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+        if util::check_key_in_region(key, &self.region).is_err() {
+            panic!(
+                "key not in region: key: {:?}, region: {:?}",
+                key, self.region
+            )
+        }
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+        if util::check_key_in_region(key, &self.region).is_err() {
+            panic!(
+                "key not in region: key: {:?}, region: {:?}",
+                key, self.region
+            )
+        }
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
     }
@@ -306,7 +316,13 @@ impl RegionIterator {
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
-        util::check_key_in_region_inclusive(key, &self.region)
+        if util::check_key_in_region_inclusive(key, &self.region).is_err() {
+            panic!(
+                "key not in region: key: {:?}, region: {:?}",
+                key, self.region
+            )
+        }
+        Ok(())
     }
 }
 
