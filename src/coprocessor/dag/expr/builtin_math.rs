@@ -487,22 +487,28 @@ impl ScalarFunc {
             return Ok(None);
         }
 
-        let mut n = n.trim();
-        if n.starts_with('-') {
-            negative = true;
-            n = n.get(1..).unwrap();
-        } else if n.starts_with('+') {
-            n = n.get(1..).unwrap();
+        let n = n.trim_left();
+        let mut start = 0;
+        let mut end = n.len();
+        for (idx, c) in n.char_indices() {
+            if idx == 0 {
+                negative = c == '-';
+                if c == '+' || c == '-' {
+                    start = 1;
+                    continue;
+                }
+            }
+            if !c.is_digit(from_base as u32) {
+                end = idx;
+                break;
+            }
         }
-        let n = n
-            .chars()
-            .take_while(|c| c.is_digit(from_base as u32))
-            .collect::<String>();
+        let n = n.get(start..end).unwrap();
         if n.is_empty() {
-            return Ok(Some(Cow::Owned(b"0".to_vec())));
+            return Ok(Some(Cow::Borrowed(b"0")));
         }
 
-        let mut value = u64::from_str_radix(&n, from_base as u32).unwrap();
+        let mut value = u64::from_str_radix(n, from_base as u32).unwrap();
         if signed {
             value = if negative {
                 value.min(-i64::min_value() as u64)
@@ -514,11 +520,7 @@ impl ScalarFunc {
         if negative {
             value = -value;
         }
-        if value < 0 {
-            negative = true
-        } else {
-            negative = false
-        }
+        negative = value < 0;
 
         if negative && ignore_sign {
             value = -value;
