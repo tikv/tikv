@@ -430,7 +430,7 @@ impl RegionInfoAccessor {
     }
 }
 
-impl RegionInfoProvider for RegionCollection {
+impl RegionInfoProvider for RegionInfoAccessor {
     fn seek_region(
         &self,
         from: &[u8],

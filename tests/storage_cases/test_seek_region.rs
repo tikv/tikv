@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use test_raftstore::*;
-use tikv::raftstore::coprocessor::RegionCollection;
+use tikv::raftstore::coprocessor::RegionInfoAccessor;
 use tikv::raftstore::store::SeekRegionResult;
 use tikv::storage::engine::RegionInfoProvider;
 use tikv::util::collections::HashMap;
@@ -196,7 +196,7 @@ fn test_region_collection_seek_region() {
         .sim
         .wl()
         .post_create_coprocessor_host(box move |id, host| {
-            let p = RegionCollection::new(host);
+            let p = RegionInfoAccessor::new(host);
             p.start();
             tx.send((id, p)).unwrap()
         });
