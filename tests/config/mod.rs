@@ -80,6 +80,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
         enable_load_statistics: true,
+        helper_threadpool_size: 2,
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {

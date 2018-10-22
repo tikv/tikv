@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,16 +12,15 @@ pub(super) struct GrpcThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,
     capacity: usize,
-    threshold: f64,
     cur_pos: usize,
     cpu_usages: Vec<f64>,
     instants: Vec<Instant>,
-    in_heavy_load: Arc<AtomicBool>,
+    in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
 }
 
 #[cfg(target_os = "linux")]
 impl GrpcThreadLoadStatistics {
-    pub(super) fn new(capacity: usize, threshold: f64, in_heavy_load: Arc<AtomicBool>) -> Self {
+    pub(super) fn new(capacity: usize, in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>) -> Self {
         let pid: pid_t = unsafe { getpid() };
         let mut tids = vec![];
         let mut cpu_total = 0f64;
@@ -38,7 +37,6 @@ impl GrpcThreadLoadStatistics {
             pid,
             tids,
             capacity,
-            threshold,
             cur_pos: 0,
             cpu_usages: vec![cpu_total; capacity],
             instants: vec![Instant::now(); capacity],
@@ -62,8 +60,9 @@ impl GrpcThreadLoadStatistics {
 
         let millis = (current_instant - earlist_instant).as_millis();
         let cpu_usage = (current_cpu_usage - earlist_cpu_usage) / millis as f64 * 1000f64;
-        let in_heavy_load = cpu_usage >= self.tids.len() as f64 * self.threshold;
-        self.in_heavy_load.store(in_heavy_load, Ordering::SeqCst);
+        let cpu_usage = (cpu_usage * 100f64) as usize;
+        self.in_heavy_load.1.store(cpu_usage, Ordering::SeqCst);
+        self.in_heavy_load.0.fetch_add(1, Ordering::SeqCst);
 
         self.cur_pos = next_pos;
     }

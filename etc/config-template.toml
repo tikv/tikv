@@ -90,9 +90,6 @@
 # enable load statistics or not.
 # enable-load-statistics = true
 
-# heavy load threshold.
-# heavy-load-threshold = 0.6
-
 # helper threadpool size
 helper-threadpool-size = 2
 

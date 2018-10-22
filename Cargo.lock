@@ -619,7 +619,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=super-batch-streaming#28eb01e0a93962483031b700d327dae1662fd712"
+source = "git+https://github.com/pingcap/kvproto.git?branch=super-batch-streaming#30d47dbfd1c0465cdd723f6b58a57516fe044842"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1072,7 +1072,7 @@ version = "0.3.1"
 source = "git+https://github.com/pingcap/raft-rs.git#b10d74ced67f57e7a591ecc590991b616e4ec570"
 dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "log 0.4.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",

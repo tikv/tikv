@@ -12,7 +12,7 @@
 // limitations under the License.
 use std::iter::{self, FromIterator};
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 
@@ -63,7 +63,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     // A helper thread for super batch. It's used to collect responses for batch_commands
     // interface.
     helper_runtime: Arc<Runtime>,
-    in_heavy_load: Arc<AtomicBool>,
+    in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
@@ -73,7 +73,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         helper_runtime: Arc<Runtime>,
-        in_heavy_load: Arc<AtomicBool>,
+        in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
     ) -> Self {
         Service {
             storage,
@@ -936,19 +936,21 @@ fn handle_batch_commands_request<E: Engine>(
 // TODO: wait 2ms to avoid little batch.
 struct BatchCommandsRetriever {
     receiver: Receiver<(u64, BatchCommandsResponse_Response)>,
-    in_heavy_load: Arc<AtomicBool>,
+    in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
     current_resp: BatchCommandsResponse,
+    last_term: usize,
 }
 
 impl BatchCommandsRetriever {
     fn new(
         rx: Receiver<(u64, BatchCommandsResponse_Response)>,
-        in_heavy_load: Arc<AtomicBool>,
+        in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
     ) -> Self {
         BatchCommandsRetriever {
             receiver: rx,
             in_heavy_load,
             current_resp: BatchCommandsResponse::default(),
+            last_term: 0,
         }
     }
 }
@@ -988,7 +990,12 @@ impl Stream for BatchCommandsRetriever {
         }
 
         let mut resp = mem::replace(&mut self.current_resp, BatchCommandsResponse::default());
-        resp.set_in_heavy_load(self.in_heavy_load.load(Ordering::SeqCst));
+        let term = self.in_heavy_load.0.load(Ordering::SeqCst);
+        if term > self.last_term {
+            self.last_term = term;
+            let load = self.in_heavy_load.1.load(Ordering::SeqCst) as u64;
+            resp.set_transport_layer_load(load);
+        }
         Ok(Async::Ready(Some(resp)))
     }
 }

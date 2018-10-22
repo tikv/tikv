@@ -14,7 +14,7 @@
 use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -61,7 +61,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
 
     // A helper thread (or pool) for transport layer.
     helper_runtime: Arc<Runtime>,
-    in_heavy_load: Arc<AtomicBool>,
+    in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
@@ -103,7 +103,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
                 .unwrap(),
         );
 
-        let in_heavy_load = Arc::new(AtomicBool::new(false));
+        let in_heavy_load = Arc::new((AtomicUsize::new(0), AtomicUsize::new(0)));
 
         let kv_service = KvService::new(
             storage.clone(),
@@ -185,8 +185,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         // Start load statistics if need.
         if cfg.enable_load_statistics {
             let in_heavy_load = Arc::clone(&self.in_heavy_load);
-            let threshold = cfg.heavy_load_threshold;
-            let mut load_stats = GrpcThreadLoadStatistics::new(4, threshold, in_heavy_load);
+            let mut load_stats = GrpcThreadLoadStatistics::new(4, in_heavy_load);
             let executor = self.helper_runtime.executor();
             executor.spawn(
                 Interval::new(Instant::now(), Duration::from_secs(1))

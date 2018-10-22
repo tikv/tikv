@@ -83,7 +83,6 @@ pub struct Config {
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     pub enable_load_statistics: bool,
-    pub heavy_load_threshold: f64,
     pub helper_threadpool_size: usize,
 
     // Server labels to specify some attributes about this server.
@@ -136,7 +135,6 @@ impl Default for Config {
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             enable_load_statistics: true,
-            heavy_load_threshold: 0.6,
             helper_threadpool_size: 2,
         }
     }
