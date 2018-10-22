@@ -18,12 +18,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
-use tikv::raftstore::coprocessor::{RegionCollection, RegionInfo};
+use tikv::raftstore::coprocessor::{RegionInfo, RegionInfoAccessor};
 use tikv::raftstore::store::keys::data_end_key;
 use tikv::raftstore::store::util::{find_peer, new_peer};
 use tikv::util::HandyRwLock;
 
-fn dump(c: &RegionCollection) -> Vec<(Region, StateRole)> {
+fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
     let (regions, region_ranges) = c.debug_dump();
 
     assert_eq!(regions.len(), region_ranges.len());
@@ -50,7 +50,7 @@ fn check_region_ranges(regions: &[(Region, StateRole)], ranges: &[(&[u8], &[u8])
         })
 }
 
-fn test_region_collection_impl(cluster: &mut Cluster<NodeCluster>, c: &RegionCollection) {
+fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &RegionInfoAccessor) {
     for i in 0..9 {
         let k = format!("k{}", i).into_bytes();
         let v = format!("v{}", i).into_bytes();
@@ -154,7 +154,7 @@ fn test_region_collection_impl(cluster: &mut Cluster<NodeCluster>, c: &RegionCol
     pd_client.must_remove_peer(region3.get_id(), find_peer(&region3, 1).unwrap().clone());
 
     let mut regions_after_removing = Vec::new();
-    // It seems region_collection is a little delayed than raftstore...
+    // It seems region_info_accessor is a little delayed than raftstore...
     for _ in 0..100 {
         regions_after_removing = dump(c);
         if regions_after_removing.len() == 2 {
@@ -169,21 +169,21 @@ fn test_region_collection_impl(cluster: &mut Cluster<NodeCluster>, c: &RegionCol
 }
 
 #[test]
-fn test_node_cluster_region_collection() {
+fn test_node_cluster_region_info_accessor() {
     let mut cluster = new_node_cluster(1, 3);
     configure_for_merge(&mut cluster);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    // Create a RegionCollection on node 1
+    // Create a RegionInfoAccessor on node 1
     let (tx, rx) = channel();
     cluster
         .sim
         .wl()
         .post_create_coprocessor_host(box move |id, host| {
             if id == 1 {
-                let c = RegionCollection::new(host);
+                let c = RegionInfoAccessor::new(host);
                 tx.send(c).unwrap();
             }
         });
@@ -193,7 +193,7 @@ fn test_node_cluster_region_collection() {
     // We only created it on the node whose id == 1 so we shouldn't receive more than one item.
     assert!(rx.try_recv().is_err());
 
-    test_region_collection_impl(&mut cluster, &c);
+    test_region_info_accessor_impl(&mut cluster, &c);
 
     drop(cluster);
     c.stop();
