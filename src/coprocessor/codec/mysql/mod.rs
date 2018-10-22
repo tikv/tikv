@@ -75,7 +75,7 @@ pub use self::types::{
 };
 
 #[cfg(test)]
-mod test {
+mod tests {
     #[test]
     fn test_parse_frace() {
         let cases = vec![

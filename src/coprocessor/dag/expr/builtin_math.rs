@@ -485,7 +485,7 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::{convert, mysql, Datum};
     use coprocessor::dag::expr::test::{check_overflow, eval_func, eval_func_with, str2dec};

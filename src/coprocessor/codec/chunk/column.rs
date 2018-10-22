@@ -386,7 +386,7 @@ pub trait ColumnEncoder: NumberEncoder {
 impl<T: Write> ColumnEncoder for T {}
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use coprocessor::codec::chunk::test::field_type;
     use coprocessor::codec::datum::Datum;

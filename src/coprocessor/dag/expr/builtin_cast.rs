@@ -707,7 +707,7 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use std::{i64, u64};

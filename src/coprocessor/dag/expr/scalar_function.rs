@@ -983,7 +983,7 @@ dispatch_call! {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::dag::expr::{Error, ScalarFunc};
     use std::usize;
     use tipb::expression::ScalarFuncSig;

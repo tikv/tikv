@@ -475,7 +475,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::super::EvalConfig;
     use super::*;
     use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;

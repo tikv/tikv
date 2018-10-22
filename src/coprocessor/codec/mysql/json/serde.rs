@@ -150,7 +150,7 @@ impl<'de> Deserialize<'de> for Json {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

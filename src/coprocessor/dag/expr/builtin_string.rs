@@ -262,7 +262,7 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::mysql::charset::{CHARSET_BIN, COLLATION_BIN_ID};
     use coprocessor::codec::mysql::types::{BINARY_FLAG, VAR_STRING};
     use coprocessor::codec::Datum;

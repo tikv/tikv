@@ -194,7 +194,7 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::mysql::Duration;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};

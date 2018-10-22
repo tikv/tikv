@@ -84,7 +84,7 @@ impl Column {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::sync::Arc;
     use std::{str, u64};
 

@@ -36,7 +36,7 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::mysql::Decimal;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
