@@ -171,7 +171,7 @@ impl RegionCollection {
         true
     }
 
-    fn handle_create_region(&mut self, region: Region) {
+    fn create_region(&mut self, region: Region) {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
@@ -202,7 +202,7 @@ impl RegionCollection {
         }
     }
 
-    fn handle_update_region(&mut self, region: Region) {
+    fn handle_create_or_update_region(&mut self, region: Region) {
         let mut need_create_new_region = true;
         let mut end_key_updated = false;
 
@@ -245,18 +245,28 @@ impl RegionCollection {
         }
 
         if need_create_new_region {
-            warn!(
-                "region_collection: trying to update region {} but it doesn't exist. create it.",
-                region.get_id()
-            );
             // It's a new region. Create it.
-            self.handle_create_region(region);
+            self.create_region(region);
         }
     }
 
     fn handle_destroy_region(&mut self, region: Region) {
-        if let Some(removed_region_info) = self.regions.remove(&region.get_id()) {
+        if let Some(mut removed_region_info) = self.regions.remove(&region.get_id()) {
             let removed_region = removed_region_info.region;
+            assert_eq!(removed_region.get_id(), region.get_id());
+
+            // Ignore if it's a stale message
+            let removed_version = removed_region.get_region_epoch().get_version();
+            let removed_conf = removed_region.get_region_epoch().get_conf_ver();
+            if removed_version > region.get_region_epoch().get_version()
+                || removed_conf > region.get_region_epoch().get_conf_ver()
+            {
+                // It shouldn't be deleted. Put it back.
+                removed_region_info.region = removed_region;
+                self.regions.insert(region.get_id(), removed_region_info);
+                return;
+            }
+
             assert_eq!(removed_region.get_id(), region.get_id());
             let end_key = data_end_key(removed_region.get_end_key());
 
@@ -276,7 +286,7 @@ impl RegionCollection {
         let region_id = region.get_id();
         if self.regions.get(&region_id).is_none() {
             warn!("region_collection: role change on region {} but the region doesn't exist. create it.", region_id);
-            self.handle_create_region(region);
+            self.create_region(region);
         }
 
         if let Some(r) = self.regions.get_mut(&region_id) {
@@ -287,10 +297,10 @@ impl RegionCollection {
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
             RaftStoreEvent::CreateRegion { region } => {
-                self.handle_create_region(region);
+                self.handle_create_or_update_region(region);
             }
             RaftStoreEvent::UpdateRegion { region } => {
-                self.handle_update_region(region);
+                self.handle_create_or_update_region(region);
             }
             RaftStoreEvent::DestroyRegion { region } => {
                 self.handle_destroy_region(region);
@@ -439,7 +449,7 @@ mod tests {
     fn must_create_region(c: &mut RegionCollection, region: &Region) {
         assert!(c.regions.get(&region.get_id()).is_none());
 
-        c.handle_create_region(region.clone());
+        c.handle_create_or_update_region(region.clone());
 
         assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
@@ -454,7 +464,7 @@ mod tests {
             .get(&region.get_id())
             .map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_update_region(region.clone());
+        c.handle_create_or_update_region(region.clone());
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.region, *region);
@@ -483,10 +493,11 @@ mod tests {
         }
     }
 
-    fn must_destroy_region(c: &mut RegionCollection, id: u64) {
+    fn must_destroy_region(c: &mut RegionCollection, region: Region) {
+        let id = region.get_id();
         let end_key = c.regions.get(&id).map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_destroy_region(new_region(id, b"", b"", 1));
+        c.handle_destroy_region(region);
 
         assert!(c.regions.get(&id).is_none());
         // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
@@ -554,8 +565,8 @@ mod tests {
             ],
         );
 
-        must_destroy_region(&mut c, 4);
-        must_destroy_region(&mut c, 3);
+        must_destroy_region(&mut c, new_region(4, b"k1", b"k3", 3));
+        must_destroy_region(&mut c, new_region(3, b"k9", b"k99", 2));
         check_collection(
             &c,
             &[
@@ -633,10 +644,10 @@ mod tests {
         ];
         must_load_regions(&mut c, init_regions);
 
-        let (mut updating_region, destroying_region_id) = if to_left {
-            (init_regions[1].clone(), init_regions[2].get_id())
+        let (mut updating_region, destroying_region) = if to_left {
+            (init_regions[1].clone(), init_regions[2].clone())
         } else {
-            (init_regions[2].clone(), init_regions[1].get_id())
+            (init_regions[2].clone(), init_regions[1].clone())
         };
         updating_region.set_start_key(b"k1".to_vec());
         updating_region.set_end_key(b"k3".to_vec());
@@ -644,9 +655,9 @@ mod tests {
 
         if update_first {
             must_update_region(&mut c, &updating_region);
-            must_destroy_region(&mut c, destroying_region_id);
+            must_destroy_region(&mut c, destroying_region);
         } else {
-            must_destroy_region(&mut c, destroying_region_id);
+            must_destroy_region(&mut c, destroying_region);
             must_update_region(&mut c, &updating_region);
         }
 
@@ -695,12 +706,12 @@ mod tests {
             ],
         );
 
-        // While merging, region 2 expanded and covered region 4 but region 4 still has an `update`
-        // event which haven't been handled.
+        // While merging, region 2 expanded and covered region 4 (and their end key become the same)
+        // but region 4 still has an `update` event which haven't been handled.
         must_update_region(&mut c, &new_region(2, b"k1", b"k9", 3));
         must_update_region(&mut c, &new_region(4, b"k5", b"k9", 2));
         must_change_role(&mut c, &new_region(4, b"k5", b"k9", 2), StateRole::Leader);
-        must_destroy_region(&mut c, 4);
+        must_destroy_region(&mut c, new_region(4, b"k5", b"k9", 2));
         check_collection(
             &c,
             &[
