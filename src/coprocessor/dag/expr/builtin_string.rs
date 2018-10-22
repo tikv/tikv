@@ -66,6 +66,20 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn concat<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mut output: Vec<u8> = Vec::new();
+        for expr in &self.children {
+            let input = try_opt!(expr.eval_string(ctx, row));
+            output.extend_from_slice(&input);
+        }
+        Ok(Some(Cow::Owned(output)))
+    }
+
+    #[inline]
     pub fn ltrim<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -141,6 +155,29 @@ impl ScalarFunc {
         let mut s = try_opt!(self.children[0].eval_string(ctx, row));
         s.to_mut().reverse();
         Ok(Some(s))
+    }
+
+    pub fn right<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let i = try_opt!(self.children[1].eval_int(ctx, row));
+        if i <= 0 {
+            return Ok(Some(Cow::Owned(b"".to_vec())));
+        }
+        let len = s.chars().count();
+        let i = i as usize;
+        if len > i {
+            let idx = s
+                .char_indices()
+                .nth(len - i)
+                .map(|(idx, _)| idx)
+                .unwrap_or_else(|| s.len());
+            return Ok(Some(Cow::Owned(s[idx..].to_string().into_bytes())));
+        }
+        Ok(Some(Cow::Owned(s.to_string().into_bytes())))
     }
 
     #[inline]
@@ -547,6 +584,53 @@ mod test {
     }
 
     #[test]
+    fn test_right() {
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"o".to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::I64(2),
+                Datum::Bytes("据库".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::Bytes("ハチ公".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::I64(100),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (Datum::Null, Datum::I64(-1), Datum::Null),
+            (Datum::Bytes(b"hello".to_vec()), Datum::Null, Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let arg1 = datum_expr(arg1);
+            let arg2 = datum_expr(arg2);
+            let op = scalar_func_expr(ScalarFuncSig::Right, &[arg1, arg2]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
     fn test_ascii() {
         let cases = vec![
             (Datum::Bytes(b"1010".to_vec()), Datum::I64(49)),
@@ -769,6 +853,58 @@ mod test {
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_concat() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes(b"defg".to_vec()),
+                ],
+                Datum::Bytes(b"abcdefg".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                    Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                    Datum::Bytes( "НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                ],
+                Datum::Bytes(
+                    "忠犬ハチ公CAFÉ数据库قاعدة البياناتНОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                ],
+                Datum::Bytes("abcCAFÉ数据库".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"defg".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (vec![Datum::Null], Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (row, exp) in cases {
+            let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
+            let mut expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
         }
     }
 

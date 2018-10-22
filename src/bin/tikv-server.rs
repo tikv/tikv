@@ -72,7 +72,7 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -267,7 +267,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 fn main() {
     let matches = App::new("TiKV")
         .long_version(util::tikv_version_info().as_ref())
-        .author("PingCAP Inc. <info@pingcap.com>")
+        .author("TiKV Org.")
         .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(
             Arg::with_name("config")
@@ -386,7 +386,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    tikv_util::set_exit_hook(false, Some(guard));
 
     // Print version information.
     util::print_tikv_info();
