@@ -28,17 +28,17 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 
-/// `RegionCollection` is used to collect all regions on this TiKV into a collection so that other
+/// `RegionInfoAccessor` is used to collect all regions on this TiKV into a collection so that other
 /// parts of TiKV can get region information from it. It registers a observer to raftstore, which
-/// is named `EventSender`, and it simply send some specific types of events through a channel.
-/// In the mean time, `RegionCollectionWorker` keeps fetching messages from the channel, and mutate
-/// the collection according tho the messages. When an accessor method of `RegionCollection` is
-/// called, it also simply send a message to `RegionCollectionWorker`, and the result will be send
+/// is named `RegionEventListener`, and it simply send some specific types of events through a channel.
+/// In the mean time, `RegionCollection` keeps fetching messages from the channel, and mutate
+/// the collection according tho the messages. When an accessor method of `RegionInfoAccessor` is
+/// called, it also simply send a message to `RegionCollection`, and the result will be send
 /// back through as soon as it's finished.
 /// In fact, the channel mentioned above is actually a `util::worker::Worker`.
 ///
-/// **Caution**: Note that the information in `RegionCollection` is not perfectly precise. Some
-/// regions may be absent while merging or splitting is in progress. Also, `RegionCollection` may
+/// **Caution**: Note that the information in `RegionInfoAccessor` is not perfectly precise. Some
+/// regions may be absent while merging or splitting is in progress. Also, `RegionInfoAccessor` may
 /// slightly lag actual regions on the TiKV.
 
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
@@ -65,8 +65,8 @@ impl RegionInfo {
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 
-/// `RegionCollection` has its own thread (namely RegionCollectionWorker). Queries and updates are
-/// done by sending commands to the thread.
+/// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
+/// thread.
 enum RegionCollectionMsg {
     RaftStoreEvent(RaftStoreEvent),
     /// Get all contents from the collection. Only used for testing.
@@ -82,16 +82,16 @@ impl Display for RegionCollectionMsg {
     }
 }
 
-/// `EventSender` implements observer traits. It simply send the events that we are interested in
+/// `RegionEventListener` implements observer traits. It simply send the events that we are interested in
 /// through the `scheduler`.
 #[derive(Clone)]
-struct EventSender {
+struct RegionEventListener {
     scheduler: Scheduler<RegionCollectionMsg>,
 }
 
-impl Coprocessor for EventSender {}
+impl Coprocessor for RegionEventListener {}
 
-impl RegionChangeObserver for EventSender {
+impl RegionChangeObserver for RegionEventListener {
     fn on_region_changed(&self, context: &mut ObserverContext, event: RegionChangeEvent) {
         let region = context.region().clone();
         let event = match event {
@@ -105,7 +105,7 @@ impl RegionChangeObserver for EventSender {
     }
 }
 
-impl RoleObserver for EventSender {
+impl RoleObserver for RegionEventListener {
     fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
@@ -115,30 +115,30 @@ impl RoleObserver for EventSender {
     }
 }
 
-/// Create an `EventSender` and register it to given coprocessor host.
-fn register_raftstore_event_sender(
+/// Create an `RegionEventListener` and register it to given coprocessor host.
+fn register_region_event_listener(
     host: &mut CoprocessorHost,
     scheduler: Scheduler<RegionCollectionMsg>,
 ) {
-    let event_sender = EventSender { scheduler };
+    let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, box event_sender.clone());
+        .register_role_observer(1, box listener.clone());
     host.registry
-        .register_region_change_observer(1, box event_sender.clone());
+        .register_region_change_observer(1, box listener);
 }
 
-/// `RegionCollectionWorker` is the underlying runner of `RegionCollection`. It listens on events
-/// sent by the `EventSender` and maintains the collection of all regions. Role of each region
-/// are also tracked.
-struct RegionCollectionWorker {
-    // region_id -> (Region, State)
-    regions: HashMap<u64, RegionInfo>,
-    // 'z' + end_key -> region_id
-    region_ranges: BTreeMap<Vec<u8>, u64>,
+/// `RegionCollection` is the place where we hold all region information we collected, and the
+/// underlying runner of `RegionInfoAccessor`. It listens on events sent by the `RegionEventListener` and
+/// keeps information of all regions. Role of each region are also tracked.
+struct RegionCollection {
+    // HashMap: region_id -> (Region, State)
+    regions: RegionsMap,
+    // BTreeMap: 'z' + end_key -> region_id
+    region_ranges: RegionRangesMap,
 }
 
-impl RegionCollectionWorker {
+impl RegionCollection {
     fn new() -> Self {
         Self {
             regions: HashMap::default(),
@@ -302,7 +302,7 @@ impl RegionCollectionWorker {
     }
 }
 
-impl Runnable<RegionCollectionMsg> for RegionCollectionWorker {
+impl Runnable<RegionCollectionMsg> for RegionCollection {
     fn run(&mut self, task: RegionCollectionMsg) {
         match task {
             RegionCollectionMsg::RaftStoreEvent(event) => {
@@ -316,16 +316,16 @@ impl Runnable<RegionCollectionMsg> for RegionCollectionWorker {
     }
 }
 
-/// `RegionCollection` keeps all region information separately from raftstore itself.
+/// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
-pub struct RegionCollection {
+pub struct RegionInfoAccessor {
     worker: Arc<Mutex<Worker<RegionCollectionMsg>>>,
     scheduler: Scheduler<RegionCollectionMsg>,
 }
 
-impl RegionCollection {
-    /// Create a new `RegionCollection` and register to `host`.
-    /// `RegionCollection` doesn't need, and should not be created more than once. If it's needed
+impl RegionInfoAccessor {
+    /// Create a new `RegionInfoAccessor` and register to `host`.
+    /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
     pub fn new(host: &mut CoprocessorHost) -> Self {
         let worker = WorkerBuilder::new("region-collection-worker")
@@ -333,7 +333,7 @@ impl RegionCollection {
             .create();
         let scheduler = worker.scheduler();
 
-        register_raftstore_event_sender(host, scheduler.clone());
+        register_region_event_listener(host, scheduler.clone());
 
         Self {
             worker: Arc::new(Mutex::new(worker)),
@@ -341,16 +341,16 @@ impl RegionCollection {
         }
     }
 
-    /// Start the `RegionCollection`. It should be started before raftstore.
+    /// Start the `RegionInfoAccessor`. It should be started before raftstore.
     pub fn start(&self) {
         self.worker
             .lock()
             .unwrap()
-            .start(RegionCollectionWorker::new())
+            .start(RegionCollection::new())
             .unwrap();
     }
 
-    /// Stop the `RegionCollection`. It should be stopped after raftstore.
+    /// Stop the `RegionInfoAccessor`. It should be stopped after raftstore.
     pub fn stop(&self) {
         self.worker.lock().unwrap().stop().unwrap().join().unwrap();
     }
@@ -378,7 +378,7 @@ mod tests {
         region
     }
 
-    fn check_collection(c: &RegionCollectionWorker, regions: &[(Region, StateRole)]) {
+    fn check_collection(c: &RegionCollection, regions: &[(Region, StateRole)]) {
         let region_ranges: Vec<_> = regions
             .iter()
             .map(|(r, _)| (data_end_key(r.get_end_key()), r.get_id()))
@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// Add a set of regions to an empty collection and check if it's successfully loaded.
-    fn must_load_regions(c: &mut RegionCollectionWorker, regions: &[Region]) {
+    fn must_load_regions(c: &mut RegionCollection, regions: &[Region]) {
         assert!(c.regions.is_empty());
         assert!(c.region_ranges.is_empty());
 
@@ -436,7 +436,7 @@ mod tests {
         check_collection(&c, &expected_regions);
     }
 
-    fn must_create_region(c: &mut RegionCollectionWorker, region: &Region) {
+    fn must_create_region(c: &mut RegionCollection, region: &Region) {
         assert!(c.regions.get(&region.get_id()).is_none());
 
         c.handle_create_region(region.clone());
@@ -448,7 +448,7 @@ mod tests {
         );
     }
 
-    fn must_update_region(c: &mut RegionCollectionWorker, region: &Region) {
+    fn must_update_region(c: &mut RegionCollection, region: &Region) {
         let old_end_key = c
             .regions
             .get(&region.get_id())
@@ -483,7 +483,7 @@ mod tests {
         }
     }
 
-    fn must_destroy_region(c: &mut RegionCollectionWorker, id: u64) {
+    fn must_destroy_region(c: &mut RegionCollection, id: u64) {
         let end_key = c.regions.get(&id).map(|r| r.region.get_end_key().to_vec());
 
         c.handle_destroy_region(new_region(id, b"", b"", 1));
@@ -500,7 +500,7 @@ mod tests {
         }
     }
 
-    fn must_change_role(c: &mut RegionCollectionWorker, region: &Region, role: StateRole) {
+    fn must_change_role(c: &mut RegionCollection, region: &Region, role: StateRole) {
         c.handle_role_change(region.clone(), role);
 
         if let Some(r) = c.regions.get(&region.get_id()) {
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_basic_updating() {
-        let mut c = RegionCollectionWorker::new();
+        let mut c = RegionCollection::new();
         let init_regions = &[
             new_region(1, b"", b"k1", 1),
             new_region(2, b"k1", b"k9", 1),
@@ -571,7 +571,7 @@ mod tests {
     /// This is to ensure the collection is correct, no matter what the events' order to happen is.
     /// Values in `seq` and of `derive_index` start from 1.
     fn test_split_impl(derive_index: usize, seq: &[usize]) {
-        let mut c = RegionCollectionWorker::new();
+        let mut c = RegionCollection::new();
         let init_regions = &[
             new_region(1, b"", b"k1", 1),
             new_region(2, b"k1", b"k9", 1),
@@ -624,7 +624,7 @@ mod tests {
     }
 
     fn test_merge_impl(to_left: bool, update_first: bool) {
-        let mut c = RegionCollectionWorker::new();
+        let mut c = RegionCollection::new();
         let init_regions = &[
             new_region(1, b"", b"k1", 1),
             new_region(2, b"k1", b"k2", 1),
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_extreme_cases() {
-        let mut c = RegionCollectionWorker::new();
+        let mut c = RegionCollection::new();
         let init_regions = &[
             new_region(1, b"", b"k1", 1),
             new_region(2, b"k1", b"k9", 1),
