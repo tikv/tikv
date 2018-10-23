@@ -1449,7 +1449,7 @@ impl SnapManagerBuilder {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use protobuf::Message;
     use std::cmp;
     use std::fs::{self, File, OpenOptions};

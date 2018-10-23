@@ -2201,7 +2201,7 @@ impl Neg for Decimal {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN};
 

@@ -42,7 +42,7 @@ impl Json {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use coprocessor::dag::expr::{EvalConfig, EvalContext};
     use std::f64;
