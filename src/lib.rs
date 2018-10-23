@@ -114,6 +114,7 @@ extern crate zipf;
 #[macro_use]
 extern crate derive_more;
 
+extern crate base64;
 extern crate panic_hook;
 
 #[macro_use]

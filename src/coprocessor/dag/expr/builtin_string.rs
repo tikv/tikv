@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use base64;
 use hex;
 use hex::FromHex;
 use std::borrow::Cow;
@@ -312,6 +313,67 @@ impl ScalarFunc {
             _ => Err(box_err!("invalid direction value: {}", direction)),
         }
     }
+
+    #[inline]
+    pub fn to_base64<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        if encoded_size(s.len()).is_none() {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        // TODO:
+        // 1. check with maxAllowedPacket
+        // 2. b.tp.Flen == -1 || b.tp.Flen > mysql.MaxBlobWidth
+        let r = base64::encode_config(&s, base64_config());
+        Ok(Some(Cow::Owned(r.into_bytes())))
+    }
+
+    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
+    #[inline]
+    pub fn from_base64<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+
+        let mut input_copy = Vec::<u8>::with_capacity(input.len());
+        input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
+        if input_copy.len().checked_mul(3).is_none() || input_copy.len() % 4 != 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+
+        // TODO: check with maxAllowedPacket
+
+        match base64::decode_config(&input_copy, base64_config()) {
+            Ok(r) => Ok(Some(Cow::Owned(r))),
+            _ => Ok(None),
+        }
+    }
+}
+
+#[inline]
+fn base64_config() -> base64::Config {
+    base64::Config::new(
+        base64::CharacterSet::Standard,
+        true,
+        false,
+        base64::LineWrap::Wrap(76, base64::LineEnding::LF),
+    )
+}
+
+#[inline]
+fn encoded_size(len: usize) -> Option<usize> {
+    if len == 0 {
+        return Some(0);
+    }
+    len.checked_add(2)
+        .and_then(|r| r.checked_div(3))
+        .and_then(|r| r.checked_mul(4))
+        .and_then(|r| r.checked_add((r - 1) / 76))
 }
 
 #[inline]
@@ -326,7 +388,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 
 #[cfg(test)]
 mod tests {
-    use super::TrimDirection;
+    use super::{encoded_size, TrimDirection};
     use coprocessor::codec::mysql::charset::{CHARSET_BIN, COLLATION_BIN_ID};
     use coprocessor::codec::mysql::types::{BINARY_FLAG, VAR_STRING};
     use coprocessor::codec::Datum;
@@ -1293,5 +1355,84 @@ mod tests {
         ];
         let got = eval_func(ScalarFuncSig::Trim3Args, &args);
         assert!(got.is_err());
+    }
+
+    #[test]
+    fn test_encoded_size() {
+        assert_eq!(encoded_size(0).unwrap(), 0);
+        assert_eq!(encoded_size(54).unwrap(), 72);
+        assert_eq!(encoded_size(58).unwrap(), 81);
+        assert!(encoded_size(usize::max_value()).is_none());
+    }
+
+    #[test]
+    fn test_to_base64() {
+        let tests = vec![
+            ("", ""),
+            ("abc", "YWJj"),
+            ("ab c", "YWIgYw=="),
+            ("1", "MQ=="),
+            ("1.1", "MS4x"),
+            ("ab\nc", "YWIKYw=="),
+            ("ab\tc", "YWIJYw=="),
+            ("qwerty123456", "cXdlcnR5MTIzNDU2"),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==",
+            ),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv",
+            ),
+            (
+                "ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/",
+                "QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=",
+            ),
+        ];
+        for (s, exp) in tests {
+            let s = Datum::Bytes(s.to_string().into_bytes());
+            let exp = Datum::Bytes(exp.to_string().into_bytes());
+            let got = eval_func(ScalarFuncSig::ToBase64, &[s]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_from_base64() {
+        let tests = vec![
+            ("", ""),
+            ("YWJj", "abc"),
+            ("YWIgYw==", "ab c"),
+            ("YWIKYw==", "ab\nc"),
+            ("YWIJYw==", "ab\tc"),
+            ("cXdlcnR5MTIzNDU2", "qwerty123456"),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSkt\tMTU5PUFFSU1RVVld\nYWVphYmNkZ\rWZnaGlqa2xt   bm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+        ];
+        for (s, exp) in tests {
+            let s = Datum::Bytes(s.to_string().into_bytes());
+            let exp = Datum::Bytes(exp.to_string().into_bytes());
+            let got = eval_func(ScalarFuncSig::FromBase64, &[s]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let s = Datum::Bytes(b"src".to_vec());
+        let exp = Datum::Bytes(b"".to_vec());
+        let got = eval_func(ScalarFuncSig::FromBase64, &[s]).unwrap();
+        assert_eq!(got, exp);
     }
 }
