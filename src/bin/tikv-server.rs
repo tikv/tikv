@@ -60,7 +60,7 @@ use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
-use tikv::raftstore::coprocessor::{CoprocessorHost, RegionCollection};
+use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
@@ -221,8 +221,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
 
     // Create region collection
-    let region_collection = RegionCollection::new(&mut coprocessor_host);
-    region_collection.start();
+    let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+    region_info_accessor.start();
 
     node.start(
         event_loop,
@@ -244,7 +244,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Start auto gc
-    let auto_gc_cfg = AutoGCConfig::new(pd_client, region_collection.clone(), node.id());
+    let auto_gc_cfg = AutoGCConfig::new(pd_client, region_info_accessor.clone(), node.id());
     if let Err(e) = storage.start_auto_gc(auto_gc_cfg) {
         fatal!("failed to start auto_gc on storage, error: {:?}", e);
     }
@@ -275,7 +275,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     node.stop()
         .unwrap_or_else(|e| fatal!("failed to stop node: {:?}", e));
 
-    region_collection.stop();
+    region_info_accessor.stop();
 
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!("ignore failure when stopping resolver: {:?}", e);
