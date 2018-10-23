@@ -263,6 +263,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IfDuration
             | ScalarFuncSig::IfJson
             | ScalarFuncSig::LikeSig
+            | ScalarFuncSig::Conv
             | ScalarFuncSig::Trim3Args => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
@@ -338,7 +339,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Compress
             | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::ConnectionID
-            | ScalarFuncSig::Conv
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
             | ScalarFuncSig::CurrentDate
@@ -922,6 +922,7 @@ dispatch_call! {
         SHA1 => sha1,
         SHA2 => sha2,
         Elt => elt,
+        Conv => conv,
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
         Trim3Args => trim_3_args,
@@ -1235,6 +1236,7 @@ mod test {
                     ScalarFuncSig::IfDuration,
                     ScalarFuncSig::IfJson,
                     ScalarFuncSig::LikeSig,
+                    ScalarFuncSig::Conv,
                     ScalarFuncSig::Trim3Args,
                 ],
                 3,
@@ -1349,7 +1351,6 @@ mod test {
             ScalarFuncSig::Compress,
             ScalarFuncSig::ConcatWS,
             ScalarFuncSig::ConnectionID,
-            ScalarFuncSig::Conv,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
             ScalarFuncSig::CurrentDate,
