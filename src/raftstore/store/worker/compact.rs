@@ -247,7 +247,7 @@ fn collect_ranges_need_compact(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 

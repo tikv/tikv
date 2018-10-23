@@ -390,7 +390,7 @@ impl<T: Display + Send + 'static> Worker<T> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;

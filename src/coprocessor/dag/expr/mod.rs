@@ -322,7 +322,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::{Error, EvalConfig, EvalContext, Expression};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;

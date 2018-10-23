@@ -389,7 +389,7 @@ fn get_var_u64_binary_len(mut v: u64) -> usize {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

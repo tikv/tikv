@@ -164,7 +164,7 @@ impl<'a> Iterator for RowIterator<'a> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::*;
