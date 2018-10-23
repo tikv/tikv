@@ -488,7 +488,7 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 mod tests {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::dag::expr::test::{check_overflow, eval_func, eval_func_with, str2dec};
+    use coprocessor::dag::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::{f64, i64, u64};
     use tipb::expression::ScalarFuncSig;

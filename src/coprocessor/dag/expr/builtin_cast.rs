@@ -720,7 +720,7 @@ mod tests {
     use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time, Tz};
     use coprocessor::codec::{convert, Datum};
     use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
-    use coprocessor::dag::expr::test::{col_expr as base_col_expr, scalar_func_expr};
+    use coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     pub fn col_expr(col_id: i64, tp: i32) -> Expr {

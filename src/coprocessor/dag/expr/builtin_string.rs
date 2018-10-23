@@ -266,7 +266,7 @@ mod tests {
     use coprocessor::codec::mysql::charset::{CHARSET_BIN, COLLATION_BIN_ID};
     use coprocessor::codec::mysql::types::{BINARY_FLAG, VAR_STRING};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{
+    use coprocessor::dag::expr::tests::{
         col_expr, datum_expr, scalar_func_expr, string_datum_expr_with_tp,
     };
     use coprocessor::dag::expr::{EvalContext, Expression};

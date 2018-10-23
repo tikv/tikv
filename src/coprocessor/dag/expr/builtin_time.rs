@@ -126,7 +126,7 @@ impl ScalarFunc {
 mod tests {
     use coprocessor::codec::mysql::Time;
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::*;
     use coprocessor::dag::expr::{EvalContext, Expression};
     use std::sync::Arc;

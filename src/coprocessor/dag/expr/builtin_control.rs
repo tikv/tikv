@@ -234,7 +234,7 @@ mod tests {
 
     use coprocessor::codec::mysql::{Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{col_expr, datum_expr, scalar_func_expr, str2dec};
+    use coprocessor::dag::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]

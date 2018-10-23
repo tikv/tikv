@@ -128,7 +128,7 @@ impl Constant {
 mod tests {
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::datum_expr;
+    use coprocessor::dag::expr::tests::datum_expr;
     use coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
 

@@ -202,7 +202,7 @@ impl<'a> JsonFuncArgsParser<'a> {
 mod tests {
     use coprocessor::codec::mysql::Json;
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{datum_expr, make_null_datums, scalar_func_expr};
+    use coprocessor::dag::expr::tests::{datum_expr, make_null_datums, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
