@@ -70,9 +70,7 @@ jobs:
       - run:
           name: Installing tarpaulin
           command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.3 --force
-            fi
+            RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.6 --force
       - restore_cache:
           # Actually master does not need to download the cache. However we cannot make conditions here.
           name: Downloading ./target Cache from master
@@ -129,16 +127,10 @@ jobs:
           paths:
             - ~/tikv_cache_build
       - run:
-          name: Testing
-          command: make trace_test
-          no_output_timeout: 1800s
-      - run:
-          name: Calculating code coverage (master branch only)
+          name: Testing & Calculating code coverage
           command: |
-            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
-              cargo tarpaulin --no-count --skip-clean --out Xml
-              bash <(curl -s https://codecov.io/bash)
-            fi
+            cargo tarpaulin --no-count --skip-clean --out Xml
+            bash <(curl -s https://codecov.io/bash)
           no_output_timeout: 1800s
 workflows:
   version: 2
