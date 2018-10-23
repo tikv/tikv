@@ -1243,7 +1243,7 @@ mod tests {
             .unwrap();
         assert_eq!(scanner.read_next().unwrap(), None);
         let statistics = scanner.take_statistics();
-        assert_eq!(statistics.lock.prev, 256);
+        assert_eq!(statistics.lock.prev, 255);
         assert_eq!(statistics.write.prev, 1);
     }
 
