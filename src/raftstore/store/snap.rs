@@ -1451,6 +1451,7 @@ impl SnapManagerBuilder {
 #[cfg(test)]
 mod test {
     use protobuf::Message;
+    use std::cmp;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -2339,8 +2340,9 @@ mod test {
         let kv = get_test_db_for_regions(&kv_path, &regions).unwrap();
 
         let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
+        let max_total_size = 10240;
         let snap_mgr = SnapManagerBuilder::default()
-            .max_total_size(10240)
+            .max_total_size(max_total_size)
             .build(snapfiles_path.path().to_str().unwrap(), None);
         let snapshot = DbSnapshot::new(kv);
 
@@ -2388,13 +2390,15 @@ mod test {
                 Box::new(snap_mgr.clone()),
             ).unwrap();
 
-            if i < 5 {
-                // sizeof(snapshot) == 1918 bytes. The first 1918 is for region 100.
-                // That snapshot won't be deleted because it's not for generating.
-                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * (i + 2));
-            } else {
-                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * 6);
-            }
+            // TODO: this size may change in different RocksDB version.
+            let snap_size = 1342;
+            let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
+            // The first snap_size is for region 100.
+            // That snapshot won't be deleted because it's not for generating.
+            assert_eq!(
+                snap_mgr.get_total_snap_size(),
+                snap_size * cmp::min(max_snap_count, (i + 2) as u64)
+            );
         }
     }
 }
