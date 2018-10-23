@@ -86,7 +86,7 @@ fn decode_escaped_unicode(s: &str) -> Result<char> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
