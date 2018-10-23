@@ -289,7 +289,13 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 })
         },
     );
-    f.and_then(move |_| sink.success(Done::new()).map_err(Error::from))
+    f.then(move |res| match res {
+        Ok(()) => sink.success(Done::new()),
+        Err(e) => {
+            let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
+            sink.fail(status)
+        }
+    }).map_err(Error::from)
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
