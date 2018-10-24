@@ -21,7 +21,6 @@ use coprocessor::codec::mysql::types;
 use coprocessor::codec::Datum;
 
 const SPACE: u8 = 0o40u8;
-const SPACE_CHAR: char = ' ';
 
 enum TrimDirection {
     Both = 1,
@@ -285,8 +284,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let r = s.trim_matches(SPACE_CHAR);
-        Ok(Some(Cow::Owned(r.to_string().into_bytes())))
+        trim(&s, " ", TrimDirection::Both)
     }
 
     #[inline]
@@ -297,10 +295,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        let r = s
-            .trim_left_matches(pat.as_ref())
-            .trim_right_matches(pat.as_ref());
-        Ok(Some(Cow::Owned(r.to_string().into_bytes())))
+        trim(&s, &pat, TrimDirection::Both)
     }
 
     #[inline]
@@ -312,15 +307,17 @@ impl ScalarFunc {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let direction = TrimDirection::from_i64(try_opt!(self.children[2].eval_int(ctx, row)));
-        let r = match direction {
-            Some(TrimDirection::Leading) => s.trim_left_matches(pat.as_ref()),
-            Some(TrimDirection::Trailing) => s.trim_right_matches(pat.as_ref()),
-            _ => s
-                .trim_left_matches(pat.as_ref())
-                .trim_right_matches(pat.as_ref()),
-        };
-        Ok(Some(Cow::Owned(r.to_string().into_bytes())))
+        trim(&s, &pat, direction.unwrap())
     }
+}
+
+fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
+    let r = match direction {
+        TrimDirection::Leading => s.trim_left_matches(pat),
+        TrimDirection::Trailing => s.trim_right_matches(pat),
+        _ => s.trim_left_matches(pat).trim_right_matches(pat),
+    };
+    Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
 
 #[cfg(test)]
