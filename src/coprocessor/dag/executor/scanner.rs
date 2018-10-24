@@ -184,7 +184,7 @@ impl<S: Snapshot> Scanner<S> {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use std::i64;
 
     use kvproto::kvrpcpb::{Context, IsolationLevel};
