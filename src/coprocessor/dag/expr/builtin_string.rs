@@ -311,6 +311,7 @@ impl ScalarFunc {
     }
 }
 
+#[inline]
 fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
     let r = match direction {
         TrimDirection::Leading => s.trim_left_matches(pat),
