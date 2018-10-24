@@ -23,12 +23,12 @@ extern crate log;
 extern crate protobuf;
 extern crate raft;
 extern crate rocksdb;
-extern crate rustc_serialize;
 #[macro_use]
 extern crate tikv;
 extern crate toml;
 #[macro_use(slog_o, slog_kv)]
 extern crate slog;
+extern crate hex;
 #[cfg(unix)]
 extern crate nix;
 #[cfg(unix)]
@@ -40,7 +40,6 @@ extern crate slog_term;
 
 mod util;
 
-use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
@@ -1550,7 +1549,7 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        println!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -1815,11 +1814,11 @@ fn get_module_type(module: &str) -> MODULE {
     }
 }
 
-fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
+fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
     if key.starts_with("0x") || key.starts_with("0X") {
-        return key[2..].from_hex();
+        return hex::decode(&key[2..]);
     }
-    key.from_hex()
+    hex::decode(key)
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
