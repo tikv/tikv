@@ -133,7 +133,7 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     fn test_prefix_next_once(key: &[u8], expected: &[u8]) {

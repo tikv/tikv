@@ -837,7 +837,7 @@ mod check_data_dir {
     }
 
     #[cfg(test)]
-    mod test {
+    mod tests {
         use std::fs::File;
         use std::io::Write;
         use std::os::unix::fs::symlink;
@@ -974,7 +974,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::fs::File;
     use std::path::Path;
 
