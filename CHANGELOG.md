@@ -2,6 +2,25 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.0-rc.4]
+- Optimize the RocksDB Write stall issue caused by applying snapshots [#3606](https://github.com/tikv/tikv/pull/3606)
+- Add raftstore `tick` metrics [#3657](https://github.com/tikv/tikv/pull/3657)
+- Upgrade RocksDB and fix the Write block issue and that the source file might be damaged by the Write operation when performing `IngestExternalFile` [#3661](https://github.com/tikv/tikv/pull/3661)
+- Upgrade grpcio and fix the issue that “too many pings” is wrongly reported [#3650](https://github.com/tikv/tikv/pull/3650)
+
+## [2.1.0-rc.3]
+### Performance
+- Optimize the concurrency for coprocessor requests [#3515](https://github.com/tikv/tikv/pull/3515)
+### New features
+- Add the support for Log functions [#3603](https://github.com/tikv/tikv/pull/3603)
+- Add the support for the `sha1` function [#3612](https://github.com/tikv/tikv/pull/3612)
+- Add the support for the `truncate_int` function [#3532](https://github.com/tikv/tikv/pull/3532)
+- Add the support for the `year` function [#3622](https://github.com/tikv/tikv/pull/3622)
+- Add the support for the `truncate_real` function [#3633](https://github.com/tikv/tikv/pull/3633)
+### Bug fixes
+- Fix the reporting error behavior related to time functions [#3487](https://github.com/tikv/tikv/pull/3487), [#3615](https://github.com/tikv/tikv/pull/3615) 
+- Fix the issue that the time parsed from string is inconsistent with that in TiDB [#3589](https://github.com/tikv/tikv/pull/3589) 
+
 ## [2.1.0-rc.2]
 ### Performance
 * Support splitting Regions based on statistics estimation to reduce the I/O cost [#3511](https://github.com/tikv/tikv/pull/3511)
