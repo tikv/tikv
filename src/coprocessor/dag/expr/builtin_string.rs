@@ -306,8 +306,11 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        let direction = TrimDirection::from_i64(try_opt!(self.children[2].eval_int(ctx, row)));
-        trim(&s, &pat, direction.unwrap())
+        let direction = try_opt!(self.children[2].eval_int(ctx, row));
+        match TrimDirection::from_i64(direction) {
+            Some(d) => trim(&s, &pat, d),
+            _ => Err(box_err!("invalid direction value: {}", direction)),
+        }
     }
 }
 
@@ -1281,6 +1284,14 @@ mod tests {
             let got = eval_func(ScalarFuncSig::Trim3Args, &[s, pat, direction]).unwrap();
             assert_eq!(got, exp);
         }
-    }
 
+        // test invalid direction value
+        let args = [
+            Datum::Bytes(b"bar".to_vec()),
+            Datum::Bytes(b"b".to_vec()),
+            Datum::I64(0),
+        ];
+        let got = eval_func(ScalarFuncSig::Trim3Args, &args);
+        assert!(got.is_err());
+    }
 }
