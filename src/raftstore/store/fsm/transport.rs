@@ -940,6 +940,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
         self.scheduler.fetch_batch(&mut batches, batch_size);
         batch_size_observer.observe(batches.fsm_holders.len() as f64);
         while !batches.fsm_holders.is_empty() {
+            self.ctx.sync_log = false;
             self.timer = SlowTimer::new();
             let mut has_ready = false;
             if batches.store.is_some() {
