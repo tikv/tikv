@@ -546,6 +546,8 @@ trait DebugExecutor {
     fn dump_metrics(&self, tags: Vec<&str>);
 
     fn dump_region_properties(&self, region_id: u64);
+
+    fn delete_range(&self, start_key: &[u8], end_key: &[u8], yes: bool);
 }
 
 impl DebugExecutor for DebugClient {
@@ -720,6 +722,10 @@ impl DebugExecutor for DebugClient {
             println!("{}: {}", prop.get_name(), prop.get_value());
         }
     }
+
+    fn delete_range(&self, _start_key: &[u8], _end_key: &[u8], _yes: bool) {
+        unimplemented!();
+    }
 }
 
 impl DebugExecutor for Debugger {
@@ -888,6 +894,35 @@ impl DebugExecutor for Debugger {
         for (name, value) in props {
             println!("{}: {}", name, value);
         }
+    }
+
+    fn delete_range(&self, start_key: &[u8], end_key: &[u8], yes: bool) {
+        if start_key >= end_key {
+            println!("Range start key should be less than end key");
+            return;
+        }
+
+        if !yes {
+            println!("You are about to clean all data from all of CF_DEFAULT, CF_LOCK and CF_WRITE that are in the following range:");
+            println!("start_key: \"{}\"", escape(start_key));
+            println!("end_key  : \"{}\"", escape(end_key));
+            println!("\nPlease double check:");
+            println!("  * Is the range exactly where you want to clear?");
+            println!("  * Did you forget to add 'z' prefix to data keys?");
+            println!("  * Did you use ENCODED keys?");
+            println!("  * Are your keys escaped by your shell?");
+            println!("Continue? [y/N]");
+            let mut answer = String::new();
+            ::std::io::stdin().read_line(&mut answer).unwrap();
+            let answer = answer.trim();
+            if !answer.starts_with('y') && !answer.starts_with('Y') {
+                println!("Exit.");
+                return;
+            }
+        }
+
+        Debugger::delete_range(self, start_key, end_key).unwrap();
+        println!("Deleted.");
     }
 }
 
@@ -1536,6 +1571,27 @@ fn main() {
                         ),
                 )
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
+        )
+        .subcommand(
+            SubCommand::with_name("delete-range")
+                .about("Delete all keys in the range (Be careful when using this!)")
+                .arg(
+                    Arg::with_name("from")
+                        .takes_value(true)
+                        .required(true)
+                        .help("The starting of the range to be deleted (inclusive)")
+                )
+                .arg(
+                    Arg::with_name("to")
+                        .takes_value(true)
+                        .required(true)
+                        .help("The ending of the range to be deleted (exclusive)")
+                )
+                .arg(
+                    Arg::with_name("yes")
+                        .short("y")
+                        .help("Do not ask for confirm, automatically answer \"yes\"")
+                )
         );
 
     let matches = app.clone().get_matches();
@@ -1794,6 +1850,11 @@ fn main() {
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
             println!("{:?}", resp.get_entries());
         }
+    } else if let Some(matches) = matches.subcommand_matches("delete-range") {
+        let start_key = matches.value_of("from").map(unescape).unwrap();
+        let end_key = matches.value_of("to").map(unescape).unwrap();
+        let yes = matches.is_present("yes");
+        debug_executor.delete_range(&start_key, &end_key, yes);
     } else {
         let _ = app.print_help();
     }

@@ -697,6 +697,16 @@ impl Debugger {
         ));
         Ok(res)
     }
+
+    pub fn delete_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let db = &self.engines.kv;
+        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+            box_try!(raftstore_util::delete_all_in_range_cf(
+                db, cf, start_key, end_key, false
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub struct MvccChecker {
