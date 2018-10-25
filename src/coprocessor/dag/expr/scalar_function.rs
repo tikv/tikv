@@ -264,7 +264,8 @@ impl ScalarFunc {
             | ScalarFuncSig::IfJson
             | ScalarFuncSig::LikeSig
             | ScalarFuncSig::Conv
-            | ScalarFuncSig::Trim3Args => (3, 3),
+            | ScalarFuncSig::Trim3Args
+            | ScalarFuncSig::SubstringIndex => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -453,7 +454,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubStringAndString
             | ScalarFuncSig::SubstringBinary2Args
             | ScalarFuncSig::SubstringBinary3Args
-            | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::SubTimeStringNull
@@ -926,6 +926,7 @@ dispatch_call! {
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
         Trim3Args => trim_3_args,
+        SubstringIndex => substring_index,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1238,6 +1239,7 @@ mod tests {
                     ScalarFuncSig::LikeSig,
                     ScalarFuncSig::Conv,
                     ScalarFuncSig::Trim3Args,
+                    ScalarFuncSig::SubstringIndex,
                 ],
                 3,
                 3,
@@ -1465,7 +1467,6 @@ mod tests {
             ScalarFuncSig::SubStringAndString,
             ScalarFuncSig::SubstringBinary2Args,
             ScalarFuncSig::SubstringBinary3Args,
-            ScalarFuncSig::SubstringIndex,
             ScalarFuncSig::SubTimeDateTimeNull,
             ScalarFuncSig::SubTimeDurationNull,
             ScalarFuncSig::SubTimeStringNull,
