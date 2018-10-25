@@ -934,12 +934,13 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
         let mut batches = Batch::with_capacity(batch_size);
         let mut msgs = Vec::with_capacity(self.cfg.messages_per_tick);
         let mut store_msgs = Vec::with_capacity(self.cfg.messages_per_tick);
-        let mut exhausted_peers = Vec::with_capacity(self.cfg.messages_per_tick);
+        let mut exhausted_peers = Vec::with_capacity(batch_size);
         let mut previous_metrics = self.ctx.raft_metrics.clone();
         let batch_size_observer = POLL_BATCH_SIZE.local();
         self.scheduler.fetch_batch(&mut batches, batch_size);
         batch_size_observer.observe(batches.fsm_holders.len() as f64);
         while !batches.fsm_holders.is_empty() {
+            self.ctx.sync_log = false;
             self.timer = SlowTimer::new();
             let mut has_ready = false;
             if batches.store.is_some() {
