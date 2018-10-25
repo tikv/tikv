@@ -21,7 +21,7 @@ use crypto::{
     sha1::Sha1,
     sha2::{Sha224, Sha256, Sha384, Sha512},
 };
-use rustc_serialize::hex::ToHex;
+use hex;
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;
@@ -40,7 +40,7 @@ impl ScalarFunc {
         let mut buff: [u8; 16] = [0; 16];
         hasher.input(input.as_ref());
         hasher.result(&mut buff);
-        let md5 = buff[..].to_hex().into_bytes();
+        let md5 = hex::encode(buff).into_bytes();
         Ok(Some(Cow::Owned(md5)))
     }
 
@@ -54,7 +54,7 @@ impl ScalarFunc {
         let mut buff: [u8; 20] = [0; 20];
         hasher.input(input.as_ref());
         hasher.result(&mut buff);
-        let sha1 = buff[..].to_hex().into_bytes();
+        let sha1 = hex::encode(buff).into_bytes();
         Ok(Some(Cow::Owned(sha1)))
     }
 
