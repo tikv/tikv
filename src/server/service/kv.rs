@@ -43,7 +43,7 @@ use storage::txn::Error as TxnError;
 use storage::{self, Engine, Key, Mutation, Options, Storage, Value};
 use util::collections::HashMap;
 use util::future::{paired_future_callback, AndThenWith};
-use util::mpsc::{unbounded, Receiver, Sender};
+use util::mpsc1::{unbounded, Receiver, Sender};
 use util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
@@ -549,6 +549,41 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     sink.fail(status).map_err(|_| ())
                 }),
         );
+    }
+
+    fn batch_raft(
+        &mut self,
+        ctx: RpcContext,
+        stream: RequestStream<BatchRaftMessage>,
+        sink: ClientStreamingSink<Done>,
+    ) {
+        let ch = self.ch.clone();
+        ctx.spawn(
+            stream
+                .map_err(Error::from)
+                .for_each(move |mut msgs| {
+                    let len = msgs.get_msgs().len();
+                    RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
+                    RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
+                    for msg in msgs.take_msgs().into_iter() {
+                        if let Err(e) = ch.send_raft_msg(msg) {
+                            return Err(Error::from(e));
+                        }
+                    }
+                    Ok(())
+                })
+                .then(|res| {
+                    let status = match res {
+                        Err(e) => {
+                            let msg = format!("{:?}", e);
+                            error!("dispatch raft msg from gRPC to raftstore fail: {}", msg);
+                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                        }
+                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                    };
+                    sink.fail(status).map_err(|_| ())
+                }),
+        )
     }
 
     fn snapshot(

@@ -619,7 +619,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=super-batch-streaming#30d47dbfd1c0465cdd723f6b58a57516fe044842"
+source = "git+https://github.com/pingcap/kvproto.git?branch=super-batch-streaming#d15e33c5b8c07ec0a9c23b70062f2849f80b08a2"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
