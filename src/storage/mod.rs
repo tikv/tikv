@@ -1452,7 +1452,6 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 mod tests {
     use super::*;
     use kvproto::kvrpcpb::{Context, LockInfo};
-    use std::sync::mpsc::TryRecvError;
     use std::sync::mpsc::{channel, Sender};
     use util::config::ReadableSize;
     use util::worker::FutureWorker;
@@ -1478,6 +1477,12 @@ mod tests {
             Err(e) => err_matcher(e),
             _ => panic!("expect result to be an error"),
         }
+    }
+
+    fn no_expect_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
+        Box::new(move |_x: Result<T>| {
+            done.send(id).unwrap();
+        })
     }
 
     fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
@@ -1887,23 +1892,36 @@ mod tests {
             )
             .unwrap();
 
-        loop {
-            match rx.try_recv() {
-                Err(TryRecvError::Empty) => {
-                    break;
-                }
-                _ => storage
-                    .async_prewrite(
-                        Context::new(),
-                        vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                        b"x".to_vec(),
-                        100,
-                        Options::default(),
-                        expect_ok_callback(tx.clone(), 1),
-                    )
-                    .unwrap(),
-            }
-        }
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                no_expect_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                no_expect_callback(tx.clone(), 1),
+            )
+            .unwrap();
+            storage
+        .async_prewrite(
+            Context::new(),
+            vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+            b"x".to_vec(),
+            100,
+            Options::default(),
+            no_expect_callback(tx.clone(), 1),
+        )
+        .unwrap();
         storage
             .async_prewrite(
                 Context::new(),
@@ -1914,6 +1932,9 @@ mod tests {
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage
