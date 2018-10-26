@@ -1891,8 +1891,7 @@ mod tests {
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
-        for _ in 1..5 {
-            storage
+        storage
             .async_prewrite(
                 Context::new(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
@@ -1902,11 +1901,40 @@ mod tests {
                 no_expect_callback(tx.clone(), 1),
             )
             .unwrap();
-        }
-        for _ in 1..5+1 {
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                no_expect_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                no_expect_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"101".to_vec()))],
+                b"x".to_vec(),
+                101,
+                Options::default(),
+                expect_too_busy_callback(tx.clone(), 2),
+            )
+            .unwrap();
+
+        for _ in 1..5 + 1 {
             rx.recv().unwrap();
         }
-       
         storage
             .async_prewrite(
                 Context::new(),
