@@ -1029,6 +1029,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::RaftMessage(data) => if let Err(e) = self.on_raft_message(data) {
                 error!("{} handle raft message err: {:?}", self.tag, e);
             },
+            Msg::BatchRaftMessage(msgs) => msgs.into_iter().for_each(|data| {
+                if let Err(e) = self.on_raft_message(data) {
+                    error!("{} handle raft message err: {:?}", self.tag, e);
+                }
+            }),
             Msg::RaftCmd {
                 send_time,
                 request,

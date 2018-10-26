@@ -162,6 +162,7 @@ pub enum Msg {
 
     // For notify.
     RaftMessage(RaftMessage),
+    BatchRaftMessage(Vec<RaftMessage>),
 
     RaftCmd {
         send_time: Instant,
@@ -235,6 +236,7 @@ impl fmt::Debug for Msg {
         match *self {
             Msg::Quit => write!(fmt, "Quit"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
+            Msg::BatchRaftMessage(ref v) => write!(fmt, "Batch Raft Message [{}]", v.len()),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
             Msg::ComputeHashResult {

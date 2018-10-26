@@ -32,7 +32,7 @@ use util::security::SecurityManager;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
-const PRESERVED_MSG_BUFFER_COUNT: usize = 1024;
+const PRESERVED_MSG_BUFFER_COUNT: usize = 64;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 

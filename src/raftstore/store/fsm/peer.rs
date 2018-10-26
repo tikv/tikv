@@ -666,11 +666,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.apply_worker
                 .schedule(ApplyTask::Proposals(region_proposals))
                 .unwrap();
-
-            // In most cases, if the leader proposes a message, it will also
-            // broadcast the message to other followers, so we should flush the
-            // messages ASAP.
-            self.trans.flush();
         }
 
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;

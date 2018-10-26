@@ -565,12 +565,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     let len = msgs.get_msgs().len();
                     RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
                     RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                    for msg in msgs.take_msgs().into_iter() {
-                        if let Err(e) = ch.send_raft_msg(msg) {
-                            return Err(Error::from(e));
-                        }
-                    }
-                    Ok(())
+                    ch.send_batch_raft_msgs(msgs.take_msgs().into())
+                        .map_err(Error::from)
                 })
                 .then(|res| {
                     let status = match res {
