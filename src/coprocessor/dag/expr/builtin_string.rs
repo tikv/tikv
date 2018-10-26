@@ -324,19 +324,17 @@ impl ScalarFunc {
         let delim = delim.as_ref();
         let count = try_opt!(self.children[2].eval_int(ctx, row));
 
-        let strs = s.as_ref().split(delim).collect::<Vec<_>>();
-        let len = strs.len();
-        let mut start = 0_usize;
-        let mut end = strs.len();
-
-        if mysql::has_unsigned_flag(self.children[2].get_tp().get_flag()) {
-            end = len.min(count as u64 as usize);
-        } else if count > 0 {
-            end = len.min(count as usize);
+        let take_from_left = |x| s.split(delim).take(x).collect::<Vec<_>>().join(delim);
+        let r = if mysql::has_unsigned_flag(self.children[2].get_tp().get_flag()) {
+            take_from_left(count as u64 as usize)
+        } else if count >= 0 {
+            take_from_left(count as usize)
         } else {
-            start = len - len.min(-count as usize);
+            let strs = s.as_ref().split(delim).collect::<Vec<_>>();
+            let len = strs.len();
+            let start = len - len.min(-count as usize);
+            strs[start..].join(delim)
         };
-        let r = strs[start..end].join(delim);
         Ok(Some(Cow::Owned(r.into_bytes())))
     }
 }
