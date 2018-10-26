@@ -77,19 +77,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         debug_engines: Option<Engines>,
         import_service: Option<ImportSSTService<T>>,
     ) -> Result<Self> {
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(cfg.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .build(),
-        );
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(
-            Arc::clone(&env),
-            Arc::clone(cfg),
-            Arc::clone(security_mgr),
-        )));
-        let snap_worker = Worker::new("snap-handler");
-
         // A helper thread (or pool) for transport layer.
         let mut tp_builder = thread_pool::Builder::new();
         let pool_size = cfg.helper_threadpool_size;
@@ -102,8 +89,22 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
                 .build()
                 .unwrap(),
         );
-
         let in_heavy_load = Arc::new((AtomicUsize::new(0), AtomicUsize::new(0)));
+
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(cfg.grpc_concurrency)
+                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .build(),
+        );
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(
+            Arc::clone(&env),
+            Arc::clone(cfg),
+            Arc::clone(security_mgr),
+            Arc::clone(&in_heavy_load),
+            Arc::clone(&helper_runtime),
+        )));
+        let snap_worker = Worker::new("snap-handler");
 
         let kv_service = KvService::new(
             storage.clone(),
