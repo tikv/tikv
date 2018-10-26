@@ -1479,6 +1479,12 @@ mod tests {
         }
     }
 
+    fn no_expect_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
+        Box::new(move |_x: Result<T>| {
+            done.send(id).unwrap();
+        })
+    }
+
     fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             x.unwrap();
@@ -1885,18 +1891,22 @@ mod tests {
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
-        storage
+        for _ in 1..5 {
+            storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
-                b"y".to_vec(),
-                101,
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
+                100,
                 Options::default(),
-                expect_too_busy_callback(tx.clone(), 2),
+                no_expect_callback(tx.clone(), 1),
             )
             .unwrap();
-        rx.recv().unwrap();
-        rx.recv().unwrap();
+        }
+        for _ in 1..5+1 {
+            rx.recv().unwrap();
+        }
+       
         storage
             .async_prewrite(
                 Context::new(),
