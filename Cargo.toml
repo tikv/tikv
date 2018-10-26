@@ -86,6 +86,7 @@ panic_hook = { path = "components/panic_hook" }
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
+"grpcio:0.4.0" = { git = "https://github.com/hicqu/grpc-rs", branch = "client-clone" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"

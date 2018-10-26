@@ -14,7 +14,7 @@
 
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
-use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
+pub use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,18 +62,28 @@ impl State {
     fn inc_send_and_maybe_notify(&self) {
         let un_notified = self.un_notified.fetch_add(1, Ordering::SeqCst);
         if un_notified >= State::NOTIFY_BATCH_SIZE - 1 {
-            self.notify();
+            self.do_notify();
         }
     }
 
     #[inline]
-    pub fn notify(&self) {
+    fn do_notify(&self) {
         let task = self.recv_task.take(Ordering::AcqRel);
         if let Some(t) = task {
             self.un_notified.store(0, Ordering::SeqCst);
-            self.external_notifier.store(false, Ordering::SeqCst);
             t.notify();
         }
+    }
+
+    #[inline]
+    pub fn external_notify(&self) {
+        if !self
+            .external_notifier
+            .compare_and_swap(true, false, Ordering::SeqCst)
+        {
+            unreachable!("external_notifier must be true");
+        }
+        self.do_notify();
     }
 }
 
@@ -98,7 +108,7 @@ impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
         if self.state.is_sender_closed() {
-            self.state.notify();
+            self.state.do_notify();
         }
     }
 }
@@ -228,12 +238,6 @@ impl<T> Stream for Receiver<T> {
     type Item = T;
 
     fn poll(&mut self) -> Poll<Option<T>, ()> {
-        if self.state.external_notifier.load(Ordering::SeqCst) {
-            // external notifier registered.
-            self.state.recv_task.swap(task::current(), Ordering::SeqCst);
-            return Ok(Async::NotReady);
-        }
-
         match self.try_recv() {
             Ok(m) => Ok(Async::Ready(Some(m))),
             Err(TryRecvError::Empty) => {
@@ -260,15 +264,6 @@ impl<T> Stream for BatchReceiver<T> {
     type Item = Vec<T>;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, ()> {
-        if self.rx.state.external_notifier.load(Ordering::SeqCst) {
-            // external notifier registered.
-            self.rx
-                .state
-                .recv_task
-                .swap(task::current(), Ordering::SeqCst);
-            return Ok(Async::NotReady);
-        }
-
         let finished = loop {
             match self.rx.try_recv() {
                 Err(TryRecvError::Disconnected) => break true,

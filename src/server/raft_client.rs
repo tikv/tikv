@@ -13,11 +13,9 @@
 
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crossbeam::sync::AtomicOption;
-use futures::sync::oneshot::{self, Sender};
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
@@ -30,7 +28,7 @@ use tokio::timer::Delay;
 use super::metrics::*;
 use super::{Config, Result};
 use util::collections::{HashMap, HashMapEntry};
-use util::mpsc2::{batch_unbounded, Sender as BatchSender};
+use util::mpsc2::{batch_unbounded, SendError, Sender as BatchSender};
 use util::security::SecurityManager;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -41,7 +39,6 @@ static CONN_ID: AtomicI32 = AtomicI32::new(0);
 struct Conn {
     stream: BatchSender<RaftMessage>,
     _client: TikvClient,
-    _close: Sender<()>,
 }
 
 impl Conn {
@@ -67,33 +64,37 @@ impl Conn {
                 CONN_ID.fetch_add(1, Ordering::SeqCst),
             );
         let channel = security_mgr.connect(cb, addr);
+        let client1 = TikvClient::new(channel);
+        let client2 = client1.clone();
 
-        let (tx_close, rx_close) = oneshot::channel();
-        let addr = addr.to_owned();
-
-        let client = TikvClient::new(channel);
         let (tx, rx) = batch_unbounded::<RaftMessage>();
+        let rx1 = Arc::new(Mutex::new(rx));
+        let rx2 = Arc::clone(&rx1);
 
-        let rx_for_batch_raft = Arc::new(AtomicOption::new());
-        rx_for_batch_raft.swap(rx, Ordering::SeqCst);
-        let rx_for_raft = Arc::clone(&rx_for_batch_raft);
-
-        let (batch_sink, batch_receiver) = client.batch_raft().unwrap();
-        let (sink, receiver) = client.raft().unwrap();
-
+        let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
         let batch_send_or_fallback = batch_sink
-            .send_all(Reusable::new(rx_for_batch_raft).map(move |v| {
+            .send_all(Reusable(rx1).map(move |v| {
                 let mut batch_msgs = BatchRaftMessage::new();
                 batch_msgs.set_msgs(RepeatedField::from(v));
                 (batch_msgs, WriteFlags::default().buffer_hint(false))
             }))
-            .then(|result| match result {
+            .then(move |r| {
+                drop(batch_receiver);
+                match r {
+                    Ok(_) => info!("batch_raft RPC finished success"),
+                    Err(ref e) => error!("batch_raft RPC finished fail: {}", e),
+                };
+                r
+            })
+            .then(move |result| match result {
                 Ok(_) => box future::ok(()) as Box<Future<Item = (), Error = GrpcError> + Send>,
                 Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
                     if status == RpcStatusCode::Unimplemented =>
                 {
                     // fallback batch_raft to raft call.
-                    let msgs = Reusable::new(rx_for_raft)
+                    warn!("RaftClient batch_raft fail, fallback to raft");
+                    let (sink, receiver) = client2.raft().unwrap();
+                    let msgs = Reusable(rx2)
                         .map(|msgs| {
                             let len = msgs.len();
                             let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
@@ -108,35 +109,31 @@ impl Conn {
                         .flatten();
                     box sink.send_all(msgs).map(|_| ()).then(move |r| {
                         drop(receiver);
+                        match r {
+                            Ok(_) => info!("raft RPC finished success"),
+                            Err(ref e) => error!("raft RPC finished fail: {}", e),
+                        };
                         r
                     })
                 }
                 Err(e) => box future::err(e),
-            })
-            .then(move |r| {
-                drop(batch_receiver);
-                r
             });
 
-        client.spawn(
-            rx_close
-                .map_err(|_| ())
-                .select(
-                    batch_send_or_fallback
-                        .map_err(move |e| {
-                            REPORT_FAILURE_MSG_COUNTER
-                                .with_label_values(&["unreachable", &*store_id.to_string()])
-                                .inc();
-                            warn!("send raftmessage to {} failed: {:?}", addr, e);
-                        })
-                )
-                .then(|_| Ok(())),
+        let addr = addr.to_owned();
+        client1.spawn(
+            batch_send_or_fallback
+                .map_err(move |e| {
+                    REPORT_FAILURE_MSG_COUNTER
+                        .with_label_values(&["unreachable", &*store_id.to_string()])
+                        .inc();
+                    warn!("batch_raft/raft RPC to {} finally fail: {:?}", addr, e);
+                })
+                .map(|_| ()),
         );
 
         Conn {
             stream: tx,
-            _client: client,
-            _close: tx_close,
+            _client: client1,
         }
     }
 }
@@ -174,7 +171,7 @@ impl RaftClient {
     fn get_conn(&mut self, addr: &str, region_id: u64, store_id: u64) -> &mut Conn {
         let index = region_id as usize % self.cfg.grpc_raft_conn_num;
         match self.conns.entry((addr.to_owned(), index)) {
-            HashMapEntry::Occupied(e) => return e.into_mut(),
+            HashMapEntry::Occupied(e) => e.into_mut(),
             HashMapEntry::Vacant(e) => {
                 let conn = Conn::new(
                     Arc::clone(&self.env),
@@ -183,17 +180,21 @@ impl RaftClient {
                     &self.security_mgr,
                     store_id,
                 );
-                return e.insert(conn);
+                e.insert(conn)
             }
         }
     }
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {
-        if let Err(_) = self
+        if let Err(SendError(msg)) = self
             .get_conn(addr, msg.region_id, store_id)
             .stream
             .send(msg)
         {
+            error!("RaftClient send fail");
+            let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
+            self.conns.remove(&(addr.to_owned(), index));
+
             if let Some(current_addr) = self.addrs.remove(&store_id) {
                 if current_addr != *addr {
                     self.addrs.insert(store_id, current_addr);
@@ -210,11 +211,11 @@ impl RaftClient {
                 if self.in_heavy_load.1.load(Ordering::SeqCst) > 160 {
                     self.helper_runtime.executor().spawn(
                         Delay::new(Instant::now() + Duration::from_millis(2))
-                            .map_err(|_| ())
-                            .inspect(move |_| notifier.notify()),
+                            .map_err(|_| error!("RaftClient delay flush error"))
+                            .inspect(move |_| notifier.external_notify()),
                     );
                 } else {
-                    notifier.notify();
+                    notifier.external_notify();
                     counter += 1;
                 }
             }
@@ -231,33 +232,13 @@ impl Drop for RaftClient {
 }
 
 // ReusableReceiver is for fallback batch_raft call to raft call.
-struct Reusable<T> {
-    lock: Arc<AtomicOption<T>>,
-    t: Option<T>,
-}
-
-impl<T> Reusable<T> {
-    fn new(t: Arc<AtomicOption<T>>) -> Self {
-        Reusable { lock: t, t: None }
-    }
-}
+struct Reusable<T>(Arc<Mutex<T>>);
 
 impl<T: Stream> Stream for Reusable<T> {
     type Item = T::Item;
     type Error = GrpcError;
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.t.is_none() {
-            self.t = self.lock.take(Ordering::SeqCst);
-        }
-        let t = self.t.as_mut().unwrap();
+        let mut t = self.0.lock().unwrap();
         t.poll().map_err(|_| GrpcError::RpcFinished(None))
-    }
-}
-
-impl<T> Drop for Reusable<T> {
-    fn drop(&mut self) {
-        if let Some(t) = self.t.take() {
-            self.lock.swap(t, Ordering::SeqCst);
-        }
     }
 }
