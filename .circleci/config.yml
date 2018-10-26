@@ -57,7 +57,7 @@ jobs:
       - run:
           name: Installing tarpaulin
           command: |
-            RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.1 --force
+            RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.6 --force
       - restore_cache:
           # Actually master does not need to download the cache. However we cannot make conditions here.
           name: Downloading ./target Cache from master
