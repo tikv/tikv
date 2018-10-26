@@ -23,6 +23,14 @@ use coprocessor::codec::Datum;
 
 const SPACE: u8 = 0o40u8;
 
+// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
+// mysql base64 doc: A newline is added after each 76 characters of encoded output
+const BASE64_LINE_WRAP_LENGTH: usize = 76;
+
+// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
+const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
+const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
+
 enum TrimDirection {
     Both = 1,
     Leading,
@@ -342,7 +350,16 @@ impl ScalarFunc {
 
         let mut input_copy = Vec::<u8>::with_capacity(input.len());
         input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
-        if input_copy.len().checked_mul(3).is_none() || input_copy.len() % 4 != 0 {
+
+        let will_overflow = input_copy
+            .len()
+            .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
+            .is_none();
+
+        // mysql will return "" when the input is incorrectly padded
+        let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
+
+        if will_overflow || invalid_padding {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
@@ -361,7 +378,7 @@ fn base64_config() -> base64::Config {
         base64::CharacterSet::Standard,
         true,
         false,
-        base64::LineWrap::Wrap(76, base64::LineEnding::LF),
+        base64::LineWrap::Wrap(BASE64_LINE_WRAP_LENGTH, base64::LineEnding::LF),
     )
 }
 
@@ -370,10 +387,12 @@ fn encoded_size(len: usize) -> Option<usize> {
     if len == 0 {
         return Some(0);
     }
-    len.checked_add(2)
-        .and_then(|r| r.checked_div(3))
-        .and_then(|r| r.checked_mul(4))
-        .and_then(|r| r.checked_add((r - 1) / 76))
+    // size_withou_wrap = (len + (3 - 1)) / 3 * 4
+    // size = size_withou_wrap + (size_withou_wrap - 1) / 76
+    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
+        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
+        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
+        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
 }
 
 #[inline]
