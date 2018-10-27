@@ -23,6 +23,8 @@ use crossbeam_channel;
 use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
 
+const NOTIFY_BATCH_SIZE: usize = 16;
+
 pub struct State {
     sender_cnt: AtomicIsize,
     receiver_cnt: AtomicIsize,
@@ -36,8 +38,6 @@ pub struct State {
 }
 
 impl State {
-    const NOTIFY_BATCH_SIZE: usize = 8;
-
     fn new() -> State {
         State {
             sender_cnt: AtomicIsize::new(1),
@@ -61,7 +61,7 @@ impl State {
     #[inline]
     fn inc_send_and_maybe_notify(&self) {
         let un_notified = self.un_notified.fetch_add(1, Ordering::SeqCst);
-        if un_notified >= State::NOTIFY_BATCH_SIZE - 1 {
+        if un_notified >= NOTIFY_BATCH_SIZE - 1 {
             self.do_notify();
         }
     }
@@ -215,7 +215,7 @@ pub fn batch_unbounded<T>() -> (Sender<T>, BatchReceiver<T>) {
     let (tx, rx) = unbounded();
     let rx = BatchReceiver {
         rx,
-        buf: Vec::with_capacity(State::NOTIFY_BATCH_SIZE),
+        buf: Vec::with_capacity(NOTIFY_BATCH_SIZE),
     };
     (tx, rx)
 }
@@ -270,6 +270,9 @@ impl<T> Stream for BatchReceiver<T> {
                 Ok(m) => self.buf.push(m),
                 Err(TryRecvError::Empty) => break false,
             }
+            if self.buf.len() >= NOTIFY_BATCH_SIZE {
+                break false;
+            }
         };
 
         if self.buf.is_empty() && finished {
@@ -288,7 +291,7 @@ impl<T> Stream for BatchReceiver<T> {
             // polling but before task is set, `t` should be None.
             return self.poll();
         }
-        let msgs = mem::replace(&mut self.buf, Vec::with_capacity(State::NOTIFY_BATCH_SIZE));
+        let msgs = mem::replace(&mut self.buf, Vec::with_capacity(NOTIFY_BATCH_SIZE));
         Ok(Async::Ready(Some(msgs)))
     }
 }

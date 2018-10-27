@@ -91,7 +91,9 @@
 # enable-load-statistics = true
 
 # helper threadpool size
-helper-threadpool-size = 2
+# helper-threadpool-size = 2
+
+# heavy-load-threshold = 100
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}

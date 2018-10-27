@@ -208,7 +208,8 @@ impl RaftClient {
         let mut counter = 0;
         for conn in self.conns.values_mut() {
             if let Some(notifier) = conn.stream.get_notifier() {
-                if self.in_heavy_load.1.load(Ordering::SeqCst) > 160 {
+                let threshold = self.cfg.heavy_load_threshold;
+                if self.in_heavy_load.1.load(Ordering::SeqCst) > threshold {
                     self.helper_runtime.executor().spawn(
                         Delay::new(Instant::now() + Duration::from_millis(2))
                             .map_err(|_| error!("RaftClient delay flush error"))
