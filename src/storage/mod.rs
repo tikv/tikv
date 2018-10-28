@@ -660,19 +660,25 @@ impl<E: Engine> Storage<E> {
                         !ctx.get_not_fill_cache(),
                     );
 
+                    let end_key = if end_key.is_empty() {
+                        None
+                    } else {
+                        Some(end_key)
+                    };
+
                     let mut scanner;
                     if !options.reverse_scan {
                         scanner = snap_store.scanner(
                             ScanMode::Forward,
                             options.key_only,
                             Some(start_key),
-                            Some(end_key),
+                            end_key,
                         )?;
                     } else {
                         scanner = snap_store.scanner(
                             ScanMode::Backward,
                             options.key_only,
-                            Some(end_key),
+                            end_key,
                             Some(start_key),
                         )?;
                     };
