@@ -10,7 +10,8 @@ test_storage = { path = "../test_storage" }
 futures = "0.1"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
+git = "https://github.com/MyonKeminta/kvproto.git"
+branch = "misono/add-end-key"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

@@ -15,7 +15,8 @@ rand = "0.3"
 log = "0.3.9"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
+git = "https://github.com/MyonKeminta/kvproto.git"
+branch = "misono/add-end-key"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
