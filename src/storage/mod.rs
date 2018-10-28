@@ -632,7 +632,7 @@ impl<E: Engine> Storage<E> {
         &self,
         ctx: Context,
         start_key: Key,
-        end_key: Key,
+        end_key: Option<Key>,
         limit: usize,
         start_ts: u64,
         options: Options,
@@ -659,12 +659,6 @@ impl<E: Engine> Storage<E> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                     );
-
-                    let end_key = if end_key.is_empty() {
-                        None
-                    } else {
-                        Some(end_key)
-                    };
 
                     let mut scanner;
                     if !options.reverse_scan {
@@ -1637,6 +1631,7 @@ mod tests {
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"x"),
+                    None,
                     1000,
                     1,
                     Options::default(),
@@ -1678,18 +1673,63 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        // Forward
         expect_multi_values(
             vec![None, None, None],
             storage
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"\x00"),
+                    None,
                     1000,
                     5,
                     Options::default(),
                 )
                 .wait(),
         );
+        // Backward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+
         storage
             .async_commit(
                 Context::new(),
@@ -1704,6 +1744,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        // Forward
         expect_multi_values(
             vec![
                 Some((b"a".to_vec(), b"aa".to_vec())),
@@ -1714,6 +1755,59 @@ mod tests {
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+                Some((b"c".to_vec(), b"cc".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![
+                Some((b"b".to_vec(), b"bb".to_vec())),
+                Some((b"c".to_vec(), b"cc".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"b")),
                     1000,
                     5,
                     Options::default(),

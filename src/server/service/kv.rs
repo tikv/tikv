@@ -122,12 +122,18 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         options.key_only = req.get_key_only();
         options.reverse_scan = req.get_reverse();
 
+        let end_key = if req.get_end_key().is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(req.get_end_key()))
+        };
+
         let future = self
             .storage
             .async_scan(
                 req.take_context(),
                 Key::from_raw(req.get_start_key()),
-                Key::from_raw(req.get_end_key()),
+                end_key,
                 req.get_limit() as usize,
                 req.get_version(),
                 options,
