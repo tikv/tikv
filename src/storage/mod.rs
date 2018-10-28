@@ -632,6 +632,7 @@ impl<E: Engine> Storage<E> {
         &self,
         ctx: Context,
         start_key: Key,
+        end_key: Key,
         limit: usize,
         start_ts: u64,
         options: Options,
@@ -665,13 +666,13 @@ impl<E: Engine> Storage<E> {
                             ScanMode::Forward,
                             options.key_only,
                             Some(start_key),
-                            None,
+                            Some(end_key),
                         )?;
                     } else {
                         scanner = snap_store.scanner(
                             ScanMode::Backward,
                             options.key_only,
-                            None,
+                            Some(end_key),
                             Some(start_key),
                         )?;
                     };

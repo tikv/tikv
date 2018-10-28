@@ -127,6 +127,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .async_scan(
                 req.take_context(),
                 Key::from_raw(req.get_start_key()),
+                Key::from_raw(req.get_end_key()),
                 req.get_limit() as usize,
                 req.get_version(),
                 options,
