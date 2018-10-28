@@ -321,22 +321,49 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let delim = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        let delim = delim.as_ref();
         let count = try_opt!(self.children[2].eval_int(ctx, row));
-
-        let take_from_left = |x| s.split(delim).take(x).collect::<Vec<_>>().join(delim);
+        if delim.is_empty() || count == 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
         let r = if mysql::has_unsigned_flag(self.children[2].get_tp().get_flag()) {
-            take_from_left(count as u64 as usize)
+            substring_index_positive(&s, delim.as_ref(), count as u64 as usize)
         } else if count >= 0 {
-            take_from_left(count as usize)
+            substring_index_positive(&s, delim.as_ref(), count as usize)
         } else {
-            let strs = s.as_ref().split(delim).collect::<Vec<_>>();
-            let len = strs.len();
-            let start = len - len.min(-count as usize);
-            strs[start..].join(delim)
+            substring_index_negative(&s, delim.as_ref(), -count as usize)
         };
         Ok(Some(Cow::Owned(r.into_bytes())))
     }
+}
+
+#[inline]
+fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
+    let mut bg = 0;
+    let mut cnt = 0;
+    let mut last = 0;
+    while cnt < count {
+        if let Some(idx) = s[bg..].find(delim) {
+            last = bg + idx;
+            bg = last + delim.len();
+            cnt += 1;
+        } else {
+            last = s.len();
+            break;
+        }
+    }
+    s[..last].to_string()
+}
+
+#[inline]
+fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
+    let mut positions = vec![0];
+    let mut bg = 0;
+    while let Some(idx) = s[bg..].find(delim) {
+        bg = bg + idx + delim.len();
+        positions.push(bg);
+    }
+    let start = positions[positions.len() - positions.len().min(count)];
+    s[start..].to_string()
 }
 
 #[inline]
