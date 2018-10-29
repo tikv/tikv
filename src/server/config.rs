@@ -138,8 +138,8 @@ impl Default for Config {
             snap_max_total_size: ReadableSize(0),
             enable_load_statistics: true,
             helper_threadpool_size: 2,
-            heavy_load_threshold: 100,
-            heavy_load_wait_duration: ReadableDuration::millis(5),
+            heavy_load_threshold: 50,
+            heavy_load_wait_duration: ReadableDuration::millis(2),
         }
     }
 }

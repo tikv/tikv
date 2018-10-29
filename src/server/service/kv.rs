@@ -830,14 +830,15 @@ fn response_batch_commands_request<F>(
             return Err(());
         }
         timer.observe_duration();
-
-        if in_heavy_load.1.load(Ordering::SeqCst) > 100 {
-            if let Some(notifier) = tx.get_notifier() {
+        if let Some(notifier) = tx.get_notifier() {
+            if in_heavy_load.1.load(Ordering::SeqCst) > 50 {
                 executor1.spawn(
                     Delay::new(Instant::now() + Duration::from_millis(2))
                         .map_err(|_| error!("BatchCommands RPC delay responses error"))
                         .inspect(move |_| notifier.external_notify()),
                 );
+            } else {
+                notifier.external_notify();
             }
         }
         Ok(())
