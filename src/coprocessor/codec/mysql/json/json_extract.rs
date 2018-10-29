@@ -83,7 +83,7 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::super::path_expr::{
         PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
         PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,

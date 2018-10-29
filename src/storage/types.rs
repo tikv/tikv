@@ -20,12 +20,11 @@ use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
 
+use storage::mvcc::{Lock, Write};
 use util::codec::bytes;
+use util::codec::bytes::BytesEncoder;
 use util::codec::number::{self, NumberEncoder};
 use util::{codec, escape};
-
-use storage::mvcc::{Lock, Write};
-
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -64,7 +63,11 @@ impl Key {
     /// Creates a key from raw bytes.
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
-        Key(codec::bytes::encode_bytes(key))
+        // adding extra length for appending timestamp
+        let len = codec::bytes::max_encoded_bytes_size(key.len()) + codec::number::U64_SIZE;
+        let mut encoded = Vec::with_capacity(len);
+        encoded.encode_bytes(key, false).unwrap();
+        Key(encoded)
     }
 
     /// Gets and moves the raw representation of this key.
