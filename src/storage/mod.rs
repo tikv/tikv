@@ -2126,12 +2126,11 @@ mod tests {
                 .wait(),
         );
 
-        // Delete range ["", ""), it means delete all
         storage
             .async_delete_range(
                 Context::new(),
                 Key::from_raw(b""),
-                Key::from_raw(b""),
+                Key::from_raw(&[255]),
                 expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();

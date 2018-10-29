@@ -3,9 +3,6 @@ name = "test_storage"
 version = "0.0.1"
 publish = false
 
-[lib]
-path = "lib.rs"
-
 [dependencies]
 tikv = { path = "../../" }
 test_raftstore = { path = "../test_raftstore" }

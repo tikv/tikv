@@ -119,7 +119,8 @@ impl ScalarFunc {
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::TruncateReal
-            | ScalarFuncSig::TruncateDecimal => (2, 2),
+            | ScalarFuncSig::TruncateDecimal
+            | ScalarFuncSig::Trim2Args => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -249,7 +250,10 @@ impl ScalarFunc {
             | ScalarFuncSig::Cot
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::SHA1
-            | ScalarFuncSig::MD5 => (1, 1),
+            | ScalarFuncSig::MD5
+            | ScalarFuncSig::Radians
+            | ScalarFuncSig::Exp
+            | ScalarFuncSig::Trim1Arg => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -258,7 +262,9 @@ impl ScalarFunc {
             | ScalarFuncSig::IfTime
             | ScalarFuncSig::IfDuration
             | ScalarFuncSig::IfJson
-            | ScalarFuncSig::LikeSig => (3, 3),
+            | ScalarFuncSig::LikeSig
+            | ScalarFuncSig::Conv
+            | ScalarFuncSig::Trim3Args => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -333,7 +339,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Compress
             | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::ConnectionID
-            | ScalarFuncSig::Conv
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
             | ScalarFuncSig::CurrentDate
@@ -351,7 +356,6 @@ impl ScalarFunc {
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
-            | ScalarFuncSig::Exp
             | ScalarFuncSig::ExportSet3Arg
             | ScalarFuncSig::ExportSet4Arg
             | ScalarFuncSig::ExportSet5Arg
@@ -407,7 +411,6 @@ impl ScalarFunc {
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
-            | ScalarFuncSig::Radians
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
@@ -472,9 +475,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ToBase64
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
-            | ScalarFuncSig::Trim1Arg
-            | ScalarFuncSig::Trim2Args
-            | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
@@ -820,6 +820,8 @@ dispatch_call! {
         Rand => rand,
         RandWithSeed => rand_with_seed,
         TruncateReal => truncate_real,
+        Radians => radians,
+        Exp => exp,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -920,6 +922,10 @@ dispatch_call! {
         SHA1 => sha1,
         SHA2 => sha2,
         Elt => elt,
+        Conv => conv,
+        Trim1Arg => trim_1_arg,
+        Trim2Args => trim_2_args,
+        Trim3Args => trim_3_args,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -981,7 +987,7 @@ dispatch_call! {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::dag::expr::{Error, ScalarFunc};
     use std::usize;
     use tipb::expression::ScalarFuncSig;
@@ -1084,6 +1090,7 @@ mod test {
                     ScalarFuncSig::RoundWithFracDec,
                     ScalarFuncSig::RoundWithFracInt,
                     ScalarFuncSig::RoundWithFracReal,
+                    ScalarFuncSig::Trim2Args,
                 ],
                 2,
                 2,
@@ -1212,6 +1219,9 @@ mod test {
                     ScalarFuncSig::SHA1,
                     ScalarFuncSig::Cot,
                     ScalarFuncSig::Degrees,
+                    ScalarFuncSig::Radians,
+                    ScalarFuncSig::Exp,
+                    ScalarFuncSig::Trim1Arg,
                 ],
                 1,
                 1,
@@ -1226,6 +1236,8 @@ mod test {
                     ScalarFuncSig::IfDuration,
                     ScalarFuncSig::IfJson,
                     ScalarFuncSig::LikeSig,
+                    ScalarFuncSig::Conv,
+                    ScalarFuncSig::Trim3Args,
                 ],
                 3,
                 3,
@@ -1339,7 +1351,6 @@ mod test {
             ScalarFuncSig::Compress,
             ScalarFuncSig::ConcatWS,
             ScalarFuncSig::ConnectionID,
-            ScalarFuncSig::Conv,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
             ScalarFuncSig::CurrentDate,
@@ -1357,7 +1368,6 @@ mod test {
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
-            ScalarFuncSig::Exp,
             ScalarFuncSig::ExportSet3Arg,
             ScalarFuncSig::ExportSet4Arg,
             ScalarFuncSig::ExportSet5Arg,
@@ -1413,7 +1423,6 @@ mod test {
             ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
-            ScalarFuncSig::Radians,
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
@@ -1478,9 +1487,6 @@ mod test {
             ScalarFuncSig::ToBase64,
             ScalarFuncSig::ToDays,
             ScalarFuncSig::ToSeconds,
-            ScalarFuncSig::Trim1Arg,
-            ScalarFuncSig::Trim2Args,
-            ScalarFuncSig::Trim3Args,
             ScalarFuncSig::Uncompress,
             ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,
