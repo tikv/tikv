@@ -546,7 +546,7 @@ mod tests {
             (b"a05", true, Some((b"a05", b"a05")), Some((b"a05", b"a05"))),
             (b"a10", true, Some((b"a10", b"a10")), Some((b"a10", b"a10"))),
             (b"a14", true, Some((b"a14", b"a14")), Some((b"a14", b"a14"))),
-            (b"a15", true, Some((b"a15", b"a15")), Some((b"a15", b"a15"))),
+            (b"a15", true, None, Some((b"a14", b"a14"))),
             (b"a18", false, None, None),
             (b"a19", false, None, None),
         ];
