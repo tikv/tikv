@@ -22,6 +22,23 @@ use coprocessor::codec::Datum;
 
 const SPACE: u8 = 0o40u8;
 
+enum TrimDirection {
+    Both = 1,
+    Leading,
+    Trailing,
+}
+
+impl TrimDirection {
+    fn from_i64(i: i64) -> Option<Self> {
+        match i {
+            1 => Some(TrimDirection::Both),
+            2 => Some(TrimDirection::Leading),
+            3 => Some(TrimDirection::Trailing),
+            _ => None,
+        }
+    }
+}
+
 impl ScalarFunc {
     #[inline]
     pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -259,15 +276,62 @@ impl ScalarFunc {
         }
         self.children[i as usize].eval_string(ctx, row)
     }
+
+    #[inline]
+    pub fn trim_1_arg<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        trim(&s, " ", TrimDirection::Both)
+    }
+
+    #[inline]
+    pub fn trim_2_args<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        trim(&s, &pat, TrimDirection::Both)
+    }
+
+    #[inline]
+    pub fn trim_3_args<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let pat = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        let direction = try_opt!(self.children[2].eval_int(ctx, row));
+        match TrimDirection::from_i64(direction) {
+            Some(d) => trim(&s, &pat, d),
+            _ => Err(box_err!("invalid direction value: {}", direction)),
+        }
+    }
+}
+
+#[inline]
+fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
+    let r = match direction {
+        TrimDirection::Leading => s.trim_left_matches(pat),
+        TrimDirection::Trailing => s.trim_right_matches(pat),
+        _ => s.trim_left_matches(pat).trim_right_matches(pat),
+    };
+    Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
+    use super::TrimDirection;
     use coprocessor::codec::mysql::charset::{CHARSET_BIN, COLLATION_BIN_ID};
     use coprocessor::codec::mysql::types::{BINARY_FLAG, VAR_STRING};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{
-        col_expr, datum_expr, scalar_func_expr, string_datum_expr_with_tp,
+    use coprocessor::dag::expr::tests::{
+        col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
     };
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::{Expr, ScalarFuncSig};
@@ -1137,5 +1201,97 @@ mod test {
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);
         }
+    }
+
+    #[test]
+    fn test_trim_1_arg() {
+        let tests = vec![
+            ("   bar   ", "bar"),
+            ("\t   bar   \n", "\t   bar   \n"),
+            ("\r   bar   \t", "\r   bar   \t"),
+            ("   \tbar\n     ", "\tbar\n"),
+            ("", ""),
+        ];
+        for (s, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Trim1Arg, &[s]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let got = eval_func(ScalarFuncSig::Trim1Arg, &[Datum::Null]).unwrap();
+        assert_eq!(got, Datum::Null);
+    }
+
+    #[test]
+    fn test_trim_2_args() {
+        let tests = vec![
+            ("xxxbarxxx", "x", "bar"),
+            ("bar", "x", "bar"),
+            ("   bar   ", "", "   bar   "),
+            ("", "x", ""),
+            ("张三和张三", "张三", "和"),
+        ];
+        for (s, pat, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pat = Datum::Bytes(pat.as_bytes().to_vec());
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Trim2Args, &[s, pat]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let invalid_tests = vec![
+            (Datum::Null, Datum::Bytes(b"x".to_vec()), Datum::Null),
+            (Datum::Bytes(b"bar".to_vec()), Datum::Null, Datum::Null),
+        ];
+        for (s, pat, exp) in invalid_tests {
+            let got = eval_func(ScalarFuncSig::Trim2Args, &[s, pat]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+    #[test]
+    fn test_trim_3_args() {
+        let tests = vec![
+            ("xxxbarxxx", "x", TrimDirection::Leading as i64, "barxxx"),
+            ("barxxyz", "xyz", TrimDirection::Trailing as i64, "barx"),
+            ("xxxbarxxx", "x", TrimDirection::Both as i64, "bar"),
+        ];
+        for (s, pat, direction, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pat = Datum::Bytes(pat.as_bytes().to_vec());
+            let direction = Datum::I64(direction);
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+
+            let got = eval_func(ScalarFuncSig::Trim3Args, &[s, pat, direction]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let invalid_tests = vec![
+            (
+                Datum::Null,
+                Datum::Bytes(b"x".to_vec()),
+                Datum::I64(TrimDirection::Leading as i64),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"bar".to_vec()),
+                Datum::Null,
+                Datum::I64(TrimDirection::Leading as i64),
+                Datum::Null,
+            ),
+        ];
+        for (s, pat, direction, exp) in invalid_tests {
+            let got = eval_func(ScalarFuncSig::Trim3Args, &[s, pat, direction]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // test invalid direction value
+        let args = [
+            Datum::Bytes(b"bar".to_vec()),
+            Datum::Bytes(b"b".to_vec()),
+            Datum::I64(0),
+        ];
+        let got = eval_func(ScalarFuncSig::Trim3Args, &args);
+        assert!(got.is_err());
     }
 }

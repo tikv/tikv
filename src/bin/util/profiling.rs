@@ -66,7 +66,7 @@ mod imp {
     }
 
     #[cfg(test)]
-    mod test {
+    mod tests {
         use std::fs;
 
         use tempdir::TempDir;
