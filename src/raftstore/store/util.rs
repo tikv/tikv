@@ -12,7 +12,9 @@
 // limitations under the License.
 
 use std::collections::Bound::Excluded;
+use std::fs::File;
 use std::option::Option;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
@@ -36,6 +38,8 @@ use util::{rocksdb as rocksdb_util, Either};
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
+
+pub const PANIC_MARK_FILE: &str = "panic_mark_file";
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
@@ -938,8 +942,20 @@ impl<'a> fmt::Display for KeysInfoFormatter<'a> {
     }
 }
 
+pub fn panic_mark_file_path<P: AsRef<Path>>(db_path: P) -> PathBuf {
+    db_path.as_ref().parent().unwrap().join(PANIC_MARK_FILE)
+}
+
+pub fn exit_with_panic_mark<P: AsRef<Path>>(db_path: P, e: Error) {
+    let file_path = panic_mark_file_path(db_path);
+    File::create(&file_path)
+        .unwrap_or_else(|e| panic!("failed to create panic mark file, error: {:?}", e));
+    panic!("Occurs unexpected error: {:?}", e);
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::{iter, process, thread};
 
     use kvproto::metapb::{self, RegionEpoch};
@@ -1804,5 +1820,15 @@ mod tests {
                 b"key_014".to_vec(),
             ]
         );
+    }
+
+    #[test]
+    fn test_panic_mark_file_path() {
+        let db_path = Path::new("./test_db/db");
+        let panic_mark_file = panic_mark_file_path(&db_path);
+        assert_eq!(
+            panic_mark_file,
+            Path::new("./test_db/").join(PANIC_MARK_FILE)
+        )
     }
 }

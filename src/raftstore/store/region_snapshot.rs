@@ -153,6 +153,8 @@ pub struct RegionIterator {
     region: Arc<Region>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
+    db_path: String,
+    panic_when_exceed_bound: bool,
 }
 
 fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -187,12 +189,15 @@ impl RegionIterator {
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
+        let db_path = snap.get_db().path().to_string();
         RegionIterator {
             iter,
             valid: false,
             start_key,
             end_key,
             region,
+            db_path,
+            panic_when_exceed_bound: true,
         }
     }
 
@@ -207,13 +212,21 @@ impl RegionIterator {
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
+        let db_path = snap.get_db().path().to_string();
         RegionIterator {
             iter,
             valid: false,
             start_key,
             end_key,
             region,
+            db_path,
+            panic_when_exceed_bound: true,
         }
+    }
+
+    // Set false only in test.
+    pub fn panic_when_exceed_bound(&mut self, panic: bool) {
+        self.panic_when_exceed_bound = panic;
     }
 
     pub fn seek_to_first(&mut self) -> bool {
@@ -306,7 +319,14 @@ impl RegionIterator {
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
-        util::check_key_in_region_inclusive(key, &self.region)
+        if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+            if self.panic_when_exceed_bound {
+                util::exit_with_panic_mark(&self.db_path, e);
+            } else {
+                return Err(e);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -436,6 +456,7 @@ mod tests {
         for upper_bound in upper_bounds {
             let iter_opt = IterOption::new(None, upper_bound.map(|v| v.to_vec()), true);
             let mut iter = snap.iter(iter_opt);
+            iter.panic_when_exceed_bound(false);
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
                 let check_res =
                     |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
@@ -529,7 +550,9 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
-        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
+        let mut it = snap.iter(IterOption::default());
+        it.panic_when_exceed_bound(false);
+        let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(
             !iter
                 .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
@@ -587,7 +610,9 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
+        let mut it = snap.iter(IterOption::default());
+        it.panic_when_exceed_bound(false);
+        let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(
             !iter
                 .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
@@ -642,6 +667,7 @@ mod tests {
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3".to_vec());
         let mut iter = snap.iter(iter_opt);
+        iter.panic_when_exceed_bound(false);
         assert!(iter.seek_to_last());
         let mut res = vec![];
         loop {
