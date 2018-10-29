@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,14 +18,14 @@ extern crate tikv;
 extern crate tikv_fuzz;
 
 use tikv::util::codec::number::*;
-use tikv_fuzz::util::number_maker::{make_f64, make_i32, make_i64, make_u16, make_u32, make_u64};
+use tikv_fuzz::util::number_maker;
 
 fn fuzz_number_u64_encode(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_u64(&mut iter);
+    let n = number_maker::make_u64(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_u64(n);
     let _ = buf.encode_u64_le(n);
@@ -45,7 +45,7 @@ fn fuzz_number_i64_encode(data: &[u8]) {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_i64(&mut iter);
+    let n = number_maker::make_i64(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_i64(n);
     let _ = buf.encode_i64_le(n);
@@ -65,7 +65,7 @@ fn fuzz_number_f64_encode(data: &[u8]) {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_f64(&mut iter);
+    let n = number_maker::make_f64(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_f64(n);
     let _ = buf.encode_f64_le(n);
@@ -84,7 +84,7 @@ fn fuzz_number_u32_encode(data: &[u8]) {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_u32(&mut iter);
+    let n = number_maker::make_u32(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_u32(n);
     let _ = buf.encode_u32_le(n);
@@ -101,7 +101,7 @@ fn fuzz_number_i32_encode(data: &[u8]) {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_i32(&mut iter);
+    let n = number_maker::make_i32(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_i32_le(n);
 }
@@ -116,7 +116,7 @@ fn fuzz_number_u16_encode(data: &[u8]) {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_u16(&mut iter);
+    let n = number_maker::make_u16(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_u16(n);
     let _ = buf.encode_u16_le(n);
