@@ -14,7 +14,7 @@
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpc::{ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags};
@@ -210,8 +210,9 @@ impl RaftClient {
             if let Some(notifier) = conn.stream.get_notifier() {
                 let threshold = self.cfg.heavy_load_threshold;
                 if self.in_heavy_load.1.load(Ordering::SeqCst) > threshold {
+                    let wait = self.cfg.heavy_load_wait_duration.0;
                     self.helper_runtime.executor().spawn(
-                        Delay::new(Instant::now() + Duration::from_millis(2))
+                        Delay::new(Instant::now() + wait)
                             .map_err(|_| error!("RaftClient delay flush error"))
                             .inspect(move |_| notifier.external_notify()),
                     );

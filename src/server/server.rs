@@ -189,7 +189,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             let mut load_stats = GrpcThreadLoadStatistics::new(4, in_heavy_load);
             let executor = self.helper_runtime.executor();
             executor.spawn(
-                Interval::new(Instant::now(), Duration::from_secs(1))
+                Interval::new(Instant::now(), Duration::from_millis(100))
                     .map_err(|_| ())
                     .for_each(move |i| {
                         load_stats.record(i);

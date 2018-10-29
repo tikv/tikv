@@ -7,6 +7,12 @@ use libc::{getpid, pid_t};
 use super::server::GRPC_THREAD_PREFIX;
 use util::metrics::{get_thread_ids, Stat};
 
+// TODO: make it more pretty.
+// pub struct Load {
+//     term_and_load: Arc<(AtomicUsize, AtomicUsize)>,
+//     heavy_load_threshold: usize,
+// }
+
 #[cfg(target_os = "linux")]
 pub(super) struct GrpcThreadLoadStatistics {
     pid: pid_t,

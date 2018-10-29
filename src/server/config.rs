@@ -85,6 +85,7 @@ pub struct Config {
     pub enable_load_statistics: bool,
     pub helper_threadpool_size: usize,
     pub heavy_load_threshold: usize,
+    pub heavy_load_wait_duration: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -138,6 +139,7 @@ impl Default for Config {
             enable_load_statistics: true,
             helper_threadpool_size: 2,
             heavy_load_threshold: 100,
+            heavy_load_wait_duration: ReadableDuration::millis(5),
         }
     }
 }
