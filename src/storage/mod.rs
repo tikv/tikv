@@ -1134,15 +1134,27 @@ impl<E: Engine> Storage<E> {
         limit: usize,
         statistics: &mut Statistics,
         key_only: bool,
+        reverse: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.into_encoded());
+            if reverse {
+                option.set_lower_bound(end.into_encoded());
+            } else {
+                option.set_upper_bound(end.into_encoded());
+            }
         }
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
+        let scan_mode = if reverse { ScanMode::Backward } else { ScanMode::Forward };
+        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, scan_mode)?;
         let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.seek(start_key, statistics)? {
-            return Ok(vec![]);
+        if reverse {
+            if !cursor.seek_for_prev(start_key, statistics)? {
+                return Ok(vec![]);
+            }
+        } else {
+            if !cursor.seek(start_key, statistics)? {
+                return Ok(vec![]);
+            }
         }
         let mut pairs = vec![];
         while cursor.valid() && pairs.len() < limit {
@@ -1154,7 +1166,11 @@ impl<E: Engine> Storage<E> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.next(statistics);
+            if reverse {
+                cursor.prev(statistics);
+            } else {
+                cursor.next(statistics);
+            }
         }
         Ok(pairs)
     }
@@ -1166,6 +1182,7 @@ impl<E: Engine> Storage<E> {
         key: Vec<u8>,
         limit: usize,
         key_only: bool,
+        reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
         let engine = self.get_engine();
@@ -1192,6 +1209,7 @@ impl<E: Engine> Storage<E> {
                         limit,
                         &mut statistics,
                         key_only,
+                        reverse,
                     ).map_err(Error::from);
 
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
@@ -1288,6 +1306,7 @@ impl<E: Engine> Storage<E> {
                             each_limit,
                             &mut statistics,
                             key_only,
+                            false,
                         )?;
                         result.extend(pairs.into_iter());
                     }
