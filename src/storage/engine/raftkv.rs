@@ -437,6 +437,10 @@ impl Snapshot for RegionSnapshot {
     fn get_properties_cf(&self, cf: CfName) -> engine::Result<TablePropertiesCollection> {
         RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
     }
+
+    fn db_path(&self) -> String {
+        self.path()
+    }
 }
 
 impl EngineIterator for RegionIterator {

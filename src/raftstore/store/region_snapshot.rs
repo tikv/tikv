@@ -20,6 +20,8 @@ use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
+use util::panic_handler;
+
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
@@ -43,6 +45,10 @@ impl RegionSnapshot {
             snap,
             region: Arc::new(region),
         }
+    }
+
+    pub fn path(&self) -> String {
+        self.snap.get_db().path().to_string()
     }
 
     pub fn get_region(&self) -> &Region {
@@ -321,7 +327,7 @@ impl RegionIterator {
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
             if self.panic_when_exceed_bound {
-                util::exit_with_panic_mark(&self.db_path, e);
+                panic_handler::exit_with_panic_mark(&self.db_path, format!("{:?}", e));
             } else {
                 return Err(e);
             }

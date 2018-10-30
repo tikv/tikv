@@ -215,6 +215,10 @@ impl Snapshot for RocksSnapshot {
         let iter = self.db_iterator_cf(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
+
+    fn db_path(&self) -> String {
+        self.get_db().path().to_string()
+    }
 }
 
 impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {

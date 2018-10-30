@@ -61,14 +61,13 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{
-    self, new_compaction_listener, util as raftstore_util, Engines, SnapManagerBuilder,
-};
+use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::util::panic_handler;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
@@ -106,7 +105,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
     let import_path = store_path.join("import");
-    let panic_mark_file = raftstore_util::panic_mark_file_path(&db_path);
 
     let f = File::create(lock_path.as_path())
         .unwrap_or_else(|e| fatal!("failed to create lock at {}: {:?}", lock_path.display(), e));
@@ -117,7 +115,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
     }
 
-    if tikv_util::file::file_exists(&panic_mark_file) {
+    if panic_handler::panic_mark_file_exists(&db_path) {
+        let panic_mark_file = panic_handler::panic_mark_file_path(&db_path);
         fatal!(
             "panic_mark_file {:?} exists, there must be something wrong with the db.",
             panic_mark_file
