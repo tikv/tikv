@@ -14,6 +14,7 @@
 use hex;
 use hex::FromHex;
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
@@ -330,7 +331,12 @@ impl ScalarFunc {
         } else if count >= 0 {
             substring_index_positive(&s, delim.as_ref(), count as usize)
         } else {
-            substring_index_negative(&s, delim.as_ref(), -count as usize)
+            let count = if count == i64::min_value() {
+                i64::max_value() as usize + 1
+            } else {
+                -count as usize
+            };
+            substring_index_negative(&s, delim.as_ref(), count)
         };
         Ok(Some(Cow::Owned(r.into_bytes())))
     }
@@ -356,14 +362,17 @@ fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
 
 #[inline]
 fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
-    let mut positions = vec![0];
     let mut bg = 0;
+    let mut positions = VecDeque::with_capacity(count.min(128));
+    positions.push_back(0);
     while let Some(idx) = s[bg..].find(delim) {
         bg = bg + idx + delim.len();
-        positions.push(bg);
+        positions.push_back(bg);
+        if positions.len() > count {
+            positions.pop_front();
+        }
     }
-    let start = positions[positions.len() - positions.len().min(count)];
-    s[start..].to_string()
+    s[positions[0]..].to_string()
 }
 
 #[inline]
@@ -1369,6 +1378,10 @@ mod tests {
             ("1aaaaaa1", "aa", -1, "1"),
             ("1aaa1", "aa", -2, "1aaa1"),
             ("1aaaaaa1", "aa", -2, "aa1"),
+            ("aaa1aa1aa", "aa", -3, "a1aa1aa"),
+            ("aaa1aa1aa", "aa", i64::max_value(), "aaa1aa1aa"),
+            ("aaa1aa1aa", "aa", i64::min_value() + 1, "aaa1aa1aa"),
+            ("aaa1aa1aa", "aa", i64::min_value(), "aaa1aa1aa"),
             ("", ".", 0, ""),
             ("", ".", 1, ""),
             ("", ".", -1, ""),
@@ -1385,7 +1398,7 @@ mod tests {
         let args = [
             Datum::Bytes(b"www.pingcap.com".to_vec()),
             Datum::Bytes(b".".to_vec()),
-            Datum::U64(18446744073709551615),
+            Datum::U64(u64::max_value()),
         ];
         let got = eval_func(ScalarFuncSig::SubstringIndex, &args).unwrap();
         assert_eq!(got, Datum::Bytes(b"www.pingcap.com".to_vec()));
