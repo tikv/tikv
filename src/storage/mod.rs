@@ -2532,8 +2532,11 @@ mod tests {
                 )
                 .wait(),
         );
-        let mut results: Vec<Option<KvPair>> =
-            test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        let mut results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .collect();
         expect_multi_values(
             results.clone(),
             storage
@@ -2551,6 +2554,22 @@ mod tests {
                     20,
                     false,
                     false,
+                )
+                .wait(),
+        );
+        let mut results: Vec<Option<KvPair>> =
+            test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        results.reverse();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"z".to_vec(),
+                    20,
+                    false,
+                    true,
                 )
                 .wait(),
         );
