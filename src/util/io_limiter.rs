@@ -104,7 +104,7 @@ impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::fs::File;
     use std::io::{Read, Write};
     use std::sync::Arc;

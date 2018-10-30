@@ -279,9 +279,12 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     fn create_data_cursor(&mut self) -> Result<()> {
-        self.scan_mode = Some(ScanMode::Forward);
         if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(None, None, self.fill_cache);
+            let iter_opt = IterOption::new(
+                self.lower_bound.as_ref().cloned(),
+                self.upper_bound.as_ref().cloned(),
+                self.fill_cache,
+            );
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
