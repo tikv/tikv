@@ -116,10 +116,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     if panic_handler::panic_mark_file_exists(&db_path) {
-        let panic_mark_file = panic_handler::panic_mark_file_path(&db_path);
         fatal!(
             "panic_mark_file {:?} exists, there must be something wrong with the db.",
-            panic_mark_file
+            panic_handler::panic_mark_file_path(&db_path)
         );
     }
 
