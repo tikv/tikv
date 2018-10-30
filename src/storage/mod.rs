@@ -1144,17 +1144,19 @@ impl<E: Engine> Storage<E> {
                 option.set_upper_bound(end.into_encoded());
             }
         }
-        let scan_mode = if reverse { ScanMode::Backward } else { ScanMode::Forward };
+        let scan_mode = if reverse {
+            ScanMode::Backward
+        } else {
+            ScanMode::Forward
+        };
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, scan_mode)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if reverse {
             if !cursor.seek_for_prev(start_key, statistics)? {
                 return Ok(vec![]);
             }
-        } else {
-            if !cursor.seek(start_key, statistics)? {
-                return Ok(vec![]);
-            }
+        } else if !cursor.seek(start_key, statistics)? {
+            return Ok(vec![]);
         }
         let mut pairs = vec![];
         while cursor.valid() && pairs.len() < limit {
@@ -1249,12 +1251,11 @@ impl<E: Engine> Storage<E> {
             if end_key.is_empty() && i + 1 != ranges_len {
                 end_key = ranges[i + 1].get_start_key();
             }
-            if !end_key.is_empty() {
-                if !reverse && start_key >= end_key {
-                    return false;
-                } else if reverse && start_key <= end_key {
-                    return false;
-                }
+            if !end_key.is_empty()
+                || !reverse && start_key >= end_key
+                || reverse && start_key <= end_key
+            {
+                return false;
             }
         }
         true
@@ -2523,7 +2524,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, true, false)
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"c2".to_vec(),
+                    20,
+                    true,
+                    false,
+                )
                 .wait(),
         );
         let mut results: Vec<Option<KvPair>> =
@@ -2538,7 +2546,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false, false)
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"c2".to_vec(),
+                    20,
+                    false,
+                    false,
+                )
                 .wait(),
         );
     }
@@ -2621,7 +2636,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false, false)
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    5,
+                    false,
+                    false,
+                )
                 .wait(),
         );
 
@@ -2643,7 +2665,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, true, false)
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    5,
+                    true,
+                    false,
+                )
                 .wait(),
         );
 
@@ -2661,7 +2690,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 3, false, false)
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    3,
+                    false,
+                    false,
+                )
                 .wait(),
         );
 
@@ -2709,7 +2745,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false, false)
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    5,
+                    false,
+                    false,
+                )
                 .wait(),
         );
 
