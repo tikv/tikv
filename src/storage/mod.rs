@@ -1241,7 +1241,7 @@ impl<E: Engine> Storage<E> {
         Err(Error::InvalidCf(cf.to_owned()))
     }
 
-    fn check_key_ranges(ranges: &[KeyRange]) -> bool {
+    fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
         let ranges_len = ranges.len();
         for i in 0..ranges_len {
             let start_key = ranges[i].get_start_key();
@@ -1249,8 +1249,12 @@ impl<E: Engine> Storage<E> {
             if end_key.is_empty() && i + 1 != ranges_len {
                 end_key = ranges[i + 1].get_start_key();
             }
-            if !end_key.is_empty() && start_key >= end_key {
-                return false;
+            if !end_key.is_empty() {
+                if !reverse && start_key >= end_key {
+                    return false;
+                } else if reverse && start_key <= end_key {
+                    return false;
+                }
             }
         }
         true
@@ -1263,6 +1267,7 @@ impl<E: Engine> Storage<E> {
         mut ranges: Vec<KeyRange>,
         each_limit: usize,
         key_only: bool,
+        reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_scan";
         let engine = self.get_engine();
@@ -1281,7 +1286,7 @@ impl<E: Engine> Storage<E> {
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges) {
+                    if !Self::check_key_ranges(&ranges, reverse) {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
@@ -1306,7 +1311,7 @@ impl<E: Engine> Storage<E> {
                             each_limit,
                             &mut statistics,
                             key_only,
-                            false,
+                            reverse,
                         )?;
                         result.extend(pairs.into_iter());
                     }
@@ -2511,14 +2516,14 @@ mod tests {
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, true)
+                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, true, false)
                 .wait(),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, true)
+                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, true, false)
                 .wait(),
         );
         let mut results: Vec<Option<KvPair>> =
@@ -2526,14 +2531,14 @@ mod tests {
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, false)
+                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, false, false)
                 .wait(),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false)
+                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false, false)
                 .wait(),
         );
     }
@@ -2616,7 +2621,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false, false)
                 .wait(),
         );
 
@@ -2638,7 +2643,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, true, false)
                 .wait(),
         );
 
@@ -2656,7 +2661,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 3, false)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 3, false, false)
                 .wait(),
         );
 
@@ -2674,7 +2679,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 3, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 3, true, false)
                 .wait(),
         );
 
@@ -2704,7 +2709,7 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false, false)
                 .wait(),
         );
 
@@ -2722,7 +2727,41 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true, false)
+                .wait(),
+        );
+
+        // backward test
+        let results = vec![
+            Some((b"a3".to_vec(), vec![])),
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a".to_vec(), vec![])),
+            Some((b"b3".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"c3".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+        ];
+        let ranges: Vec<KeyRange> = vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ].into_iter()
+            .map(|(s, e)| {
+                let mut range = KeyRange::new();
+                range.set_start_key(s);
+                range.set_end_key(e);
+                range
+            })
+            .collect();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true, true)
                 .wait(),
         );
     }

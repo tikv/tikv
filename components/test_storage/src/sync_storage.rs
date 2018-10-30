@@ -205,9 +205,10 @@ impl<E: Engine> SyncStorage<E> {
         cf: String,
         start_key: Vec<u8>,
         limit: usize,
+        reverse: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, limit, false)
+            .async_raw_scan(ctx, cf, start_key, limit, false, reverse)
             .wait()
     }
 }
