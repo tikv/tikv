@@ -89,7 +89,7 @@
 # helper threadpool size
 # helper-threadpool-size = 2
 
-# heavy-load-threshold = 50
+# heavy-load-threshold = 100
 # heavy-load-wait-duration = 2ms
 
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.

@@ -111,6 +111,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             cop,
             raft_router.clone(),
             snap_worker.scheduler(),
+            cfg.heavy_load_threshold,
             Arc::clone(&helper_runtime),
             Arc::clone(&in_heavy_load),
         );
