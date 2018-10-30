@@ -257,3 +257,95 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
         DBIterator::value(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+    use super::super::tests::*;
+    use super::super::{new_local_engine, CFStatistics};
+    use super::*;
+    use tempdir::TempDir;
+    const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+
+    #[test]
+    fn test_rocksdb() {
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        test_base_curd_options(&engine)
+    }
+
+    #[test]
+    fn test_rocksdb_linear() {
+        let dir = TempDir::new("rocksdb_test_linear").unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        test_linear(&engine);
+    }
+
+    #[test]
+    fn test_rocksdb_statistic() {
+        let dir = TempDir::new("rocksdb_statistics_test").unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        test_cfs_statistics(&engine);
+    }
+
+    #[test]
+    fn rocksdb_reopen() {
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        {
+            let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+            must_put_cf(&engine, "cf", b"k", b"v1");
+        }
+        {
+            let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+            assert_has_cf(&engine, "cf", b"k", b"v1");
+        }
+    }
+
+    #[test]
+    fn test_rocksdb_perf_statistics() {
+        let dir = TempDir::new("test_rocksdb_perf_statistics").unwrap();
+        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        test_perf_statistics(&engine);
+    }
+
+    pub fn test_perf_statistics<E: Engine>(engine: &E) {
+        must_put(engine, b"foo", b"bar1");
+        must_put(engine, b"foo2", b"bar2");
+        must_put(engine, b"foo3", b"bar3"); // deleted
+        must_put(engine, b"foo4", b"bar4");
+        must_put(engine, b"foo42", b"bar42"); // deleted
+        must_put(engine, b"foo5", b"bar5"); // deleted
+        must_put(engine, b"foo6", b"bar6");
+        must_delete(engine, b"foo3");
+        must_delete(engine, b"foo42");
+        must_delete(engine, b"foo5");
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Forward)
+            .unwrap();
+
+        let mut statistics = CFStatistics::default();
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
+            .unwrap();
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
+            .unwrap();
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.prev(&mut statistics);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+
+        iter.prev(&mut statistics);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+
+        iter.prev(&mut statistics);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+    }
+
+}

@@ -55,9 +55,8 @@ pub struct MvccInfo {
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug)]
+#[derive(Debug, Eq, Ord)]
 pub struct Key(Vec<u8>);
-
 /// Core functions for `Key`.
 impl Key {
     /// Creates a key from raw bytes.
