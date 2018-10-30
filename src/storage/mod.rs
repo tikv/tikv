@@ -1252,8 +1252,7 @@ impl<E: Engine> Storage<E> {
                 end_key = ranges[i + 1].get_start_key();
             }
             if !end_key.is_empty()
-                || !reverse && start_key >= end_key
-                || reverse && start_key <= end_key
+                && (!reverse && start_key >= end_key || reverse && start_key <= end_key)
             {
                 return false;
             }
