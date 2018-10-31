@@ -63,13 +63,14 @@ impl GrpcThreadLoadStatistics {
         let next_pos = (self.cur_pos + 1) % self.capacity;
         let earlist_instant = self.instants[next_pos];
         let earlist_cpu_usage = self.cpu_usages[next_pos];
-
-        let millis = (current_instant - earlist_instant).as_millis();
-        let cpu_usage = (current_cpu_usage - earlist_cpu_usage) / millis as f64 * 1000f64;
-        let cpu_usage = (cpu_usage * 100f64) as usize;
-        self.in_heavy_load.1.store(cpu_usage, Ordering::SeqCst);
-        self.in_heavy_load.0.fetch_add(1, Ordering::SeqCst);
-
         self.cur_pos = next_pos;
+
+        let millis = (current_instant - earlist_instant).as_millis() as usize;
+        if millis > 0 {
+            let cpu_usage = (current_cpu_usage - earlist_cpu_usage) * 1000f64 * 100f64;
+            let cpu_usage = cpu_usage as usize / millis;
+            self.in_heavy_load.1.store(cpu_usage, Ordering::SeqCst);
+            self.in_heavy_load.0.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
