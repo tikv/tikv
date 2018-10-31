@@ -1,28 +1,31 @@
+// Copyright 2018 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #![no_main]
 #[macro_use]
 extern crate libfuzzer_sys;
 extern crate tikv;
+extern crate tikv_fuzz;
 
-use std::mem;
 use tikv::util::codec::number::*;
-
-fn make_u64<I>(iter: &mut I) -> u64
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 8];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
+use tikv_fuzz::util::number_maker;
 
 fn fuzz_number_u64_encode(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_u64(&mut iter);
+    let n = number_maker::make_u64(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_u64(n);
     let _ = buf.encode_u64_le(n);
@@ -37,23 +40,12 @@ fn fuzz_number_u64_decode(data: &[u8]) {
     let _ = decode_u64_le(&mut buf.as_slice());
 }
 
-fn make_i64<I>(iter: &mut I) -> i64
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 8];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_i64_encode(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_i64(&mut iter);
+    let n = number_maker::make_i64(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_i64(n);
     let _ = buf.encode_i64_le(n);
@@ -68,23 +60,12 @@ fn fuzz_number_i64_decode(data: &[u8]) {
     let _ = decode_i64_le(&mut buf.as_slice());
 }
 
-fn make_f64<I>(iter: &mut I) -> f64
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 8];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_f64_encode(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_f64(&mut iter);
+    let n = number_maker::make_f64(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_f64(n);
     let _ = buf.encode_f64_le(n);
@@ -98,23 +79,12 @@ fn fuzz_number_f64_decode(data: &[u8]) {
     let _ = decode_f64_le(&mut buf.as_slice());
 }
 
-fn make_u32<I>(iter: &mut I) -> u32
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 4];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_u32_encode(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_u32(&mut iter);
+    let n = number_maker::make_u32(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_u32(n);
     let _ = buf.encode_u32_le(n);
@@ -126,23 +96,12 @@ fn fuzz_number_u32_decode(data: &[u8]) {
     let _ = decode_u32_le(&mut buf.as_slice());
 }
 
-fn make_i32<I>(iter: &mut I) -> i32
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 4];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_i32_encode(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_i32(&mut iter);
+    let n = number_maker::make_i32(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_i32_le(n);
 }
@@ -152,23 +111,12 @@ fn fuzz_number_i32_decode(data: &[u8]) {
     let _ = decode_i32_le(&mut buf.as_slice());
 }
 
-fn make_u16<I>(iter: &mut I) -> u16
-where
-    I: Iterator<Item = u8>,
-{
-    let mut bytes = [0u8; 2];
-    for byte in &mut bytes {
-        *byte = iter.next().unwrap();
-    }
-    unsafe { mem::transmute(bytes) }
-}
-
 fn fuzz_number_u16_encode(data: &[u8]) {
     if data.is_empty() {
         return;
     }
     let mut iter = data.iter().cycle().cloned();
-    let n = make_u16(&mut iter);
+    let n = number_maker::make_u16(&mut iter);
     let mut buf = vec![];
     let _ = buf.encode_u16(n);
     let _ = buf.encode_u16_le(n);
