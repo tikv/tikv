@@ -563,6 +563,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
+        info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
         ctx.spawn(
             stream
@@ -1212,33 +1213,25 @@ impl Stream for BatchCommandsRetriever {
     type Item = BatchCommandsResponse;
     type Error = ();
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.receiver.poll()? {
-            Async::Ready(Some((id, resp))) => {
-                self.current_resp.mut_request_ids().push(id);
-                self.current_resp.mut_responses().push(resp);
-            }
-            Async::Ready(None) => return Ok(Async::Ready(None)),
-            Async::NotReady => return Ok(Async::NotReady),
-        }
-
-        loop {
+        let finished = loop {
             match self.receiver.try_recv() {
+                Err(TryRecvError::Disconnected) => {
+                    warn!("super batch channel is closed, it's unexpected");
+                    break true;
+                }
                 Ok((id, resp)) => {
                     self.current_resp.mut_request_ids().push(id);
                     self.current_resp.mut_responses().push(resp);
-                    if self.current_resp.get_responses().len() < 1000 {
-                        continue;
-                    }
                 }
-                Err(TryRecvError::Disconnected) => {
-                    warn!("super batch channel is closed, it's unexpected");
-                }
-                _ => {}
+                Err(TryRecvError::Empty) => if self.receiver.yield_poll() {
+                    break false;
+                },
             }
-            break;
-        }
+        };
 
-        if self.current_resp.get_responses().is_empty() {
+        if self.current_resp.get_responses().is_empty() && finished {
+            return Ok(Async::Ready(None));
+        } else if self.current_resp.get_responses().is_empty() {
             return Ok(Async::NotReady);
         }
 

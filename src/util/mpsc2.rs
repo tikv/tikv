@@ -188,6 +188,14 @@ impl<T> Receiver<T> {
             recv(crossbeam_channel::after(timeout)) => Err(RecvTimeoutError::Timeout),
         }
     }
+
+    // For implement more receivers based on futures. Must be called in poll.
+    // The return value indicates the the caller can give up the poll or not.
+    #[inline]
+    pub fn yield_poll(&self) -> bool {
+        let recv_task = &self.state.recv_task;
+        recv_task.swap(task::current(), Ordering::AcqRel).is_some()
+    }
 }
 
 impl<T> Drop for Receiver<T> {
@@ -268,28 +276,16 @@ impl<T> Stream for BatchReceiver<T> {
             match self.rx.try_recv() {
                 Err(TryRecvError::Disconnected) => break true,
                 Ok(m) => self.buf.push(m),
-                Err(TryRecvError::Empty) => break false,
-            }
-            if self.buf.len() >= NOTIFY_BATCH_SIZE {
-                break false;
+                Err(TryRecvError::Empty) => if self.rx.yield_poll() {
+                    break false;
+                },
             }
         };
 
         if self.buf.is_empty() && finished {
             return Ok(Async::Ready(None));
         } else if self.buf.is_empty() {
-            if self
-                .rx
-                .state
-                .recv_task
-                .swap(task::current(), Ordering::AcqRel)
-                .is_some()
-            {
-                return Ok(Async::NotReady);
-            }
-            // Note: If there is a message or all the senders are dropped after
-            // polling but before task is set, `t` should be None.
-            return self.poll();
+            return Ok(Async::NotReady);
         }
         let msgs = mem::replace(&mut self.buf, Vec::with_capacity(NOTIFY_BATCH_SIZE));
         Ok(Async::Ready(Some(msgs)))
