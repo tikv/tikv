@@ -11,6 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+use std::collections::Bound::{self, Excluded, Included, Unbounded};
+use std::fmt::{self, Debug, Formatter};
+use std::sync::{Arc, RwLock};
+
+use kvproto::kvrpcpb::Context;
+
 use raftstore::store::engine::IterOption;
 use storage::engine::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError, Iterator, Modify,
@@ -18,11 +25,79 @@ use storage::engine::{
 };
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
-use kvproto::kvrpcpb::Context;
-use std::collections::BTreeMap;
-use std::collections::Bound::{self, Excluded, Included, Unbounded};
-use std::fmt::{self, Debug, Formatter};
-use std::sync::{Arc, RwLock};
+#[derive(Clone)]
+pub struct BTreeEngine {
+    cf_names: Vec<CfName>,
+    cf_contents: Vec<Arc<RwLock<BTreeMap<Key, Value>>>>,
+}
+
+impl BTreeEngine {
+    pub fn new(cfs: &[CfName]) -> Self {
+        let mut cf_names = vec![];
+        let mut cf_contents = vec![];
+
+        // create default cf
+        if cfs.iter().position(|&c| c == CF_DEFAULT).is_none() {
+            cf_names.push(CF_DEFAULT);
+            cf_contents.push(Arc::new(RwLock::new(BTreeMap::new())))
+        }
+
+        for cf in cfs.iter() {
+            cf_names.push(*cf);
+            cf_contents.push(Arc::new(RwLock::new(BTreeMap::new())))
+        }
+
+        Self {
+            cf_names,
+            cf_contents,
+        }
+    }
+
+    pub fn default() -> Self {
+        let cfs = &[CF_WRITE, CF_DEFAULT, CF_LOCK];
+        Self::new(cfs)
+    }
+
+    pub fn get_cf(&self, cf: CfName) -> Arc<RwLock<BTreeMap<Key, Value>>> {
+        let index = self.cf_names.iter().position(|&c| c == cf);
+        match index {
+            None => unreachable!(
+                "Not exist CF:[{}]! Please create it by BTreeEngine::new(&[CfName])!",
+                cf
+            ),
+            Some(i) => self.cf_contents[i].clone(),
+        }
+    }
+}
+
+impl Engine for BTreeEngine {
+    type Iter = BTreeEngineIterator;
+    type Snap = BTreeEngineSnapshot;
+
+    fn async_write(
+        &self,
+        _ctx: &Context,
+        modifies: Vec<Modify>,
+        cb: EngineCallback<()>,
+    ) -> EngineResult<()> {
+        if modifies.is_empty() {
+            return Err(EngineError::EmptyRequest);
+        }
+        cb((CbContext::new(), write_modifies(&self, modifies)));
+
+        Ok(())
+    }
+    fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
+        cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
+        Ok(())
+    }
+}
+
+impl Debug for BTreeEngine {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "BTreeEngine []",)
+    }
+}
 
 pub struct BTreeEngineIterator {
     tree: Arc<RwLock<BTreeMap<Key, Value>>>,
@@ -38,9 +113,6 @@ impl BTreeEngineIterator {
         tree: Arc<RwLock<BTreeMap<Key, Value>>>,
         iter_opt: IterOption,
     ) -> BTreeEngineIterator {
-        let cur_key: Option<Key> = None;
-        let cur_value: Option<Value> = None;
-
         let lower_bound = match iter_opt.lower_bound() {
             None => Unbounded,
             Some(key) => Included(Key::from_raw(key)),
@@ -53,8 +125,8 @@ impl BTreeEngineIterator {
 
         Self {
             tree: tree.clone(),
-            cur_key,
-            cur_value,
+            cur_key: None,
+            cur_value: None,
             valid: false,
             lower_bound,
             upper_bound,
@@ -203,21 +275,10 @@ impl Snapshot for BTreeEngineSnapshot {
     type Iter = BTreeEngineIterator;
 
     fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
-        let tree = self.default_cf.read().unwrap();
-        let v = tree.get(key);
-
-        match v {
-            None => Ok(None),
-            Some(v) => Ok(Some(v.clone())),
-        }
+        self.get_cf(CF_DEFAULT, key)
     }
     fn get_cf(&self, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
-        let tree_cf = match cf {
-            CF_DEFAULT => &self.default_cf,
-            CF_WRITE => &self.write_cf,
-            CF_LOCK => &self.lock_cf,
-            _ => &self.default_cf,
-        };
+        let tree_cf = self.inner_engine.get_cf(cf);
         let tree = tree_cf.read().unwrap();
         let v = tree.get(key);
         match v {
@@ -226,21 +287,16 @@ impl Snapshot for BTreeEngineSnapshot {
         }
     }
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-        let itr = BTreeEngineIterator::new(self.default_cf.clone(), iter_opt);
-        Ok(Cursor::new(itr, mode))
+        self.iter_cf(CF_DEFAULT, iter_opt, mode)
     }
+    #[inline]
     fn iter_cf(
         &self,
         cf: CfName,
         iter_opt: IterOption,
         mode: ScanMode,
     ) -> EngineResult<Cursor<Self::Iter>> {
-        let tree = match cf {
-            CF_DEFAULT => &self.default_cf,
-            CF_WRITE => &self.write_cf,
-            CF_LOCK => &self.lock_cf,
-            _ => unreachable!(),
-        };
+        let tree = self.inner_engine.get_cf(cf);
 
         Ok(Cursor::new(
             BTreeEngineIterator::new(tree.clone(), iter_opt),
@@ -251,79 +307,14 @@ impl Snapshot for BTreeEngineSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct BTreeEngineSnapshot {
-    write_cf: Arc<RwLock<BTreeMap<Key, Value>>>,
-    lock_cf: Arc<RwLock<BTreeMap<Key, Value>>>,
-    default_cf: Arc<RwLock<BTreeMap<Key, Value>>>,
+    inner_engine: BTreeEngine,
 }
 
 impl BTreeEngineSnapshot {
     pub fn new(engine: &BTreeEngine) -> Self {
         Self {
-            write_cf: engine.write_cf.clone(),
-            lock_cf: engine.lock_cf.clone(),
-            default_cf: engine.default_cf.clone(),
+            inner_engine: engine.clone(),
         }
-    }
-}
-
-#[derive(Clone)]
-pub struct BTreeEngine {
-    pub write_cf: Arc<RwLock<BTreeMap<Key, Value>>>,
-    pub lock_cf: Arc<RwLock<BTreeMap<Key, Value>>>,
-    pub default_cf: Arc<RwLock<BTreeMap<Key, Value>>>,
-}
-
-impl BTreeEngine {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        let default_cf = Arc::new(RwLock::new(BTreeMap::new()));
-        let lock_cf = Arc::new(RwLock::new(BTreeMap::new()));
-        let write_cf = Arc::new(RwLock::new(BTreeMap::new()));
-
-        Self {
-            write_cf,
-            lock_cf,
-            default_cf,
-        }
-    }
-
-    pub fn get_cf(&self, cf: CfName) -> Arc<RwLock<BTreeMap<Key, Value>>> {
-        match cf {
-            CF_LOCK => self.lock_cf.clone(),
-            CF_WRITE => self.write_cf.clone(),
-            CF_DEFAULT => self.default_cf.clone(),
-            //            _ => unreachable!(),
-            _ => self.default_cf.clone(),
-        }
-    }
-}
-
-impl Engine for BTreeEngine {
-    type Iter = BTreeEngineIterator;
-    type Snap = BTreeEngineSnapshot;
-
-    fn async_write(
-        &self,
-        _ctx: &Context,
-        modifies: Vec<Modify>,
-        cb: EngineCallback<()>,
-    ) -> EngineResult<()> {
-        if modifies.is_empty() {
-            return Err(EngineError::EmptyRequest);
-        }
-        cb((CbContext::new(), write_modifies(&self, modifies)));
-
-        Ok(())
-    }
-    fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
-        cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
-        Ok(())
-    }
-}
-
-impl Debug for BTreeEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "BTreeEngine []",)
     }
 }
 
@@ -353,25 +344,25 @@ pub mod tests {
 
     #[test]
     fn test_btree_engine() {
-        let engine = BTreeEngine::new();
+        let engine = BTreeEngine::new(TEST_ENGINE_CFS);
         test_base_curd_options(&engine)
     }
 
     #[test]
     fn test_linear_of_btree_engine() {
-        let engine = BTreeEngine::new();
+        let engine = BTreeEngine::default();
         test_linear(&engine);
     }
 
     #[test]
     fn test_statistic_of_btree_engine() {
-        let engine = BTreeEngine::new();
+        let engine = BTreeEngine::default();
         test_cfs_statistics(&engine);
     }
 
     #[test]
     fn test_bound_of_btree_engine() {
-        let engine = BTreeEngine::new();
+        let engine = BTreeEngine::default();
         let test_data = vec![
             (b"a1".to_vec(), b"v1".to_vec()),
             (b"a3".to_vec(), b"v3".to_vec()),

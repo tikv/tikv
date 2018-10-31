@@ -265,7 +265,6 @@ mod tests {
     use super::super::{new_local_engine, CFStatistics};
     use super::*;
     use tempdir::TempDir;
-    const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     #[test]
     fn test_rocksdb() {

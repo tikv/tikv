@@ -697,6 +697,7 @@ pub mod tests {
     use storage::{CfName, Key, CF_DEFAULT};
     use util::codec::bytes;
     use util::escape;
+    pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
