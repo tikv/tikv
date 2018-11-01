@@ -11,20 +11,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod chunk;
-mod column;
-
-pub use coprocessor::codec::{Error, Result};
-
-pub use self::chunk::{Chunk, ChunkEncoder};
-
-#[cfg(test)]
-mod tests {
-    use tipb::expression::FieldType;
-
-    pub fn field_type(tp: u8) -> FieldType {
-        let mut fp = FieldType::new();
-        fp.set_tp(i32::from(tp));
-        fp
-    }
-}
+pub mod number_maker;

@@ -20,6 +20,7 @@ mod imp {
     use tikv::raftstore::store::Engines;
     use tikv::util::{metrics, rocksdb_stats};
 
+    #[allow(dead_code)]
     pub fn handle_signal(engines: Option<Engines>) {
         use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
         use signal::trap::Trap;

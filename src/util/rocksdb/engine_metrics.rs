@@ -50,8 +50,8 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheDataHit,
     TickerType::BlockCacheDataAdd,
     TickerType::BlockCacheDataBytesInsert,
-    TickerType::BlockCacheByteRead,
-    TickerType::BlockCacheByteWrite,
+    TickerType::BlockCacheBytesRead,
+    TickerType::BlockCacheBytesWrite,
     TickerType::BloomFilterUseful,
     TickerType::MemtableHit,
     TickerType::MemtableMiss,
@@ -83,8 +83,8 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::WalFileBytes,
     TickerType::WriteDoneBySelf,
     TickerType::WriteDoneByOther,
-    TickerType::WriteTimeout,
-    TickerType::WriteWithWAL,
+    TickerType::WriteTimedout,
+    TickerType::WriteWithWal,
     TickerType::CompactReadBytes,
     TickerType::CompactWriteBytes,
     TickerType::FlushWriteBytes,
@@ -92,8 +92,8 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::ReadAmpTotalReadBytes,
 ];
 pub const ENGINE_HIST_TYPES: &[HistType] = &[
-    HistType::GetMicros,
-    HistType::WriteMicros,
+    HistType::DbGet,
+    HistType::DbWrite,
     HistType::CompactionTime,
     HistType::TableSyncMicros,
     HistType::CompactionOutfileSyncMicros,
@@ -105,9 +105,9 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::HardRateLimitDelayCount,
     HistType::SoftRateLimitDelayCount,
     HistType::NumFilesInSingleCompaction,
-    HistType::SeekMicros,
+    HistType::DbSeek,
     HistType::WriteStall,
-    HistType::SSTReadMicros,
+    HistType::SstReadMicros,
     HistType::NumSubcompactionsScheduled,
     HistType::BytesPerRead,
     HistType::BytesPerWrite,
@@ -215,12 +215,12 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .with_label_values(&[name, "block_cache_data_bytes_insert"])
                 .inc_by(v);
         }
-        TickerType::BlockCacheByteRead => {
+        TickerType::BlockCacheBytesRead => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "block_cache_byte_read"])
                 .inc_by(v);
         }
-        TickerType::BlockCacheByteWrite => {
+        TickerType::BlockCacheBytesWrite => {
             STORE_ENGINE_FLOW_VEC
                 .with_label_values(&[name, "block_cache_byte_write"])
                 .inc_by(v);
@@ -390,12 +390,12 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .with_label_values(&[name, "write_done_by_other"])
                 .inc_by(v);
         }
-        TickerType::WriteTimeout => {
+        TickerType::WriteTimedout => {
             STORE_ENGINE_WRITE_SERVED_VEC
                 .with_label_values(&[name, "write_timeout"])
                 .inc_by(v);
         }
-        TickerType::WriteWithWAL => {
+        TickerType::WriteWithWal => {
             STORE_ENGINE_WRITE_SERVED_VEC
                 .with_label_values(&[name, "write_with_wal"])
                 .inc_by(v);
@@ -431,7 +431,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
 
 pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &str) {
     match t {
-        HistType::GetMicros => {
+        HistType::DbGet => {
             STORE_ENGINE_GET_MICROS_VEC
                 .with_label_values(&[name, "get_median"])
                 .set(value.median);
@@ -451,7 +451,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 .with_label_values(&[name, "get_max"])
                 .set(value.max);
         }
-        HistType::WriteMicros => {
+        HistType::DbWrite => {
             STORE_ENGINE_WRITE_MICROS_VEC
                 .with_label_values(&[name, "write_median"])
                 .set(value.median);
@@ -691,7 +691,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 .with_label_values(&[name, "num_files_in_single_compaction_max"])
                 .set(value.max);
         }
-        HistType::SeekMicros => {
+        HistType::DbSeek => {
             STORE_ENGINE_SEEK_MICROS_VEC
                 .with_label_values(&[name, "seek_median"])
                 .set(value.median);
@@ -731,7 +731,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 .with_label_values(&[name, "write_stall_max"])
                 .set(value.max);
         }
-        HistType::SSTReadMicros => {
+        HistType::SstReadMicros => {
             STORE_ENGINE_SST_READ_MICROS_VEC
                 .with_label_values(&[name, "sst_read_micros_median"])
                 .set(value.median);
@@ -1228,6 +1228,12 @@ lazy_static! {
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
         &["db", "cf", "level"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_stall_conditions_changed",
+        "Stall conditions changed of each column family",
+        &["db", "cf", "type"]
     ).unwrap();
 }
 

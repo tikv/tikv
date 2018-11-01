@@ -11,20 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod chunk;
-mod column;
+#![no_main]
+#[macro_use]
+extern crate libfuzzer_sys;
+extern crate tikv;
 
-pub use coprocessor::codec::{Error, Result};
+fuzz_target!(|data: &[u8]| {
+    use tikv::util::codec;
 
-pub use self::chunk::{Chunk, ChunkEncoder};
-
-#[cfg(test)]
-mod tests {
-    use tipb::expression::FieldType;
-
-    pub fn field_type(tp: u8) -> FieldType {
-        let mut fp = FieldType::new();
-        fp.set_tp(i32::from(tp));
-        fp
-    }
-}
+    let _ = codec::bytes::encode_bytes(data);
+    let _ = codec::bytes::encode_bytes_desc(data);
+    let _ = codec::bytes::encoded_compact_len(data);
+    let _ = codec::bytes::encoded_bytes_len(data, true);
+    let _ = codec::bytes::encoded_bytes_len(data, false);
+});
