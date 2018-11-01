@@ -32,12 +32,12 @@ pub struct BTreeEngine {
 }
 
 impl BTreeEngine {
-    pub fn new(cfs: &[CfName]) -> Self {
+    fn new(cfs: &[CfName]) -> Self {
         let mut cf_names = vec![];
         let mut cf_contents = vec![];
 
-        // create default cf
-        if cfs.iter().position(|&c| c == CF_DEFAULT).is_none() {
+        // create default cf if missing
+        if cfs.iter().find(|&&c| c == CF_DEFAULT).is_none() {
             cf_names.push(CF_DEFAULT);
             cf_contents.push(Arc::new(RwLock::new(BTreeMap::new())))
         }
@@ -136,7 +136,6 @@ impl BTreeEngineIterator {
 
 impl Iterator for BTreeEngineIterator {
     fn next(&mut self) -> bool {
-        assert!(self.valid());
         let tree = self.tree.read().unwrap();
         let mut range = tree.range((
             Excluded(self.cur_key.clone().unwrap()),
@@ -156,7 +155,6 @@ impl Iterator for BTreeEngineIterator {
     }
 
     fn prev(&mut self) -> bool {
-        assert!(self.valid());
         let tree = self.tree.read().unwrap();
         let mut range = tree.range((
             self.lower_bound.clone(),
@@ -260,6 +258,7 @@ impl Iterator for BTreeEngineIterator {
     }
 
     fn key(&self) -> &[u8] {
+        assert!(self.valid());
         debug!("Iterator.key() -> {:?}", unsafe {
             String::from_utf8_unchecked(self.cur_key.clone().unwrap().to_raw().unwrap())
         });
@@ -267,6 +266,7 @@ impl Iterator for BTreeEngineIterator {
     }
 
     fn value(&self) -> &[u8] {
+        assert!(self.valid());
         self.cur_value.as_ref().unwrap().as_slice()
     }
 }
@@ -378,21 +378,21 @@ pub mod tests {
         let mut iter_op = IterOption::default();
         iter_op.set_lower_bound(b"a3".to_vec());
         iter_op.set_upper_bound(b"a7".to_vec());
-        let mut iter = snap.iter(iter_op, ScanMode::Forward).unwrap();
+        let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(iter.seek_to_last(&mut statistics));
+        assert!(cursor.seek_to_last(&mut statistics));
 
         let mut ret = vec![];
 
         loop {
             ret.push((
-                Key::from_encoded(iter.key(&mut statistics).to_vec())
+                Key::from_encoded(cursor.key(&mut statistics).to_vec())
                     .to_raw()
                     .unwrap(),
-                iter.value(&mut statistics).to_vec(),
+                cursor.value(&mut statistics).to_vec(),
             ));
 
-            if !iter.prev(&mut statistics) {
+            if !cursor.prev(&mut statistics) {
                 break;
             }
         }
@@ -400,4 +400,58 @@ pub mod tests {
         ret.sort();
         assert_eq!(ret, test_data[1..3].to_vec());
     }
+
+    #[test]
+    fn test_iterator() {
+        let engine = BTreeEngine::default();
+        let test_data = vec![
+            (b"a1".to_vec(), b"v1".to_vec()),
+            (b"a3".to_vec(), b"v3".to_vec()),
+            (b"a5".to_vec(), b"v5".to_vec()),
+            (b"a7".to_vec(), b"v7".to_vec()),
+        ];
+        for (k, v) in &test_data {
+            must_put(&engine, k.as_slice(), v.as_slice());
+        }
+
+        let iter_op = IterOption::default();
+        let tree = engine.get_cf(CF_DEFAULT).clone();
+        let mut iter = BTreeEngineIterator::new(tree, iter_op);
+        assert!(!iter.valid());
+
+        assert!(iter.seek_to_first());
+        assert!(iter.valid());
+        assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
+        assert!(!iter.prev());
+        assert!(!iter.valid());
+        assert!(iter.next());
+        assert!(iter.valid());
+        assert_eq!(iter.key(), Key::from_raw(b"a3").as_encoded().as_slice());
+
+        assert!(iter.seek(&Key::from_raw(b"a1")).unwrap());
+        assert!(iter.valid());
+        assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
+
+        assert!(iter.seek_to_last());
+        assert!(iter.valid());
+        assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
+        assert!(!iter.next());
+        assert!(!iter.valid());
+        assert!(iter.prev());
+        assert!(iter.valid());
+        assert_eq!(iter.key(), Key::from_raw(b"a5").as_encoded().as_slice());
+
+        assert!(iter.seek(&Key::from_raw(b"a7")).unwrap());
+        assert!(iter.valid());
+        assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
+
+        assert!(!iter.seek_for_prev(&Key::from_raw(b"a0")).unwrap());
+
+        assert!(iter.seek_for_prev(&Key::from_raw(b"a1")).unwrap());
+        assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
+
+        assert!(iter.seek_for_prev(&Key::from_raw(b"a8")).unwrap());
+        assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
+    }
+
 }
