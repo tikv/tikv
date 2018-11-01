@@ -32,7 +32,7 @@ pub struct BTreeEngine {
 }
 
 impl BTreeEngine {
-    fn new(cfs: &[CfName]) -> Self {
+    pub fn new(cfs: &[CfName]) -> Self {
         let mut cf_names = vec![];
         let mut cf_contents = vec![];
 
@@ -122,6 +122,12 @@ impl BTreeEngineIterator {
             None => Unbounded,
             Some(key) => Excluded(Key::from_raw(key)),
         };
+        assert!(
+            check_bounds(&lower_bound, &upper_bound),
+            "lower bound must <= upper bound,lower_bound: {:?}, upper_bound:{:?}",
+            lower_bound,
+            upper_bound
+        );
 
         Self {
             tree: tree.clone(),
@@ -174,6 +180,15 @@ impl Iterator for BTreeEngineIterator {
     }
 
     fn seek(&mut self, key: &Key) -> EngineResult<bool> {
+        let key_bound = Included(key.clone());
+        let upper_bound = self.upper_bound.clone();
+        assert!(
+            check_key_in_range(&self.lower_bound, &key_bound, &upper_bound),
+            "Err(KeyNotInRegion),start_key: {:?}, end_key:{:?}",
+            key_bound,
+            upper_bound
+        );
+
         debug!("Iterator.seek({:?})", unsafe {
             String::from_utf8_unchecked(key.to_raw().unwrap())
         });
@@ -181,7 +196,7 @@ impl Iterator for BTreeEngineIterator {
             .tree
             .read()
             .unwrap()
-            .range((Included(key.clone()), self.upper_bound.clone()))
+            .range((key_bound, upper_bound))
             .next()
         {
             None => {
@@ -198,11 +213,17 @@ impl Iterator for BTreeEngineIterator {
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> EngineResult<bool> {
+        let lower_bound = self.lower_bound.clone();
+        let key_bound = Included(key.clone());
+        assert!(
+            check_key_in_range(&lower_bound, &key_bound, &self.upper_bound),
+            "Err(KeyNotInRegion),start_key: {:?}, end_key:{:?}",
+            lower_bound,
+            key_bound
+        );
+
         let tree = self.tree.read().unwrap();
-        match tree
-            .range((self.lower_bound.clone(), Included(key.clone())))
-            .next_back()
-        {
+        match tree.range((lower_bound, key_bound)).next_back() {
             None => {
                 self.valid = false;
             }
@@ -307,13 +328,13 @@ impl Snapshot for BTreeEngineSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct BTreeEngineSnapshot {
-    inner_engine: BTreeEngine,
+    inner_engine: Arc<BTreeEngine>,
 }
 
 impl BTreeEngineSnapshot {
     pub fn new(engine: &BTreeEngine) -> Self {
         Self {
-            inner_engine: engine.clone(),
+            inner_engine: Arc::new(engine.clone()),
         }
     }
 }
@@ -334,6 +355,34 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
         };
     }
     Ok(())
+}
+
+// If start > end, return false;
+// If start == end && both bounds are Excluded return false;
+// else return true;
+#[inline]
+fn bound_cmp(start: &Bound<Key>, end: &Bound<Key>) -> bool {
+    match (start, end) {
+        (_, Unbounded) | (Unbounded, _) => true,
+
+        (Excluded(l), Excluded(r)) => l < r,
+
+        (Excluded(l), Included(r)) | (Included(l), Excluded(r)) | (Included(l), Included(r)) => {
+            l <= r
+        }
+    }
+}
+
+fn check_bounds(left: &Bound<Key>, right: &Bound<Key>) -> bool {
+    bound_cmp(left, right)
+}
+
+fn check_key_in_range(
+    lower_bound: &Bound<Key>,
+    key: &Bound<Key>,
+    upper_bound: &Bound<Key>,
+) -> bool {
+    bound_cmp(lower_bound, key) && bound_cmp(key, upper_bound)
 }
 
 #[cfg(test)]
@@ -454,4 +503,142 @@ pub mod tests {
         assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
     }
 
+    #[test]
+    fn test_valid_bounds() {
+        assert_eq!(
+            false,
+            check_bounds(
+                &Excluded(Key::from_raw(b"1")),
+                &Excluded(Key::from_raw(b"1")),
+            )
+        );
+
+        assert_eq!(
+            true,
+            check_bounds(
+                &Included(Key::from_raw(b"1")),
+                &Included(Key::from_raw(b"1")),
+            )
+        );
+        assert_eq!(
+            true,
+            check_bounds(
+                &Included(Key::from_raw(b"1")),
+                &Excluded(Key::from_raw(b"1")),
+            )
+        );
+        assert_eq!(
+            true,
+            check_bounds(
+                &Excluded(Key::from_raw(b"1")),
+                &Included(Key::from_raw(b"1")),
+            )
+        );
+
+        assert_eq!(
+            true,
+            check_bounds(&Excluded(Key::from_raw(b"1")), &Unbounded)
+        );
+        assert_eq!(
+            true,
+            check_bounds(&Included(Key::from_raw(b"1")), &Unbounded)
+        );
+
+        assert_eq!(
+            true,
+            check_bounds(&Unbounded, &Excluded(Key::from_raw(b"1")))
+        );
+        assert_eq!(
+            true,
+            check_bounds(&Unbounded, &Included(Key::from_raw(b"1")))
+        );
+
+        assert_eq!(
+            false,
+            check_bounds(
+                &Excluded(Key::from_raw(b"2")),
+                &Excluded(Key::from_raw(b"1")),
+            )
+        );
+        assert_eq!(
+            false,
+            check_bounds(
+                &Included(Key::from_raw(b"2")),
+                &Excluded(Key::from_raw(b"1")),
+            )
+        );
+        assert_eq!(
+            false,
+            check_bounds(
+                &Included(Key::from_raw(b"2")),
+                &Included(Key::from_raw(b"1")),
+            )
+        );
+
+        assert_eq!(
+            true,
+            check_bounds(
+                &Excluded(Key::from_raw(b"1")),
+                &Excluded(Key::from_raw(b"2")),
+            )
+        );
+
+        assert_eq!(
+            false,
+            check_key_in_range(
+                &Excluded(Key::from_raw(b"1")),
+                &Excluded(Key::from_raw(b"0")),
+                &Excluded(Key::from_raw(b"2")),
+            )
+        );
+        assert_eq!(
+            true,
+            check_key_in_range(
+                &Excluded(Key::from_raw(b"1")),
+                &Included(Key::from_raw(b"1")),
+                &Excluded(Key::from_raw(b"1")),
+            )
+        );
+        assert_eq!(
+            true,
+            check_key_in_range(
+                &Excluded(Key::from_raw(b"1")),
+                &Included(Key::from_raw(b"2")),
+                &Excluded(Key::from_raw(b"3")),
+            )
+        );
+    }
+
+    #[test]
+    fn test_key_not_in_range() {
+        let engine = BTreeEngine::default();
+        let snap = engine.snapshot(&Context::new()).unwrap();
+        let mut iter_op = IterOption::default();
+
+        iter_op.set_lower_bound(b"a7".to_vec());
+        iter_op.set_upper_bound(b"a3".to_vec());
+        assert!(
+            ::panic_hook::recover_safe(|| snap.iter(iter_op, ScanMode::Forward).unwrap()).is_err()
+        );
+
+        let mut iter_op = IterOption::default();
+        iter_op.set_lower_bound(b"a3".to_vec());
+        iter_op.set_upper_bound(b"a7".to_vec());
+        let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
+        let mut statistics = CFStatistics::default();
+        assert!(
+            ::panic_hook::recover_safe(|| cursor.seek(&Key::from_raw(b"a8"), &mut statistics))
+                .is_err()
+        );
+        assert!(
+            ::panic_hook::recover_safe(|| cursor.seek(&Key::from_raw(b"a0"), &mut statistics))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_get_not_exist_cf() {
+        let engine = BTreeEngine::new(&[]);
+        assert!(::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).is_err());
+    }
 }
