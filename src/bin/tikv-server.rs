@@ -67,7 +67,6 @@ use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::util::panic_handler;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
@@ -115,10 +114,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
     }
 
-    if panic_handler::panic_mark_file_exists(&db_path) {
+    if tikv_util::panic_mark_file_exists(&db_path) {
         fatal!(
             "panic_mark_file {:?} exists, there must be something wrong with the db.",
-            panic_handler::panic_mark_file_path(&db_path)
+            tikv_util::panic_mark_file_path(&db_path)
         );
     }
 
@@ -394,7 +393,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    tikv_util::set_exit_hook(false, Some(guard));
+    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     // Print version information.
     util::print_tikv_info();

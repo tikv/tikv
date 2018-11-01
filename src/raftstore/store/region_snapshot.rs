@@ -19,8 +19,7 @@ use std::sync::Arc;
 use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
-
-use util::panic_handler;
+use util::set_panic_mark;
 
 /// Snapshot of a region.
 ///
@@ -45,10 +44,6 @@ impl RegionSnapshot {
             snap,
             region: Arc::new(region),
         }
-    }
-
-    pub fn path(&self) -> String {
-        self.snap.get_db().path().to_string()
     }
 
     pub fn get_region(&self) -> &Region {
@@ -159,7 +154,6 @@ pub struct RegionIterator {
     region: Arc<Region>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-    db_path: String,
     panic_when_exceed_bound: bool,
 }
 
@@ -195,14 +189,12 @@ impl RegionIterator {
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
-        let db_path = snap.get_db().path().to_string();
         RegionIterator {
             iter,
             valid: false,
             start_key,
             end_key,
             region,
-            db_path,
             panic_when_exceed_bound: true,
         }
     }
@@ -218,14 +210,12 @@ impl RegionIterator {
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
-        let db_path = snap.get_db().path().to_string();
         RegionIterator {
             iter,
             valid: false,
             start_key,
             end_key,
             region,
-            db_path,
             panic_when_exceed_bound: true,
         }
     }
@@ -326,8 +316,9 @@ impl RegionIterator {
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+            set_panic_mark();
             if self.panic_when_exceed_bound {
-                panic_handler::exit_with_panic_mark(&self.db_path, format!("{:?}", e));
+                panic!("key exceed bound: {:?}", e);
             } else {
                 return Err(e);
             }

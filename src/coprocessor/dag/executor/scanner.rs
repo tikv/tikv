@@ -17,9 +17,7 @@ use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
 use storage::txn::Result;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
-use util::escape;
-
-use util::panic_handler;
+use util::{escape, set_panic_mark};
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
@@ -52,7 +50,6 @@ pub struct Scanner<S: Snapshot> {
     no_more: bool,
     /// `reset_range` may re-initialize a StoreScanner, so we need to backlog statistics.
     statistics_backlog: Statistics,
-    db_path: String,
 }
 
 impl<S: Snapshot> Scanner<S> {
@@ -78,7 +75,6 @@ impl<S: Snapshot> Scanner<S> {
             range,
             no_more: false,
             statistics_backlog: Statistics::default(),
-            db_path: store.db_path(),
         })
     }
 
@@ -90,7 +86,6 @@ impl<S: Snapshot> Scanner<S> {
         self.last_scanned_key.clear();
         self.statistics_backlog.add(&self.scanner.take_statistics());
         self.scanner = create_range_scanner(store, self.scan_mode, self.key_only, &self.range)?;
-        self.db_path = store.db_path();
         Ok(())
     }
 
@@ -110,13 +105,13 @@ impl<S: Snapshot> Scanner<S> {
         };
 
         if self.range.start > key || self.range.end <= key {
-            let err_msg = format!(
-                "key: {} out of range [{}, {})",
+            set_panic_mark();
+            panic!(
+                "key: {} out of range [{}, {}]",
                 escape(&key),
                 escape(self.range.get_start()),
                 escape(self.range.get_end())
             );
-            panic_handler::exit_with_panic_mark(&self.db_path, err_msg);
         }
 
         // `Vec::clear()` produce 2 more instructions than `set_len(0)`, so we directly use

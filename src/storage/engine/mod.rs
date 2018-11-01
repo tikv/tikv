@@ -130,9 +130,6 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
     fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
-    fn db_path(&self) -> String {
-        "./".to_string()
-    }
 }
 
 pub trait Iterator: Send + Sized {

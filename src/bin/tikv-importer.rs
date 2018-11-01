@@ -101,7 +101,7 @@ fn main() {
 
     let config = setup_config(&matches);
     let guard = init_log(&config);
-    tikv_util::set_exit_hook(false, Some(guard));
+    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
     util::print_tikv_info();

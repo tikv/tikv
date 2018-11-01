@@ -114,10 +114,6 @@ impl<S: Snapshot> SnapshotStore<S> {
             backward_scanner,
         })
     }
-
-    pub fn db_path(&self) -> String {
-        self.snapshot.db_path()
-    }
 }
 
 pub struct StoreScanner<S: Snapshot> {
