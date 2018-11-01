@@ -1152,7 +1152,7 @@ impl<E: Engine> Storage<E> {
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, scan_mode)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if reverse {
-            if !cursor.seek_for_prev(start_key, statistics)? {
+            if !cursor.reverse_seek(start_key, statistics)? {
                 return Ok(vec![]);
             }
         } else if !cursor.seek(start_key, statistics)? {
@@ -2560,9 +2560,12 @@ mod tests {
                 )
                 .wait(),
         );
-        let mut results: Vec<Option<KvPair>> =
-            test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
-        results.reverse();
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .rev()
+            .collect();
         expect_multi_values(
             results,
             storage
@@ -2574,6 +2577,52 @@ mod tests {
                     false,
                     true,
                 )
+                .wait(),
+        );
+
+        // end key tests
+        let ctx = Context::new();
+        let results = vec![
+            (b"c1".to_vec(), b"cc11".to_vec()),
+            (b"c2".to_vec(), b"cc22".to_vec()),
+            (b"c3".to_vec(), b"cc33".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"d1".to_vec(), b"dd11".to_vec()),
+            (b"d2".to_vec(), b"dd22".to_vec()),
+        ].into_iter()
+            .map(|(k, v)| Some((k, v)));
+        expect_multi_values(
+            results.clone().collect(),
+            <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
+                .and_then(move |snapshot| {
+                    <Storage<RocksEngine>>::raw_scan(
+                        &snapshot,
+                        &"".to_string(),
+                        &Key::from_encoded(b"c1".to_vec()),
+                        Some(Key::from_encoded(b"d3".to_vec())),
+                        20,
+                        &mut Statistics::default(),
+                        false,
+                        false,
+                    )
+                })
+                .wait(),
+        );
+        expect_multi_values(
+            results.rev().collect(),
+            <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
+                .and_then(move |snapshot| {
+                    <Storage<RocksEngine>>::raw_scan(
+                        &snapshot,
+                        &"".to_string(),
+                        &Key::from_encoded(b"d3".to_vec()),
+                        Some(Key::from_encoded(b"c1".to_vec())),
+                        20,
+                        &mut Statistics::default(),
+                        false,
+                        true,
+                    )
+                })
                 .wait(),
         );
     }
@@ -2794,17 +2843,50 @@ mod tests {
                 .wait(),
         );
 
-        // backward test
         let results = vec![
-            Some((b"a3".to_vec(), vec![])),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+        ];
+        let ranges: Vec<KeyRange> = vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ].into_iter()
+            .map(|(s, e)| {
+                let mut range = KeyRange::new();
+                range.set_start_key(s);
+                range.set_end_key(e);
+                range
+            })
+            .collect();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    5,
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+
+        let results = vec![
             Some((b"a2".to_vec(), vec![])),
             Some((b"a1".to_vec(), vec![])),
             Some((b"a".to_vec(), vec![])),
-            Some((b"b3".to_vec(), vec![])),
             Some((b"b2".to_vec(), vec![])),
             Some((b"b1".to_vec(), vec![])),
             Some((b"b".to_vec(), vec![])),
-            Some((b"c3".to_vec(), vec![])),
             Some((b"c2".to_vec(), vec![])),
             Some((b"c1".to_vec(), vec![])),
             Some((b"c".to_vec(), vec![])),
