@@ -367,10 +367,10 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
     positions.push_back(0);
     while let Some(idx) = s[bg..].find(delim) {
         bg = bg + idx + delim.len();
-        positions.push_back(bg);
-        if positions.len() > count {
+        if positions.len() == count {
             positions.pop_front();
         }
+        positions.push_back(bg);
     }
     s[positions[0]..].to_string()
 }
