@@ -116,6 +116,7 @@ extern crate derive_more;
 
 extern crate base64;
 extern crate panic_hook;
+extern crate safemem;
 
 #[macro_use]
 pub mod util;

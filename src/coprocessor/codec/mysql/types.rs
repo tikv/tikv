@@ -25,6 +25,9 @@ pub const PARSE_TO_JSON_FLAG: u64 = 262144;
 /// Telling boolean literal from integers.
 pub const IS_BOOLEAN_FLAG: u64 = 524288;
 
+/// MySQL type maximum length
+pub const MAX_BLOB_WIDTH: i32 = 16777216;
+
 /// `has_unsigned_flag` checks if `UNSIGNED_FLAG` is set.
 #[inline]
 pub fn has_unsigned_flag<T: Into<u64>>(flag: T) -> bool {
