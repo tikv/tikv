@@ -2091,6 +2091,8 @@ impl Runner {
             .apply_res_capacity(self.applies.len() * self.applies[0].len())
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
+
+        let mut count = 0;
         for applys in self.applies.drain(..) {
             for apply in applys {
                 if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
@@ -2117,8 +2119,12 @@ impl Runner {
                 } else {
                     *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
                 }
+
+                count += 1;
             }
         }
+
+        APPLY_TASK_BATCH_SIZE.observe(count as f64);
 
         // Write to engine
         // raftsotre.sync-log = true means we need prevent data loss when power failure.
