@@ -56,7 +56,7 @@ use tikv::util as tikv_util;
 fn main() {
     let matches = App::new("TiKV Importer")
         .long_version(util::tikv_version_info().as_ref())
-        .author("PingCAP Inc. <info@pingcap.com>")
+        .author("TiKV Org.")
         .about("An import server for TiKV")
         .arg(
             Arg::with_name("addr")

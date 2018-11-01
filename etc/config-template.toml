@@ -83,6 +83,15 @@
 # should be set based on your disk performance
 # snap-max-write-bytes-per-sec = "100MB"
 
+# enable load statistics or not.
+# enable-load-statistics = true
+
+# helper threadpool size
+# helper-threadpool-size = 2
+
+# heavy-load-threshold = 100
+# heavy-load-wait-duration = 2ms
+
 # set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
 # labels = {}
 

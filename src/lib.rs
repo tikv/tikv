@@ -76,7 +76,6 @@ extern crate raft;
 extern crate rand;
 extern crate regex;
 extern crate rocksdb;
-extern crate rustc_serialize;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
@@ -105,6 +104,7 @@ extern crate tempdir;
 extern crate test;
 extern crate time;
 extern crate tipb;
+extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_timer;
 #[cfg(test)]

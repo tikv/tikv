@@ -62,11 +62,11 @@ indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
 futures-cpupool = "0.1"
 tokio-core = "0.1"
+tokio = "0.1"
 tokio-timer = "0.2"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
-rustc-serialize = "0.3"
 zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
@@ -84,16 +84,17 @@ panic_hook = { path = "components/panic_hook" }
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
+"grpcio:0.4.0" = { git = "https://github.com/hicqu/grpc-rs", branch = "client-clone" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
-git = "https://github.com/busyjay/rust-rocksdb.git"
-branch = "hot-fix"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "super-batch-streaming"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

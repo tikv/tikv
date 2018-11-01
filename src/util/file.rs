@@ -93,7 +93,7 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use rand::{thread_rng, Rng};
     use std::fs::OpenOptions;
     use std::io::Write;
