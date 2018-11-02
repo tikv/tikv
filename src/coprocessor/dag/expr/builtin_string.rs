@@ -340,6 +340,125 @@ impl ScalarFunc {
         };
         Ok(Some(Cow::Owned(r.into_bytes())))
     }
+
+    #[inline]
+    pub fn substring_2_args<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        if pos == 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+
+        let start = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            find_start(pos as u64 as usize, s.char_indices())
+        } else if pos > 0 {
+            find_start(pos as usize, s.char_indices())
+        } else {
+            let pos = 0_i64
+                .checked_sub(pos)
+                .map(|i| i as usize)
+                .unwrap_or_else(|| i64::max_value() as usize + 1);
+            find_start(pos, s.char_indices().rev())
+        };
+
+        if let Some(start) = start {
+            Ok(Some(Cow::Owned(s[start..].as_bytes().to_vec())))
+        } else {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+    }
+
+    #[inline]
+    pub fn substring_3_args<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        let len = try_opt!(self.children[2].eval_int(ctx, row));
+        let mut positive_search = true;
+
+        let pos = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+            pos as u64 as usize
+        } else if pos > 0 {
+            pos as usize
+        } else {
+            positive_search = false;
+            0_i64
+                .checked_sub(pos)
+                .map(|i| i as usize)
+                .unwrap_or_else(|| i64::max_value() as usize + 1)
+        };
+
+        let len = if mysql::has_unsigned_flag(self.children[2].get_tp().get_flag()) {
+            len as u64 as usize
+        } else if len > 0 {
+            len as usize
+        } else {
+            0
+        };
+
+        if pos == 0 || len == 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        let mut start = None;
+        let mut end = s.len();
+        let mut cnt = 1;
+        if positive_search {
+            for (i, _) in s.char_indices() {
+                if cnt > len && (cnt - len) >= pos {
+                    end = i;
+                    break;
+                }
+                if cnt == pos {
+                    start = Some(i);
+                }
+                cnt += 1;
+            }
+        } else {
+            let mut positions = VecDeque::with_capacity(len);
+            positions.push_back(end);
+            for (i, _) in s.char_indices().rev() {
+                if cnt == pos {
+                    start = Some(i);
+                    break;
+                }
+                if positions.len() == len {
+                    positions.pop_front();
+                }
+                positions.push_back(i);
+                cnt += 1;
+            }
+            end = positions[0];
+        }
+        if let Some(start) = start {
+            return Ok(Some(Cow::Owned(s[start..end].as_bytes().to_vec())));
+        } else {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+    }
+}
+
+#[inline]
+fn find_start<I>(pos: usize, ci: I) -> Option<usize>
+where
+    I: Iterator<Item = (usize, char)>,
+{
+    let mut start = None;
+    let mut cnt = 1;
+    for (i, _) in ci {
+        if cnt == pos {
+            start = Some(i);
+            break;
+        }
+        cnt += 1;
+    }
+    start
 }
 
 #[inline]
@@ -1442,6 +1561,85 @@ mod tests {
         for (s, delim, count, exp) in invalid_tests {
             let got = eval_func(ScalarFuncSig::SubstringIndex, &[s, delim, count]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_2_args() {
+        let tests = vec![
+            ("中文a测试bb", 1, "中文a测试bb"),
+            ("中文a测试bb", 2, "文a测试bb"),
+            ("中文a测a试", -1, "试"),
+            ("中文a测a试", -2, "a试"),
+            ("Quadratically", 5, "ratically"),
+            ("Sakila", 1, "Sakila"),
+            ("Sakila", -3, "ila"),
+            ("Sakila", 0, ""),
+            ("Sakila", 100, ""),
+            ("Sakila", -100, ""),
+            ("Sakila", i64::max_value(), ""),
+            ("Sakila", i64::min_value(), ""),
+            ("", 1, ""),
+            ("", -1, ""),
+        ];
+        for (s, pos, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pos = Datum::I64(pos);
+            let got = eval_func(ScalarFuncSig::Substring2Args, &[s, pos]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
+        }
+
+        let s = Datum::Bytes(b"Sakila".to_vec());
+        let pos = Datum::U64(u64::max_value());
+        let got = eval_func(ScalarFuncSig::Substring2Args, &[s, pos]).unwrap();
+        assert_eq!(got, Datum::Bytes(b"".to_vec()));
+    }
+
+    #[test]
+    fn test_substring_3_args() {
+        let tests = vec![
+            ("Quadratically", 5, 6, "ratica"),
+            ("Sakila", -5, 3, "aki"),
+            ("Sakila", 2, 0, ""),
+            ("Sakila", 2, -1, ""),
+            ("Sakila", 2, 100, "akila"),
+            ("中文a测试bb", -3, 1, "试"),
+            ("中文a测试bb", -3, 2, "试b"),
+            ("中文a测a试", 2, 1, "文"),
+            ("中文a测a试", 2, 3, "文a测"),
+            ("中文a测a试", -1, 1, "试"),
+            ("中文a测a试", -1, 5, "试"),
+            ("中文a测a试", -6, 20, "中文a测a试"),
+            ("中文a测a试", -7, 5, ""),
+            ("", 1, 1, ""),
+            ("", -1, 1, ""),
+        ];
+        for (s, pos, len, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pos = Datum::I64(pos);
+            let len = Datum::I64(len);
+            let got = eval_func(ScalarFuncSig::Substring3Args, &[s, pos, len]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
+        }
+
+        let tests = vec![
+            (
+                "中文a测a试",
+                Datum::U64(u64::max_value()),
+                Datum::I64(5),
+                "",
+            ),
+            (
+                "中文a测a试",
+                Datum::I64(2),
+                Datum::U64(u64::max_value()),
+                "文a测a试",
+            ),
+        ];
+        for (s, pos, len, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Substring3Args, &[s, pos, len]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
     }
 }
