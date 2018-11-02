@@ -1243,10 +1243,11 @@ impl<E: Engine> Storage<E> {
         Err(Error::InvalidCf(cf.to_owned()))
     }
 
+    /// Check if key range is valid
+    ///
+    /// - if reverse, endKey is less than startKey. endKey is lowerBound.
+    /// - if not reverse, endKey is greater than startKey. endKey is upperBound.
     fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
-        // note:
-        //   if reverse, endKey is less than startKey. endKey is lowerBound.
-        //   if not reverse, endKey is greater than startKey. endKey is upperBound
         let ranges_len = ranges.len();
         for i in 0..ranges_len {
             let start_key = ranges[i].get_start_key();
