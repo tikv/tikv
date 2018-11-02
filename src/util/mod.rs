@@ -51,16 +51,16 @@ pub mod worker;
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
 
-static mut SET_PANIC_MARK: bool = false;
+static mut PANIC_MARK: bool = false;
 
 pub fn set_panic_mark() {
     unsafe {
-        SET_PANIC_MARK = true;
+        PANIC_MARK = true;
     }
 }
 
 pub fn panic_mark_is_on() -> bool {
-    unsafe { SET_PANIC_MARK }
+    unsafe { PANIC_MARK }
 }
 
 pub const PANIC_MARK_FILE: &str = "panic_mark_file";

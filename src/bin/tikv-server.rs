@@ -114,10 +114,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
     }
 
-    if tikv_util::panic_mark_file_exists(&db_path) {
+    if tikv_util::panic_mark_file_exists(&cfg.storage.data_dir) {
         fatal!(
             "panic_mark_file {:?} exists, there must be something wrong with the db.",
-            tikv_util::panic_mark_file_path(&db_path)
+            tikv_util::panic_mark_file_path(&cfg.storage.data_dir)
         );
     }
 
