@@ -509,7 +509,7 @@ pub fn set_exit_hook(
         // To collect remaining logs, drop the guard before exit.
         drop(log_guard.lock().unwrap().take());
 
-        // If SET_PANIC_MARK is true, create panic mark file.
+        // If PANIC_MARK is true, create panic mark file.
         if panic_mark_is_on() {
             create_panic_mark_file(data_dir.clone());
         }
