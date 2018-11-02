@@ -11,49 +11,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message as PbMsg, RepeatedField};
-use tipb::schema::ColumnInfo;
+use protobuf::{Message, RepeatedField};
 use tipb::select::{Chunk, DAGRequest, EncodeType, SelectResponse, StreamResponse};
 
+use coprocessor::dag::expr::EvalConfig;
+use coprocessor::*;
 use storage::{Snapshot, SnapshotStore};
 
-use coprocessor::codec::datum::{Datum, DatumEncoder};
-use coprocessor::codec::mysql;
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::util;
-use coprocessor::*;
+use super::executor::{build_exec, Executor, ExecutorMetrics};
 
-use super::executor::{build_exec, Executor, ExecutorMetrics, Row};
-
-pub struct DAGContext<S: Snapshot + 'static> {
-    _phantom: PhantomData<S>,
-
-    columns: Arc<Vec<ColumnInfo>>,
-    has_aggr: bool,
-    req_ctx: ReqContext,
+pub struct DAGContext {
+    deadline: Deadline,
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
 
-impl<S: Snapshot + 'static> DAGContext<S> {
-    pub fn new(
+impl DAGContext {
+    pub fn new<S: Snapshot + 'static>(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         snap: S,
-        req_ctx: ReqContext,
+        req_ctx: &ReqContext,
         batch_row_limit: usize,
     ) -> Result<Self> {
-        let mut eval_cfg = box_try!(EvalConfig::new(req.get_time_zone_offset(), req.get_flags(),));
+        let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
+        // We respect time zone name first, then offset.
+        if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
+            box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
+        } else if req.has_time_zone_offset() {
+            box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
+        } else {
+            // This should not be reachable. However we will not panic here in case
+            // of compatibility issues.
+        }
         if req.has_max_warning_count() {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }
         if req.has_sql_mode() {
-            eval_cfg.set_sql_mode(req.get_sql_mode())
+            eval_cfg.set_sql_mode(req.get_sql_mode());
         }
         if req.has_is_strict_sql_mode() {
             eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
@@ -73,11 +72,8 @@ impl<S: Snapshot + 'static> DAGContext<S> {
             req.get_collect_range_counts(),
         )?;
         Ok(Self {
-            _phantom: Default::default(),
-            columns: dag_executor.columns,
-            has_aggr: dag_executor.has_aggr,
-            req_ctx,
-            exec: dag_executor.exec,
+            deadline: req_ctx.deadline,
+            exec: dag_executor,
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
         })
@@ -102,14 +98,14 @@ impl<S: Snapshot + 'static> DAGContext<S> {
     }
 }
 
-impl<S: Snapshot> RequestHandler for DAGContext<S> {
+impl RequestHandler for DAGContext {
     fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
             match self.exec.next() {
                 Ok(Some(row)) => {
-                    self.req_ctx.check_if_outdated()?;
+                    self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
                         let chunk = Chunk::new();
                         chunks.push(chunk);
@@ -117,12 +113,9 @@ impl<S: Snapshot> RequestHandler for DAGContext<S> {
                     }
                     let chunk = chunks.last_mut().unwrap();
                     record_cnt += 1;
-                    if self.has_aggr {
-                        chunk.mut_rows_data().extend_from_slice(&row.data.value);
-                    } else {
-                        let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
-                        chunk.mut_rows_data().extend_from_slice(&value);
-                    }
+                    // for default encode type
+                    let value = row.get_binary(&self.output_offsets)?;
+                    chunk.mut_rows_data().extend_from_slice(&value);
                 }
                 Ok(None) => {
                     let mut resp = Response::new();
@@ -158,13 +151,10 @@ impl<S: Snapshot> RequestHandler for DAGContext<S> {
         while record_cnt < self.batch_row_limit {
             match self.exec.next() {
                 Ok(Some(row)) => {
+                    self.deadline.check_if_exceeded()?;
                     record_cnt += 1;
-                    if self.has_aggr {
-                        chunk.mut_rows_data().extend_from_slice(&row.data.value);
-                    } else {
-                        let value = inflate_cols(&row, &self.columns, &self.output_offsets)?;
-                        chunk.mut_rows_data().extend_from_slice(&value);
-                    }
+                    let value = row.get_binary(&self.output_offsets)?;
+                    chunk.mut_rows_data().extend_from_slice(&value);
                 }
                 Ok(None) => {
                     finished = true;
@@ -193,32 +183,4 @@ impl<S: Snapshot> RequestHandler for DAGContext<S> {
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.exec.collect_metrics_into(metrics);
     }
-}
-
-#[inline]
-fn inflate_cols(row: &Row, cols: &[ColumnInfo], output_offsets: &[u32]) -> Result<Vec<u8>> {
-    let data = &row.data;
-    // TODO capacity is not enough
-    let mut values = Vec::with_capacity(data.value.len());
-    for offset in output_offsets {
-        let col = &cols[*offset as usize];
-        let col_id = col.get_column_id();
-        match data.get(col_id) {
-            Some(value) => values.extend_from_slice(value),
-            None if col.get_pk_handle() => {
-                let pk = util::get_pk(col, row.handle);
-                box_try!(values.encode(&[pk], false));
-            }
-            None if col.has_default_val() => {
-                values.extend_from_slice(col.get_default_val());
-            }
-            None if mysql::has_not_null_flag(col.get_flag() as u64) => {
-                return Err(box_err!("column {} of {} is missing", col_id, row.handle));
-            }
-            None => {
-                box_try!(values.encode(&[Datum::Null], false));
-            }
-        }
-    }
-    Ok(values)
 }

@@ -1,14 +1,16 @@
 # pingcap/rust: 2017-06-12
-FROM pingcap/rust
+FROM pingcap/rust as builder
 
 MAINTAINER Liu Yin <liuy@pingcap.com>
 
-ADD . /tikv
+COPY . /tikv
+WORKDIR /tikv
 
-RUN cd /tikv && \
-    make && \
-    cp -f bin/tikv-server /tikv-server && \
-    rm -rf /tikv
+RUN make
+
+
+FROM pingcap/alpine-glibc
+COPY --from=builder /tikv/bin/tikv-server /tikv-server
 
 EXPOSE 20160
 

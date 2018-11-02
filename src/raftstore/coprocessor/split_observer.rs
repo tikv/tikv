@@ -14,8 +14,12 @@
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use coprocessor::codec::table;
 use util::codec::bytes::{self, encode_bytes};
+use util::escape;
 
+use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
+use protobuf::RepeatedField;
+use raftstore::store::util;
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't separate
@@ -26,14 +30,15 @@ pub struct SplitObserver;
 type Result<T> = StdResult<T, String>;
 
 impl SplitObserver {
-    fn on_split(&self, ctx: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
-        if split.get_split_key().is_empty() {
-            return Err("split key is expected!".to_owned());
+    fn adjust_key(&self, region: &Region, key: Vec<u8>) -> Result<Vec<u8>> {
+        if key.is_empty() {
+            return Err("key is empty".to_owned());
         }
 
-        let mut key = match bytes::decode_bytes(&mut split.get_split_key(), false) {
+        let mut key = match bytes::decode_bytes(&mut key.as_slice(), false) {
             Ok(x) => x,
-            Err(_) => return Ok(()),
+            // It's a raw key, skip it.
+            Err(_) => return Ok(key),
         };
 
         // format of a key is TABLE_PREFIX + table_id + RECORD_PREFIX_SEP + handle + column_id
@@ -48,14 +53,58 @@ impl SplitObserver {
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
         }
 
-        let region_start_key = ctx.region().get_start_key();
-
         let key = encode_bytes(&key);
-        if *key <= *region_start_key {
-            return Err("no need to split".to_owned());
+        match util::check_key_in_region_exclusive(&key, region) {
+            Ok(()) => Ok(key),
+            Err(_) => Err(format!(
+                "key \"{}\" should be in (\"{}\", \"{}\")",
+                escape(&key),
+                escape(region.get_start_key()),
+                escape(region.get_end_key()),
+            )),
         }
+    }
 
-        split.set_split_key(key);
+    fn on_split(&self, ctx: &mut ObserverContext, splits: &mut Vec<SplitRequest>) -> Result<()> {
+        let (mut i, mut j) = (0, 0);
+        let mut last_valid_key: Option<Vec<u8>> = None;
+        let region_id = ctx.region().get_id();
+        while i < splits.len() {
+            let k = i;
+            i += 1;
+            {
+                let split = &mut splits[k];
+                let key = split.take_split_key();
+                match self.adjust_key(ctx.region(), key) {
+                    Ok(key) => {
+                        if last_valid_key.as_ref().map_or(false, |k| *k >= key) {
+                            warn!(
+                                "[region {}] key {} is not larger than previous {} at {}, skip.",
+                                region_id,
+                                escape(&key),
+                                escape(last_valid_key.as_ref().unwrap()),
+                                k
+                            );
+                            continue;
+                        }
+                        last_valid_key = Some(key.clone());
+                        split.set_split_key(key)
+                    }
+                    Err(e) => {
+                        warn!("[region {}] invalid key at {}, skip: {:?}", region_id, k, e);
+                        continue;
+                    }
+                }
+            }
+            if k != j {
+                splits.swap(k, j);
+            }
+            j += 1;
+        }
+        if j == 0 {
+            return Err("no valid key found for split.".to_owned());
+        }
+        splits.truncate(j);
         Ok(())
     }
 }
@@ -68,26 +117,56 @@ impl AdminObserver for SplitObserver {
         ctx: &mut ObserverContext,
         req: &mut AdminRequest,
     ) -> CopResult<()> {
-        if req.get_cmd_type() != AdminCmdType::Split {
-            return Ok(());
-        }
-        if !req.has_split() {
-            box_try!(Err(
-                "cmd_type is Split but it doesn't have split request, message maybe \
-                 corrupted!"
-                    .to_owned()
-            ));
-        }
-        if let Err(e) = self.on_split(ctx, req.mut_split()) {
-            error!("failed to handle split req: {:?}", e);
-            return Err(box_err!(e));
+        match req.get_cmd_type() {
+            AdminCmdType::Split => {
+                if !req.has_split() {
+                    box_try!(Err(
+                        "cmd_type is Split but it doesn't have split request, message maybe \
+                         corrupted!"
+                            .to_owned()
+                    ));
+                }
+                let mut request = vec![req.take_split()];
+                if let Err(e) = self.on_split(ctx, &mut request) {
+                    error!(
+                        "[region {}] failed to handle split req: {:?}",
+                        ctx.region().get_id(),
+                        e
+                    );
+                    return Err(box_err!(e));
+                }
+                // self.on_split() makes sure request is not empty, or it will return error.
+                // so directly unwrap here.
+                req.set_split(request.pop().unwrap());
+            }
+            AdminCmdType::BatchSplit => {
+                if !req.has_splits() {
+                    return Err(box_err!(
+                        "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
+                         corrupted!"
+                            .to_owned()
+                    ));
+                }
+                let mut requests = req.mut_splits().take_requests().into_vec();
+                if let Err(e) = self.on_split(ctx, &mut requests) {
+                    error!(
+                        "[region {}] failed to handle split req: {:?}",
+                        ctx.region().get_id(),
+                        e
+                    );
+                    return Err(box_err!(e));
+                }
+                req.mut_splits()
+                    .set_requests(RepeatedField::from_vec(requests));
+            }
+            _ => return Ok(()),
         }
         Ok(())
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
     use coprocessor::codec::{datum, table, Datum};
@@ -106,11 +185,19 @@ mod test {
         req
     }
 
-    fn new_row_key(table_id: i64, row_id: i64, column_id: u64, version_id: u64) -> Vec<u8> {
-        let mut key = table::encode_row_key(table_id, row_id);
-        if column_id > 0 {
-            key.write_u64::<BigEndian>(column_id).unwrap();
+    fn new_batch_split_request(keys: Vec<Vec<u8>>) -> AdminRequest {
+        let mut req = AdminRequest::new();
+        req.set_cmd_type(AdminCmdType::BatchSplit);
+        for key in keys {
+            let mut split_req = SplitRequest::new();
+            split_req.set_split_key(key);
+            req.mut_splits().mut_requests().push(split_req);
         }
+        req
+    }
+
+    fn new_row_key(table_id: i64, row_id: i64, version_id: u64) -> Vec<u8> {
+        let mut key = table::encode_row_key(table_id, row_id);
         key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();
         key
@@ -126,8 +213,8 @@ mod test {
 
     #[test]
     fn test_forget_encode() {
-        let region_start_key = new_row_key(256, 1, 0, 0);
-        let key = new_row_key(256, 2, 1, 0);
+        let region_start_key = new_row_key(256, 1, 0);
+        let key = new_row_key(256, 2, 0);
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(region_start_key);
@@ -135,16 +222,22 @@ mod test {
         let mut ctx = ObserverContext::new(&r);
         let observer = SplitObserver;
 
-        let mut req = new_split_request(&key);
+        let mut req = new_batch_split_request(vec![key]);
         observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
-        let expect_key = new_row_key(256, 2, 0, 0);
+        let expect_key = new_row_key(256, 2, 0);
         let len = expect_key.len();
-        assert_eq!(req.get_split().get_split_key(), &expect_key[..len - 8]);
+        assert_eq!(req.get_splits().get_requests().len(), 1);
+        assert_eq!(
+            req.get_splits().get_requests()[0].get_split_key(),
+            &expect_key[..len - 8]
+        );
     }
 
     #[test]
     fn test_split() {
-        let region = Region::new();
+        let mut region = Region::new();
+        let start_key = new_row_key(1, 1, 1);
+        region.set_start_key(start_key.clone());
         let mut ctx = ObserverContext::new(&region);
         let mut req = AdminRequest::new();
 
@@ -156,55 +249,77 @@ mod test {
         assert!(!req.has_split(), "only split req should be handle.");
 
         req = new_split_request(b"test");
+        // For compatible reason, split should supported too.
         assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), b"test");
 
-        let mut key = encode_bytes(b"db:1");
-        key.write_u64::<BigEndian>(0).unwrap();
-        let mut expect_key = encode_bytes(b"db:1");
-        req = new_split_request(&key);
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        // Empty key should be skipped.
+        let mut split_keys = vec![vec![]];
+        // Start key should be skipped.
+        split_keys.push(start_key);
 
-        key = new_row_key(1, 2, 0, 0);
-        req = new_split_request(&key);
-        expect_key = key[..key.len() - 8].to_vec();
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        req = new_batch_split_request(split_keys.clone());
+        // Although invalid keys should be skipped, but if all keys are
+        // invalid, errors should be reported.
+        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_err());
 
-        key = new_row_key(1, 2, 1, 0);
-        req = new_split_request(&key);
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        let mut key = new_row_key(1, 2, 0);
+        let mut expected_key = key[..key.len() - 8].to_vec();
+        split_keys.push(key);
+        let mut expected_keys = vec![expected_key.clone()];
 
-        key = new_row_key(1, 2, 1, 1);
-        req = new_split_request(&key);
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        // Extra version of same key will be ignored.
+        key = new_row_key(1, 2, 1);
+        split_keys.push(key);
 
-        key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 0);
-        req = new_split_request(&key);
-        expect_key = key[..key.len() - 8].to_vec();
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        key = new_index_key(2, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 0);
+        expected_key = key[..key.len() - 8].to_vec();
+        split_keys.push(key);
+        expected_keys.push(expected_key.clone());
 
-        key = new_index_key(1, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 5);
-        req = new_split_request(&key);
-        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        // Extra version of same key will be ignored.
+        key = new_index_key(2, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 5);
+        split_keys.push(key);
 
-        expect_key =
+        expected_key =
             encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f");
-        key = expect_key.clone();
+        key = expected_key.clone();
         key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
-        req = new_split_request(&key);
-        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        split_keys.push(key);
+        expected_keys.push(expected_key.clone());
 
         // Split at table prefix.
-        expect_key = encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea");
-        req = new_split_request(&expect_key);
+        key = encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xee");
+        split_keys.push(key.clone());
+        expected_keys.push(key);
+
+        // Raw key should be preserved.
+        split_keys.push(b"xyz".to_vec());
+        expected_keys.push(b"xyz".to_vec());
+
+        key = encode_bytes(b"xyz:1");
+        key.write_u64::<BigEndian>(0).unwrap();
+        split_keys.push(key);
+        expected_key = encode_bytes(b"xyz:1");
+        expected_keys.push(expected_key);
+
+        req = new_batch_split_request(split_keys);
+        req.mut_splits().set_right_derive(true);
         observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
-        assert_eq!(req.get_split().get_split_key(), &*expect_key);
+        assert!(req.get_splits().get_right_derive());
+        assert_eq!(req.get_splits().get_requests().len(), expected_keys.len());
+        for (i, (req, expected_key)) in req
+            .get_splits()
+            .get_requests()
+            .iter()
+            .zip(expected_keys)
+            .enumerate()
+        {
+            assert_eq!(
+                req.get_split_key(),
+                expected_key.as_slice(),
+                "case {}",
+                i + 1
+            );
+        }
     }
 }

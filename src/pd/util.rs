@@ -31,10 +31,11 @@ use kvproto::pdpb::{
     RegionHeartbeatResponse, ResponseHeader,
 };
 use kvproto::pdpb_grpc::PdClient;
-use tokio_timer::Timer;
+use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 use util::security::SecurityManager;
+use util::timer::GLOBAL_TIMER_HANDLE;
 use util::{Either, HandyRwLock};
 
 pub struct Inner {
@@ -92,7 +93,7 @@ impl Stream for HeartbeatReceiver {
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
-    timer: Timer,
+    timer: Handle,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -105,7 +106,7 @@ impl LeaderClient {
     ) -> LeaderClient {
         let (tx, rx) = client.region_heartbeat().unwrap();
         LeaderClient {
-            timer: Timer::default(),
+            timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
                 env,
                 hb_sender: Either::Left(Some(tx)),
@@ -248,7 +249,7 @@ where
             Err(_) => Box::new(
                 self.client
                     .timer
-                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
+                    .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
                     .then(|_| Err(self)),
             ),
         }
@@ -267,7 +268,7 @@ where
                     Ok(ctx)
                 }
                 Err(err) => {
-                    error!("request failed: {:?}", err);
+                    ctx.resp = Some(Err(err));
                     Err(ctx)
                 }
             })
@@ -278,7 +279,8 @@ where
         let ctx = match ctx {
             Ok(ctx) | Err(ctx) => ctx,
         };
-        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
+        let done = ctx.reconnect_count == 0
+            || (ctx.resp.is_some() && Self::should_not_retry(ctx.resp.as_ref().unwrap()));
         if done {
             Ok(Loop::Break(ctx))
         } else {
@@ -286,9 +288,22 @@ where
         }
     }
 
+    fn should_not_retry(resp: &Result<Resp>) -> bool {
+        match resp {
+            Ok(_) => true,
+            // Error::Incompatible is returned by response header from pd, no need to retry
+            Err(Error::Incompatible) => true,
+            Err(err) => {
+                error!("request failed: {:?}, retry", err);
+                false
+            }
+        }
+    }
+
     fn post_loop(ctx: Result<Self>) -> Result<Resp> {
         let ctx = ctx.expect("end loop with Ok(_)");
-        ctx.resp.unwrap_or_else(|| Err(box_err!("fail to request")))
+        ctx.resp
+            .unwrap_or_else(|| Err(box_err!("response is empty")))
     }
 
     /// Returns a Future, it is resolves once a future returned by the closure
@@ -388,7 +403,7 @@ fn connect(
     security_mgr: &SecurityManager,
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    info!("connect to PD endpoint: {:?}", addr);
+    info!("connecting to PD endpoint: {:?}", addr);
     let addr = addr
         .trim_left_matches("http://")
         .trim_left_matches("https://");
@@ -447,7 +462,7 @@ pub fn try_connect_leader(
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
             if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
-                info!("connect to PD leader {:?}", ep);
+                info!("connected to PD leader {:?}", ep);
                 return Ok((client, resp));
             }
         }
@@ -465,6 +480,7 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
     match err.get_field_type() {
         ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
         ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
+        ErrorType::INCOMPATIBLE_VERSION => Err(Error::Incompatible),
         _ => Err(box_err!(err.get_message())),
     }
 }

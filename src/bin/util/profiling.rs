@@ -66,7 +66,7 @@ mod imp {
     }
 
     #[cfg(test)]
-    mod test {
+    mod tests {
         use std::fs;
 
         use tempdir::TempDir;
@@ -92,6 +92,7 @@ mod imp {
 
 #[cfg(not(feature = "mem-profiling"))]
 mod imp {
+    #[allow(dead_code)]
     pub fn dump_prof(_: Option<&str>) {}
 }
 

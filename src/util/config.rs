@@ -47,7 +47,7 @@ quick_error! {
         }
         FileSystem(msg: String) {
             description(msg)
-            display("{}", msg)
+            display("config fs: {}", msg)
         }
     }
 }
@@ -239,10 +239,12 @@ const PB: u64 = (TB as u64) * (DATA_MAGNITUDE as u64);
 
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
+const TIME_MAGNITUDE_3: u64 = 24;
 const MS: u64 = UNIT;
 const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
+const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableSize(pub u64);
@@ -452,6 +454,10 @@ impl Serialize for ReadableDuration {
     {
         let mut dur = util::time::duration_to_ms(self.0);
         let mut buffer = String::new();
+        if dur >= DAY {
+            write!(buffer, "{}d", dur / DAY).unwrap();
+            dur %= DAY;
+        }
         if dur >= HOUR {
             write!(buffer, "{}h", dur / HOUR).unwrap();
             dur %= HOUR;
@@ -496,17 +502,18 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                 if !dur_str.is_ascii() {
                     return Err(E::invalid_value(Unexpected::Str(dur_str), &"ascii string"));
                 }
-                let err_msg = "valid duration, only h, m, s, ms are supported.";
+                let err_msg = "valid duration, only d, h, m, s, ms are supported.";
                 let mut left = dur_str.as_bytes();
-                let mut last_unit = HOUR + 1;
+                let mut last_unit = DAY + 1;
                 let mut dur = 0f64;
-                while let Some(idx) = left.iter().position(|c| b"hms".contains(c)) {
+                while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
                     let (first, second) = left.split_at(idx);
                     let unit = if second.starts_with(b"ms") {
                         left = &left[idx + 2..];
                         MS
                     } else {
                         let u = match second[0] {
+                            b'd' => DAY,
                             b'h' => HOUR,
                             b'm' => MINUTE,
                             b's' => SECOND,
@@ -518,7 +525,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                     if unit >= last_unit {
                         return Err(E::invalid_value(
                             Unexpected::Str(dur_str),
-                            &"h, m, s, ms should occur in giving order.",
+                            &"d, h, m, s, ms should occur in given order.",
                         ));
                     }
                     // do we need to check 12h360m?
@@ -715,6 +722,8 @@ mod check_data_dir {
             static ref GETMNTENT_LOCK: Mutex<()> = Mutex::new(());
         }
 
+        let op = "data-dir.fsinfo.get";
+
         unsafe {
             let _lock = GETMNTENT_LOCK.lock().unwrap();
 
@@ -740,8 +749,8 @@ mod check_data_dir {
             libc::endmntent(afile);
             if fs.mnt_dir.is_empty() {
                 return Err(ConfigError::FileSystem(format!(
-                    "path: {:?} not find in mountable",
-                    path
+                    "{}: path: {:?} not find in mountable",
+                    op, path
                 )));
             }
             Ok(fs)
@@ -749,6 +758,7 @@ mod check_data_dir {
     }
 
     fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
+        let op = "data-dir.rotation.get";
         // get device path
         let device = match fs::canonicalize(fsname) {
             Ok(path) => format!("{}", path.display()),
@@ -759,7 +769,10 @@ mod check_data_dir {
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
             let dir = fs::read_dir(&block_dir).map_err(|e| {
-                ConfigError::FileSystem(format!("read block dir {:?} failed: {:?}", block_dir, e))
+                ConfigError::FileSystem(format!(
+                    "{}: read block dir {:?} failed: {:?}",
+                    op, block_dir, e
+                ))
             })?;
             let mut find = false;
             for entry in dir {
@@ -777,8 +790,8 @@ mod check_data_dir {
             }
             if !find {
                 return Err(ConfigError::FileSystem(format!(
-                    "fs: {:?} no device find in block",
-                    fsname
+                    "{}: {:?} no device find in block",
+                    op, fsname
                 )));
             }
         }
@@ -786,8 +799,8 @@ mod check_data_dir {
         let rota_path = format!("{}/queue/rotational", device_dir);
         if !Path::new(&rota_path).exists() {
             return Err(ConfigError::FileSystem(format!(
-                "block {:?} has no rotational file",
-                device_dir
+                "{}: block {:?} has no rotational file",
+                op, device_dir
             )));
         }
 
@@ -795,22 +808,20 @@ mod check_data_dir {
         File::open(&rota_path)
             .and_then(|mut f| f.read_to_string(&mut buffer))
             .map_err(|e| {
-                ConfigError::FileSystem(format!(
-                    "get_rotational_info from {:?} failed: {:?}",
-                    rota_path, e
-                ))
+                ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
             })?;
         Ok(buffer.trim_matches('\n').to_owned())
     }
 
     // check device && fs
     pub fn check_data_dir(data_path: &str, mnt_file: &str) -> Result<(), ConfigError> {
+        let op = "data-dir.check";
         let real_path = match canonicalize_path(data_path) {
             Ok(path) => path,
             Err(e) => {
                 return Err(ConfigError::FileSystem(format!(
-                    "path: {:?} canonicalize failed: {:?}",
-                    data_path, e
+                    "{}: path: {:?} canonicalize failed: {:?}",
+                    op, data_path, e
                 )))
             }
         };
@@ -826,7 +837,7 @@ mod check_data_dir {
     }
 
     #[cfg(test)]
-    mod test {
+    mod tests {
         use std::fs::File;
         use std::io::Write;
         use std::os::unix::fs::symlink;
@@ -963,7 +974,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::fs::File;
     use std::path::Path;
 
@@ -1085,10 +1096,14 @@ mod test {
             (0, 0, "0s"),
             (0, 1, "1ms"),
             (2, 0, "2s"),
+            (24 * 3600, 0, "1d"),
+            (2 * 24 * 3600, 10, "2d10ms"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
             (3600 + 2 * 60, 0, "1h2m"),
+            (5 * 24 * 3600 + 3600 + 2 * 60, 0, "5d1h2m"),
             (3600 + 2, 5, "1h2s5ms"),
+            (3 * 24 * 3600 + 7 * 3600 + 2, 5, "3d7h2s5ms"),
         ];
         for (secs, ms, exp) in legal_cases {
             let d = DurHolder {

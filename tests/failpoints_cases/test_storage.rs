@@ -11,13 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use fail;
-use kvproto::kvrpcpb::Context;
-use raftstore::server::new_server_cluster;
-use std::sync::mpsc::channel;
+use std::sync::{mpsc::channel, Arc};
 use std::thread;
 use std::time::Duration;
-use storage::util::new_raft_engine;
+
+use fail;
+use grpcio::*;
+use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
+use kvproto::tikvpb_grpc::TikvClient;
+
+use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
+use test_storage::new_raft_engine;
 use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
 use tikv::storage::config::Config;
@@ -31,7 +35,7 @@ fn test_storage_gcworker_busy() {
     let _guard = ::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let pd_worker = FutureWorker::new("test future worker");
+    let pd_worker = FutureWorker::new("test-future–worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
@@ -90,7 +94,7 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let config = Config::default();
-    let pd_worker = FutureWorker::new("test future worker");
+    let pd_worker = FutureWorker::new("test-future–worker");
     let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
         || storage::ReadPoolContext::new(pd_worker.scheduler())
     });
@@ -108,7 +112,7 @@ fn test_scheduler_leader_change_twice() {
     storage0
         .async_prewrite(
             ctx0,
-            vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+            vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
             b"k".to_vec(),
             10,
             Options::default(),
@@ -133,4 +137,63 @@ fn test_scheduler_leader_change_twice() {
             panic!("expect stale command, but got {:?}", res);
         }
     }
+}
+
+#[test]
+fn test_server_catching_api_error() {
+    let _guard = ::setup();
+    let raftkv_fp = "raftkv_early_error_report";
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    fail::cfg(raftkv_fp, "return()").unwrap();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader.clone());
+
+    let mut prewrite_req = PrewriteRequest::new();
+    prewrite_req.set_context(ctx.clone());
+    let mut mutation = kvrpcpb::Mutation::new();
+    mutation.op = Op::Put;
+    mutation.key = b"k3".to_vec();
+    mutation.value = b"v3".to_vec();
+    prewrite_req.set_mutations(vec![mutation].into_iter().collect());
+    prewrite_req.primary_lock = b"k3".to_vec();
+    prewrite_req.start_version = 1;
+    prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(prewrite_resp.has_region_error(), "{:?}", prewrite_resp);
+    assert!(
+        prewrite_resp.get_region_error().has_region_not_found(),
+        "{:?}",
+        prewrite_resp
+    );
+    must_get_none(&cluster.get_engine(1), b"k3");
+
+    let mut put_req = RawPutRequest::new();
+    put_req.set_context(ctx.clone());
+    put_req.key = b"k3".to_vec();
+    put_req.value = b"v3".to_vec();
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(put_resp.has_region_error(), "{:?}", put_resp);
+    assert!(
+        put_resp.get_region_error().has_region_not_found(),
+        "{:?}",
+        put_resp
+    );
+    must_get_none(&cluster.get_engine(1), b"k3");
+
+    fail::remove(raftkv_fp);
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(!put_resp.has_region_error(), "{:?}", put_resp);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }

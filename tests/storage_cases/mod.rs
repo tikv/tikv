@@ -13,6 +13,5 @@
 
 mod test_raft_storage;
 mod test_raftkv;
+mod test_seek_region;
 mod test_storage;
-
-use storage::*;

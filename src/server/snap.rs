@@ -289,7 +289,13 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 })
         },
     );
-    f.and_then(move |_| sink.success(Done::new()).map_err(Error::from))
+    f.then(move |res| match res {
+        Ok(()) => sink.success(Done::new()),
+        Err(e) => {
+            let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
+            sink.fail(status)
+        }
+    }).map_err(Error::from)
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
@@ -315,7 +321,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
             env,
             snap_mgr,
             pool: CpuPoolBuilder::new()
-                .name_prefix(thd_name!("snap sender"))
+                .name_prefix(thd_name!("snap-sender"))
                 .pool_size(DEFAULT_POOL_SIZE)
                 .create(),
             raft_router: r,

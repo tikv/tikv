@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use rocksdb::{self, CompactionJobInfo, FlushJobInfo, IngestionInfo};
 use util::rocksdb::engine_metrics::*;
 
-use super::properties::SizeProperties;
+use super::properties::RangeProperties;
 
 pub struct EventListener {
     db_name: String,
@@ -64,8 +64,8 @@ pub struct CompactedEvent {
     pub total_output_bytes: u64,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
-    pub input_props: Vec<SizeProperties>,
-    pub output_props: Vec<SizeProperties>,
+    pub input_props: Vec<RangeProperties>,
+    pub output_props: Vec<RangeProperties>,
 }
 
 impl CompactedEvent {
@@ -73,8 +73,8 @@ impl CompactedEvent {
         info: &CompactionJobInfo,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        input_props: Vec<SizeProperties>,
-        output_props: Vec<SizeProperties>,
+        input_props: Vec<RangeProperties>,
+        output_props: Vec<RangeProperties>,
     ) -> CompactedEvent {
         CompactedEvent {
             cf: info.cf_name().to_owned(),
@@ -129,7 +129,7 @@ impl rocksdb::EventListener for CompactionListener {
         let mut output_props = Vec::with_capacity(info.output_file_count());
         let iter = info.table_properties().into_iter();
         for (file, properties) in iter {
-            if let Ok(prop) = SizeProperties::decode(properties.user_collected_properties()) {
+            if let Ok(prop) = RangeProperties::decode(properties.user_collected_properties()) {
                 if input_files.contains(file) {
                     input_props.push(prop);
                 } else if output_files.contains(file) {

@@ -43,6 +43,7 @@ const VAR_UINT_FLAG: u8 = 9;
 const JSON_FLAG: u8 = 10;
 const MAX_FLAG: u8 = 250;
 
+/// `Datum` stores data with different types.
 #[derive(PartialEq, Clone)]
 pub enum Datum {
     Null,
@@ -82,12 +83,14 @@ impl Debug for Datum {
     }
 }
 
+/// `cmp_f64` compares the f64 values and returns the Ordering.
 #[inline]
 pub fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
     l.partial_cmp(&r)
         .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
 }
 
+/// `checked_add_i64`  checks and adds `r` to the `l`. Return None if the sum is negative.
 #[inline]
 fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
     if r >= 0 {
@@ -98,6 +101,7 @@ fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
 }
 
 impl Datum {
+    /// `cmp` compares the datum and returns an Ordering.
     pub fn cmp(&self, ctx: &mut EvalContext, datum: &Datum) -> Result<Ordering> {
         if let Datum::Json(_) = *self {
             if let Datum::Json(_) = *datum {
@@ -290,6 +294,7 @@ impl Datum {
         Ok(b)
     }
 
+    /// `to_string` returns a string representation of the datum.
     pub fn to_string(&self) -> Result<String> {
         let s = match *self {
             Datum::I64(i) => format!("{}", i),
@@ -373,12 +378,14 @@ impl Datum {
     }
 
     /// Keep compatible with TiDB's `GetFloat64` function.
+    #[inline]
     pub fn f64(&self) -> f64 {
         let i = self.i64();
         f64::from_bits(i as u64)
     }
 
     /// Keep compatible with TiDB's `GetInt64` function.
+    #[inline]
     pub fn i64(&self) -> i64 {
         match *self {
             Datum::I64(i) => i,
@@ -396,6 +403,7 @@ impl Datum {
     }
 
     /// Keep compatible with TiDB's `GetUint64` function.
+    #[inline]
     pub fn u64(&self) -> u64 {
         self.i64() as u64
     }
@@ -482,6 +490,7 @@ impl Datum {
         }
     }
 
+    /// `to_json_path_expr` parses Datum::Bytes(b) to a JSON PathExpression.
     pub fn to_json_path_expr(&self) -> Result<PathExpression> {
         let v = match *self {
             Datum::Bytes(ref bs) => str::from_utf8(bs)?,
@@ -536,6 +545,7 @@ impl Datum {
         Ok(res)
     }
 
+    /// `checked_div` computes the result of `self / d`.
     pub fn checked_div(self, ctx: &mut EvalContext, d: Datum) -> Result<Datum> {
         match (self, d) {
             (Datum::F64(f), d) => {
@@ -834,6 +844,7 @@ pub fn decode(data: &mut BytesSlice) -> Result<Vec<Datum>> {
     Ok(res)
 }
 
+/// `DatumEncoder` encodes the datum.
 pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
     /// Encode values to buf slice.
     fn encode(&mut self, values: &[Datum], comparable: bool) -> Result<()> {
@@ -935,6 +946,8 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
         .sum()
 }
 
+/// `encode` encodes a datum slice into a buffer.
+/// Uses comparable to encode or not to encode a memory comparable buffer.
 pub fn encode(values: &[Datum], comparable: bool) -> Result<Vec<u8>> {
     let mut buf = vec![];
     encode_to(&mut buf, values, comparable)?;
@@ -942,14 +955,18 @@ pub fn encode(values: &[Datum], comparable: bool) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// `encode_key` encodes a datum slice into a memory comparable buffer as the key.
 pub fn encode_key(values: &[Datum]) -> Result<Vec<u8>> {
     encode(values, true)
 }
 
+/// `encode_value` encodes a datum slice into a buffer.
 pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
     encode(values, false)
 }
 
+/// `encode_to` encodes a datum slice and appends the buffer to a vector.
+/// Uses comparable to encode a memory comparable buffer or not.
 pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Result<()> {
     buf.reserve(approximate_size(values, comparable));
     buf.encode(values, comparable)?;
@@ -958,7 +975,6 @@ pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Resul
 
 /// Split bytes array into two part: first one is a whole datum's encoded data,
 /// and the second part is the remaining data.
-#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
 pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     if buf.is_empty() {
         return Err(box_err!("{} is too short", escape(buf)));
@@ -999,10 +1015,10 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, FLAG_IGNORE_TRUNCATE};
+    use coprocessor::dag::expr::{EvalConfig, EvalContext};
     use util::as_slice;
 
     use std::cmp::Ordering;
@@ -1691,8 +1707,7 @@ mod test {
             (Datum::Dec(0u64.into()), Some(false)),
         ];
 
-        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
 
         for (d, b) in tests {
             if d.clone().into_bool(&mut ctx).unwrap() != b {
@@ -1871,8 +1886,7 @@ mod test {
             ),
         ];
 
-        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
             let got = d.into_f64(&mut ctx).unwrap();
             assert_eq!(Datum::F64(got), Datum::F64(exp));
@@ -1902,8 +1916,7 @@ mod test {
             (Datum::Json(Json::from_str(r#"false"#).unwrap()), 0),
         ];
 
-        let cfg = EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap();
-        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
             let got = d.into_i64(&mut ctx).unwrap();
             assert_eq!(got, exp);

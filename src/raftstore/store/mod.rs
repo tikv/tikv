@@ -15,9 +15,9 @@ pub mod bootstrap;
 pub mod cmd_resp;
 pub mod config;
 pub mod engine;
+pub mod fsm;
 pub mod keys;
 pub mod msg;
-pub mod store;
 pub mod transport;
 pub mod util;
 
@@ -35,11 +35,17 @@ pub use self::bootstrap::{
 };
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
-pub use self::msg::{
-    BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SignificantMsg, Tick,
-    WriteCallback, WriteResponse,
+pub use self::fsm::{
+    create_event_loop, new_compaction_listener, DestroyPeerJob, Store, StoreChannel, StoreInfo,
+    StoreStat,
 };
-pub use self::peer::{Peer, ProposalContext};
+pub use self::msg::{
+    Callback, Msg, ReadCallback, ReadResponse, SeekRegionCallback, SeekRegionFilter,
+    SeekRegionResult, SignificantMsg, Tick, WriteCallback, WriteResponse,
+};
+pub use self::peer::{
+    Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
+};
 pub use self::peer_storage::{
     clear_meta, do_snapshot, init_apply_state, init_raft_state, write_initial_apply_state,
     write_initial_raft_state, write_peer_state, CacheQueryStats, PeerStorage, SnapState,
@@ -50,9 +56,9 @@ pub use self::snap::{
     check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
-pub use self::store::{create_event_loop, new_compaction_listener, Store, StoreChannel, StoreStat};
 pub use self::transport::Transport;
 pub use self::util::Engines;
+pub use self::worker::{KeyEntry, ReadTask};
 
 // Only used in tests
 #[cfg(test)]

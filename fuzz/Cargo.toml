@@ -1,5 +1,5 @@
 [package]
-name = "tikv-fuzz"
+name = "tikv_fuzz"
 version = "0.0.1"
 publish = false
 
@@ -14,6 +14,10 @@ git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
 [[bin]]
 name = "codec_bytes"
 path = "fuzz_targets/codec_bytes.rs"
+
+[[bin]]
+name = "codec_number"
+path = "fuzz_targets/codec_number.rs"
 
 [[bin]]
 name = "coprocessor_codec_mysql_decimal"

@@ -27,23 +27,29 @@ BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
+BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
+BUILD_INFO_RUSTC_FALLBACK := "Unknown"
+export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
+export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+
 default: release
 
 .PHONY: all
 
 all: format build test
 
-pre-clippy:
-	@if [ "`cat clippy-version`" != "`cargo clippy --version || echo 0`" ]; then\
-		cargo install clippy --version `cat clippy-version` --force;\
-	fi
+pre-clippy: unset-override
+	@rustup component add clippy-preview
 
 clippy: pre-clippy
-	@cargo clippy --bins --examples --tests --benches -- \
+	@cargo clippy --all --all-targets -- \
 		-A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
 		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
-		-A implicit_hasher -A large_enum_variant -A new_without_default_derive \
-		-A neg_cmp_op_on_partial_ord -A too_many_arguments -A excessive_precision
+		-A implicit_hasher -A large_enum_variant -A new_without_default \
+		-A new_without_default_derive -A neg_cmp_op_on_partial_ord \
+		-A too_many_arguments -A excessive_precision
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
@@ -52,12 +58,12 @@ build:
 	cargo build --features "${ENABLE_FEATURES}"
 
 run:
-	cargo run --features "${ENABLE_FEATURES}"
+	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
 	@cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
-	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-fail ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 
 unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
@@ -78,7 +84,7 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --features "${ENABLE_FEATURES}" --all --exclude tikv_fuzz ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	cargo test --features "${ENABLE_FEATURES}" --bench benches ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
@@ -87,14 +93,14 @@ test:
 	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
 bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "${ENABLE_FEATURES}" -- --nocapture && \
-	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --exclude tikv_fuzz --features "${ENABLE_FEATURES}" -- --nocapture
 
-pre-format:
+unset-override:
 	@# unset first in case of any previous overrides
 	@if rustup override list | grep `pwd` > /dev/null; then rustup override unset; fi
-	@rustup 2>/dev/null || true
-	@rustup component list | grep 'rustfmt-preview.*installed' &>/dev/null || rustup component add rustfmt-preview
+
+pre-format: unset-override
+	@rustup component add rustfmt-preview
 
 format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \

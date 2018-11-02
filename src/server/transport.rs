@@ -21,8 +21,8 @@ use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
-use raftstore::store::{BatchReadCallback, Callback, Msg as StoreMsg, SignificantMsg, Transport};
-use raftstore::Result as RaftStoreResult;
+use raftstore::store::{Callback, Msg as StoreMsg, ReadTask, SignificantMsg, Transport};
+use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
 use server::raft_client::RaftClient;
 use server::Result;
 use util::collections::HashSet;
@@ -45,15 +45,6 @@ pub trait RaftStoreRouter: Send + Clone {
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
-    }
-
-    // Send a batch of RaftCmdRequests to local store.
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     // Send significant message. We should guarantee that the message can't be dropped.
@@ -86,29 +77,42 @@ pub trait RaftStoreRouter: Send + Clone {
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
     pub significant_msg_sender: Sender<SignificantMsg>,
+    local_reader_ch: Scheduler<ReadTask>,
 }
 
 impl ServerRaftStoreRouter {
     pub fn new(
-        ch: SendCh<StoreMsg>,
+        raftstore_ch: SendCh<StoreMsg>,
         significant_msg_sender: Sender<SignificantMsg>,
+        local_reader_ch: Scheduler<ReadTask>,
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
-            ch,
+            ch: raftstore_ch,
             significant_msg_sender,
+            local_reader_ch,
         }
     }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.try_send(msg)?;
-        Ok(())
+        if ReadTask::acceptable(&msg) {
+            self.local_reader_ch
+                .schedule(ReadTask::read(msg))
+                .map_err(|e| box_err!(e))
+        } else {
+            self.ch.try_send(msg).map_err(RaftStoreError::Transport)
+        }
     }
 
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        self.ch.send(msg)?;
-        Ok(())
+        if ReadTask::acceptable(&msg) {
+            self.local_reader_ch
+                .schedule(ReadTask::read(msg))
+                .map_err(|e| box_err!(e))
+        } else {
+            self.ch.send(msg).map_err(RaftStoreError::Transport)
+        }
     }
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -117,14 +121,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
-    }
-
-    fn send_batch_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_batch_raft_snapshot_cmd(batch, on_finished))
     }
 
     fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {

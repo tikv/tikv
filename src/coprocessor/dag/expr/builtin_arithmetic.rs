@@ -292,11 +292,11 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::test::{
+    use coprocessor::dag::expr::tests::{
         check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
     };
     use coprocessor::dag::expr::*;
@@ -798,6 +798,12 @@ mod test {
             ),
             (
                 ScalarFuncSig::ModDecimal,
+                str2dec("0.0000000001"),
+                str2dec("1.0"),
+                str2dec("0.0000000001"),
+            ),
+            (
+                ScalarFuncSig::ModDecimal,
                 str2dec("1"),
                 str2dec("1.1"),
                 str2dec("1"),
@@ -1088,9 +1094,10 @@ mod test {
             let rhs = datum_expr(right);
             let scalar_func = scalar_func_expr(sig, &[lhs, rhs]);
             for (flag, sql_mode, strict_sql_mode, is_ok, has_warning) in &cases {
-                let mut cfg = EvalConfig::new(0, *flag).unwrap();
-                cfg.set_sql_mode(*sql_mode);
-                cfg.set_strict_sql_mode(*strict_sql_mode);
+                let mut cfg = EvalConfig::new();
+                cfg.set_by_flags(*flag)
+                    .set_sql_mode(*sql_mode)
+                    .set_strict_sql_mode(*strict_sql_mode);
                 let mut ctx = EvalContext::new(Arc::new(cfg));
                 let op = Expression::build(&mut ctx, scalar_func.clone()).unwrap();
                 let got = op.eval(&mut ctx, &[]);

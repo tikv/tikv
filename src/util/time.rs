@@ -15,9 +15,12 @@ use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, Builder, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use time::{Duration as TimeDuration, Timespec};
+
+// Re-export duration.
+pub use std::time::Duration;
 
 /// Convert Duration to milliseconds.
 #[inline]
@@ -109,7 +112,7 @@ impl Monitor {
     {
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
-            .name(thd_name!("time-monitor-worker"))
+            .name(thd_name!("time-monitor"))
             .spawn(move || {
                 while let Err(_) = rx.try_recv() {
                     let before = now();

@@ -42,7 +42,7 @@ use storage::{
 use util::config::{
     self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB,
 };
-use util::properties::{MvccPropertiesCollectorFactory, SizePropertiesCollectorFactory};
+use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
 use util::rocksdb::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
@@ -193,7 +193,7 @@ impl Default for DefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -207,8 +207,8 @@ impl Default for DefaultCfConfig {
 impl DefaultCfConfig {
     pub fn build_opt(&self) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
     }
 }
@@ -247,7 +247,7 @@ impl Default for WriteCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -271,8 +271,8 @@ impl WriteCfConfig {
         // Collects user defined properties.
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(SizePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts
     }
 }
@@ -303,7 +303,7 @@ impl Default for LockCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -352,7 +352,7 @@ impl Default for RaftCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -535,7 +535,7 @@ impl Default for RaftDefaultCfConfig {
             level0_stop_writes_trigger: 36,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
-            dynamic_level_bytes: false,
+            dynamic_level_bytes: true,
             num_levels: 7,
             max_bytes_for_level_multiplier: 10,
             compaction_style: DBCompactionStyle::Level,
@@ -1168,7 +1168,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use tempdir::TempDir;
 
     use super::*;

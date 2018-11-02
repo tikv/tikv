@@ -15,10 +15,14 @@ mod builtin_arithmetic;
 mod builtin_cast;
 mod builtin_compare;
 mod builtin_control;
+mod builtin_encryption;
 mod builtin_json;
 mod builtin_like;
 mod builtin_math;
+mod builtin_miscellaneous;
 mod builtin_op;
+mod builtin_other;
+mod builtin_string;
 mod builtin_time;
 mod column;
 mod constant;
@@ -31,7 +35,9 @@ pub use coprocessor::codec::{Error, Result};
 use coprocessor::codec::mysql::{charset, types};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
+use rand::XorShiftRng;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::str;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use util::codec::number;
@@ -61,6 +67,24 @@ pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     tp: FieldType,
+    cus_rng: CusRng,
+}
+
+#[derive(Clone)]
+struct CusRng {
+    rng: RefCell<Option<XorShiftRng>>,
+}
+
+impl ::std::fmt::Debug for CusRng {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        write!(f, "()")
+    }
+}
+
+impl PartialEq for CusRng {
+    fn eq(&self, other: &CusRng) -> bool {
+        self == other
+    }
 }
 
 impl Expression {
@@ -90,7 +114,6 @@ impl Expression {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
     fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
@@ -107,7 +130,6 @@ impl Expression {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -267,6 +289,9 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             tp,
+                            cus_rng: CusRng {
+                                rng: RefCell::new(None),
+                            },
                         })
                     })
             }
@@ -297,8 +322,8 @@ where
 }
 
 #[cfg(test)]
-mod test {
-    use super::{Error, EvalConfig, EvalContext, Expression, FLAG_IGNORE_TRUNCATE};
+mod tests {
+    use super::{Error, EvalConfig, EvalContext, Expression};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
     use coprocessor::codec::mysql::{
@@ -355,6 +380,31 @@ mod test {
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(col_id).unwrap();
         expr.set_val(buf);
+        expr
+    }
+
+    pub fn string_datum_expr_with_tp(
+        datum: Datum,
+        tp: u8,
+        flag: u64,
+        flen: i32,
+        charset: String,
+        collate: i32,
+    ) -> Expr {
+        let mut expr = Expr::new();
+        match datum {
+            Datum::Bytes(bs) => {
+                expr.set_tp(ExprType::Bytes);
+                expr.set_val(bs);
+                expr.mut_field_type().set_tp(i32::from(tp));
+                expr.mut_field_type().set_flag(flag as u32);
+                expr.mut_field_type().set_flen(flen);
+                expr.mut_field_type().set_charset(charset);
+                expr.mut_field_type().set_collate(collate);
+            }
+            Datum::Null => expr.set_tp(ExprType::Null),
+            d => panic!("unsupport datum: {:?}", d),
+        }
         expr
     }
 
@@ -422,9 +472,50 @@ mod test {
         expr
     }
 
+    /// dispatch ScalarFuncSig with the args, return the result by calling eval.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let got = eval_func(ScalarFuncSig::TruncateInt, &[Datum::I64(1028), Datum::I64(-2)]).unwrap();
+    /// assert_eq!(got, Datum::I64(1000));
+    /// ```
+    pub fn eval_func(sig: ScalarFuncSig, args: &[Datum]) -> super::Result<Datum> {
+        eval_func_with(sig, args, |_, _| {})
+    }
+
+    /// dispatch ScalarFuncSig with the args, return the result by calling eval.
+    /// f is used to setup the Expression before calling eval, like the set flag of the FieldType.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let x = Datum::U64(18446744073709551615);
+    /// let d = Datum::I64(-2);
+    /// let exp = Datum::U64(18446744073709551600);
+    /// let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
+    ///     if mysql::has_unsigned_flag(args[0].get_field_type().get_flag()) {
+    ///         op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+    ///     }
+    /// }).unwrap();
+    /// assert_eq!(got, exp);
+    /// ```
+    pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr]) -> ()>(
+        sig: ScalarFuncSig,
+        args: &[Datum],
+        f: F,
+    ) -> super::Result<Datum> {
+        let mut ctx = EvalContext::default();
+        let args: Vec<Expr> = args.iter().map(|arg| datum_expr(arg.clone())).collect();
+        let expr = scalar_func_expr(sig, &args);
+        let mut op = Expression::build(&mut ctx, expr).unwrap();
+        f(&mut op, &args);
+        op.eval(&mut ctx, &[])
+    }
+
     #[test]
     fn test_expression_eval() {
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new(0, FLAG_IGNORE_TRUNCATE).unwrap()));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
@@ -458,7 +549,10 @@ mod test {
             ),
         ];
         for (sig, cols, exp) in cases {
-            let col_expr = col_expr(0);
+            let mut col_expr = col_expr(0);
+            col_expr
+                .mut_field_type()
+                .set_charset(charset::CHARSET_UTF8.to_owned());
             let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
                 .set_decimal(convert::UNSPECIFIED_LENGTH as i32);

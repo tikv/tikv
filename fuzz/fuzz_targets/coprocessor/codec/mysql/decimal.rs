@@ -11,7 +11,7 @@ where
     I: Iterator<Item = u8>,
 {
     let mut bytes = [0u8; 8];
-    for byte in bytes.iter_mut() {
+    for byte in &mut bytes {
         *byte = iter.next().unwrap();
     }
     unsafe { mem::transmute(bytes) }
@@ -42,9 +42,6 @@ where
     let _ = lhs.as_f64();
     let _ = lhs.is_zero();
     let _ = lhs.approximate_encoded_size();
-
-    let frac_inc = iter.next().unwrap();
-    lhs.clone().div(rhs.clone(), frac_inc);
 
     let _ = lhs > rhs;
 

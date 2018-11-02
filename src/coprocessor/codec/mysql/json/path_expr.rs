@@ -34,9 +34,6 @@
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[*]') -> [1, "2"]
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
 
-// FIXME: remove following later
-#![allow(dead_code)]
-
 use super::json_unquote::unquote_string;
 use coprocessor::codec::Result;
 use regex::Regex;
@@ -107,7 +104,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
     let mut legs = vec![];
     let mut flags = PathExpressionFlag::default();
     let mut last_end = 0;
-    for (start, end) in RE.find_iter(expr) {
+    for m in RE.find_iter(expr) {
+        let (start, end) = (m.start(), m.end());
         // Check all characters between two legs are blank.
         if expr
             .index(last_end..start)
@@ -160,7 +158,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

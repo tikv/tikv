@@ -16,18 +16,20 @@ use std::fmt;
 use std::time::Instant;
 
 use kvproto::import_sstpb::SSTMeta;
+use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
+use raftstore::store::util::KeysInfoFormatter;
 use util::escape;
 use util::rocksdb::CompactedEvent;
 
-use super::RegionSnapshot;
+use super::{Peer, RegionSnapshot};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadResponse {
     pub response: RaftCmdResponse,
     pub snapshot: Option<RegionSnapshot>,
@@ -38,16 +40,29 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
+#[derive(Debug)]
+pub enum SeekRegionResult {
+    Found {
+        local_peer: metapb::Peer,
+        region: metapb::Region,
+    },
+    LimitExceeded {
+        next_key: Vec<u8>,
+    },
+    Ended,
+}
+
 pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
-pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
+
+pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
+pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-///  - `BatchRead`: callbacks for a batch read request.
 pub enum Callback {
     /// No callback.
     None,
@@ -55,8 +70,6 @@ pub enum Callback {
     Read(ReadCallback),
     /// Write callback.
     Write(WriteCallback),
-    /// Batch read callbacks.
-    BatchRead(BatchReadCallback),
 }
 
 impl Callback {
@@ -74,7 +87,6 @@ impl Callback {
                 let resp = WriteResponse { response: resp };
                 write(resp);
             }
-            Callback::BatchRead(_) => unreachable!(),
         }
     }
 
@@ -82,13 +94,6 @@ impl Callback {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
-        }
-    }
-
-    pub fn invoke_batch_read(self, args: Vec<Option<ReadResponse>>) {
-        match self {
-            Callback::BatchRead(batch_read) => batch_read(args),
-            other => panic!("expect Callback::BatchRead(..), got {:?}", other),
         }
     }
 }
@@ -99,7 +104,6 @@ impl fmt::Debug for Callback {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
-            Callback::BatchRead(_) => write!(fmt, "Callback::BatchRead(..)"),
         }
     }
 }
@@ -118,6 +122,26 @@ pub enum Tick {
     CheckMerge,
     CheckPeerStaleState,
     CleanupImportSST,
+}
+
+impl Tick {
+    #[inline]
+    pub fn tag(self) -> &'static str {
+        match self {
+            Tick::Raft => "raft",
+            Tick::RaftLogGc => "raft_log_gc",
+            Tick::SplitRegionCheck => "split_region_check",
+            Tick::CompactCheck => "compact_check",
+            Tick::PdHeartbeat => "pd_heartbeat",
+            Tick::PdStoreHeartbeat => "pd_store_heartbeat",
+            Tick::SnapGc => "snap_gc",
+            Tick::CompactLockCf => "compact_lock_cf",
+            Tick::ConsistencyCheck => "consistency_check",
+            Tick::CheckMerge => "check_merge",
+            Tick::CheckPeerStaleState => "check_peer_stale_state",
+            Tick::CleanupImportSST => "cleanup_import_sst",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -145,18 +169,12 @@ pub enum Msg {
         callback: Callback,
     },
 
-    BatchRaftSnapCmds {
-        send_time: Instant,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: Callback,
-    },
-
     SplitRegion {
         region_id: u64,
         region_epoch: RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
-        split_key: Vec<u8>,
+        split_keys: Vec<Vec<u8>>,
         callback: Callback,
     },
 
@@ -196,6 +214,20 @@ pub enum Msg {
     ValidateSSTResult {
         invalid_ssts: Vec<SSTMeta>,
     },
+
+    SeekRegion {
+        from_key: Vec<u8>,
+        filter: SeekRegionFilter,
+        limit: u32,
+        callback: SeekRegionCallback,
+    },
+
+    // Clear region size and keys for all regions in the range, so we can force them to re-calculate
+    // their size later.
+    ClearRegionSizeInRange {
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -204,7 +236,6 @@ impl fmt::Debug for Msg {
             Msg::Quit => write!(fmt, "Quit"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
-            Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
             Msg::ComputeHashResult {
                 region_id,
@@ -218,10 +249,15 @@ impl fmt::Debug for Msg {
                 escape(hash)
             ),
             Msg::SplitRegion {
-                ref region_id,
-                ref split_key,
+                region_id,
+                ref split_keys,
                 ..
-            } => write!(fmt, "Split region {} at key {:?}", region_id, split_key),
+            } => write!(
+                fmt,
+                "Split region {} with {}",
+                region_id,
+                KeysInfoFormatter(&split_keys)
+            ),
             Msg::RegionApproximateSize { region_id, size } => write!(
                 fmt,
                 "Region's approximate size [region_id: {}, size: {:?}]",
@@ -238,6 +274,17 @@ impl fmt::Debug for Msg {
             }
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            Msg::SeekRegion { ref from_key, .. } => {
+                write!(fmt, "Seek Region from_key {:?}", from_key)
+            }
+            Msg::ClearRegionSizeInRange {
+                ref start_key,
+                ref end_key,
+            } => write!(
+                fmt,
+                "Clear Region size in range {:?} to {:?}",
+                start_key, end_key
+            ),
         }
     }
 }
@@ -248,17 +295,6 @@ impl Msg {
             send_time: Instant::now(),
             request,
             callback,
-        }
-    }
-
-    pub fn new_batch_raft_snapshot_cmd(
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> Msg {
-        Msg::BatchRaftSnapCmds {
-            send_time: Instant::now(),
-            batch,
-            on_finished: Callback::BatchRead(on_finished),
         }
     }
 
@@ -283,7 +319,7 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
     use raftstore::Error;
     use util::transport::SendCh;
 
@@ -338,6 +374,7 @@ mod tests {
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());
+        request.set_status_request(StatusRequest::new());
         assert!(call_command(sendch, request.clone(), Duration::from_millis(500)).is_ok());
         match call_command(sendch, request, Duration::from_millis(10)) {
             Err(Error::Timeout(_)) => {}

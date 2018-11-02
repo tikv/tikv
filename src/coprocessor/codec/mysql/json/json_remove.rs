@@ -66,7 +66,7 @@ impl Json {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::super::path_expr::parse_json_path_expr;
     use super::*;
 

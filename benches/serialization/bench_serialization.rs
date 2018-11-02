@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate protobuf;
-
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
-use protobuf::Message;
 use raft::eraftpb::Entry;
+
+use protobuf::{self, Message};
 use rand::{thread_rng, Rng};
 use test::Bencher;
+
 use tikv::util::collections::HashMap;
 
 #[inline]

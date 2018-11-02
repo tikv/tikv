@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME: remove following later
-#![allow(dead_code)]
-
 use std::{char, str, u32};
 
 use super::super::Result;
@@ -89,7 +86,7 @@ fn decode_escaped_unicode(s: &str) -> Result<char> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use std::collections::BTreeMap;
 

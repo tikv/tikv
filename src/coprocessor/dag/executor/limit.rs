@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// remove later
-#![allow(dead_code)]
-
 use tipb::executor::Limit;
 
 use super::ExecutorMetrics;
@@ -67,10 +64,14 @@ impl<'a> Executor for LimitExecutor<'a> {
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.src.take_eval_warnings()
     }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
@@ -79,9 +80,9 @@ mod test {
     use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::test::gen_table_data;
+    use super::super::topn::tests::gen_table_data;
     use super::*;
 
     #[test]
@@ -114,7 +115,7 @@ mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store, false).unwrap();
+        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, false).unwrap();
 
         // init Limit meta
         let mut limit_meta = Limit::default();
@@ -124,7 +125,7 @@ mod test {
         let mut limit_ect = LimitExecutor::new(limit_meta, Box::new(ts_ect));
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
-            limit_rows.push(row);
+            limit_rows.push(row.take_origin());
         }
         assert_eq!(limit_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 2, 3, 5, 6];

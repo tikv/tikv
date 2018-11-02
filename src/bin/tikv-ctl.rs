@@ -17,26 +17,42 @@ extern crate chrono;
 extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
+extern crate libc;
+#[macro_use]
+extern crate log;
 extern crate protobuf;
 extern crate raft;
 extern crate rocksdb;
-extern crate rustc_serialize;
+#[macro_use]
 extern crate tikv;
 extern crate toml;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
+extern crate hex;
+#[cfg(unix)]
+extern crate nix;
+#[cfg(unix)]
+extern crate signal;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 
-use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
+mod util;
+
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::iter::FromIterator;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use std::{process, str, u64};
 
 use clap::{App, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
@@ -104,18 +120,19 @@ fn new_debug_executor(
                 Arc::new(raft_db),
             ))) as Box<DebugExecutor>
         }
-        (Some(remote), None) => {
-            let env = Arc::new(Environment::new(1));
-            let cb = ChannelBuilder::new(env)
-                .max_receive_message_len(1 << 30) // 1G.
-                .max_send_message_len(1 << 30);
-
-            let channel = mgr.connect(cb, remote);
-            let client = DebugClient::new(channel);
-            Box::new(client) as Box<DebugExecutor>
-        }
+        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<DebugExecutor>,
         _ => unreachable!(),
     }
+}
+
+fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
+    let env = Arc::new(Environment::new(1));
+    let cb = ChannelBuilder::new(env)
+            .max_receive_message_len(1 << 30) // 1G.
+            .max_send_message_len(1 << 30);
+
+    let channel = mgr.connect(cb, host);
+    DebugClient::new(channel)
 }
 
 trait DebugExecutor {
@@ -744,8 +761,7 @@ impl DebugExecutor for Debugger {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        #[allow(deprecated)]
-        let stream = stream::iter(iter).map_err(|e| e.to_string());
+        let stream = stream::iter_result(iter).map_err(|e| e.to_string());
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
@@ -876,9 +892,11 @@ impl DebugExecutor for Debugger {
 
 fn main() {
     let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
+    let version_info = util::tikv_version_info();
 
     let mut app = App::new("TiKV Ctl")
-        .author("PingCAP")
+        .long_version(version_info.as_ref())
+        .author("TiKV Org.")
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
@@ -1477,19 +1495,64 @@ fn main() {
                         .takes_value(true)
                         .help("the key to split it, in unecoded escaped format")
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("fail")
+                .about("injecting failures to TiKV and recovery")
+                .subcommand(
+                    SubCommand::with_name("inject")
+                    .about("Inject failures")
+                    .arg(
+                        Arg::with_name("args")
+                            .multiple(true)
+                            .takes_value(true)
+                            .help(
+                                "Inject fail point and actions pairs.\
+                                E.g. tikv-fail inject fail::a=off fail::b=panic",
+                            ),
+                    )
+                    .arg(
+                        Arg::with_name("file")
+                            .short("f")
+                            .takes_value(true)
+                            .help("Read a file of fail points and actions to inject"),
+                    ),
+                )
+                .subcommand(
+                    SubCommand::with_name("recover")
+                        .about("Recover failures")
+                        .arg(
+                            Arg::with_name("args")
+                                .multiple(true)
+                                .takes_value(true)
+                                .help("Recover fail points. Eg. tikv-fail recover fail::a fail::b"),
+                        )
+                        .arg(
+                            Arg::with_name("file")
+                                .short("f")
+                                .takes_value(true)
+                                .help("Recover from a file of fail points"),
+                        ),
+                )
+                .subcommand(SubCommand::with_name("list").about("List all fail points"))
         );
 
     let matches = app.clone().get_matches();
+    if matches.args.is_empty() {
+        let _ = app.print_help();
+        println!();
+        return;
+    }
 
     // Deal with arguments about key utils.
     if let Some(hex) = matches.value_of("hex-to-escaped") {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        println!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
-        match Key::from_encoded(unescape(encoded)).raw() {
+        match Key::from_encoded(unescape(encoded)).into_raw() {
             Ok(k) => println!("{}", escape(&k)),
             Err(e) => eprintln!("decode meets error: {}", e),
         };
@@ -1678,6 +1741,58 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
         debug_executor.dump_region_properties(region_id)
+    } else if let Some(matches) = matches.subcommand_matches("fail") {
+        if host.is_none() {
+            eprintln!("command fail requires host");
+            process::exit(-1);
+        }
+        let client = new_debug_client(host.unwrap(), mgr);
+        if let Some(matches) = matches.subcommand_matches("inject") {
+            let mut list = matches
+                .value_of("file")
+                .map_or_else(Vec::new, read_fail_file);
+            if let Some(ps) = matches.values_of("args") {
+                for pair in ps {
+                    let mut parts = pair.split('=');
+                    list.push((
+                        parts.next().unwrap().to_owned(),
+                        parts.next().unwrap_or("").to_owned(),
+                    ))
+                }
+            }
+            for (name, actions) in list {
+                if actions.is_empty() {
+                    println!("No action for fail point {}", name);
+                    continue;
+                }
+                let mut inject_req = InjectFailPointRequest::new();
+                inject_req.set_name(name);
+                inject_req.set_actions(actions);
+
+                let option = CallOption::default().timeout(Duration::from_secs(10));
+                client.inject_fail_point_opt(&inject_req, option).unwrap();
+            }
+        } else if let Some(matches) = matches.subcommand_matches("recover") {
+            let mut list = matches
+                .value_of("file")
+                .map_or_else(Vec::new, read_fail_file);
+            if let Some(fps) = matches.values_of("args") {
+                for fp in fps {
+                    list.push((fp.to_owned(), "".to_owned()))
+                }
+            }
+            for (name, _) in list {
+                let mut recover_req = RecoverFailPointRequest::new();
+                recover_req.set_name(name);
+                let option = CallOption::default().timeout(Duration::from_secs(10));
+                client.recover_fail_point_opt(&recover_req, option).unwrap();
+            }
+        } else if matches.is_present("list") {
+            let list_req = ListFailPointsRequest::new();
+            let option = CallOption::default().timeout(Duration::from_secs(10));
+            let resp = client.list_fail_points_opt(&list_req, option).unwrap();
+            println!("{:?}", resp.get_entries());
+        }
     } else {
         let _ = app.print_help();
     }
@@ -1699,24 +1814,23 @@ fn get_module_type(module: &str) -> MODULE {
     }
 }
 
-fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
-    const HEX_PREFIX: &str = "0x";
-    if key.starts_with(HEX_PREFIX) {
-        return key[2..].from_hex();
+fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
+    if key.starts_with("0x") || key.starts_with("0X") {
+        return hex::decode(&key[2..]);
     }
-    key.from_hex()
+    hex::decode(key)
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
     const GB: u64 = 1024 * 1024 * 1024;
     const MB: u64 = 1024 * 1024;
     if bytes < MB {
-        return bytes.to_string();
+        return format!("{} B", bytes);
     }
     let mb = if bytes % GB == 0 {
         String::from("")
     } else {
-        format!("{:.3} MB ", (bytes % GB) as f64 / MB as f64)
+        format!("{:.3} MB", (bytes % GB) as f64 / MB as f64)
     };
     bytes /= GB;
     let gb = if bytes == 0 {
@@ -1866,5 +1980,34 @@ fn compact_whole_cluster(
 
     for h in handles {
         h.join().unwrap();
+    }
+}
+
+fn read_fail_file(path: &str) -> Vec<(String, String)> {
+    let f = File::open(path).unwrap();
+    let f = BufReader::new(f);
+
+    let mut list = vec![];
+    for line in f.lines() {
+        let line = line.unwrap();
+        let mut parts = line.split('=');
+        list.push((
+            parts.next().unwrap().to_owned(),
+            parts.next().unwrap_or("").to_owned(),
+        ))
+    }
+    list
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_hex;
+
+    #[test]
+    fn test_from_hex() {
+        let result = vec![0x74];
+        assert_eq!(from_hex("74").unwrap(), result);
+        assert_eq!(from_hex("0x74").unwrap(), result);
+        assert_eq!(from_hex("0X74").unwrap(), result);
     }
 }

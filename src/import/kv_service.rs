@@ -53,7 +53,7 @@ impl ImportKVService {
 
 impl ImportKv for ImportKVService {
     fn switch_mode(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
@@ -82,7 +82,7 @@ impl ImportKv for ImportKVService {
     }
 
     fn open_engine(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: OpenEngineRequest,
         sink: UnarySink<OpenEngineResponse>,
@@ -103,7 +103,7 @@ impl ImportKv for ImportKVService {
     }
 
     fn write_engine(
-        &self,
+        &mut self,
         ctx: RpcContext,
         stream: RequestStream<WriteEngineRequest>,
         sink: ClientStreamingSink<WriteEngineResponse>,
@@ -160,7 +160,7 @@ impl ImportKv for ImportKVService {
     }
 
     fn close_engine(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: CloseEngineRequest,
         sink: UnarySink<CloseEngineResponse>,
@@ -191,7 +191,7 @@ impl ImportKv for ImportKVService {
     }
 
     fn import_engine(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: ImportEngineRequest,
         sink: UnarySink<ImportEngineResponse>,
@@ -212,7 +212,7 @@ impl ImportKv for ImportKVService {
     }
 
     fn cleanup_engine(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: CleanupEngineRequest,
         sink: UnarySink<CleanupEngineResponse>,
@@ -233,7 +233,7 @@ impl ImportKv for ImportKVService {
     }
 
     fn compact_cluster(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: CompactClusterRequest,
         sink: UnarySink<CompactClusterResponse>,
@@ -247,11 +247,11 @@ impl ImportKv for ImportKVService {
             let start = Key::from_raw(compact.get_range().get_start());
             compact
                 .mut_range()
-                .set_start(keys::data_key(start.encoded()));
+                .set_start(keys::data_key(start.as_encoded()));
             let end = Key::from_raw(compact.get_range().get_end());
             compact
                 .mut_range()
-                .set_end(keys::data_end_key(end.encoded()));
+                .set_end(keys::data_end_key(end.as_encoded()));
         }
 
         ctx.spawn(

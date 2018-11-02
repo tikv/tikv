@@ -14,6 +14,7 @@
 use std::fmt::{self, Debug, Formatter};
 use std::io::Error as IoError;
 use std::result;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use kvproto::errorpb;
@@ -26,14 +27,16 @@ use protobuf::RepeatedField;
 
 use super::metrics::*;
 use super::{
-    BatchCallback, Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify,
+    Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, RegionInfoProvider,
     ScanMode, Snapshot,
 };
 use raftstore::errors::Error as RaftServerError;
 use raftstore::store::engine::IterOption;
 use raftstore::store::engine::Peekable;
-use raftstore::store::{self, Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{RegionIterator, RegionSnapshot};
+use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
+use raftstore::store::{
+    Msg as StoreMsg, RegionIterator, RegionSnapshot, SeekRegionFilter, SeekRegionResult,
+};
 use rocksdb::TablePropertiesCollection;
 use server::transport::RaftStoreRouter;
 use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
@@ -175,37 +178,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         RaftKv { router }
     }
 
-    fn batch_call_snap_commands(
-        &self,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchCallback<CmdRes>,
-    ) -> Result<()> {
-        let batch_size = batch.len();
-        let mut counts = Vec::with_capacity(batch_size);
-        for req in &batch {
-            let count = req.get_requests().len();
-            counts.push(count);
-        }
-        let on_finished: store::BatchReadCallback =
-            Box::new(move |resps: Vec<Option<store::ReadResponse>>| {
-                assert_eq!(batch_size, resps.len());
-                let mut cmd_resps = Vec::with_capacity(resps.len());
-                for (count, resp) in counts.into_iter().zip(resps) {
-                    match resp {
-                        Some(resp) => {
-                            let (cb_ctx, cmd_res) = on_read_result(resp, count);
-                            cmd_resps.push(Some((cb_ctx, cmd_res.map_err(Error::into))));
-                        }
-                        None => cmd_resps.push(None),
-                    }
-                }
-                on_finished(cmd_resps);
-            });
-
-        self.router.send_batch_commands(batch, on_finished)?;
-        Ok(())
-    }
-
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
         let mut header = RaftRequestHeader::new();
         header.set_region_id(ctx.get_region_id());
@@ -247,6 +219,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         reqs: Vec<Request>,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
+        fail_point!("raftkv_early_error_report", |_| Err(
+            RaftServerError::RegionNotFound(ctx.get_region_id()).into()
+        ));
         let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::new();
@@ -262,23 +237,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
                 }),
             )
             .map_err(From::from)
-    }
-
-    fn batch_exec_snap_requests(
-        &self,
-        batch: Vec<(Context, Vec<Request>)>,
-        on_finished: BatchCallback<CmdRes>,
-    ) -> Result<()> {
-        let batch = batch.into_iter().map(|(ctx, reqs)| {
-            let header = self.new_request_header(&ctx);
-            let mut cmd = RaftCmdRequest::new();
-            cmd.set_header(header);
-            cmd.set_requests(RepeatedField::from_vec(reqs));
-
-            cmd
-        });
-
-        self.batch_call_snap_commands(batch.collect(), on_finished)
     }
 }
 
@@ -316,7 +274,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             match m {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::new();
-                    delete.set_key(k.encoded().to_owned());
+                    delete.set_key(k.into_encoded());
                     if cf != CF_DEFAULT {
                         delete.set_cf(cf.to_string());
                     }
@@ -325,7 +283,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 }
                 Modify::Put(cf, k, v) => {
                     let mut put = PutRequest::new();
-                    put.set_key(k.encoded().to_owned());
+                    put.set_key(k.into_encoded());
                     put.set_value(v);
                     if cf != CF_DEFAULT {
                         put.set_cf(cf.to_string());
@@ -336,8 +294,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Modify::DeleteRange(cf, start_key, end_key) => {
                     let mut delete_range = DeleteRangeRequest::new();
                     delete_range.set_cf(cf.to_string());
-                    delete_range.set_start_key(start_key.encoded().to_owned());
-                    delete_range.set_end_key(end_key.encoded().to_owned());
+                    delete_range.set_start_key(start_key.into_encoded());
+                    delete_range.set_end_key(end_key.into_encoded());
                     req.set_cmd_type(CmdType::DeleteRange);
                     req.set_delete_range(delete_range);
                 }
@@ -400,67 +358,38 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             e.into()
         })
     }
+}
 
-    fn async_batch_snapshot(
+impl<S: RaftStoreRouter> RegionInfoProvider for RaftKv<S> {
+    // This method may block until raftstore returns the result.
+    fn seek_region(
         &self,
-        batch: Vec<Context>,
-        on_finished: BatchCallback<Self::Snap>,
-    ) -> engine::Result<()> {
-        fail_point!("raftkv_async_batch_snapshot");
-        if batch.is_empty() {
-            return Err(engine::Error::EmptyRequest);
-        }
-
-        let batch_size = batch.len();
-        ASYNC_REQUESTS_COUNTER_VEC
-            .snapshot
-            .all
-            .inc_by(batch_size as i64);
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.snapshot.start_coarse_timer();
-
-        let on_finished: BatchCallback<CmdRes> = box move |cmd_resps: super::BatchResults<_>| {
-            req_timer.observe_duration();
-            assert_eq!(batch_size, cmd_resps.len());
-            let mut snapshots = Vec::with_capacity(cmd_resps.len());
-            for resp in cmd_resps {
-                match resp {
-                    Some((cb_ctx, Ok(CmdRes::Resp(r)))) => {
-                        snapshots.push(Some((
-                            cb_ctx,
-                            Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
-                        )));
-                    }
-                    Some((cb_ctx, Ok(CmdRes::Snap(s)))) => {
-                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                        snapshots.push(Some((cb_ctx, Ok(s))));
-                    }
-                    Some((cb_ctx, Err(e))) => {
-                        let status_kind = get_status_kind_from_engine_error(&e);
-                        ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                        snapshots.push(Some((cb_ctx, Err(e))));
-                    }
-                    None => snapshots.push(None),
-                }
-            }
-            on_finished(snapshots);
+        from_key: &[u8],
+        filter: SeekRegionFilter,
+        limit: u32,
+    ) -> engine::Result<SeekRegionResult> {
+        let (tx, rx) = mpsc::channel();
+        let callback = box move |result| {
+            tx.send(result).unwrap_or_else(|e| {
+                panic!(
+                    "raftstore failed to send seek_local_region result back to raft router: {:?}",
+                    e
+                );
+            });
         };
 
-        let batch = batch.into_iter().map(|ctx| {
-            let mut req = Request::new();
-            req.set_cmd_type(CmdType::Snap);
-
-            (ctx, vec![req])
-        });
-
-        self.batch_exec_snap_requests(batch.collect(), on_finished)
-            .map_err(|e| {
-                let status_kind = get_status_kind_from_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC
-                    .snapshot
-                    .get(status_kind)
-                    .inc_by(batch_size as i64);
-                e.into()
-            })
+        self.router.try_send(StoreMsg::SeekRegion {
+            from_key: from_key.to_vec(),
+            filter,
+            limit,
+            callback,
+        })?;
+        rx.recv().map_err(|e| {
+            box_err!(
+                "failed to receive seek_local_region result from raftstore: {:?}",
+                e
+            )
+        })
     }
 }
 
@@ -471,7 +400,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
-        let v = box_try!(self.get_value(key.encoded()));
+        let v = box_try!(self.get_value(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -479,7 +408,7 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -523,14 +452,14 @@ impl EngineIterator for RegionIterator {
         fail_point!("raftkv_iter_seek", |_| Err(box_err!(
             "injected error for iter_seek"
         )));
-        RegionIterator::seek(self, key.encoded()).map_err(From::from)
+        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
         fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
             "injected error for iter_seek_for_prev"
         )));
-        RegionIterator::seek_for_prev(self, key.encoded()).map_err(From::from)
+        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
     }
 
     fn seek_to_first(&mut self) -> bool {
@@ -546,7 +475,7 @@ impl EngineIterator for RegionIterator {
     }
 
     fn validate_key(&self, key: &Key) -> engine::Result<()> {
-        self.should_seekable(key.encoded()).map_err(From::from)
+        self.should_seekable(key.as_encoded()).map_err(From::from)
     }
 
     fn key(&self) -> &[u8] {

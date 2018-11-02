@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use slog::{Drain, Logger};
-use slog_async::{Async, OverflowStrategy};
-use slog_term::{PlainDecorator, TermDecorator};
 use std::env;
 use std::io::BufWriter;
 use std::process;
@@ -21,6 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
 use chrono;
 use clap::ArgMatches;
+use slog::{Drain, Logger};
+use slog_async::{Async, OverflowStrategy};
+use slog_scope::GlobalLoggerGuard;
+use slog_term::{PlainDecorator, TermDecorator};
 
 use tikv::config::{MetricConfig, TiKvConfig};
 use tikv::util;
@@ -48,22 +49,24 @@ macro_rules! fatal {
     })
 }
 
-pub fn init_log(config: &TiKvConfig) {
+#[allow(dead_code)]
+pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
     let log_rotation_timespan = chrono::Duration::from_std(
         config.log_rotation_timespan.clone().into(),
     ).expect("config.log_rotation_timespan is an invalid duration.");
-    if config.log_file.is_empty() {
+    let guard = if config.log_file.is_empty() {
         let decorator = TermDecorator::new().build();
         let drain = logger::TikvFormat::new(decorator).fuse();
         let drain = Async::new(drain)
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
+            .thread_name(thd_name!("term-slogger"))
             .build()
             .fuse();
         let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
-        });
+        })
     } else {
         let logger = BufWriter::new(
             RotatingFileLogger::new(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
@@ -76,15 +79,20 @@ pub fn init_log(config: &TiKvConfig) {
         );
         let decorator = PlainDecorator::new(logger);
         let drain = logger::TikvFormat::new(decorator).fuse();
-        let drain = Async::new(drain).build().fuse();
+        let drain = Async::new(drain)
+            .thread_name(thd_name!("file-slogger"))
+            .build()
+            .fuse();
         let logger = Logger::root_typed(drain, slog_o!());
         logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
-        });
-    }
+        })
+    };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
+    guard
 }
 
+#[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
@@ -103,6 +111,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
+#[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
     if let Some(level) = matches.value_of("log-level") {
         config.log_level = logger::get_level_by_string(level).unwrap();
@@ -160,6 +169,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 }
 
 /// Check environment variables that affect TiKV.
+#[allow(dead_code)]
 pub fn check_environment_variables() {
     if cfg!(unix) && env::var("TZ").is_err() {
         env::set_var("TZ", ":/etc/localtime");

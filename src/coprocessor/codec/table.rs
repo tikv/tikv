@@ -37,6 +37,7 @@ pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
 pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 
+/// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_all(TABLE_PREFIX)?;
@@ -53,7 +54,8 @@ trait TableEncoder: NumberEncoder {
 
 impl<T: Write> TableEncoder for T {}
 
-/// Extract table prefix from table record or index.
+/// Extracts table prefix from table record or index.
+#[inline]
 pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
     if !key.starts_with(TABLE_PREFIX) || key.len() < TABLE_PREFIX_KEY_LEN {
         Err(invalid_type!(
@@ -65,7 +67,7 @@ pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
     }
 }
 
-/// Check if the range is for table record or index.
+/// Checks if the range is for table record or index.
 pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     for range in ranges {
         extract_table_prefix(range.get_start())?;
@@ -81,6 +83,7 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     Ok(())
 }
 
+/// Decodes table ID from the key.
 pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     if !key.starts_with(TABLE_PREFIX) {
         return Err(invalid_type!(
@@ -93,6 +96,8 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     number::decode_i64(&mut remaining).map_err(Error::from)
 }
 
+/// `flatten` flattens the datum.
+#[inline]
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
@@ -287,12 +292,14 @@ pub fn decode_row(
     }
 }
 
+/// `RowColMeta` saves the column meta of the row.
 #[derive(Debug)]
 pub struct RowColMeta {
     offset: usize,
     length: usize,
 }
 
+/// `RowColsDict` stores the row data and a map mapping column ID to its meta.
 #[derive(Debug)]
 pub struct RowColsDict {
     // data of current row
@@ -313,14 +320,19 @@ impl RowColsDict {
         RowColsDict { value, cols }
     }
 
+    /// Returns the total count of the columns.
+    #[inline]
     pub fn len(&self) -> usize {
         self.cols.len()
     }
 
+    /// Returns whether it has columns or not.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.cols.is_empty()
     }
 
+    /// Gets the column data from its meta if `key` exists.
     pub fn get(&self, key: i64) -> Option<&[u8]> {
         if let Some(meta) = self.cols.get(&key) {
             return Some(&self.value[meta.offset..(meta.offset + meta.length)]);
@@ -328,6 +340,7 @@ impl RowColsDict {
         None
     }
 
+    /// Appends a column to the row.
     pub fn append(&mut self, cid: i64, value: &mut Vec<u8>) {
         let offset = self.value.len();
         let length = value.len();
@@ -335,7 +348,7 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
-    // get binary of cols, keep the origin order, return one slice and cols' end offsets.
+    /// Gets binary of cols, keeps the original order, and returns one slice and cols' end offsets.
     pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;
@@ -348,15 +361,14 @@ impl RowColsDict {
         let end_offsets = self
             .cols
             .values()
-            .into_iter()
             .map(|meta| meta.offset + meta.length - start)
             .collect();
         (&self.value[start..start + length], end_offsets)
     }
 }
 
-// `cut_row` cut encoded row into (col_id,offset,length)
-// and return interested columns' meta in RowColsDict
+/// `cut_row` cuts the encoded row into (col_id,offset,length)
+///  and returns interested columns' meta in RowColsDict
 pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     if cols.is_empty() || data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
         return Ok(RowColsDict::new(HashMap::default(), data));
@@ -380,7 +392,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     Ok(RowColsDict::new(meta_map, data))
 }
 
-// `cut_idx_key` cuts encoded index key into RowColsDict and handle .
+/// `cut_idx_key` cuts the encoded index key into RowColsDict and handle .
 pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
     let mut meta_map: HashMap<i64, RowColMeta> =
         HashMap::with_capacity_and_hasher(col_ids.len(), Default::default());
@@ -405,7 +417,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
     use tipb::schema::ColumnInfo;

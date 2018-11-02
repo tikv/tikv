@@ -13,16 +13,19 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
-#![feature(proc_macro)]
+#![feature(try_from)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
+#![feature(duration_as_u128)]
 #![feature(entry_or_default)]
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
+#![feature(const_int_ops)]
+#![feature(use_extern_macros)]
 #![recursion_limit = "200"]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
@@ -34,20 +37,25 @@ extern crate backtrace;
 extern crate bitflags;
 extern crate byteorder;
 extern crate chrono;
+extern crate chrono_tz;
 extern crate crc;
 extern crate crossbeam;
 #[macro_use]
 extern crate crossbeam_channel;
+extern crate crypto;
 #[macro_use]
 extern crate fail;
 extern crate fnv;
 extern crate fs2;
+#[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
 extern crate fxhash;
 extern crate grpcio as grpc;
+extern crate hex;
 extern crate indexmap;
 extern crate kvproto;
+
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
@@ -105,6 +113,8 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
+
+extern crate panic_hook;
 
 #[macro_use]
 pub mod util;

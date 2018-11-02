@@ -16,8 +16,10 @@ mod column;
 
 pub use coprocessor::codec::{Error, Result};
 
+pub use self::chunk::{Chunk, ChunkEncoder};
+
 #[cfg(test)]
-mod test {
+mod tests {
     use tipb::expression::FieldType;
 
     pub fn field_type(tp: u8) -> FieldType {

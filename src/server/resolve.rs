@@ -121,7 +121,7 @@ pub fn new_resolver<T>(pd_client: Arc<T>) -> Result<(Worker<Task>, PdStoreAddrRe
 where
     T: PdClient + 'static,
 {
-    let mut worker = Worker::new("store address resolve worker");
+    let mut worker = Worker::new("addr-resolver");
 
     let runner = Runner {
         pd_client,
@@ -217,10 +217,18 @@ mod tests {
         fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
             unimplemented!();
         }
+
+        fn ask_batch_split(
+            &self,
+            _: metapb::Region,
+            _: usize,
+        ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+            unimplemented!();
+        }
         fn store_heartbeat(&self, _: pdpb::StoreStats) -> PdFuture<()> {
             unimplemented!();
         }
-        fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
+        fn report_batch_split(&self, _: Vec<metapb::Region>) -> PdFuture<()> {
             unimplemented!();
         }
     }

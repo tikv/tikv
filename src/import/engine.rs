@@ -31,7 +31,7 @@ use rocksdb::{
 use config::DbConfig;
 use raftstore::store::keys;
 use storage::mvcc::{Write, WriteType};
-use storage::types::{split_encoded_key_on_ts, Key};
+use storage::types::Key;
 use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use util::config::MB;
 use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
@@ -74,7 +74,7 @@ impl Engine {
             match m.get_op() {
                 Mutation_OP::Put => {
                     let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-                    wb.put(k.encoded(), m.get_value()).unwrap();
+                    wb.put(k.as_encoded(), m.get_value()).unwrap();
                 }
             }
         }
@@ -185,7 +185,7 @@ impl SSTWriter {
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         let k = keys::data_key(key);
-        let (_, commit_ts) = split_encoded_key_on_ts(key)?;
+        let (_, commit_ts) = Key::split_on_ts_for(key)?;
         if is_short_value(value) {
             let w = Write::new(WriteType::Put, commit_ts, Some(value.to_vec()));
             self.write.put(&k, &w.to_bytes())?;
@@ -316,7 +316,7 @@ mod tests {
     }
 
     fn new_encoded_key(i: u8, ts: u64) -> Vec<u8> {
-        Key::from_raw(&[i]).append_ts(ts).encoded().to_owned()
+        Key::from_raw(&[i]).append_ts(ts).into_encoded()
     }
 
     #[test]
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(keys.len(), n as usize);
         for (i, expected) in keys.iter().enumerate() {
             let k = Key::from_raw(&[i as u8]);
-            assert_eq!(k.encoded(), expected.encoded());
+            assert_eq!(k.as_encoded(), expected.as_encoded());
         }
     }
 

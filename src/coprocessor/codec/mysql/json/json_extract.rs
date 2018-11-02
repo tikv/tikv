@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME: remove following later
-#![allow(dead_code)]
-
 use super::path_expr::{
     PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK,
 };
@@ -86,7 +83,7 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::super::path_expr::{
         PathExpressionFlag, PATH_EXPRESSION_CONTAINS_ASTERISK,
         PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,

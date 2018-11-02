@@ -12,11 +12,10 @@
 // limitations under the License.
 
 use std::slice::Iter;
-use std::str;
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
-use regex::Regex;
+use regex::{bytes::Regex as BytesRegex, Regex};
 
 const MAX_RECURSE_LEVEL: usize = 1024;
 
@@ -33,26 +32,20 @@ impl ScalarFunc {
     }
 
     pub fn regexp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let target = try_opt!(self.children[0].eval_string(ctx, row));
-        let pattern = try_opt!(self.children[1].eval_string(ctx, row));
-
-        let mut p = String::from("(?i)");
-        p.push_str(str::from_utf8(&pattern)?);
-        let t = str::from_utf8(&target)?;
+        let target = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        let pattern = format!("(?i){}", &pattern);
 
         // TODO: cache compiled result
-        Ok(Some(Regex::new(&p)?.is_match(t) as i64))
+        Ok(Some(Regex::new(&pattern)?.is_match(&target) as i64))
     }
 
     pub fn regexp_binary(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
-        let pattern = try_opt!(self.children[1].eval_string(ctx, row));
-
-        let p = str::from_utf8(&pattern)?;
-        let t = str::from_utf8(&target)?;
+        let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
 
         // TODO: cache compiled result
-        Ok(Some(Regex::new(p)?.is_match(t) as i64))
+        Ok(Some(BytesRegex::new(&pattern)?.is_match(&target) as i64))
     }
 }
 
@@ -126,9 +119,9 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
@@ -211,23 +204,31 @@ mod test {
     #[test]
     fn test_regexp_binary() {
         let cases = vec![
-            ("a", r"^$", false),
-            ("a", r"a", true),
-            ("b", r"a", false),
-            ("aA", r"Aa", false),
-            ("aaa", r".", true),
-            ("ab", r"^.$", false),
-            ("b", r"..", false),
-            ("aab", r".ab", true),
-            ("abcd", r".*", true),
-            ("你", r"^.$", true),
-            ("你好", r"你好", true),
-            ("你好", r"^你好$", true),
-            ("你好", r"^您好$", false),
+            ("a".to_owned().into_bytes(), r"^$", false),
+            ("a".to_owned().into_bytes(), r"a", true),
+            ("b".to_owned().into_bytes(), r"a", false),
+            ("aA".to_owned().into_bytes(), r"Aa", false),
+            ("aaa".to_owned().into_bytes(), r".", true),
+            ("ab".to_owned().into_bytes(), r"^.$", false),
+            ("b".to_owned().into_bytes(), r"..", false),
+            ("aab".to_owned().into_bytes(), r".ab", true),
+            ("abcd".to_owned().into_bytes(), r".*", true),
+            (vec![0x7f], r"^.$", true), // dot should match one byte which is less than 128
+            (vec![0xf0], r"^.$", false), // dot can't match one byte greater than 128
+            // dot should match "你" even if the char has 3 bytes.
+            ("你".to_owned().into_bytes(), r"^.$", true),
+            ("你好".to_owned().into_bytes(), r"你好", true),
+            ("你好".to_owned().into_bytes(), r"^你好$", true),
+            ("你好".to_owned().into_bytes(), r"^您好$", false),
+            (
+                vec![255, 255, 0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD],
+                r"你好",
+                true,
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (target_str, pattern_str, exp) in cases {
-            let target = datum_expr(Datum::Bytes(target_str.as_bytes().to_vec()));
+            let target = datum_expr(Datum::Bytes(target_str.clone()));
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::RegexpBinarySig, &[target, pattern]);
             let op = Expression::build(&mut ctx, op).unwrap();

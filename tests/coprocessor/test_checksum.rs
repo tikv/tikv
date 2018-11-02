@@ -13,15 +13,18 @@
 
 use std::u64;
 
+use crc::crc64::{self, Digest, Hasher64};
+
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
+use tikv::coprocessor::dag::{ScanOn, Scanner};
 use tikv::coprocessor::*;
 use tikv::storage::{Engine, SnapshotStore};
 
-use super::test_select::*;
+use test_coprocessor::*;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::new();
@@ -50,7 +53,7 @@ fn test_checksum() {
     ];
 
     let product = ProductTable::new();
-    let (store, end_point) = init_data_with_commit(&product, &data, true);
+    let (store, endpoint) = init_data_with_commit(&product, &data, true);
 
     for column in &[product.id, product.name, product.count] {
         assert!(column.index >= 0);
@@ -64,7 +67,7 @@ fn test_checksum() {
         let request = new_checksum_request(range.clone(), scan_on);
         let expected = reversed_checksum_crc64_xor(&store, range, scan_on);
 
-        let response = handle_request(&end_point, request);
+        let response = handle_request(&endpoint, request);
         let mut resp = ChecksumResponse::new();
         resp.merge_from_bytes(response.get_data()).unwrap();
         assert_eq!(resp.get_checksum(), expected);
@@ -77,8 +80,6 @@ fn reversed_checksum_crc64_xor<E: Engine>(
     range: KeyRange,
     scan_on: ChecksumScanOn,
 ) -> u64 {
-    use crc::crc64::{self, Digest, Hasher64};
-
     let ctx = Context::new();
     let snap = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),

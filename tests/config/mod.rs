@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
 use slog::Level;
+use toml;
+
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -27,8 +29,6 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::{ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
-
-use toml;
 
 #[test]
 fn test_toml_serde() {
@@ -122,6 +122,7 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: 12,
         raft_log_gc_size_limit: ReadableSize::kb(1),
+        raft_entry_cache_life_time: ReadableDuration::secs(12),
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
@@ -139,6 +140,7 @@ fn test_serde_custom_tikv_config() {
         max_leader_missing_duration: ReadableDuration::hours(12),
         abnormal_leader_missing_duration: ReadableDuration::hours(6),
         peer_stale_state_check_interval: ReadableDuration::hours(2),
+        leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
         lock_cf_compact_interval: ReadableDuration::minutes(12),
         lock_cf_compact_bytes_threshold: ReadableSize::mb(123),
@@ -153,6 +155,7 @@ fn test_serde_custom_tikv_config() {
         cleanup_import_sst_interval: ReadableDuration::minutes(12),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
+        local_read_batch_size: 33,
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
@@ -407,8 +410,11 @@ fn test_serde_custom_tikv_config() {
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
+        batch_split_limit: 1,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
+        region_max_keys: 100000,
+        region_split_keys: 100000,
     };
     value.security = SecurityConfig {
         ca_path: "invalid path".to_owned(),
@@ -424,6 +430,7 @@ fn test_serde_custom_tikv_config() {
         max_prepare_duration: ReadableDuration::minutes(12),
         region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
+        max_open_engines: 2,
     };
 
     let custom = read_file_in_project_dir("tests/config/test-custom.toml");
