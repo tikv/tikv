@@ -144,15 +144,13 @@ workflows:
   version: 2
   ci-test:
       jobs:
-        - test
-
-jobs:
-  build:
-    branches:
-      only:
-        # This is where pull requests from "bors r+" are built.
-        - staging
-        # This is where pull requests from "bors try" are built.
-        - trying
-        # Enable building pull requests.
-        - master
+        - test:
+            filters:
+              branches:
+                only:
+                  # This is where pull requests from "bors r+" are built.
+                  - staging
+                  # This is where pull requests from "bors try" are built.
+                  - trying
+                  # Enable building pull requests.
+                  - master
