@@ -18,6 +18,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{io, u64};
 use std::{slice, thread};
@@ -51,16 +52,16 @@ pub mod worker;
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
 
-static mut PANIC_MARK: bool = false;
+static mut PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {
     unsafe {
-        PANIC_MARK = true;
+        PANIC_MARK.store(false, Ordering::SeqCst);
     }
 }
 
 pub fn panic_mark_is_on() -> bool {
-    unsafe { PANIC_MARK }
+    unsafe { PANIC_MARK.load(Ordering::SeqCst) }
 }
 
 pub const PANIC_MARK_FILE: &str = "panic_mark_file";
@@ -532,7 +533,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
 
-    use std::fs::File;
     use tempdir::TempDir;
 
     #[test]
@@ -545,8 +545,7 @@ mod tests {
     #[test]
     fn test_panic_mark_file_exists() {
         let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
-        let file_path = panic_mark_file_path(dir.path());
-        let _f = File::create(file_path).unwrap();
+        create_panic_mark_file(dir.path());
         assert!(panic_mark_file_exists(dir.path()));
     }
 
