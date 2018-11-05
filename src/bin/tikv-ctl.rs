@@ -509,6 +509,11 @@ trait DebugExecutor {
         self.recover_regions(regions);
     }
 
+    fn recover_mvcc_all(&self, threads: usize, read_only: bool) {
+        self.check_local_mode();
+        self.recover_all(threads, read_only);
+    }
+
     fn get_all_meta_regions(&self) -> Vec<u64>;
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
@@ -539,6 +544,8 @@ trait DebugExecutor {
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
     fn recover_regions(&self, regions: Vec<Region>);
+
+    fn recover_all(&self, threads: usize, read_only: bool);
 
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
@@ -679,6 +686,10 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
+    fn recover_all(&self, _: usize, _: bool) {
+        unimplemented!("only avaliable for local mode");
+    }
+
     fn print_bad_regions(&self) {
         unimplemented!("only avaliable for local mode");
     }
@@ -802,6 +813,11 @@ impl DebugExecutor for Debugger {
         for (region_id, error) in ret {
             eprintln!("region: {}, error: {}", region_id, error);
         }
+    }
+
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        Debugger::recover_all(self, threads, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
     }
 
     fn print_bad_regions(&self) {
@@ -1283,6 +1299,20 @@ fn main() {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("recover-mvcc-all")
+            .about("recover all mvcc data")
+                .arg(Arg::with_name("threads")
+                    .long("threads")
+                    .takes_value(true)
+                    .default_value("4")
+                    .help("the number of threads to do recover"))
+            .arg(
+                Arg::with_name("read-only")
+                .short("r")
+                .help("skip write RocksDB"),
+            ),
+        )
+        .subcommand(
             SubCommand::with_name("unsafe-recover")
                 .about("unsafe recover the cluster when majority replicas are failed")
                 .subcommand(
@@ -1708,6 +1738,14 @@ fn main() {
             panic!("invalid pd configuration: {:?}", e);
         }
         debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
+    } else if let Some(matches) = matches.subcommand_matches("recover-mvcc-all") {
+        let threads = matches
+            .value_of("threads")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let read_only = matches.is_present("read-only");
+        debug_executor.recover_mvcc_all(threads, read_only);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
             let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
