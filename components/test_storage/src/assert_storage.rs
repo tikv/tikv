@@ -433,12 +433,13 @@ impl<E: Engine> AssertionStorage<E> {
         match err {
             storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
                 start_ts,
-                conflict_ts,
+                conflict_start_ts,
                 ref key,
                 ref primary,
+                ..
             })) => {
                 assert_eq!(cur_start_ts, start_ts);
-                assert_eq!(confl_ts, conflict_ts);
+                assert_eq!(confl_ts, conflict_start_ts);
                 assert_eq!(key.to_owned(), confl_key.to_owned());
                 assert_eq!(primary.to_owned(), cur_primary.to_owned());
             }
