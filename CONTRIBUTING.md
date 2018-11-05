@@ -39,7 +39,7 @@ Reviewers should follow this process:
     + **You do not need to hit the 'Update Branch' button unless there are conflicts or you think it will fail.**
 - You will recieve a notification for the PR saying it was merged, or it failed.
 
-If you need support using bors you should consult [the guide](https://bors.tech/documentation/getting-started/), you may also ping @hoverbear.
+If you need support using bors you should consult [the guide](https://bors.tech/documentation/getting-started/), you may also ping [@hoverbear](https://github.com/hoverbear/).
 
 ### Code style
 
