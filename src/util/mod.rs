@@ -55,7 +55,7 @@ pub use self::rocksdb::stats as rocksdb_stats;
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {
-    PANIC_MARK.store(false, Ordering::SeqCst);
+    PANIC_MARK.store(true, Ordering::SeqCst);
 }
 
 pub fn panic_mark_is_on() -> bool {
