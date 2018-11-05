@@ -28,7 +28,7 @@ pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
-const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
+const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
 // Number of rows in each chunk.
@@ -82,6 +82,8 @@ pub struct Config {
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
+    pub helper_threadpool_size: usize,
+    pub heavy_load_threshold: usize,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -132,6 +134,8 @@ impl Default for Config {
             ),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
+            helper_threadpool_size: 1,
+            heavy_load_threshold: 100,
         }
     }
 }

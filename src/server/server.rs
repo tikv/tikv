@@ -11,14 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
+use futures::Stream;
 use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
+use tokio::executor::thread_pool;
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+use tokio::timer::Interval;
 
 use coprocessor::Endpoint;
 use import::ImportSSTService;
@@ -27,6 +33,7 @@ use storage::{Engine, Storage};
 use util::security::SecurityManager;
 use util::worker::Worker;
 
+use super::load_statistics::*;
 use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
@@ -35,6 +42,8 @@ use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
+pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
+pub const HELPER_THREAD_PREFIX: &str = "transport-helper";
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, E: Engine> {
     env: Arc<Environment>,
@@ -49,6 +58,11 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+
+    // A helper thread (or pool) for transport layer.
+    // Currently load statistics is done in the thread.
+    helper_runtime: Arc<Runtime>,
+    thread_load: Arc<ThreadLoad>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
@@ -64,17 +78,25 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         debug_engines: Option<Engines>,
         import_service: Option<ImportSSTService<T>>,
     ) -> Result<Self> {
+        // A helper thread (or pool) for transport layer.
+        let mut pool_builder = thread_pool::Builder::new();
+        pool_builder.pool_size(cfg.as_ref().helper_threadpool_size);
+        pool_builder.name_prefix(HELPER_THREAD_PREFIX);
+        let helper_runtime = Arc::new(
+            RuntimeBuilder::new()
+                .threadpool_builder(pool_builder)
+                .build()
+                .unwrap(),
+        );
+        let thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(cfg.grpc_concurrency)
-                .name_prefix(thd_name!("grpc-server"))
+                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(
-            Arc::clone(&env),
-            Arc::clone(cfg),
-            Arc::clone(security_mgr),
-        )));
+
         let snap_worker = Worker::new("snap-handler");
         let kv_service = KvService::new(
             storage.clone(),
@@ -82,6 +104,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             raft_router.clone(),
             snap_worker.scheduler(),
         );
+
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
@@ -90,6 +113,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(-1)
+            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -111,6 +135,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             SocketAddr::new(IpAddr::from_str(host)?, port as u16)
         };
 
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(
+            Arc::clone(&env),
+            Arc::clone(cfg),
+            Arc::clone(security_mgr),
+        )));
+
         let trans = ServerTransport::new(
             raft_client,
             snap_worker.scheduler(),
@@ -127,6 +157,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             storage,
             snap_mgr,
             snap_worker,
+            helper_runtime,
+            thread_load,
         };
 
         Ok(svr)
@@ -146,6 +178,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         );
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();
+
+        let thread_load = Arc::clone(&self.thread_load);
+        let mut load_stats = GrpcThreadLoadStatistics::new(4, thread_load);
+        self.helper_runtime.executor().spawn(
+            Interval::new(Instant::now(), Duration::from_millis(100))
+                .map_err(|_| ())
+                .for_each(move |i| {
+                    load_stats.record(i);
+                    Ok(())
+                }),
+        );
+
         info!("TiKV is ready to serve");
         Ok(())
     }
@@ -263,7 +307,6 @@ mod tests {
             significant_msg_sender,
         };
 
-        let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
@@ -276,6 +319,7 @@ mod tests {
         );
         let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
 
+        let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
             &cfg,
             &security_mgr,
