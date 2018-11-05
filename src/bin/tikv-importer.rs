@@ -107,6 +107,13 @@ fn main() {
     util::print_tikv_info();
     check_environment_variables();
 
+    if tikv_util::panic_mark_file_exists(&config.storage.data_dir) {
+        fatal!(
+            "panic_mark_file {:?} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&config.storage.data_dir)
+        );
+    }
+
     run_import_server(&config);
 }
 
