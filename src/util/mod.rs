@@ -52,16 +52,14 @@ pub mod worker;
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
 
-static mut PANIC_MARK: AtomicBool = AtomicBool::new(false);
+static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {
-    unsafe {
-        PANIC_MARK.store(false, Ordering::SeqCst);
-    }
+    PANIC_MARK.store(false, Ordering::SeqCst);
 }
 
 pub fn panic_mark_is_on() -> bool {
-    unsafe { PANIC_MARK.load(Ordering::SeqCst) }
+    PANIC_MARK.load(Ordering::SeqCst)
 }
 
 pub const PANIC_MARK_FILE: &str = "panic_mark_file";
