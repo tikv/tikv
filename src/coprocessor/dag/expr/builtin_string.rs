@@ -15,11 +15,12 @@ use base64;
 use hex;
 use hex::FromHex;
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::types;
-use coprocessor::codec::Datum;
+use coprocessor::codec::{mysql, Datum};
 use safemem;
 
 const SPACE: u8 = 0o40u8;
@@ -378,6 +379,33 @@ impl ScalarFunc {
             _ => Ok(None),
         }
     }
+
+    #[inline]
+    pub fn substring_index<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let delim = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        let count = try_opt!(self.children[2].eval_int(ctx, row));
+        if delim.is_empty() || count == 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        let r = if mysql::has_unsigned_flag(self.children[2].get_tp().get_flag()) {
+            substring_index_positive(&s, delim.as_ref(), count as u64 as usize)
+        } else if count >= 0 {
+            substring_index_positive(&s, delim.as_ref(), count as usize)
+        } else {
+            let count = if count == i64::min_value() {
+                i64::max_value() as usize + 1
+            } else {
+                -count as usize
+            };
+            substring_index_negative(&s, delim.as_ref(), count)
+        };
+        Ok(Some(Cow::Owned(r.into_bytes())))
+    }
 }
 
 #[inline]
@@ -424,6 +452,39 @@ fn line_wrap(buf: &mut [u8], input_len: usize) {
         safemem::copy_over(buf, old_start, new_start, line_len);
         buf[new_start + line_len] = BASE64_LINE_WRAP;
     }
+}
+
+#[inline]
+fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
+    let mut bg = 0;
+    let mut cnt = 0;
+    let mut last = 0;
+    while cnt < count {
+        if let Some(idx) = s[bg..].find(delim) {
+            last = bg + idx;
+            bg = last + delim.len();
+            cnt += 1;
+        } else {
+            last = s.len();
+            break;
+        }
+    }
+    s[..last].to_string()
+}
+
+#[inline]
+fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
+    let mut bg = 0;
+    let mut positions = VecDeque::with_capacity(count.min(128));
+    positions.push_back(0);
+    while let Some(idx) = s[bg..].find(delim) {
+        bg = bg + idx + delim.len();
+        if positions.len() == count {
+            positions.pop_front();
+        }
+        positions.push_back(bg);
+    }
+    s[positions[0]..].to_string()
 }
 
 #[inline]
@@ -1496,5 +1557,94 @@ mod tests {
         let exp = Datum::Bytes(b"".to_vec());
         let got = eval_func(ScalarFuncSig::FromBase64, &[s]).unwrap();
         assert_eq!(got, exp);
+    }
+
+    #[test]
+    fn test_substring_index() {
+        let tests = vec![
+            ("www.pingcap.com", ".", 2, "www.pingcap"),
+            ("www.pingcap.com", ".", -2, "pingcap.com"),
+            ("www.pingcap.com", ".", -3, "www.pingcap.com"),
+            ("www.pingcap.com", ".", 0, ""),
+            ("www.pingcap.com", ".", 100, "www.pingcap.com"),
+            ("www.pingcap.com", ".", -100, "www.pingcap.com"),
+            ("www.pingcap.com", "d", 0, ""),
+            ("www.pingcap.com", "d", 1, "www.pingcap.com"),
+            ("www.pingcap.com", "d", -1, "www.pingcap.com"),
+            ("www.pingcap.com", "", 0, ""),
+            ("www.pingcap.com", "", 1, ""),
+            ("www.pingcap.com", "", -1, ""),
+            ("1aaa1", "aa", 1, "1"),
+            ("1aaa1", "aa", 2, "1aaa1"),
+            ("1aaaaaa1", "aa", 2, "1aa"),
+            ("1aaa1", "aa", -1, "a1"),
+            ("1aaaaaa1", "aa", -1, "1"),
+            ("1aaa1", "aa", -2, "1aaa1"),
+            ("1aaaaaa1", "aa", -2, "aa1"),
+            ("aaa1aa1aa", "aa", -3, "a1aa1aa"),
+            ("aaa1aa1aa", "aa", i64::max_value(), "aaa1aa1aa"),
+            ("aaa1aa1aa", "aa", i64::min_value() + 1, "aaa1aa1aa"),
+            ("aaa1aa1aa", "aa", i64::min_value(), "aaa1aa1aa"),
+            // empty parts after split
+            ("...", ".", 1, ""),
+            ("...", ".", 2, "."),
+            ("...", ".", 3, ".."),
+            ("...", ".", 4, "..."),
+            ("...", ".", -1, ""),
+            ("...", ".", -2, "."),
+            ("...", ".", -3, ".."),
+            ("...", ".", -4, "..."),
+            // weird boundary conditions
+            ("...www...pingcap...com...", ".", 3, ".."),
+            ("...www...pingcap...com...", ".", 4, "...www"),
+            ("...www...pingcap...com...", ".", 5, "...www."),
+            ("...www...pingcap...com...", ".", -3, ".."),
+            ("...www...pingcap...com...", ".", -4, "com..."),
+            ("...www...pingcap...com...", ".", -5, ".com..."),
+            ("", ".", 0, ""),
+            ("", ".", 1, ""),
+            ("", ".", -1, ""),
+        ];
+        for (s, delim, count, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let delim = Datum::Bytes(delim.as_bytes().to_vec());
+            let count = Datum::I64(count);
+            let got = eval_func(ScalarFuncSig::SubstringIndex, &[s, delim, count]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
+        }
+
+        // u64 count
+        let args = [
+            Datum::Bytes(b"www.pingcap.com".to_vec()),
+            Datum::Bytes(b".".to_vec()),
+            Datum::U64(u64::max_value()),
+        ];
+        let got = eval_func(ScalarFuncSig::SubstringIndex, &args).unwrap();
+        assert_eq!(got, Datum::Bytes(b"www.pingcap.com".to_vec()));
+
+        let invalid_tests = vec![
+            (
+                Datum::Null,
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"www.pingcap.com".to_vec()),
+                Datum::Null,
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"www.pingcap.com".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+                Datum::Null,
+            ),
+        ];
+        for (s, delim, count, exp) in invalid_tests {
+            let got = eval_func(ScalarFuncSig::SubstringIndex, &[s, delim, count]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 }
