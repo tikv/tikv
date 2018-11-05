@@ -1729,6 +1729,34 @@ mod tests {
                 )
                 .wait(),
         );
+        // Forward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
 
         storage
             .async_commit(
@@ -1815,6 +1843,40 @@ mod tests {
                 .wait(),
         );
         storage.stop().unwrap();
+        // Forward with limit
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
     }
 
     #[test]

@@ -95,7 +95,7 @@ impl<E: Engine> SyncStorage<E> {
     pub fn scan(
         &self,
         ctx: Context,
-        key: Key,
+        start_key: Key,
         end_key: Option<Key>,
         limit: usize,
         key_only: bool,
@@ -104,7 +104,7 @@ impl<E: Engine> SyncStorage<E> {
         self.store
             .async_scan(
                 ctx,
-                key,
+                start_key,
                 end_key,
                 limit,
                 start_ts,
@@ -116,7 +116,7 @@ impl<E: Engine> SyncStorage<E> {
     pub fn reverse_scan(
         &self,
         ctx: Context,
-        key: Key,
+        start_key: Key,
         end_key: Option<Key>,
         limit: usize,
         key_only: bool,
@@ -125,7 +125,7 @@ impl<E: Engine> SyncStorage<E> {
         self.store
             .async_scan(
                 ctx,
-                key,
+                start_key,
                 end_key,
                 limit,
                 start_ts,
