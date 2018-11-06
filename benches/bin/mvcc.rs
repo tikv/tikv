@@ -84,6 +84,7 @@ fn bench_tombstone_scan() -> BenchSamples {
                 .scan(
                     Context::new(),
                     Key::from_raw(&k),
+                    None,
                     1,
                     false,
                     ts_generator.next().unwrap()

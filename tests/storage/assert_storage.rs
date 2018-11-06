@@ -271,7 +271,7 @@ impl AssertionStorage {
     ) {
         let key_address = make_key(start_key);
         let result = self.store
-            .scan(self.ctx.clone(), key_address, limit, false, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -290,7 +290,7 @@ impl AssertionStorage {
     ) {
         let key_address = make_key(start_key);
         let result = self.store
-            .scan(self.ctx.clone(), key_address, limit, true, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, true, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
