@@ -393,7 +393,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
+    tikv_util::panic_hook::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     // Print version information.
     util::print_tikv_info();
