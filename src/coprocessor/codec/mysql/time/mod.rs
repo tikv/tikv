@@ -48,7 +48,7 @@ const ZERO_TIMESTAMP: i64 = -62169984000;
 pub const MAX_TIMESTAMP: i64 = 253402300799;
 pub const MAX_TIME_NANOSECONDS: u32 = 999999000;
 
-const MONTH_NAMES: &[&str] = &[
+pub const MONTH_NAMES: &[&str] = &[
     "January",
     "February",
     "March",
@@ -865,7 +865,7 @@ impl Time {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     use std::cmp::Ordering;

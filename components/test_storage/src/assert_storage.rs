@@ -320,7 +320,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, limit, false, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -340,7 +340,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .reverse_scan(self.ctx.clone(), key_address, limit, false, ts)
+            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -360,7 +360,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, limit, true, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, true, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect

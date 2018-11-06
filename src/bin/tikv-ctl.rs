@@ -17,14 +17,29 @@ extern crate chrono;
 extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
+extern crate libc;
+#[macro_use]
+extern crate log;
 extern crate protobuf;
 extern crate raft;
 extern crate rocksdb;
-extern crate rustc_serialize;
+#[macro_use]
 extern crate tikv;
 extern crate toml;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
+extern crate hex;
+#[cfg(unix)]
+extern crate nix;
+#[cfg(unix)]
+extern crate signal;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 
-use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
+mod util;
+
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
@@ -877,9 +892,11 @@ impl DebugExecutor for Debugger {
 
 fn main() {
     let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
+    let version_info = util::tikv_version_info();
 
     let mut app = App::new("TiKV Ctl")
-        .author("PingCAP")
+        .long_version(version_info.as_ref())
+        .author("TiKV Org.")
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
@@ -1532,7 +1549,7 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        println!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -1797,11 +1814,11 @@ fn get_module_type(module: &str) -> MODULE {
     }
 }
 
-fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
+fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
     if key.starts_with("0x") || key.starts_with("0X") {
-        return key[2..].from_hex();
+        return hex::decode(&key[2..]);
     }
-    key.from_hex()
+    hex::decode(key)
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {

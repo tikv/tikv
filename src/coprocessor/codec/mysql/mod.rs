@@ -71,7 +71,7 @@ pub use self::json::{parse_json_path_expr, Json, JsonEncoder, ModifyType, PathEx
 pub use self::time::{Time, TimeEncoder, TimeType, Tz};
 
 #[cfg(test)]
-mod test {
+mod tests {
     #[test]
     fn test_parse_frac() {
         let cases = vec![

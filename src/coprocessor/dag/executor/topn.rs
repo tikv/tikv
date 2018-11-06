@@ -160,7 +160,7 @@ impl Executor for TopNExecutor {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use std::cell::RefCell;
     use std::sync::Arc;
 
@@ -179,7 +179,7 @@ pub mod test {
 
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::*;
 

@@ -19,8 +19,9 @@ pub use coprocessor::codec::{Error, Result};
 pub use self::chunk::{Chunk, ChunkEncoder};
 
 #[cfg(test)]
-mod test {
-    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+mod tests {
+    use cop_datatype::FieldTypeAccessor;
+    use cop_datatype::FieldTypeTp;
     use tipb::expression::FieldType;
 
     pub fn field_type(tp: FieldTypeTp) -> FieldType {

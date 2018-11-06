@@ -160,7 +160,7 @@ impl<S: Snapshot> StoreScanner<S> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::SnapshotStore;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
