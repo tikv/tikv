@@ -17,7 +17,7 @@ use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
 use storage::txn::Result;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
-use util::escape;
+use util::{escape, set_panic_mark};
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
@@ -105,8 +105,9 @@ impl<S: Snapshot> Scanner<S> {
         };
 
         if self.range.start > key || self.range.end <= key {
+            set_panic_mark();
             panic!(
-                "key: {} out of range [{}, {})",
+                "key: {} out of range, start: {}, end: {}",
                 escape(&key),
                 escape(self.range.get_start()),
                 escape(self.range.get_end())
@@ -184,7 +185,7 @@ impl<S: Snapshot> Scanner<S> {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use std::i64;
 
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};

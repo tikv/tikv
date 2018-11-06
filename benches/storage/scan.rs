@@ -81,6 +81,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
                 .scan(
                     Context::new(),
                     Key::from_raw(&k),
+                    None,
                     1,
                     false,
                     ts_generator.next().unwrap()

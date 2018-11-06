@@ -71,7 +71,7 @@ impl<'a> Executor for LimitExecutor<'a> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
@@ -80,9 +80,9 @@ mod test {
     use coprocessor::codec::datum::Datum;
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::test::gen_table_data;
+    use super::super::topn::tests::gen_table_data;
     use super::*;
 
     #[test]

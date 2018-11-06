@@ -327,8 +327,7 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
-    use std::sync::Arc;
+mod tests {
     use std::{f64, i64, u64};
 
     use cop_datatype::FieldTypeFlag;
@@ -337,7 +336,7 @@ mod test {
     use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::Decimal;
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{
+    use coprocessor::dag::expr::tests::{
         check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
     };
     use coprocessor::dag::expr::*;
@@ -1156,7 +1155,7 @@ mod test {
                 cfg.set_by_flags(*flag)
                     .set_sql_mode(*sql_mode)
                     .set_strict_sql_mode(*strict_sql_mode);
-                let mut ctx = EvalContext::new(Arc::new(cfg));
+                let mut ctx = EvalContext::new(::std::sync::Arc::new(cfg));
                 let op = Expression::build(&mut ctx, scalar_func.clone()).unwrap();
                 let got = op.eval(&mut ctx, &[]);
                 if *is_ok {

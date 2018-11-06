@@ -393,9 +393,9 @@ pub trait ColumnEncoder: NumberEncoder {
 impl<T: Write> ColumnEncoder for T {}
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
-    use coprocessor::codec::chunk::test::field_type;
+    use coprocessor::codec::chunk::tests::field_type;
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::*;
     use std::{f64, u64};

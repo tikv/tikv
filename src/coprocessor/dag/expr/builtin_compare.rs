@@ -496,13 +496,13 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::super::EvalConfig;
     use super::*;
     use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{col_expr, datum_expr, str2dec};
+    use coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;
     use std::sync::Arc;

@@ -105,9 +105,9 @@ mod tests {
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
 
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::test::gen_table_data;
+    use super::super::topn::tests::gen_table_data;
     use super::*;
 
     fn new_const_expr() -> Expr {

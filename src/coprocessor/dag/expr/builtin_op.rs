@@ -201,10 +201,10 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::mysql::Duration;
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{check_overflow, datum_expr, scalar_func_expr, str2dec};
+    use coprocessor::dag::expr::tests::{check_overflow, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;

@@ -164,11 +164,11 @@ impl<'a> Iterator for RowIterator<'a> {
 }
 
 #[cfg(test)]
-mod test {
-    use super::super::test::*;
-    use super::*;
-
+mod tests {
     use cop_datatype::FieldTypeTp;
+
+    use super::*;
+    use coprocessor::codec::chunk::tests::*;
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::*;
 

@@ -328,7 +328,7 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
 const MAX_ZERO_COUNT: i64 = 20;
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::f64::EPSILON;
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};

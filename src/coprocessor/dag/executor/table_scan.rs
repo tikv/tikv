@@ -223,7 +223,7 @@ impl<S: Snapshot> Executor for TableScanExecutor<S> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
     use kvproto::kvrpcpb::IsolationLevel;
@@ -232,7 +232,7 @@ mod test {
 
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{
+    use super::super::scanner::tests::{
         get_point_range, get_range, prepare_table_data, Data, TestStore,
     };
     use super::*;

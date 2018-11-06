@@ -274,7 +274,7 @@ impl<S: Snapshot> Executor for IndexScanExecutor<S> {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use std::i64;
 
@@ -287,7 +287,7 @@ pub mod test {
     use storage::SnapshotStore;
     use util::collections::HashMap;
 
-    use super::super::scanner::test::{new_col_info, Data, TestStore};
+    use super::super::scanner::tests::{new_col_info, Data, TestStore};
     use super::*;
 
     const TABLE_ID: i64 = 1;

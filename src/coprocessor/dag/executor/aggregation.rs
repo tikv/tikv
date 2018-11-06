@@ -395,7 +395,7 @@ impl StreamAggExecutor {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
     use cop_datatype::FieldTypeTp;
@@ -412,11 +412,11 @@ mod test {
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
-    use super::super::index_scan::test::IndexTestWrapper;
+    use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;
-    use super::super::scanner::test::{get_range, new_col_info, Data, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, Data, TestStore};
     use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::test::gen_table_data;
+    use super::super::topn::tests::gen_table_data;
     use super::*;
 
     #[inline]
