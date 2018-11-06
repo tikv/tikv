@@ -39,10 +39,11 @@ use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::fsm::peer::{MergeAsyncWait, TickSchedulerTracker};
 use raftstore::store::fsm::transport::PollContext;
-use raftstore::store::fsm::{ConfigProvider, DestroyPeerJob};
-use raftstore::store::worker::{
-    apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
+use raftstore::store::fsm::{
+    apply, apply::ApplyMetrics, Apply, ApplyRouter, ApplyTask, Proposal, RegionProposal,
 };
+use raftstore::store::fsm::{ConfigProvider, DestroyPeerJob};
+use raftstore::store::worker::{ReadProgress, ReadTask};
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::HashMap;
@@ -236,7 +237,7 @@ pub struct Peer {
     // When entry exceed max size, reject to propose the entry.
     pub raft_entry_max_size: u64,
 
-    pub apply_scheduler: Scheduler<ApplyTask>,
+    pub apply_router: ApplyRouter,
     pub read_scheduler: Scheduler<ReadTask>,
 
     pub pending_remove: bool,
@@ -359,7 +360,7 @@ impl Peer {
             approximate_size: None,
             approximate_keys: None,
             compaction_declined_bytes: 0,
-            apply_scheduler: provider.apply_scheduler(),
+            apply_router: provider.apply_scheduler(),
             read_scheduler: provider.read_scheduler(),
             pending_remove: false,
             tick_tracker: TickSchedulerTracker::empty(),
@@ -399,8 +400,8 @@ impl Peer {
     /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate(&self) {
         if self
-            .apply_scheduler
-            .schedule(ApplyTask::register(self))
+            .apply_router
+            .force_send_task(self.region_id(), ApplyTask::register(self))
             .is_err()
         {
             warn!(
