@@ -24,19 +24,19 @@ impl ThreadLoad {
 
     #[allow(dead_code)]
     pub fn in_heavy_load(&self) -> bool {
-        self.load.load(Ordering::SeqCst) > self.threshold
+        self.load.load(Ordering::Acquire) > self.threshold
     }
 
     /// Incease when every time updating `load`.
     #[allow(dead_code)]
     pub fn term(&self) -> usize {
-        self.term.load(Ordering::SeqCst)
+        self.term.load(Ordering::Acquire)
     }
 
     /// For example, 200 means the threads eat 200% CPU.
     #[allow(dead_code)]
     pub fn load(&self) -> usize {
-        self.load.load(Ordering::SeqCst)
+        self.load.load(Ordering::Acquire)
     }
 }
 
@@ -96,8 +96,8 @@ impl GrpcThreadLoadStatistics {
         if millis > 0 {
             let cpu_usage = (current_cpu_usage - earlist_cpu_usage) * 1000f64 * 100f64;
             let cpu_usage = cpu_usage as usize / millis;
-            self.thread_load.load.store(cpu_usage, Ordering::SeqCst);
-            self.thread_load.term.fetch_add(1, Ordering::SeqCst);
+            self.thread_load.load.store(cpu_usage, Ordering::Release);
+            self.thread_load.term.fetch_add(1, Ordering::Release);
         }
     }
 }

@@ -41,9 +41,11 @@ use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 
+const LOAD_STATISTICS_SLOTS: usize = 4;
+const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
-pub const HELPER_THREAD_PREFIX: &str = "transport-helper";
+pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, E: Engine> {
     env: Arc<Environment>,
@@ -61,7 +63,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
 
     // A helper thread (or pool) for transport layer.
     // Currently load statistics is done in the thread.
-    helper_runtime: Arc<Runtime>,
+    stats_runtime: Arc<Runtime>,
     thread_load: Arc<ThreadLoad>,
 }
 
@@ -80,9 +82,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let mut pool_builder = thread_pool::Builder::new();
-        pool_builder.pool_size(cfg.as_ref().helper_threadpool_size);
-        pool_builder.name_prefix(HELPER_THREAD_PREFIX);
-        let helper_runtime = Arc::new(
+        pool_builder.pool_size(cfg.as_ref().stats_concurrency);
+        pool_builder.name_prefix(STATS_THREAD_PREFIX);
+        let stats_runtime = Arc::new(
             RuntimeBuilder::new()
                 .threadpool_builder(pool_builder)
                 .build()
@@ -157,7 +159,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             storage,
             snap_mgr,
             snap_worker,
-            helper_runtime,
+            stats_runtime,
             thread_load,
         };
 
@@ -180,9 +182,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         self.grpc_server.start();
 
         let thread_load = Arc::clone(&self.thread_load);
-        let mut load_stats = GrpcThreadLoadStatistics::new(4, thread_load);
-        self.helper_runtime.executor().spawn(
-            Interval::new(Instant::now(), Duration::from_millis(100))
+        let mut load_stats = GrpcThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, thread_load);
+        self.stats_runtime.executor().spawn(
+            Interval::new(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())
                 .for_each(move |i| {
                     load_stats.record(i);
