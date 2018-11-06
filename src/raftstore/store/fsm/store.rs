@@ -929,18 +929,22 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
         }
     }
 
-    pub fn poll(&mut self, receiver: &Receiver<StoreMsg>, buf: &mut Vec<StoreMsg>) -> bool {
-        let mut polled = false;
+    pub fn poll(
+        &mut self,
+        receiver: &Receiver<StoreMsg>,
+        buf: &mut Vec<StoreMsg>,
+    ) -> Option<usize> {
+        let mut mark_poll_pos = None;
         while buf.len() < self.core.cfg.as_ref().map_or(1024, |c| c.messages_per_tick) {
             match receiver.try_recv() {
                 Ok(msg) => buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    polled = true;
+                    mark_poll_pos = Some(0);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.stop();
-                    polled = true;
+                    mark_poll_pos = Some(0);
                     break;
                 }
             }
@@ -948,7 +952,7 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
         for msg in buf.drain(..) {
             self.on_store_msg(msg);
         }
-        polled
+        mark_poll_pos
     }
 }
 

@@ -2222,12 +2222,14 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
                 self.peer.approximate_size = None;
                 self.peer.approximate_keys = None;
             }
+            PeerMsg::Noop => {}
         }
     }
 
-    pub fn poll(&mut self, receiver: &Receiver<PeerMsg>, buf: &mut Vec<PeerMsg>) -> bool {
-        let mut polled = false;
+    pub fn poll(&mut self, receiver: &Receiver<PeerMsg>, buf: &mut Vec<PeerMsg>) -> Option<usize> {
+        let mut mark = None;
         if self.peer.pending_merge_apply.is_some() {
+            mark = Some(receiver.len());
             if !self
                 .peer
                 .pending_merge_apply
@@ -2236,22 +2238,22 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
                 .poller
                 .waken()
             {
-                return true;
+                return mark;
             }
             if !self.resume_handling_pending_apply() {
-                return true;
+                return mark;
             }
         }
         while buf.len() < self.peer.cfg.messages_per_tick {
             match receiver.try_recv() {
                 Ok(msg) => buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    polled = true;
+                    mark = Some(0);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.stop();
-                    polled = true;
+                    mark = Some(0);
                     break;
                 }
             }
@@ -2259,7 +2261,7 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         for m in buf.drain(..) {
             self.on_peer_msg(m);
         }
-        polled
+        mark
     }
 }
 

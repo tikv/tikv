@@ -270,9 +270,7 @@ pub struct OneshotNotifier {
 impl Drop for OneshotNotifier {
     fn drop(&mut self) {
         self.waken.store(true, Ordering::Release);
-        self.mail_box
-            .state
-            .notify_peer(&self.mail_box, &self.scheduler);
+        let _ = self.mail_box.force_send(PeerMsg::Noop, &self.scheduler);
     }
 }
 
@@ -640,13 +638,13 @@ impl Batch {
     }
 
     #[inline]
-    fn release_peer(&mut self, index: usize) -> bool {
+    fn release_peer(&mut self, index: usize, pos: usize) -> bool {
         let mut holder = self.fsm_holders.pop().unwrap();
         let mut peer = self.peers.swap_remove(index);
         let mail_box = peer.mail_box.take().unwrap();
         mem::replace(&mut *holder, FsmTypes::Peer(peer));
         mail_box.state.release_fsm(holder);
-        if mail_box.sender.is_empty() {
+        if mail_box.sender.len() == pos {
             true
         } else {
             match mail_box.state.maybe_catch_fsm() {
@@ -666,12 +664,12 @@ impl Batch {
     }
 
     #[inline]
-    fn release_store(&mut self, mail_box: &MailBox<StoreMsg>) -> bool {
+    fn release_store(&mut self, mail_box: &MailBox<StoreMsg>, pos: usize) -> bool {
         let mut holder = self.fsm_holders.pop().unwrap();
         let s = self.store.take().unwrap();
         mem::replace(&mut *holder, FsmTypes::Store(s));
         mail_box.state.release_fsm(holder);
-        if mail_box.sender.is_empty() {
+        if mail_box.sender.len() == pos {
             true
         } else {
             match mail_box.state.maybe_catch_fsm() {
@@ -944,14 +942,14 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
             self.timer = SlowTimer::new();
             let mut has_ready = false;
             if batches.store.is_some() {
-                let to_release = {
+                let mark = {
                     let mut s = batches.store.as_mut().unwrap();
                     let s: &mut StoreFsm = &mut *s;
                     let mut store = Store::new(&mut s.store, &mut self.ctx, &self.scheduler);
                     store.poll(&s.receiver, &mut store_msgs)
                 };
-                if to_release {
-                    batches.release_store(&self.scheduler.router.store_box);
+                if let Some(pos) = mark {
+                    batches.release_store(&self.scheduler.router.store_box, pos);
                 }
             }
             let mut pending_cnt = batches.peers.len();
@@ -959,7 +957,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
             for (i, p) in batches.peers.iter_mut().enumerate() {
                 let p: &mut PeerFsm = &mut *p;
                 let mut peer = Peer::new(&mut p.peer, &mut self.ctx, &self.scheduler);
-                let polled = peer.poll(&p.receiver, &mut msgs);
+                let mark = peer.poll(&p.receiver, &mut msgs);
                 if peer.peer.has_ready && !peer.peer.stopped {
                     has_ready = true;
                     if let Some(p) = peer.peer.take_apply_proposals() {
@@ -973,9 +971,9 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     pending_cnt -= 1;
                 }
                 if peer.peer.stopped {
-                    exhausted_peers.push((i, true));
-                } else if polled {
-                    exhausted_peers.push((i, false));
+                    exhausted_peers.push((i, None));
+                } else if mark.is_some() {
+                    exhausted_peers.push((i, mark));
                 }
             }
             if has_ready {
@@ -998,9 +996,9 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                 self.ctx.queued_snapshot.clear();
             }
 
-            while let Some((r, stopped)) = exhausted_peers.pop() {
-                if !stopped {
-                    batches.release_peer(r);
+            while let Some((r, mark)) = exhausted_peers.pop() {
+                if let Some(pos) = mark {
+                    batches.release_peer(r, pos);
                 } else {
                     batches.remove_peer(r);
                 }

@@ -225,6 +225,7 @@ pub enum PeerMsg {
         state: Option<RegionLocalState>,
     },
     ClearStat,
+    Noop,
 }
 
 pub enum StoreMsg {
@@ -294,6 +295,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::ApplyRes(_) => write!(fmt, "ApplyRes"),
             PeerMsg::Start { ref state } => write!(fmt, "Start {:?}", state),
             PeerMsg::ClearStat => write!(fmt, "ClearStat"),
+            PeerMsg::Noop => write!(fmt, "Noop"),
         }
     }
 }

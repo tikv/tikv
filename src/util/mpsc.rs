@@ -80,6 +80,11 @@ pub struct Receiver<T> {
 
 impl<T> Sender<T> {
     #[inline]
+    pub fn len(&self) -> usize {
+        self.sender.len()
+    }
+
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.sender.is_empty()
     }
@@ -113,6 +118,16 @@ impl<T> Sender<T> {
 }
 
 impl<T> Receiver<T> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.receiver.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.receiver.is_empty()
+    }
+
     #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
         match self.receiver.recv() {
@@ -189,6 +204,11 @@ pub struct LooseBoundedSender<T> {
 }
 
 impl<T> LooseBoundedSender<T> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.sender.len()
+    }
+
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.sender.is_empty()
