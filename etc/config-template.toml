@@ -113,7 +113,7 @@
 # scheduler-notify-capacity = 10240
 
 ## The number of slots in Scheduler latches, which controls write concurrency.
-## In most cases you can use the default value. When importing data, you can set it  to a larger
+## In most cases you can use the default value. When importing data, you can set it to a larger
 ## value.
 # scheduler-concurrency = 2048000
 
