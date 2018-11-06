@@ -13,9 +13,12 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::fs::File;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{io, u64};
 use std::{slice, thread};
@@ -49,6 +52,32 @@ pub mod worker;
 
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
+
+static PANIC_MARK: AtomicBool = AtomicBool::new(false);
+
+pub fn set_panic_mark() {
+    PANIC_MARK.store(true, Ordering::SeqCst);
+}
+
+pub fn panic_mark_is_on() -> bool {
+    PANIC_MARK.load(Ordering::SeqCst)
+}
+
+pub const PANIC_MARK_FILE: &str = "panic_mark_file";
+
+pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
+    data_dir.as_ref().join(PANIC_MARK_FILE)
+}
+
+pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
+    let file = panic_mark_file_path(data_dir);
+    File::create(&file).unwrap();
+}
+
+pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
+    let path = panic_mark_file_path(data_dir);
+    file::file_exists(path)
+}
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
@@ -421,6 +450,78 @@ impl<T> Drop for MustConsumeVec<T> {
     }
 }
 
+/// Exit the whole process when panic.
+pub fn set_exit_hook(
+    panic_abort: bool,
+    guard: Option<::slog_scope::GlobalLoggerGuard>,
+    data_dir: &str,
+) {
+    use std::panic;
+    use std::process;
+    use std::sync::Mutex;
+
+    // HACK! New a backtrace ahead for caching necessary elf sections of this
+    // tikv-server, in case it can not open more files during panicking
+    // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
+    //
+    // Crate backtrace caches debug info in a static variable `STATE`,
+    // and the `STATE` lives forever once it has been created.
+    // See more: https://github.com/alexcrichton/backtrace-rs/blob/\
+    //           597ad44b131132f17ed76bf94ac489274dd16c7f/\
+    //           src/symbolize/libbacktrace.rs#L126-L159
+    // Caching is slow, spawn it in another thread to speed up.
+    thread::Builder::new()
+        .name(thd_name!("backtrace-loader"))
+        .spawn(::backtrace::Backtrace::new)
+        .unwrap();
+
+    // Hold the guard.
+    let log_guard = Mutex::new(guard);
+
+    let data_dir = data_dir.to_string();
+    let orig_hook = panic::take_hook();
+    panic::set_hook(box move |info: &panic::PanicInfo| {
+        if log_enabled!(::log::LogLevel::Error) {
+            let msg = match info.payload().downcast_ref::<&'static str>() {
+                Some(s) => *s,
+                None => match info.payload().downcast_ref::<String>() {
+                    Some(s) => &s[..],
+                    None => "Box<Any>",
+                },
+            };
+            let thread = thread::current();
+            let name = thread.name().unwrap_or("<unnamed>");
+            let loc = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()));
+            let bt = ::backtrace::Backtrace::new();
+            error!(
+                "thread '{}' panicked '{}' at {:?}\n{:?}",
+                name,
+                msg,
+                loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                bt
+            );
+        } else {
+            orig_hook(info);
+        }
+
+        // To collect remaining logs, drop the guard before exit.
+        drop(log_guard.lock().unwrap().take());
+
+        // If PANIC_MARK is true, create panic mark file.
+        if panic_mark_is_on() {
+            create_panic_mark_file(data_dir.clone());
+        }
+
+        if panic_abort {
+            process::abort();
+        } else {
+            process::exit(1);
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +531,22 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
+
+    use tempdir::TempDir;
+
+    #[test]
+    fn test_panic_mark_file_path() {
+        let dir = TempDir::new("test_panic_mark_file_path").unwrap();
+        let panic_mark_file = panic_mark_file_path(dir.path());
+        assert_eq!(panic_mark_file, dir.path().join(PANIC_MARK_FILE))
+    }
+
+    #[test]
+    fn test_panic_mark_file_exists() {
+        let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
+        create_panic_mark_file(dir.path());
+        assert!(panic_mark_file_exists(dir.path()));
+    }
 
     #[test]
     fn test_to_socket_addr() {

@@ -16,6 +16,7 @@ use std::panic::{self, PanicInfo};
 use std::sync::{Mutex, Once, ONCE_INIT};
 use std::{process, thread};
 
+use super::{create_panic_mark_file, panic_mark_is_on};
 use backtrace::Backtrace;
 use log::LogLevel;
 use slog_scope::GlobalLoggerGuard;
@@ -64,7 +65,7 @@ fn track_hook(p: &PanicInfo) {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
+pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>, data_dir: &str) {
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
     // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
@@ -84,6 +85,7 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
     let log_guard = Mutex::new(guard);
 
     let orig_hook = panic::take_hook();
+    let data_dir = data_dir.to_string();
     panic::set_hook(box move |info: &PanicInfo| {
         if log_enabled!(LogLevel::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
@@ -112,6 +114,11 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<GlobalLoggerGuard>) {
 
         // To collect remaining logs, drop the guard before exit.
         drop(log_guard.lock().unwrap().take());
+
+        // If PANIC_MARK is true, create panic mark file.
+        if panic_mark_is_on() {
+            create_panic_mark_file(data_dir.clone());
+        }
 
         if panic_abort {
             process::abort();
