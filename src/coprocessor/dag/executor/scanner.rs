@@ -107,7 +107,7 @@ impl<S: Snapshot> Scanner<S> {
         if self.range.start > key || self.range.end <= key {
             set_panic_mark();
             panic!(
-                "key: {} out of range [{}, {}]",
+                "key: {} out of range, start: {}, end: {}",
                 escape(&key),
                 escape(self.range.get_start()),
                 escape(self.range.get_end())
