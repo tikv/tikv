@@ -115,6 +115,11 @@ impl<T> Sender<T> {
     pub fn close(&self) {
         self.state.alive.store(false, Ordering::Release);
     }
+
+    #[inline]
+    pub fn is_alive(&self) -> bool {
+        self.state.is_alive()
+    }
 }
 
 impl<T> Receiver<T> {

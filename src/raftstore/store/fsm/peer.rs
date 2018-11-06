@@ -47,7 +47,10 @@ use super::Key;
 use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::cmd_resp::{bind_term, new_error};
 use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
+use raftstore::store::fsm::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use raftstore::store::fsm::transport::{self, OneshotPoller, PollContext};
+use raftstore::store::fsm::ApplyRouter;
+use raftstore::store::fsm::{Apply, ApplyTask, ApplyTaskRes};
 use raftstore::store::fsm::{ConfigProvider, StoreMeta};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use raftstore::store::metrics::*;
@@ -55,10 +58,8 @@ use raftstore::store::msg::Callback;
 use raftstore::store::peer::{self, ConsistencyState, StaleState};
 use raftstore::store::peer_storage::{ApplySnapResult, InvokeContext, PeerStorage};
 use raftstore::store::transport::Transport;
-use raftstore::store::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use raftstore::store::worker::{
-    Apply, ApplyTask, ApplyTaskRes, CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask,
-    RegionTask, SplitCheckTask,
+    CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
 use raftstore::store::{
     util, Config, Engines, PeerMsg, PeerTick, SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
@@ -108,8 +109,8 @@ impl<'a, T: Transport, C> ConfigProvider for Peer<'a, T, C> {
     }
 
     #[inline]
-    fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
-        self.peer.apply_scheduler.clone()
+    fn apply_scheduler(&self) -> ApplyRouter {
+        self.peer.apply_router.clone()
     }
 
     #[inline]
@@ -329,9 +330,9 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
                     self.peer.has_ready = true;
                 }
             }
-            ApplyTaskRes::Destroy(p) => {
-                assert_eq!(p.id(), self.peer_id());
-                assert_eq!(p.region_id(), self.region_id());
+            ApplyTaskRes::Destroy { region_id, id } => {
+                assert_eq!(id, self.peer_id());
+                assert_eq!(region_id, self.region_id());
                 self.destroy_peer(false);
             }
         }
@@ -547,21 +548,24 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         let target_region_id = merge_target.get_id();
 
         let meta = self.ctx.store_meta.lock().unwrap();
-        if let Some(epoch) = meta.pending_cross_snap.get(&target_region_id).or_else(|| {
-            meta.regions
-                .get(&target_region_id)
-                .map(|r| r.get_region_epoch())
-        }) {
+        if let Some(epoch) = meta.pending_cross_snap.get(&target_region_id) {
             info!(
                 "{} checking target {} epoch: {:?}",
                 self.peer.tag, target_region_id, epoch
             );
-            // So the target peer has moved on, we should let it go.
-            if epoch.get_version() > merge_target.get_region_epoch().get_version() {
-                return Ok(true);
+            if epoch.get_version() <= merge_target.get_region_epoch().get_version() {
+                // Wait till it catching up logs.
+                return Ok(false);
             }
-            // Wait till it catching up logs.
-            return Ok(false);
+            let b = meta.regions.get(&target_region_id).map_or(false, |e| {
+                e.get_region_epoch().get_version() > merge_target.get_region_epoch().get_version()
+            });
+            if b {
+                // Merge has been applied, callback may not be responded yet.
+                return Ok(false);
+            }
+            // So the target peer has moved on, we should let it go.
+            return Ok(true);
         }
 
         let state_key = keys::region_state_key(target_region_id);
@@ -766,8 +770,8 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
             self.peer
-                .apply_scheduler
-                .schedule(ApplyTask::destroy(job.region_id))
+                .apply_router
+                .force_send_task(job.region_id, ApplyTask::destroy(job.region_id))
                 .unwrap();
         }
         if job.async_remove {
@@ -2243,6 +2247,7 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             if !self.resume_handling_pending_apply() {
                 return mark;
             }
+            mark = None;
         }
         while buf.len() < self.peer.cfg.messages_per_tick {
             match receiver.try_recv() {

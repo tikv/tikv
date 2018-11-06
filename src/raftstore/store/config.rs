@@ -126,6 +126,7 @@ pub struct Config {
 
     pub store_pool_size: usize,
     pub max_batch_size: usize,
+    pub apply_pool_size: usize,
 
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -195,6 +196,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             store_pool_size: 4,
             max_batch_size: 1024,
+            apply_pool_size: 2,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -341,6 +343,9 @@ impl Config {
         if self.max_batch_size == 0 {
             return Err(box_err!("batch-max-size can't be 0."));
         }
+        if self.apply_pool_size < 1 {
+            return Err(box_err!("apply-pool-size can't be less than 1"));
+        }
         Ok(())
     }
 }
@@ -436,6 +441,10 @@ mod tests {
 
         cfg = Config::new();
         cfg.max_batch_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.apply_pool_size = 0;
         assert!(cfg.validate().is_err());
     }
 }

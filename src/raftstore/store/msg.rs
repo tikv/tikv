@@ -30,7 +30,7 @@ use util::escape;
 use util::rocksdb::CompactedEvent;
 
 use super::{peer::Peer, RegionSnapshot, SnapKey};
-use raftstore::store::worker::ApplyTaskRes;
+use raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 
 #[derive(Debug, Clone)]
 pub struct ReadResponse {

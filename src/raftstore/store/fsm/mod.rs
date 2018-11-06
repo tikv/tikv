@@ -15,10 +15,17 @@
 //! and store is also a special state machine that handles all requests across
 //! stores. They are mixed for now, will be separated in the future.
 
+pub mod apply;
+pub mod apply_transport;
 pub mod peer;
 pub mod store;
 pub mod transport;
 
+pub use self::apply::{
+    Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration, Task as ApplyTask,
+    TaskRes as ApplyTaskRes,
+};
+pub use self::apply_transport::Router as ApplyRouter;
 pub use self::peer::{DestroyPeerJob, Peer};
 pub use self::store::{new_compaction_listener, Store, StoreInfo};
 pub use self::transport::{create_router, OneshotNotifier, Router};
@@ -37,7 +44,7 @@ use util::worker::Scheduler;
 use util::RingQueue;
 
 use super::config::Config;
-use super::worker::{ApplyTask, ReadTask, RegionTask};
+use super::worker::{ReadTask, RegionTask};
 use super::Engines;
 
 type Key = Vec<u8>;
@@ -86,7 +93,7 @@ pub trait ConfigProvider {
     fn store_id(&self) -> u64;
     fn snap_scheduler(&self) -> Scheduler<RegionTask>;
     fn engines(&self) -> &Engines;
-    fn apply_scheduler(&self) -> Scheduler<ApplyTask>;
+    fn apply_scheduler(&self) -> ApplyRouter;
     fn read_scheduler(&self) -> Scheduler<ReadTask>;
     fn coprocessor_host(&self) -> Arc<CoprocessorHost>;
     fn config(&self) -> Arc<Config>;

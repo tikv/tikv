@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod apply;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
@@ -21,10 +20,6 @@ mod read;
 mod region;
 mod split_check;
 
-pub use self::apply::{
-    Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration, Runner as ApplyRunner,
-    Task as ApplyTask, TaskRes as ApplyTaskRes,
-};
 pub use self::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
 pub use self::compact::{Runner as CompactRunner, Task as CompactTask};
 pub use self::consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask};
