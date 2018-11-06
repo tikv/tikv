@@ -14,8 +14,7 @@
 use std::cmp;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
+use std::sync::mpsc::{SendError, TryRecvError};
 use std::sync::Arc;
 
 use protobuf::RepeatedField;
@@ -34,11 +33,13 @@ use kvproto::raft_serverpb::{
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
+use super::apply_transport::{OneshotNotifier, OneshotPoller, Router, Scheduler};
+use super::transport::Router as PeerRouter;
 use import::SSTImporter;
+use prometheus::{exponential_buckets, Histogram};
 use raft::NO_LIMIT;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::fsm::transport::BatchSystem;
 use raftstore::store::fsm::ConfigProvider;
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
@@ -47,15 +48,20 @@ use raftstore::store::peer_storage::{
     self, compact_raft_log, write_initial_apply_state, write_peer_state,
 };
 use raftstore::store::util::check_region_epoch;
-use raftstore::store::{cmd_resp, keys, util, Engines, PeerMsg, Router};
+use raftstore::store::{cmd_resp, keys, util, Config, Engines, PeerMsg};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::collections::HashMap;
+use util::mpsc::Receiver;
 use util::time::{duration_to_sec, Instant, SlowTimer};
-use util::worker::Runnable;
 use util::{escape, rocksdb, MustConsumeVec};
 
-use super::metrics::*;
+lazy_static! {
+    pub static ref APPLY_PROPOSAL: Histogram = register_histogram!(
+        "tikv_raftstore_apply_proposal",
+        "Proposal count of all regions in a mio tick",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+}
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
@@ -77,7 +83,7 @@ impl PendingCmd {
     }
 }
 
-impl Drop for PendingCmd {
+/*impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
             panic!(
@@ -86,7 +92,7 @@ impl Drop for PendingCmd {
             );
         }
     }
-}
+}*/
 
 impl Debug for PendingCmd {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -202,7 +208,7 @@ pub enum ExecResult {
     },
 }
 
-struct ApplyCallback {
+pub struct ApplyCallback {
     region: Region,
     cbs: Vec<(Option<Callback>, RaftCmdResponse)>,
 }
@@ -229,15 +235,19 @@ impl ApplyCallback {
 
 /// Stash keeps the informations that are needed to restore an appropriate
 /// applying context for the `ApplyContextCore::stash` call.
-struct Stash {
+pub struct Stash {
     region: Option<Region>,
     exec_ctx: Option<ExecContext>,
     last_applied_index: u64,
 }
 
-struct ApplyContextCore<'a> {
-    host: &'a CoprocessorHost,
-    importer: &'a SSTImporter,
+pub struct PollContext {
+    engines: Engines,
+    cfg: Arc<Config>,
+    host: Arc<CoprocessorHost>,
+    importer: Arc<SSTImporter>,
+    notifier: PeerRouter,
+    router: Router,
     wb: Option<WriteBatch>,
     cbs: MustConsumeVec<ApplyCallback>,
     merged_regions: Vec<u64>,
@@ -255,11 +265,22 @@ struct ApplyContextCore<'a> {
     use_delete_range: bool,
 }
 
-impl<'a> ApplyContextCore<'a> {
-    pub fn new(host: &'a CoprocessorHost, importer: &'a SSTImporter) -> ApplyContextCore<'a> {
-        ApplyContextCore {
+impl<'a> PollContext {
+    pub fn new(
+        engines: Engines,
+        cfg: Arc<Config>,
+        router: Router,
+        notifier: PeerRouter,
+        host: Arc<CoprocessorHost>,
+        importer: Arc<SSTImporter>,
+    ) -> PollContext {
+        PollContext {
+            engines,
             host,
+            cfg,
             importer,
+            notifier,
+            router,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             merged_regions: vec![],
@@ -275,17 +296,17 @@ impl<'a> ApplyContextCore<'a> {
         }
     }
 
-    pub fn enable_sync_log(mut self, eanbled: bool) -> ApplyContextCore<'a> {
+    pub fn enable_sync_log(mut self, eanbled: bool) -> PollContext {
         self.enable_sync_log = eanbled;
         self
     }
 
-    pub fn apply_res_capacity(mut self, cap: usize) -> ApplyContextCore<'a> {
+    pub fn apply_res_capacity(mut self, cap: usize) -> PollContext {
         self.apply_res = Vec::with_capacity(cap);
         self
     }
 
-    pub fn use_delete_range(mut self, use_delete_range: bool) -> ApplyContextCore<'a> {
+    pub fn use_delete_range(mut self, use_delete_range: bool) -> PollContext {
         self.use_delete_range = use_delete_range;
         self
     }
@@ -321,7 +342,7 @@ impl<'a> ApplyContextCore<'a> {
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
-            self.write_to_db(&delegate.engines.kv);
+            self.write_to_db();
             self.prepare_for(delegate);
         }
         self.wb_last_bytes = self.wb().data_size() as u64;
@@ -329,18 +350,20 @@ impl<'a> ApplyContextCore<'a> {
     }
 
     /// Write all the changes into rocksdb.
-    pub fn write_to_db(&mut self, engine: &DB) {
+    pub fn write_to_db(&mut self) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
-            engine
+            self.engines
+                .kv
                 .write_opt(self.wb.take().unwrap(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
+            self.sync_log_hint = false;
         }
         for cbs in self.cbs.drain(..) {
-            cbs.invoke_all(self.host);
+            cbs.invoke_all(&self.host);
         }
     }
 
@@ -404,33 +427,19 @@ impl<'a> ApplyContextCore<'a> {
     pub fn wb_mut(&mut self) -> &mut WriteBatch {
         self.wb.as_mut().unwrap()
     }
-}
 
-struct ApplyContext<'a, 'b: 'a> {
-    core: &'a mut ApplyContextCore<'b>,
-    delegates: &'a mut HashMap<u64, Option<ApplyDelegate>>,
-}
-
-impl<'a, 'b> ApplyContext<'a, 'b> {
-    pub fn new(
-        core: &'a mut ApplyContextCore<'b>,
-        delegates: &'a mut HashMap<u64, Option<ApplyDelegate>>,
-    ) -> ApplyContext<'a, 'b> {
-        ApplyContext { core, delegates }
-    }
-}
-
-impl<'a, 'b> Deref for ApplyContext<'a, 'b> {
-    type Target = ApplyContextCore<'b>;
-
-    fn deref(&self) -> &ApplyContextCore<'b> {
-        self.core
-    }
-}
-
-impl<'a, 'b> DerefMut for ApplyContext<'a, 'b> {
-    fn deref_mut(&mut self) -> &mut ApplyContextCore<'b> {
-        self.core
+    #[inline]
+    pub fn flush(&mut self) {
+        self.write_to_db();
+        if !self.apply_res.is_empty() {
+            for res in self.apply_res.drain(..) {
+                let region_id = res.region_id;
+                // TODO: verify if it's really shutting down.
+                let _ = self
+                    .notifier
+                    .force_send_peer_message(region_id, PeerMsg::ApplyRes(TaskRes::Apply(res)));
+            }
+        }
     }
 }
 
@@ -496,6 +505,13 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
 }
 
 #[derive(Debug)]
+struct MergeAsyncWait {
+    pending_entries: Vec<Entry>,
+    pending_tasks: Vec<Task>,
+    poller: OneshotPoller,
+}
+
+#[derive(Debug)]
 pub struct ApplyDelegate {
     // peer_id
     id: u64,
@@ -512,15 +528,23 @@ pub struct ApplyDelegate {
     // to file, but kv data may not synced to file, so we will lose data.
     apply_state: RaftApplyState,
     applied_index_term: u64,
+    metrics: ApplyMetrics,
     term: u64,
     is_merging: bool,
+    stopped: bool,
     pending_cmds: PendingCmdQueue,
-    metrics: ApplyMetrics,
+    pending_merge_apply: Option<MergeAsyncWait>,
     last_merge_version: u64,
 }
 
+enum EntryResult {
+    None,
+    Res(ExecResult),
+    Paused,
+}
+
 impl ApplyDelegate {
-    fn from_peer(peer: &Peer) -> ApplyDelegate {
+    pub fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
         ApplyDelegate::from_registration(peer.engines(), reg)
     }
@@ -536,9 +560,11 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             is_merging: false,
+            stopped: false,
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            pending_merge_apply: None,
         }
     }
 
@@ -550,13 +576,14 @@ impl ApplyDelegate {
         self.id
     }
 
+    // Return true means it's ready to handle next entries.
     fn handle_raft_committed_entries(
         &mut self,
-        apply_ctx: &mut ApplyContext,
-        committed_entries: Vec<Entry>,
-    ) {
+        apply_ctx: &mut PollContext,
+        mut committed_entries: Vec<Entry>,
+    ) -> bool {
         if committed_entries.is_empty() {
-            return;
+            return true;
         }
         apply_ctx.prepare_for(self);
         apply_ctx.committed_count += committed_entries.len();
@@ -565,14 +592,26 @@ impl ApplyDelegate {
         // commands again.
         apply_ctx.committed_count += committed_entries.len();
         let mut results = None;
-        for entry in committed_entries {
+        let mut drainer = committed_entries.drain(..);
+        let mut finished = true;
+        while let Some(entry) = drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
             }
 
             let expect_index = self.apply_state.get_applied_index() + 1;
-            if expect_index != entry.get_index() {
+            if expect_index == entry.get_index() {
+
+            } else {
+                if expect_index > entry.get_index() && self.is_merging {
+                    info!(
+                        "{} skip log at {} for already applied.",
+                        self.tag,
+                        entry.get_index()
+                    );
+                    continue;
+                }
                 panic!(
                     "{} expect index {}, but got {}",
                     self.tag,
@@ -582,19 +621,30 @@ impl ApplyDelegate {
             }
 
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry),
-                EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, entry),
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
+                EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, &entry),
             };
 
-            if let Some(res) = res {
-                results.get_or_insert_with(VecDeque::new).push_back(res);
+            match res {
+                EntryResult::None => {}
+                EntryResult::Res(r) => results.get_or_insert_with(VecDeque::new).push_back(r),
+                EntryResult::Paused => {
+                    apply_ctx.committed_count -= drainer.len() + 1;
+                    let merge_apply = self.pending_merge_apply.as_mut().unwrap();
+                    merge_apply.pending_entries = Vec::with_capacity(drainer.len() + 1);
+                    merge_apply.pending_entries.push(entry);
+                    merge_apply.pending_entries.extend(drainer);
+                    finished = false;
+                    break;
+                }
             }
         }
 
         apply_ctx.finish_for(self, results);
+        finished
     }
 
-    fn update_metrics(&mut self, apply_ctx: &ApplyContextCore) {
+    fn update_metrics(&mut self, apply_ctx: &PollContext) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
@@ -619,9 +669,9 @@ impl ApplyDelegate {
 
     fn handle_raft_entry_normal(
         &mut self,
-        apply_ctx: &mut ApplyContext,
-        entry: Entry,
-    ) -> Option<ExecResult> {
+        apply_ctx: &mut PollContext,
+        entry: &Entry,
+    ) -> EntryResult {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -650,42 +700,38 @@ impl ApplyDelegate {
                 .unwrap()
                 .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
         }
-        None
+        EntryResult::None
     }
 
     fn handle_raft_entry_conf_change(
         &mut self,
-        apply_ctx: &mut ApplyContext,
-        entry: Entry,
-    ) -> Option<ExecResult> {
+        apply_ctx: &mut PollContext,
+        entry: &Entry,
+    ) -> EntryResult {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
-        Some(
-            self.process_raft_cmd(apply_ctx, index, term, cmd)
-                .map_or_else(
-                    || {
-                        // If failed, tell raft that the config change was aborted.
-                        ExecResult::ChangePeer(Default::default())
-                    },
-                    |mut res| {
-                        if let ExecResult::ChangePeer(ref mut cp) = res {
-                            cp.conf_change = conf_change;
-                        } else {
-                            panic!(
-                                "{} unexpected result {:?} for conf change {:?} at {}",
-                                self.tag, res, conf_change, index
-                            );
-                        }
-                        res
-                    },
-                ),
-        )
+        let res = match self.process_raft_cmd(apply_ctx, index, term, cmd) {
+            EntryResult::Res(mut res) => {
+                if let ExecResult::ChangePeer(ref mut cp) = res {
+                    cp.conf_change = conf_change;
+                } else {
+                    panic!(
+                        "{} unexpected result {:?} for conf change {:?} at {}",
+                        self.tag, res, conf_change, index
+                    );
+                }
+                res
+            }
+            EntryResult::None => ExecResult::ChangePeer(Default::default()),
+            EntryResult::Paused => unreachable!(),
+        };
+        EntryResult::Res(res)
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
-        if get_change_peer_cmd(cmd).is_some() {
+    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback> {
+        if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.index == index && cmd.term == term {
                     return Some(cmd.cb.take().unwrap());
@@ -708,11 +754,11 @@ impl ApplyDelegate {
 
     fn process_raft_cmd(
         &mut self,
-        apply_ctx: &mut ApplyContext,
+        apply_ctx: &mut PollContext,
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> Option<ExecResult> {
+    ) -> EntryResult {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -724,9 +770,14 @@ impl ApplyDelegate {
             apply_ctx.sync_log_hint = true;
         }
 
-        let cmd_cb = self.find_cb(index, term, &cmd);
+        let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, cmd);
+        if let EntryResult::Paused = exec_result {
+            return exec_result;
+        }
+
+        let cmd_cb = self.find_cb(index, term, is_conf_change);
 
         debug!("{} applied command at log index {}", self.tag, index);
 
@@ -746,25 +797,28 @@ impl ApplyDelegate {
     // usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         index: u64,
         term: u64,
         req: RaftCmdRequest,
-    ) -> (RaftCmdResponse, Option<ExecResult>) {
+    ) -> (RaftCmdResponse, EntryResult) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        ctx.exec_ctx = Some(self.new_ctx(index, term, req));
+        ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.wb_mut().set_save_point();
-        let (resp, exec_result) = self.exec_raft_cmd(ctx).unwrap_or_else(|e| {
+        let (resp, exec_result) = self.exec_raft_cmd(ctx, req).unwrap_or_else(|e| {
             // clear dirty values.
             ctx.wb_mut().rollback_to_save_point().unwrap();
             match e {
                 Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
-            (cmd_resp::new_error(e), None)
+            (cmd_resp::new_error(e), EntryResult::None)
         });
+        if let EntryResult::Paused = exec_result {
+            return (resp, exec_result);
+        }
 
         let mut exec_ctx = ctx.exec_ctx.take().unwrap();
         exec_ctx.apply_state.set_applied_index(index);
@@ -772,7 +826,7 @@ impl ApplyDelegate {
         self.apply_state = exec_ctx.apply_state;
         self.applied_index_term = term;
 
-        if let Some(ref exec_result) = exec_result {
+        if let EntryResult::Res(ref exec_result) = exec_result {
             match *exec_result {
                 ExecResult::ChangePeer(ref cp) => {
                     self.region = cp.region.clone();
@@ -830,13 +884,15 @@ impl ApplyDelegate {
         }
     }
 
-    fn destroy(&mut self) {
+    fn destroy(&mut self, ctx: &mut PollContext) {
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_region_removed(self.region.get_id(), self.id, cmd);
         }
+        ctx.router.stop(self.region.get_id());
+        self.stopped = true;
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -848,31 +904,21 @@ impl ApplyDelegate {
         }
     }
 
-    fn new_ctx(&self, index: u64, term: u64, req: RaftCmdRequest) -> ExecContext {
-        ExecContext::new(self.apply_state.clone(), req, index, term)
+    fn new_ctx(&self, index: u64, term: u64) -> ExecContext {
+        ExecContext::new(self.apply_state.clone(), index, term)
     }
 }
 
-struct ExecContext {
+pub struct ExecContext {
     apply_state: RaftApplyState,
-    // Note: use reference here to help get around the borrow check
-    // at compile time, so we can borrow the content of req and modify
-    // context at the same time.
-    req: Rc<RaftCmdRequest>,
     index: u64,
     term: u64,
 }
 
 impl ExecContext {
-    pub fn new(
-        apply_state: RaftApplyState,
-        req: RaftCmdRequest,
-        index: u64,
-        term: u64,
-    ) -> ExecContext {
+    pub fn new(apply_state: RaftApplyState, index: u64, term: u64) -> ExecContext {
         ExecContext {
             apply_state,
-            req: Rc::new(req),
             index,
             term,
         }
@@ -884,9 +930,9 @@ impl ApplyDelegate {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(
         &mut self,
-        ctx: &mut ApplyContext,
-    ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        let req = Rc::clone(&ctx.exec_ctx.as_ref().unwrap().req);
+        ctx: &mut PollContext,
+        req: RaftCmdRequest,
+    ) -> Result<(RaftCmdResponse, EntryResult)> {
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -900,9 +946,9 @@ impl ApplyDelegate {
 
     fn exec_admin_cmd(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         request: &AdminRequest,
-    ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+    ) -> Result<(RaftCmdResponse, EntryResult)> {
         let cmd_type = request.get_cmd_type();
         info!(
             "{} execute admin command {:?} at [term: {}, index: {}]",
@@ -929,24 +975,15 @@ impl ApplyDelegate {
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::new();
-        let uuid = ctx
-            .exec_ctx
-            .as_ref()
-            .unwrap()
-            .req
-            .get_header()
-            .get_uuid()
-            .to_vec();
-        resp.mut_header().set_uuid(uuid);
         resp.set_admin_response(response);
         Ok((resp, exec_result))
     }
 
     fn exec_change_peer(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1096,7 +1133,7 @@ impl ApplyDelegate {
 
         Ok((
             resp,
-            Some(ExecResult::ChangePeer(ChangePeer {
+            EntryResult::Res(ExecResult::ChangePeer(ChangePeer {
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
@@ -1106,9 +1143,9 @@ impl ApplyDelegate {
 
     fn exec_split(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         info!(
             "{} split is deprecated, redirect to use batch split.",
             self.tag
@@ -1127,9 +1164,9 @@ impl ApplyDelegate {
 
     fn exec_batch_split(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         let apply_before_split = || {
             fail_point!(
                 "apply_before_split_1_3",
@@ -1240,14 +1277,17 @@ impl ApplyDelegate {
             .with_label_values(&["batch-split", "success"])
             .inc();
 
-        Ok((resp, Some(ExecResult::SplitRegion { regions, derived })))
+        Ok((
+            resp,
+            EntryResult::Res(ExecResult::SplitRegion { regions, derived }),
+        ))
     }
 
     fn exec_prepare_merge(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])
             .inc();
@@ -1297,7 +1337,7 @@ impl ApplyDelegate {
 
         Ok((
             AdminResponse::new(),
-            Some(ExecResult::PrepareMerge {
+            EntryResult::Res(ExecResult::PrepareMerge {
                 region,
                 state: merging_state,
             }),
@@ -1341,53 +1381,45 @@ impl ApplyDelegate {
         entries
     }
 
-    fn catch_up_log_for_merge(
+    fn check_log_uptodate_for_merge(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         merge: &CommitMergeRequest,
-        exist_region: &mut Region,
-    ) {
-        let region_id = exist_region.get_id();
-        let apply_state_key = keys::apply_state_key(region_id);
+        source_region_id: u64,
+    ) -> bool {
+        let apply_state_key = keys::apply_state_key(source_region_id);
         let apply_state: RaftApplyState =
             match self.engines.kv.get_msg_cf(CF_RAFT, &apply_state_key) {
                 Ok(Some(s)) => s,
                 e => panic!(
-                    "{} failed to get apply state of {:?}: {:?}",
-                    self.tag, exist_region, e
+                    "{} failed to get apply state of {}: {:?}",
+                    self.tag, source_region_id, e
                 ),
             };
         let apply_index = apply_state.get_applied_index();
-        if apply_index >= merge.get_commit() {
-            return;
-        }
+        apply_index >= merge.get_commit()
+    }
 
-        let entries = self.load_entries_for_merge(merge, apply_index);
-        if entries.is_empty() {
-            return;
+    fn catch_up_log_for_merge(&mut self, ctx: &mut PollContext, merge: CommitMergeRequest) -> bool {
+        let apply_index = self.apply_state.get_applied_index();
+        if apply_index >= merge.get_commit() {
+            return true;
         }
-        let stash = ctx.stash(self);
-        let mut delegate = match ctx.delegates.get_mut(&region_id) {
-            None => panic!("{} source region {} not exist", self.tag, region_id),
-            Some(e) => e.take().unwrap_or_else(|| {
-                panic!(
-                    "{} unexpected circle dependency of region {:?}",
-                    self.tag, exist_region
-                )
-            }),
-        };
-        delegate.handle_raft_committed_entries(ctx, entries);
-        *exist_region = delegate.region.clone();
-        *ctx.delegates.get_mut(&region_id).unwrap() = Some(delegate);
-        ctx.apply_res.last_mut().unwrap().merged = true;
-        ctx.restore_stash(stash);
+        let entries = self.load_entries_for_merge(&merge, apply_index);
+        if entries.is_empty() {
+            // TODO: is it reachable?
+            return true;
+        }
+        let b = self.handle_raft_committed_entries(ctx, entries);
+        ctx.apply_res.last_mut().unwrap().merged = b;
+        b
     }
 
     fn exec_commit_merge(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
@@ -1405,6 +1437,25 @@ impl ApplyDelegate {
 
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
+        if !self.check_log_uptodate_for_merge(ctx, merge, source_region.get_id()) {
+            let (tx, rx) = ctx.router.one_shot(self.region_id());
+            self.pending_merge_apply = Some(MergeAsyncWait {
+                poller: rx,
+                pending_entries: vec![],
+                pending_tasks: vec![],
+            });
+            // TODO: maybe it's better to move.
+            ctx.router
+                .force_send_task(
+                    source_region.get_id(),
+                    Task::CatchUpLogs {
+                        req: merge.to_owned(),
+                        notifier: tx,
+                    },
+                )
+                .unwrap();
+            return Ok((AdminResponse::default(), EntryResult::Paused));
+        }
         let region_state_key = keys::region_state_key(source_region.get_id());
         let state: RegionLocalState = match self.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
@@ -1421,7 +1472,6 @@ impl ApplyDelegate {
             ),
         }
         let mut exist_region = state.get_region().to_owned();
-        self.catch_up_log_for_merge(ctx, merge, &mut exist_region);
         if *source_region != exist_region {
             panic!(
                 "{} source_region {:?} not match exist region {:?}",
@@ -1467,7 +1517,7 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((
             resp,
-            Some(ExecResult::CommitMerge {
+            EntryResult::Res(ExecResult::CommitMerge {
                 region,
                 source: source_region.to_owned(),
             }),
@@ -1476,9 +1526,9 @@ impl ApplyDelegate {
 
     fn exec_rollback_merge(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "all"])
             .inc();
@@ -1513,7 +1563,7 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((
             resp,
-            Some(ExecResult::RollbackMerge {
+            EntryResult::Res(ExecResult::RollbackMerge {
                 region,
                 commit: rollback.get_commit(),
             }),
@@ -1522,9 +1572,9 @@ impl ApplyDelegate {
 
     fn exec_compact_log(
         &mut self,
-        ctx: &mut ApplyContext,
+        ctx: &mut PollContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["compact", "all"])
             .inc();
@@ -1538,14 +1588,14 @@ impl ApplyDelegate {
                 "{} compact index {} <= first index {}, no need to compact",
                 self.tag, compact_index, first_index
             );
-            return Ok((resp, None));
+            return Ok((resp, EntryResult::None));
         }
         if self.is_merging {
             info!(
                 "{} is in merging mode, skip compact {}",
                 self.tag, compact_index
             );
-            return Ok((resp, None));
+            return Ok((resp, EntryResult::None));
         }
 
         let compact_term = req.get_compact_log().get_compact_term();
@@ -1571,7 +1621,7 @@ impl ApplyDelegate {
 
         Ok((
             resp,
-            Some(ExecResult::CompactLog {
+            EntryResult::Res(ExecResult::CompactLog {
                 state: apply_state.get_truncated_state().clone(),
                 first_index,
             }),
@@ -1580,9 +1630,9 @@ impl ApplyDelegate {
 
     fn exec_write_cmd(
         &mut self,
-        ctx: &ApplyContext,
+        ctx: &PollContext,
         requests: &[Request],
-    ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+    ) -> Result<(RaftCmdResponse, EntryResult)> {
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
@@ -1615,30 +1665,21 @@ impl ApplyDelegate {
         }
 
         let mut resp = RaftCmdResponse::new();
-        let uuid = ctx
-            .exec_ctx
-            .as_ref()
-            .unwrap()
-            .req
-            .get_header()
-            .get_uuid()
-            .to_vec();
-        resp.mut_header().set_uuid(uuid);
         resp.set_responses(RepeatedField::from_vec(responses));
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
-            Some(ExecResult::DeleteRange { ranges })
+            EntryResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            Some(ExecResult::IngestSST { ssts })
+            EntryResult::Res(ExecResult::IngestSST { ssts })
         } else {
-            None
+            EntryResult::None
         };
 
         Ok((resp, exec_res))
     }
 
-    fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+    fn handle_put(&mut self, ctx: &PollContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1681,7 +1722,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+    fn handle_delete(&mut self, ctx: &PollContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1793,7 +1834,7 @@ impl ApplyDelegate {
 
     fn handle_ingest_sst(
         &mut self,
-        ctx: &ApplyContext,
+        ctx: &PollContext,
         req: &Request,
         ssts: &mut Vec<SSTMeta>,
     ) -> Result<Response> {
@@ -1867,13 +1908,13 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
 impl ApplyDelegate {
     fn exec_compute_hash(
         &self,
-        ctx: &ApplyContext,
+        ctx: &PollContext,
         _: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         let resp = AdminResponse::new();
         Ok((
             resp,
-            Some(ExecResult::ComputeHash {
+            EntryResult::Res(ExecResult::ComputeHash {
                 region: self.region.clone(),
                 index: ctx.exec_ctx.as_ref().unwrap().index,
                 // This snapshot may be held for a long time, which may cause too many
@@ -1887,21 +1928,26 @@ impl ApplyDelegate {
 
     fn exec_verify_hash(
         &self,
-        _: &ApplyContext,
+        _: &PollContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+    ) -> Result<(AdminResponse, EntryResult)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::new();
-        Ok((resp, Some(ExecResult::VerifyHash { index, hash })))
+        Ok((
+            resp,
+            EntryResult::Res(ExecResult::VerifyHash { index, hash }),
+        ))
     }
 }
 
+#[derive(Debug)]
 pub struct Apply {
-    region_id: u64,
+    pub region_id: u64,
     term: u64,
     entries: Vec<Entry>,
+    send_time: Instant,
 }
 
 impl Apply {
@@ -1910,6 +1956,7 @@ impl Apply {
             region_id,
             term,
             entries,
+            send_time: Instant::now(),
         }
     }
 }
@@ -1955,7 +2002,7 @@ impl Proposal {
 
 pub struct RegionProposal {
     id: u64,
-    region_id: u64,
+    pub region_id: u64,
     props: Vec<Proposal>,
 }
 
@@ -1969,31 +2016,30 @@ impl RegionProposal {
     }
 }
 
-pub struct ApplyBatch {
-    vec: Vec<Apply>,
-    start: Instant,
-}
-
 pub struct Destroy {
     region_id: u64,
 }
 
 /// region related task.
 pub enum Task {
-    Applies(ApplyBatch),
+    Apply(Apply),
+    CatchUpLogs {
+        req: CommitMergeRequest,
+        notifier: OneshotNotifier,
+    },
     Registration(Registration),
-    Proposals(Vec<RegionProposal>),
+    Proposal(RegionProposal),
     Destroy(Destroy),
+    Noop,
+}
+
+impl Debug for Task {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl Task {
-    pub fn applies(applies: Vec<Apply>) -> Task {
-        Task::Applies(ApplyBatch {
-            vec: applies,
-            start: Instant::now_coarse(),
-        })
-    }
-
     pub fn register(peer: &Peer) -> Task {
         Task::Registration(Registration::new(peer))
     }
@@ -2006,12 +2052,16 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Applies(ref a) => write!(f, "async applys count {}", a.vec.len()),
-            Task::Proposals(ref p) => write!(f, "region proposal count {}", p.len()),
+            Task::Apply(ref a) => write!(f, "[region {}] async apply", a.region_id),
+            Task::Proposal(ref p) => write!(f, "[region {}] proposal", p.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
+            Task::CatchUpLogs { ref req, .. } => {
+                write!(f, "[region {}] CatchUpLogs", req.get_source().get_id())
+            }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Task::Noop => write!(f, "Noop"),
         }
     }
 }
@@ -2041,234 +2091,303 @@ pub struct ApplyRes {
 #[derive(Debug)]
 pub enum TaskRes {
     Apply(ApplyRes),
-    Destroy(ApplyDelegate),
+    Destroy { region_id: u64, id: u64 },
 }
 
-// TODO: use threadpool to do task concurrently
-pub struct Runner {
-    engines: Engines,
-    host: Arc<CoprocessorHost>,
-    importer: Arc<SSTImporter>,
-    delegates: HashMap<u64, Option<ApplyDelegate>>,
-    notifier: Router,
-    sync_log: bool,
-    use_delete_range: bool,
-    tag: String,
-    applies: Vec<Vec<Apply>>,
-    props: Vec<Vec<RegionProposal>>,
+pub struct FallbackDelegate {
+    pub stopped: bool,
 }
 
-impl Runner {
-    pub fn new<T, C>(
-        system: &BatchSystem<T, C>,
-        notifier: Router,
-        sync_log: bool,
-        use_delete_range: bool,
-    ) -> Runner {
-        let mut delegates =
-            HashMap::with_capacity_and_hasher(system.get_peers().len(), Default::default());
-        for p in system.get_peers() {
-            delegates.insert(p.region_id(), Some(ApplyDelegate::from_peer(&p)));
-        }
-        Runner {
-            engines: system.engines().clone(),
-            host: system.coprocessor_host(),
-            importer: system.importer(),
-            delegates,
-            notifier,
-            sync_log,
-            use_delete_range,
-            tag: format!("[store {}]", system.store_id()),
-            applies: vec![],
-            props: vec![],
+impl FallbackDelegate {
+    pub fn new() -> FallbackDelegate {
+        FallbackDelegate { stopped: false }
+    }
+}
+
+pub struct FallbackPoller<'a> {
+    delegate: &'a mut FallbackDelegate,
+    ctx: &'a mut PollContext,
+    scheduler: &'a Scheduler,
+}
+
+impl<'a> FallbackPoller<'a> {
+    pub fn new(
+        delegate: &'a mut FallbackDelegate,
+        ctx: &'a mut PollContext,
+        scheduler: &'a Scheduler,
+    ) -> FallbackPoller<'a> {
+        FallbackPoller {
+            delegate,
+            ctx,
+            scheduler,
         }
     }
 
-    fn handle_applies(&mut self) {
-        let t = SlowTimer::new();
-
-        let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())
-            .apply_res_capacity(self.applies.len() * self.applies[0].len())
-            .use_delete_range(self.use_delete_range)
-            .enable_sync_log(self.sync_log);
-        for applys in self.applies.drain(..) {
-            for apply in applys {
-                if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
-                    continue;
-                }
-                let mut delegate = match self.delegates.get_mut(&apply.region_id) {
-                    None => {
-                        error!("[region {}] is missing", apply.region_id);
-                        continue;
-                    }
-                    Some(e) => e.take().unwrap(),
-                };
-                delegate.metrics = ApplyMetrics::default();
-                delegate.term = apply.term;
-
+    fn handle_tasks(&mut self, buf: &mut Vec<Task>) {
+        for task in buf.drain(..) {
+            match task {
+                Task::Registration(reg) => match self
+                    .ctx
+                    .router
+                    .try_send_task(reg.region.get_id(), Task::Registration(reg))
                 {
-                    let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
-                    delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
+                    Ok(()) => return,
+                    Err(SendError(Task::Registration(reg))) => {
+                        let delegate =
+                            ApplyDelegate::from_registration(self.ctx.engines.clone(), reg);
+                        self.scheduler.schedule(delegate);
+                    }
+                    _ => unreachable!(),
+                },
+                Task::Destroy(d) => {
+                    let region_id = d.region_id;
+                    let res = self.ctx.router.try_send_task(region_id, Task::Destroy(d));
+                    error!("[region {}] failed to send destroy: {:?}", region_id, res);
                 }
-
-                if delegate.pending_remove {
-                    delegate.destroy();
-                    self.delegates.remove(&apply.region_id);
-                } else {
-                    *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
+                Task::Apply(a) => {
+                    let region_id = a.region_id;
+                    let res = self.ctx.router.try_send_task(region_id, Task::Apply(a));
+                    error!("[region {}] failed to send apply: {:?}", region_id, res);
                 }
+                Task::CatchUpLogs { req, notifier } => {
+                    let region_id = req.get_source().get_id();
+                    let res = self
+                        .ctx
+                        .router
+                        .try_send_task(region_id, Task::CatchUpLogs { req, notifier });
+                    error!(
+                        "[region {}] failed to send catchuplogs: {:?}",
+                        region_id, res
+                    );
+                }
+                Task::Proposal(p) => {
+                    let region_id = p.region_id;
+                    let res = self.ctx.router.try_send_task(region_id, Task::Proposal(p));
+                    error!("[region {}] failed to send proposal: {:?}", region_id, res);
+                }
+                Task::Noop => {}
             }
         }
-
-        // Write to engine
-        // raftsotre.sync-log = true means we need prevent data loss when power failure.
-        // take raft log gc for example, we write kv WAL first, then write raft WAL,
-        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
-        // so we use sync-log flag here.
-        core.write_to_db(&self.engines.kv);
-
-        for region_id in core.merged_regions.drain(..) {
-            if let Some(mut e) = self.delegates.remove(&region_id) {
-                e.as_mut().unwrap().destroy();
-            }
-        }
-
-        if !core.apply_res.is_empty() {
-            for res in core.apply_res {
-                let region_id = res.region_id;
-                // TODO: verify if it's really shutting down.
-                let _ = self
-                    .notifier
-                    .force_send_peer_message(region_id, PeerMsg::ApplyRes(TaskRes::Apply(res)));
-            }
-        }
-
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
-
-        slow_log!(
-            t,
-            "{} handle ready {} committed entries",
-            self.tag,
-            core.committed_count
-        );
     }
 
-    fn handle_proposals(&mut self) {
-        let mut propose_num = 0;
-        for proposals in self.props.drain(..) {
-            for region_proposal in proposals {
-                propose_num += region_proposal.props.len();
-                let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
-                    Some(d) => d.as_mut().unwrap(),
-                    None => {
-                        for p in region_proposal.props {
-                            let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                            notify_region_removed(
-                                region_proposal.region_id,
-                                region_proposal.id,
-                                cmd,
-                            );
-                        }
-                        continue;
-                    }
-                };
-                assert_eq!(delegate.id, region_proposal.id);
-                for p in region_proposal.props {
-                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                    if p.is_conf_change {
-                        if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                            // if it loses leadership before conf change is replicated, there may be
-                            // a stale pending conf change before next conf change is applied. If it
-                            // becomes leader again with the stale pending conf change, will enter
-                            // this block, so we notify leadership may have been changed.
-                            notify_stale_command(&delegate.tag, delegate.term, cmd);
-                        }
-                        delegate.pending_cmds.set_conf_change(cmd);
-                    } else {
-                        delegate.pending_cmds.append_normal(cmd);
-                    }
+    pub fn poll(&mut self, receiver: &Receiver<Task>, buf: &mut Vec<Task>) -> Option<usize> {
+        let mut mark = None;
+        while buf.len() < self.ctx.cfg.messages_per_tick {
+            match receiver.try_recv() {
+                Ok(msg) => buf.push(msg),
+                Err(TryRecvError::Empty) => {
+                    mark = Some(0);
+                    break;
                 }
+                Err(TryRecvError::Disconnected) => {
+                    self.delegate.stopped = true;
+                    mark = Some(0);
+                    break;
+                }
+            }
+        }
+        self.handle_tasks(buf);
+        mark
+    }
+}
+
+pub struct ApplyPoller<'a> {
+    delegate: &'a mut ApplyDelegate,
+    ctx: &'a mut PollContext,
+    scheduler: &'a Scheduler,
+}
+
+impl<'a> ApplyPoller<'a> {
+    pub fn new(
+        delegate: &'a mut ApplyDelegate,
+        ctx: &'a mut PollContext,
+        scheduler: &'a Scheduler,
+    ) -> ApplyPoller<'a> {
+        ApplyPoller {
+            delegate,
+            ctx,
+            scheduler,
+        }
+    }
+
+    // Return true means poller is ready to handle next task.
+    fn on_apply_task(&mut self, task: Task) -> bool {
+        match task {
+            Task::Apply(a) => {
+                let elapsed = duration_to_sec(a.send_time.elapsed());
+                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+                self.handle_apply(a)
+            }
+            Task::Proposal(p) => self.handle_proposal(p),
+            Task::Registration(s) => self.handle_registration(s),
+            Task::Destroy(d) => self.handle_destroy(d),
+            Task::CatchUpLogs { req, notifier } => {
+                let _notifier = notifier;
+                self.delegate.catch_up_log_for_merge(&mut self.ctx, req)
+            }
+            Task::Noop => true,
+        }
+    }
+
+    /// Return true means merge is handled.
+    fn resume_handling_pending_apply(&mut self) -> bool {
+        let mut merge_apply = self.delegate.pending_merge_apply.take().unwrap();
+        if !merge_apply.poller.waken() {
+            self.delegate.pending_merge_apply = Some(merge_apply);
+            return false;
+        }
+        if !merge_apply.pending_entries.is_empty() {
+            if !self
+                .delegate
+                .handle_raft_committed_entries(&mut self.ctx, merge_apply.pending_entries)
+            {
+                let mut pending_merge = self.delegate.pending_merge_apply.as_mut().unwrap();
+                pending_merge.pending_tasks = merge_apply.pending_tasks;
+                return false;
+            }
+        }
+        if !merge_apply.pending_tasks.is_empty() {
+            self.handle_tasks(&mut merge_apply.pending_tasks)
+        } else {
+            true
+        }
+    }
+
+    /// Return true means all tasks are handled.
+    fn handle_tasks(&mut self, tasks: &mut Vec<Task>) -> bool {
+        let mut drainer = tasks.drain(..);
+        while let Some(m) = drainer.next() {
+            if !self.on_apply_task(m) {
+                break;
+            }
+        }
+        if let Some(ref mut apply) = self.delegate.pending_merge_apply {
+            apply.pending_tasks = drainer.collect();
+            false
+        } else {
+            true
+        }
+    }
+
+    // Return true means poller should try to release the fsm.
+    pub fn poll(&mut self, receiver: &Receiver<Task>, buf: &mut Vec<Task>) -> Option<usize> {
+        let mut mark = None;
+        if self.delegate.pending_merge_apply.is_some() {
+            mark = Some(receiver.len());
+            if !self.resume_handling_pending_apply() {
+                // TODO: this will occupy one thread, we need to figure out a way to solve the problem.
+                return mark;
+            }
+            mark = None;
+        }
+        while buf.len() < self.ctx.cfg.messages_per_tick {
+            match receiver.try_recv() {
+                Ok(msg) => buf.push(msg),
+                Err(TryRecvError::Empty) => {
+                    mark = Some(0);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.delegate.stopped = true;
+                    mark = Some(0);
+                    break;
+                }
+            }
+        }
+        if !self.handle_tasks(buf) {
+            // Merge should be checked later.
+            mark = Some(0);
+        }
+        if self.delegate.stopped {
+            self.delegate.destroy(&mut self.ctx);
+        }
+        mark
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.delegate.stopped
+    }
+
+    // Return true means it's OK to handle next apply.
+    fn handle_apply(&mut self, apply: Apply) -> bool {
+        if apply.entries.is_empty() || self.ctx.merged_regions.contains(&apply.region_id) {
+            return true;
+        }
+
+        self.delegate.metrics = ApplyMetrics::default();
+        self.delegate.term = apply.term;
+
+        self.delegate
+            .handle_raft_committed_entries(&mut self.ctx, apply.entries);
+
+        if self.delegate.pending_merge_apply.is_some() {
+            return false;
+        }
+
+        if self.delegate.pending_remove {
+            self.delegate.destroy(self.ctx);
+            false
+        } else {
+            true
+        }
+    }
+
+    fn handle_proposal(&mut self, region_proposal: RegionProposal) -> bool {
+        assert_eq!(self.delegate.id, region_proposal.id);
+        let mut propose_num = region_proposal.props.len();
+        for p in region_proposal.props {
+            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            if p.is_conf_change {
+                if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
+                    // if it loses leadership before conf change is replicated, there may be
+                    // a stale pending conf change before next conf change is applied. If it
+                    // becomes leader again with the stale pending conf change, will enter
+                    // this block, so we notify leadership may have been changed.
+                    notify_stale_command(&self.delegate.tag, self.delegate.term, cmd);
+                }
+                self.delegate.pending_cmds.set_conf_change(cmd);
+            } else {
+                self.delegate.pending_cmds.append_normal(cmd);
             }
         }
         APPLY_PROPOSAL.observe(propose_num as f64);
+        true
     }
 
-    fn handle_registration(&mut self, s: Registration) {
+    fn handle_registration(&mut self, s: Registration) -> bool {
         let peer_id = s.id;
-        let region_id = s.region.get_id();
         let term = s.term;
-        let delegate = ApplyDelegate::from_registration(self.engines.clone(), s);
+        let delegate = ApplyDelegate::from_registration(self.ctx.engines.clone(), s);
         info!(
             "{} register to apply delegates at term {}",
             delegate.tag, delegate.term
         );
-        if let Some(mut old_delegate) = self.delegates.insert(region_id, Some(delegate)) {
-            let old_delegate = old_delegate.as_mut().unwrap();
-            assert_eq!(old_delegate.id, peer_id);
-            old_delegate.term = term;
-            old_delegate.clear_all_commands_as_stale();
-        }
+        assert_eq!(self.delegate.id, peer_id);
+        self.delegate.term = term;
+        self.delegate.clear_all_commands_as_stale();
+        *self.delegate = delegate;
+        true
     }
 
-    fn handle_destroy(&mut self, d: Destroy) {
+    fn handle_destroy(&mut self, d: Destroy) -> bool {
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.
-        if let Some(meta) = self.delegates.remove(&d.region_id) {
-            let mut meta = meta.unwrap();
-            info!("{} remove from apply delegates", meta.tag);
-            meta.destroy();
-            self.notifier
-                .force_send_peer_message(d.region_id, PeerMsg::ApplyRes(TaskRes::Destroy(meta)))
-                .unwrap();
-        }
-    }
-
-    fn handle_shutdown(&mut self) {
-        for p in self.delegates.values_mut() {
-            p.as_mut().unwrap().clear_pending_commands();
-        }
-    }
-
-    fn flush_batch_messages(&mut self) {
-        if !self.props.is_empty() {
-            self.handle_proposals();
-        }
-        if !self.applies.is_empty() {
-            self.handle_applies();
-        }
+        info!("{} remove from apply delegates", self.delegate.tag);
+        self.delegate.destroy(self.ctx);
+        self.ctx
+            .notifier
+            .force_send_peer_message(
+                d.region_id,
+                PeerMsg::ApplyRes(TaskRes::Destroy {
+                    region_id: self.delegate.region_id(),
+                    id: self.delegate.id(),
+                }),
+            )
+            .unwrap();
+        false
     }
 }
-
-impl Runnable<Task> for Runner {
-    fn run_batch(&mut self, tasks: &mut Vec<Task>) {
-        for task in tasks.drain(..) {
-            match task {
-                Task::Applies(a) => {
-                    let elapsed = duration_to_sec(a.start.elapsed());
-                    APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
-                    self.applies.push(a.vec);
-                }
-                Task::Proposals(p) => {
-                    self.props.push(p);
-                }
-                Task::Registration(s) => {
-                    self.flush_batch_messages();
-                    self.handle_registration(s)
-                }
-                Task::Destroy(d) => {
-                    self.flush_batch_messages();
-                    self.handle_destroy(d)
-                }
-            }
-        }
-        self.flush_batch_messages();
-    }
-
-    fn shutdown(&mut self) {
-        self.handle_shutdown();
-    }
-}
-
+/*
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -2280,6 +2399,7 @@ mod tests {
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
     use raftstore::coprocessor::*;
+    use raftstore::store::fsm::apply_transport::Router as ApplyRouter;
     use raftstore::store::msg::WriteResponse;
     use raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use raftstore::store::util::{new_learner_peer, new_peer};
@@ -2312,19 +2432,10 @@ mod tests {
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         tx: Router,
-    ) -> Runner {
-        Runner {
-            engines,
-            host,
-            importer,
-            delegates: HashMap::default(),
-            notifier: tx,
-            sync_log: false,
-            tag: "".to_owned(),
-            use_delete_range: true,
-            applies: vec![],
-            props: vec![],
-        }
+    ) -> PollContext {
+        let cfg = Arc::new(Config::default());
+        let (notifier, _) = ApplyRouter::new_for_test(1);
+        PollContext::new(engines, cfg, tx, notifier, host, importer)
     }
 
     pub fn new_entry(term: u64, index: u64, req: Option<RaftCmdRequest>) -> Entry {
@@ -2393,7 +2504,7 @@ mod tests {
         reg.apply_state.set_applied_index(3);
         reg.term = 4;
         reg.applied_index_term = 5;
-        runner.run_batch(&mut vec![Task::Registration(reg.clone())]);
+        runner.handle_tasks(&mut vec![Task::Registration(reg.clone())]);
         assert!(runner.delegates.get(&2).is_some());
         {
             let delegate = &runner.delegates[&2].as_ref().unwrap();
@@ -2675,6 +2786,7 @@ mod tests {
         let mut delegate = ApplyDelegate::from_registration(engines.clone(), reg);
         let mut delegates = HashMap::default();
         let (tx, rx) = mpsc::channel();
+        let (router, _) = Router::new_for_test(1);
 
         let put_entry = EntryBuilder::new(1, 1)
             .put(b"k1", b"v1")
@@ -2683,15 +2795,15 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut host = CoprocessorHost::default();
+        let mut host = Arc::new(CoprocessorHost::default());
         let obs = ApplyObserver::default();
         host.registry
             .register_query_observer(1, Box::new(obs.clone()));
-        let mut core = ApplyContextCore::new(&host, &importer).use_delete_range(true);
-        let mut apply_ctx = ApplyContext::new(&mut core, &mut delegates);
+        let mut apply_ctx = new_runner(engines.clone(), host.clone(), importer.clone(), router);
+        apply_ctx.use_delete_range(true);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&engines.kv);
-        assert!(apply_ctx.core.apply_res.last().unwrap().exec_res.is_none());
+        apply_ctx.write_to_db();
+        assert!(apply_ctx.apply_res.last().unwrap().exec_res.is_none());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 3);
@@ -2713,7 +2825,7 @@ mod tests {
             .epoch(1, 3)
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let lock_handle = engines.kv.cf_handle(CF_LOCK).unwrap();
         assert_eq!(
             engines.kv.get_cf(lock_handle, &dk_k1).unwrap().unwrap(),
@@ -2735,7 +2847,7 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2748,7 +2860,7 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
@@ -2770,7 +2882,7 @@ mod tests {
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -2790,7 +2902,7 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
 
@@ -2800,7 +2912,7 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(engines.kv.get(&dk_k3).unwrap().unwrap(), b"v1");
@@ -2813,7 +2925,7 @@ mod tests {
             .capture_resp(&mut delegate, tx.clone())
             .build();
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_range_entry]);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert!(engines.kv.get(&dk_k1).unwrap().is_none());
@@ -2854,7 +2966,7 @@ mod tests {
             .build();
         let entries = vec![put_ok, ingest_ok, ingest_stale_epoch];
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = rx.try_recv().unwrap();
@@ -2875,7 +2987,7 @@ mod tests {
             entries.push(put_entry);
         }
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
-        apply_ctx.write_to_db(&engines.kv);
+        apply_ctx.write_to_db();
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
@@ -2944,9 +3056,10 @@ mod tests {
         let mut delegate2 = ApplyDelegate::from_registration(engines.clone(), reg);
         delegate2.apply_state.set_applied_index(1);
 
-        let host = CoprocessorHost::default();
-        let mut core = ApplyContextCore::new(&host, &importer);
+        let host = Arc::new(CoprocessorHost::default());
+        let (router, _) = Router::new_for_test(1);
         let (tx, rx) = mpsc::channel();
+        let core = new_runner(engines, host, importer, router);
         core.prepare_for(&delegate1);
         assert_eq!(core.last_applied_index, 3);
         let state = delegate1.apply_state.clone();
@@ -2969,7 +3082,7 @@ mod tests {
         assert!(core.exec_ctx.is_none());
         assert_eq!(core.last_applied_index, 1);
         let state = delegate2.apply_state.clone();
-        core.exec_ctx = Some(ExecContext::new(state, RaftCmdRequest::new(), 2, 3));
+        core.exec_ctx = Some(ExecContext::new(state, 2, 3));
         core.wb.as_mut().unwrap().put(b"k2", b"v2").unwrap();
         let tx1 = tx.clone();
         assert_eq!(core.cbs.last().unwrap().region, delegate2.region);
@@ -2991,7 +3104,7 @@ mod tests {
         );
         delegate1.apply_state = core.exec_ctx.take().unwrap().apply_state;
         core.finish_for(&mut delegate1, None);
-        core.write_to_db(&engines.kv);
+        core.write_to_db();
 
         assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
         assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 2);
@@ -3084,8 +3197,9 @@ mod tests {
 
         let mut index_id = 1;
         let mut exec_split = |delegate: &mut ApplyDelegate, reqs| {
-            let mut core = ApplyContextCore::new(&host, &importer).use_delete_range(true);
-            let mut apply_ctx = ApplyContext::new(&mut core, &mut delegates);
+            let (router, _) = Router::new_for_test(1);
+            let mut apply_ctx = new_runner(engines, host, importer, router);
+            apply_ctx.use_delete_range(true);
             let epoch = delegate.region.get_region_epoch().to_owned();
             let split = EntryBuilder::new(index_id, 1)
                 .split(reqs)
@@ -3093,7 +3207,7 @@ mod tests {
                 .capture_resp(delegate, tx.clone())
                 .build();
             delegate.handle_raft_committed_entries(&mut apply_ctx, vec![split]);
-            apply_ctx.write_to_db(&engines.kv);
+            apply_ctx.write_to_db();
             index_id += 1;
             rx.try_recv().unwrap()
         };
@@ -3217,3 +3331,4 @@ mod tests {
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
     }
 }
+*/

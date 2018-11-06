@@ -28,16 +28,20 @@ use raft::Ready;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Iterable, Mutable, Peekable};
+use raftstore::store::fsm::apply_transport::{
+    self, BatchSystem as ApplyBatchSystem, FsmTypes as ApplyFsmTypes, Router as ApplyRouter,
+};
 use raftstore::store::fsm::store::{Store, StoreCore};
+use raftstore::store::fsm::{ApplyTask, RegionProposal};
 use raftstore::store::keys::{self, enc_end_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::RAFTSTORE_CHANNEL_FULL;
 use raftstore::store::metrics::*;
 use raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use raftstore::store::worker::{
-    ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask,
-    ReadTask, RegionProposal, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
+    CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
+    ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask, ReadTask, RegionRunner,
+    RegionTask, SplitCheckRunner, SplitCheckTask,
 };
 use raftstore::store::{
     peer, Callback, Config, Engines, PeerMsg, SnapManager, StoreMsg, Transport,
@@ -281,7 +285,7 @@ pub struct OneshotPoller {
 impl OneshotPoller {
     #[inline]
     pub fn waken(&self) -> bool {
-        self.waken.load(Ordering::Release)
+        self.waken.load(Ordering::Acquire)
     }
 }
 
@@ -681,6 +685,11 @@ impl Batch {
             }
         }
     }
+
+    fn remove_store(&mut self) {
+        self.fsm_holders.pop().unwrap();
+        self.store.take().unwrap();
+    }
 }
 
 pub struct Scheduler {
@@ -774,7 +783,7 @@ pub struct PollContext<T, C: 'static> {
     pub cleanup_sst_scheduler: WorkerScheduler<CleanupSSTTask>,
     pub local_reader: WorkerScheduler<ReadTask>,
     pub region_scheduler: WorkerScheduler<RegionTask>,
-    pub apply_scheduler: WorkerScheduler<ApplyTask>,
+    pub apply_router: ApplyRouter,
     pub compact_scheduler: WorkerScheduler<CompactTask>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
@@ -836,10 +845,12 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
     ) {
         if !proposals.is_empty() {
             // TODO: verify if it's shutting down.
-            let _ = self
-                .ctx
-                .apply_scheduler
-                .schedule(ApplyTask::Proposals(proposals));
+            for prop in proposals {
+                let _ = self
+                    .ctx
+                    .apply_router
+                    .force_send_task(prop.region_id, ApplyTask::Proposal(prop));
+            }
             self.ctx.trans.flush();
         }
         self.ctx.raft_metrics.ready.has_ready_region += self.ctx.ready_res.len() as u64;
@@ -886,12 +897,11 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                 Peer::new(&mut batches[batch_pos].peer, &mut self.ctx, &self.scheduler)
                     .post_raft_ready_append(ready, invoke_ctx, &mut apply_tasks);
             }
-            if let Err(e) = self
-                .ctx
-                .apply_scheduler
-                .schedule(ApplyTask::applies(apply_tasks))
-            {
-                warn!("failed to schedule apply task: {:?}", e);
+            for task in apply_tasks {
+                let _ = self
+                    .ctx
+                    .apply_router
+                    .force_send_task(task.region_id, ApplyTask::Apply(task));
             }
         }
 
@@ -948,7 +958,9 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     let mut store = Store::new(&mut s.store, &mut self.ctx, &self.scheduler);
                     store.poll(&s.receiver, &mut store_msgs)
                 };
-                if let Some(pos) = mark {
+                if batches.store.as_ref().unwrap().store.stopped {
+                    batches.remove_store();
+                } else if let Some(pos) = mark {
                     batches.release_store(&self.scheduler.router.store_box, pos);
                 }
             }
@@ -1028,6 +1040,8 @@ pub struct BatchSystem<T: 'static, C: 'static> {
     store_meta: Arc<Mutex<StoreMeta>>,
     workers: Vec<JoinHandle<()>>,
     router: Router,
+    apply_router: ApplyRouter,
+    apply_receiver: Option<crossbeam_channel::Receiver<Box<ApplyFsmTypes>>>,
 
     coprocessor_host: Arc<CoprocessorHost>,
 
@@ -1039,7 +1053,6 @@ pub struct BatchSystem<T: 'static, C: 'static> {
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     cleanup_sst_worker: Worker<CleanupSSTTask>,
-    apply_worker: Worker<ApplyTask>,
     local_reader: Worker<ReadTask>,
     poller: CpuPool,
     global_stat: Arc<GlobalStoreStat>,
@@ -1066,8 +1079,8 @@ impl<T, C> ConfigProvider for BatchSystem<T, C> {
     }
 
     #[inline]
-    fn apply_scheduler(&self) -> WorkerScheduler<ApplyTask> {
-        self.apply_worker.scheduler()
+    fn apply_scheduler(&self) -> ApplyRouter {
+        self.apply_router.clone()
     }
 
     #[inline]
@@ -1136,6 +1149,8 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
             .registry
             .register_admin_observer(100, box SplitObserver);
 
+        let (apply_router, receiver) = apply_transport::create_router(&cfg);
+
         let poller = ::futures_cpupool::Builder::new()
             .name_prefix(thd_name!("timer"))
             .pool_size(1)
@@ -1156,7 +1171,8 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
             compact_worker: Worker::new("compact-worker"),
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
-            apply_worker: Worker::new("apply-worker"),
+            apply_router,
+            apply_receiver: Some(receiver),
             pd_worker,
             local_reader,
             poller,
@@ -1323,7 +1339,7 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
             cleanup_sst_scheduler: self.cleanup_sst_worker.scheduler(),
             local_reader: self.local_reader.scheduler(),
             region_scheduler: self.region_worker.scheduler(),
-            apply_scheduler: self.apply_worker.scheduler(),
+            apply_router: self.apply_router.clone(),
             compact_scheduler: self.compact_worker.scheduler(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
@@ -1360,14 +1376,13 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
             batch_receiver,
         };
 
-        // Start runners that require peers first.
-        let apply_runner = ApplyRunner::new(
+        let mut system = ApplyBatchSystem::new(
             self,
             self.router.clone(),
-            self.cfg.sync_log,
-            self.cfg.use_delete_range,
+            self.apply_router.clone(),
+            self.cfg.clone(),
         );
-        box_try!(self.apply_worker.start(apply_runner));
+        box_try!(system.spawn(self.apply_receiver.take().unwrap()));
 
         let reader = LocalReader::new(&self, self.router.clone());
         let timer = LocalReader::new_timer();
@@ -1469,9 +1484,9 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.cleanup_sst_worker.stop());
-        handles.push(self.apply_worker.stop());
         handles.push(self.local_reader.stop());
 
+        self.apply_router.broadcast_shutdown();
         self.router.broadcast_shutdown();
 
         for h in self.workers.drain(..) {

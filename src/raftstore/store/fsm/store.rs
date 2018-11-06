@@ -42,12 +42,13 @@ use util::worker::Scheduler;
 use raftstore::store::config::Config;
 use raftstore::store::engine::Peekable;
 use raftstore::store::fsm::transport::PollContext;
+use raftstore::store::fsm::ApplyRouter;
 use raftstore::store::fsm::{transport, ConfigProvider, Router, StoreMeta};
 use raftstore::store::keys::{self, data_end_key, data_key, enc_start_key};
 use raftstore::store::metrics::*;
 use raftstore::store::peer::Peer;
 use raftstore::store::transport::Transport;
-use raftstore::store::worker::{ApplyTask, CleanupSSTTask, CompactTask, ReadTask, RegionTask};
+use raftstore::store::worker::{CleanupSSTTask, CompactTask, ReadTask, RegionTask};
 use raftstore::store::{
     util, Engines, PeerMsg, SeekRegionCallback, SeekRegionFilter, StoreMsg, StoreTick,
 };
@@ -59,6 +60,7 @@ pub struct StoreCore {
     cfg: Option<Arc<Config>>,
     store: Option<metapb::Store>,
     last_compact_checked_key: Key,
+    pub stopped: bool,
 
     tag: String,
 
@@ -88,8 +90,8 @@ impl<'a, T: Transport, C> ConfigProvider for Store<'a, T, C> {
     }
 
     #[inline]
-    fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
-        self.ctx.apply_scheduler.clone()
+    fn apply_scheduler(&self) -> ApplyRouter {
+        self.ctx.apply_router.clone()
     }
 
     #[inline]
@@ -118,6 +120,7 @@ impl StoreCore {
         StoreCore {
             cfg: None,
             store: None,
+            stopped: false,
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
             tag: "".to_owned(),
             start_time: time::get_time(),
@@ -160,7 +163,9 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
         self.schedule_cleanup_import_sst_tick();
     }
 
-    fn stop(&mut self) {}
+    fn stop(&mut self) {
+        self.core.stopped = true;
+    }
 
     #[inline]
     fn schedule_tick(&self, dur: Duration, tick: StoreTick) {
