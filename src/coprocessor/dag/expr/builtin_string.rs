@@ -407,35 +407,38 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
         let mut start = None;
-        let mut end = s.len();
-        let mut cnt = 1;
-        if positive_search {
-            for (i, _) in s.char_indices() {
-                if cnt > len && (cnt - len) >= pos {
-                    end = i;
-                    break;
-                }
-                if cnt == pos {
-                    start = Some(i);
-                }
-                cnt += 1;
-            }
+        let end = if positive_search {
+            s.char_indices()
+                .enumerate()
+                .find(|(cnt, (i, _))| {
+                    if cnt + 1 == pos {
+                        start = Some(*i);
+                    }
+                    cnt + 1 > len && (cnt + 1 - len) >= pos
+                })
+                .map(|(_, (i, _))| i)
+                .unwrap_or_else(|| s.len())
         } else {
             let mut positions = VecDeque::with_capacity(len);
-            positions.push_back(end);
-            for (i, _) in s.char_indices().rev() {
-                if cnt == pos {
-                    start = Some(i);
-                    break;
-                }
-                if positions.len() == len {
-                    positions.pop_front();
-                }
-                positions.push_back(i);
-                cnt += 1;
-            }
-            end = positions[0];
-        }
+            positions.push_back(s.len());
+            start = s
+                .char_indices()
+                .rev()
+                .enumerate()
+                .find(|(cnt, (i, _))| {
+                    if cnt + 1 != pos {
+                        if positions.len() == len {
+                            positions.pop_front();
+                        }
+                        positions.push_back(*i);
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .map(|(_, (i, _))| i);
+            positions[0]
+        };
         if let Some(start) = start {
             return Ok(Some(Cow::Owned(s[start..end].as_bytes().to_vec())));
         } else {
@@ -449,16 +452,9 @@ fn find_start<I>(pos: usize, ci: I) -> Option<usize>
 where
     I: Iterator<Item = (usize, char)>,
 {
-    let mut start = None;
-    let mut cnt = 1;
-    for (i, _) in ci {
-        if cnt == pos {
-            start = Some(i);
-            break;
-        }
-        cnt += 1;
-    }
-    start
+    ci.enumerate()
+        .find(|(cnt, _)| cnt + 1 == pos)
+        .map(|(_, (i, _))| i)
 }
 
 #[inline]
