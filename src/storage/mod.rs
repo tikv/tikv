@@ -2035,7 +2035,7 @@ mod tests {
     fn test_sched_too_busy() {
         let read_pool = new_read_pool();
         let mut config = Config::default();
-        config.scheduler_pending_write_threshold = ReadableSize(1);
+        config.scheduler_pending_write_threshold = ReadableSize(10);
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -2054,7 +2054,6 @@ mod tests {
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
-
         storage
             .async_prewrite(
                 Context::new(),
@@ -2062,7 +2061,17 @@ mod tests {
                 b"x".to_vec(),
                 100,
                 Options::default(),
-                no_expect_callback(tx.clone(), 1),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         storage
@@ -2075,16 +2084,16 @@ mod tests {
                 no_expect_callback(tx.clone(), 1),
             )
             .unwrap();
-            storage
-        .async_prewrite(
-            Context::new(),
-            vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-            b"x".to_vec(),
-            100,
-            Options::default(),
-            no_expect_callback(tx.clone(), 1),
-        )
-        .unwrap();
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                b"x".to_vec(),
+                100,
+                Options::default(),
+                no_expect_callback(tx.clone(), 1),
+            )
+            .unwrap();
         storage
             .async_prewrite(
                 Context::new(),
@@ -2095,7 +2104,6 @@ mod tests {
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
-        rx.recv().unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
