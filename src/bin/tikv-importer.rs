@@ -52,6 +52,7 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
+use tikv::util as tikv_util;
 use tikv::util::panic_hook;
 
 fn main() {
@@ -101,11 +102,18 @@ fn main() {
 
     let config = setup_config(&matches);
     let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    panic_hook::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
     util::print_tikv_info();
     check_environment_variables();
+
+    if tikv_util::panic_mark_file_exists(&config.storage.data_dir) {
+        fatal!(
+            "panic_mark_file {:?} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&config.storage.data_dir)
+        );
+    }
 
     run_import_server(&config);
 }
