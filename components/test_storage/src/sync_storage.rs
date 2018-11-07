@@ -95,20 +95,8 @@ impl<E: Engine> SyncStorage<E> {
     pub fn scan(
         &self,
         ctx: Context,
-        key: Key,
-        limit: usize,
-        key_only: bool,
-        start_ts: u64,
-    ) -> Result<Vec<Result<KvPair>>> {
-        self.store
-            .async_scan(ctx, key, limit, start_ts, Options::new(0, false, key_only))
-            .wait()
-    }
-
-    pub fn reverse_scan(
-        &self,
-        ctx: Context,
-        key: Key,
+        start_key: Key,
+        end_key: Option<Key>,
         limit: usize,
         key_only: bool,
         start_ts: u64,
@@ -116,7 +104,29 @@ impl<E: Engine> SyncStorage<E> {
         self.store
             .async_scan(
                 ctx,
-                key,
+                start_key,
+                end_key,
+                limit,
+                start_ts,
+                Options::new(0, false, key_only),
+            )
+            .wait()
+    }
+
+    pub fn reverse_scan(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Option<Key>,
+        limit: usize,
+        key_only: bool,
+        start_ts: u64,
+    ) -> Result<Vec<Result<KvPair>>> {
+        self.store
+            .async_scan(
+                ctx,
+                start_key,
+                end_key,
                 limit,
                 start_ts,
                 Options::new(0, false, key_only).reverse_scan(),

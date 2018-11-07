@@ -536,6 +536,7 @@ mod tests {
             .async_scan(
                 Context::default(),
                 Key::from_encoded_slice(b""),
+                None,
                 expected_data.len() + 1,
                 1,
                 Options::default(),
