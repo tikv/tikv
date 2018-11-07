@@ -148,7 +148,7 @@ impl<S: Snapshot> MvccTxn<S> {
         {
             let key = mutation.key();
             if !options.skip_constraint_check {
-                if let Some((commit, _)) = self.reader.seek_write(key, u64::max_value())? {
+                if let Some((commit, write)) = self.reader.seek_write(key, u64::max_value())? {
                     // Abort on writes after our start timestamp ...
                     // If exists a commit version whose commit timestamp is larger than or equal to
                     // current start timestamp, we should abort current prewrite, even if the commit
@@ -157,7 +157,8 @@ impl<S: Snapshot> MvccTxn<S> {
                         MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                         return Err(Error::WriteConflict {
                             start_ts: self.start_ts,
-                            conflict_ts: commit,
+                            conflict_start_ts: write.start_ts,
+                            conflict_commit_ts: commit,
                             key: key.to_raw()?,
                             primary: primary.to_vec(),
                         });
