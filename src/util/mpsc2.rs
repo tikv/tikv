@@ -23,7 +23,7 @@ use crossbeam_channel;
 use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
 
-const NOTIFY_BATCH_SIZE: usize = 16;
+const NOTIFY_BATCH_SIZE: usize = 128;
 
 pub struct State {
     sender_cnt: AtomicIsize,
@@ -275,7 +275,12 @@ impl<T> Stream for BatchReceiver<T> {
         let finished = loop {
             match self.rx.try_recv() {
                 Err(TryRecvError::Disconnected) => break true,
-                Ok(m) => self.buf.push(m),
+                Ok(m) => {
+                    self.buf.push(m);
+                    if self.buf.len() >= NOTIFY_BATCH_SIZE {
+                        break false;
+                    }
+                }
                 Err(TryRecvError::Empty) => if self.rx.yield_poll() {
                     break false;
                 },

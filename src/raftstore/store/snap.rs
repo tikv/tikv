@@ -981,7 +981,7 @@ impl Snapshot for Snap {
                 box_try!(
                     options
                         .db
-                        .ingest_external_file_cf(cf_handle, &ingest_opt, &[path])
+                        .ingest_external_file_optimized(cf_handle, &ingest_opt, &[path])
                 );
             }
         }

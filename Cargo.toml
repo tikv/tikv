@@ -71,7 +71,6 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.3"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
@@ -84,13 +83,19 @@ panic_hook = { path = "components/panic_hook" }
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
-"grpcio:0.4.0" = { git = "https://github.com/hicqu/grpc-rs", branch = "client-clone" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+# git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/hicqu/rust-rocksdb"
+branch = "ingestion-for-test"
+
+[dependencies.grpcio]
+git = "https://github.com/hicqu/grpc-rs.git"
+branch = "v0.4"
+features = ["secure"]
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
