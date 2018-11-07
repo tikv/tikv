@@ -217,7 +217,7 @@ impl<E: Engine> SyncStorage<E> {
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, limit, false, true)
+            .async_raw_scan(ctx, cf, start_key, limit, false, false)
             .wait()
     }
     pub fn reverse_raw_scan(
@@ -228,7 +228,7 @@ impl<E: Engine> SyncStorage<E> {
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, limit, false, false)
+            .async_raw_scan(ctx, cf, start_key, limit, false, true)
             .wait()
     }
 }
