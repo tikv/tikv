@@ -1430,7 +1430,7 @@ impl Storage for PeerStorage {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use kvproto::raft_serverpb::RaftSnapshotData;
     use protobuf;
     use raft::eraftpb::HardState;

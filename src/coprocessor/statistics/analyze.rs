@@ -299,7 +299,7 @@ impl SampleCollector {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use coprocessor::codec::datum;
     use coprocessor::codec::datum::Datum;

@@ -1015,7 +1015,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
     use coprocessor::dag::expr::{EvalConfig, EvalContext};

@@ -292,11 +292,11 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::test::{
+    use coprocessor::dag::expr::tests::{
         check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
     };
     use coprocessor::dag::expr::*;

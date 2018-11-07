@@ -17,7 +17,7 @@ use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
 use storage::txn::Result;
 use storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
-use util::escape;
+use util::{escape, set_panic_mark};
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
@@ -29,19 +29,19 @@ pub enum ScanOn {
 
 fn create_range_scanner<S: Store>(
     store: &S,
-    asc: bool,
+    desc: bool,
     key_only: bool,
     range: &KeyRange,
 ) -> Result<S::Scanner> {
     let lower_bound = Some(Key::from_raw(range.get_start()));
     let upper_bound = Some(Key::from_raw(range.get_end()));
-    store.scanner(asc, key_only, lower_bound, upper_bound)
+    store.scanner(desc, key_only, lower_bound, upper_bound)
 }
 
 // `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
 pub struct Scanner<S: Store> {
-    asc: bool,
+    desc: bool,
     scan_on: ScanOn,
     key_only: bool,
     last_scanned_key: Vec<u8>,
@@ -61,11 +61,11 @@ impl<S: Store> Scanner<S> {
         range: KeyRange,
     ) -> Result<Self> {
         Ok(Self {
-            asc: !desc,
+            desc,
             scan_on,
             key_only,
             last_scanned_key: Vec::with_capacity(MIN_KEY_BUFFER_CAPACITY),
-            scanner: create_range_scanner(store, !desc, key_only, &range)?,
+            scanner: create_range_scanner(store, desc, key_only, &range)?,
             range,
             no_more: false,
             statistics_backlog: Statistics::default(),
@@ -79,7 +79,7 @@ impl<S: Store> Scanner<S> {
         self.no_more = false;
         self.last_scanned_key.clear();
         self.statistics_backlog.add(&self.scanner.take_statistics());
-        self.scanner = create_range_scanner(store, self.asc, self.key_only, &self.range)?;
+        self.scanner = create_range_scanner(store, self.desc, self.key_only, &self.range)?;
         Ok(())
     }
 
@@ -99,8 +99,9 @@ impl<S: Store> Scanner<S> {
         };
 
         if self.range.start > key || self.range.end <= key {
+            set_panic_mark();
             panic!(
-                "key: {} out of range [{}, {})",
+                "key: {} out of range, start: {}, end: {}",
                 escape(&key),
                 escape(self.range.get_start()),
                 escape(self.range.get_end())
@@ -121,14 +122,14 @@ impl<S: Store> Scanner<S> {
         assert!(!self.no_more);
         if self.last_scanned_key.is_empty() {
             // Happens when new() -> start_scan().
-            if self.asc {
+            if !self.desc {
                 range.set_start(self.range.get_start().to_owned());
             } else {
                 range.set_end(self.range.get_end().to_owned());
             }
         } else {
             // Happens when new() -> start_scan() -> next_row() ... -> stop_scan() -> start_scan().
-            if self.asc {
+            if !self.desc {
                 // In `stop_scan`, we will `next(last_scanned_key)`, so we don't need to next()
                 // again here.
                 range.set_start(self.last_scanned_key.clone());
@@ -146,7 +147,7 @@ impl<S: Store> Scanner<S> {
         }
         // `next_row()` should have been called when calling `stop_scan()` after `start_scan()`.
         assert!(!self.last_scanned_key.is_empty());
-        if self.asc {
+        if !self.desc {
             // Make range_end exclusive. Note that next `start_scan` will also use this
             // key as the range_start.
             util::convert_to_prefix_next(&mut self.last_scanned_key);
@@ -170,7 +171,7 @@ impl<S: Store> Scanner<S> {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use std::i64;
 
     use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -434,7 +435,7 @@ pub mod test {
             }
 
             let has_more = scanner.stop_scan(&mut range);
-            if has_more || scanner.asc {
+            if has_more || !scanner.desc {
                 assert_eq!(
                     range.get_start(),
                     table::encode_row_key(table_id, expect_start_pk).as_slice()
@@ -442,7 +443,7 @@ pub mod test {
             } else {
                 assert_eq!(expect_start_pk, -1);
             }
-            if has_more || !scanner.asc {
+            if has_more || scanner.desc {
                 assert_eq!(
                     range.get_end(),
                     table::encode_row_key(table_id, expect_end_pk).as_slice()
