@@ -84,7 +84,7 @@ impl Column {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::sync::Arc;
     use std::{str, u64};
 
@@ -92,7 +92,7 @@ mod test {
 
     use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::col_expr;
+    use coprocessor::dag::expr::tests::col_expr;
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     #[derive(PartialEq, Debug)]
