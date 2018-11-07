@@ -23,7 +23,8 @@ use crossbeam_channel;
 use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
 
-const NOTIFY_BATCH_SIZE: usize = 128;
+const NOTIFY_BATCH_SIZE: usize = 8;
+const MAX_BATCH_SIZE: usize = 32;
 
 pub struct State {
     sender_cnt: AtomicIsize,
@@ -223,7 +224,7 @@ pub fn batch_unbounded<T>() -> (Sender<T>, BatchReceiver<T>) {
     let (tx, rx) = unbounded();
     let rx = BatchReceiver {
         rx,
-        buf: Vec::with_capacity(NOTIFY_BATCH_SIZE),
+        buf: Vec::with_capacity(MAX_BATCH_SIZE),
     };
     (tx, rx)
 }
@@ -277,7 +278,7 @@ impl<T> Stream for BatchReceiver<T> {
                 Err(TryRecvError::Disconnected) => break true,
                 Ok(m) => {
                     self.buf.push(m);
-                    if self.buf.len() >= NOTIFY_BATCH_SIZE {
+                    if self.buf.len() >= MAX_BATCH_SIZE {
                         break false;
                     }
                 }
@@ -292,7 +293,7 @@ impl<T> Stream for BatchReceiver<T> {
         } else if self.buf.is_empty() {
             return Ok(Async::NotReady);
         }
-        let msgs = mem::replace(&mut self.buf, Vec::with_capacity(NOTIFY_BATCH_SIZE));
+        let msgs = mem::replace(&mut self.buf, Vec::with_capacity(MAX_BATCH_SIZE));
         Ok(Async::Ready(Some(msgs)))
     }
 }
