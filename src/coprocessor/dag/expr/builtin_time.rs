@@ -80,7 +80,7 @@ impl ScalarFunc {
     #[inline]
     pub fn micro_second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let dur = try_opt!(self.children[0].eval_duration(ctx, row));
-        Ok(Some(dur.micro_secs() as i64))
+        Ok(Some(i64::from(dur.micro_secs())))
     }
 
     #[inline]
@@ -402,25 +402,25 @@ mod tests {
         test_ok_case_one_arg(
             &mut ctx,
             ScalarFuncSig::Hour,
-            Datum::Dur(Duration::parse("0 00:00:00.0".as_bytes(), 0).unwrap()),
+            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
             Datum::I64(0),
         );
         test_ok_case_one_arg(
             &mut ctx,
             ScalarFuncSig::Minute,
-            Datum::Dur(Duration::parse("0 00:00:00.0".as_bytes(), 0).unwrap()),
+            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
             Datum::I64(0),
         );
         test_ok_case_one_arg(
             &mut ctx,
             ScalarFuncSig::Second,
-            Datum::Dur(Duration::parse("0 00:00:00.0".as_bytes(), 0).unwrap()),
+            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
             Datum::I64(0),
         );
         test_ok_case_one_arg(
             &mut ctx,
             ScalarFuncSig::MicroSecond,
-            Datum::Dur(Duration::parse("0 00:00:00.0".as_bytes(), 0).unwrap()),
+            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
             Datum::I64(0),
         );
     }
