@@ -42,13 +42,6 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref APPLY_TASK_BATCH_SIZE: Histogram = 
-        register_histogram!(
-            "tikv_raftstore_apply_batch_size",
-            "Bucketed histogram of apply task batch size",
-            exponential_buckets(1.0, 2.0, 10).unwrap()
-        ).unwrap();
-
     pub static ref APPLY_TASK_WAIT_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_wait_time_duration_secs",

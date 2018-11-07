@@ -22,7 +22,7 @@ use crossbeam_channel;
 use import::SSTImporter;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::metrics::*;
-use raftstore::store::{Config, Engines, Transport};
+use raftstore::store::{Config, Engines};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::mpsc::SendError;
@@ -65,7 +65,7 @@ impl State {
             Some(mut p) => {
                 match &mut *p {
                     FsmTypes::Apply(p) => p.mail_box = Some(mb.to_owned()),
-                    FsmTypes::Fallback(f) => {}
+                    FsmTypes::Fallback(_) => {}
                     _ => unreachable!(),
                 }
                 scheduler.send(p)
@@ -581,8 +581,7 @@ impl Poller {
             }
             for (i, p) in batches.applys.iter_mut().enumerate() {
                 let p: &mut ApplyFsm = &mut *p;
-                let mut apply_poller =
-                    ApplyPoller::new(&mut p.delegate, &mut self.ctx, &self.scheduler);
+                let mut apply_poller = ApplyPoller::new(&mut p.delegate, &mut self.ctx);
                 let mark = apply_poller.poll(&p.receiver, &mut msgs);
                 if apply_poller.stopped() {
                     exhausted_peers.push((i, None));
@@ -708,7 +707,7 @@ impl BatchSystem {
     }
 }
 
-pub fn create_router(cfg: &Config) -> (Router, crossbeam_channel::Receiver<Box<FsmTypes>>) {
+pub fn create_router(_: &Config) -> (Router, crossbeam_channel::Receiver<Box<FsmTypes>>) {
     let (fallback_tx, fallback_rx) = mpsc::unbounded();
     let fallback_delegate = FallbackDelegate::new();
     let fallback_fsm = FallbackFsm {

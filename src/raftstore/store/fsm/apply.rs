@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use protobuf::RepeatedField;
 use rocksdb::rocksdb_options::WriteOptions;
-use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::{Writable, WriteBatch};
 use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
@@ -40,7 +40,6 @@ use prometheus::{exponential_buckets, Histogram};
 use raft::NO_LIMIT;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::fsm::ConfigProvider;
 use raftstore::store::metrics::*;
 use raftstore::store::msg::Callback;
 use raftstore::store::peer::Peer;
@@ -52,7 +51,7 @@ use raftstore::store::{cmd_resp, keys, util, Config, Engines, PeerMsg};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::mpsc::Receiver;
-use util::time::{duration_to_sec, Instant, SlowTimer};
+use util::time::{duration_to_sec, Instant};
 use util::{escape, rocksdb, MustConsumeVec};
 
 lazy_static! {
@@ -867,6 +866,8 @@ impl ApplyDelegate {
     ///
     /// Please note that all the pending callbacks will be lost.
     /// Should not do this when dropping a peer in case of possible leak.
+    /// TODO: find a good way to clear pending commands.
+    #[allow(dead_code)]
     fn clear_pending_commands(&mut self) {
         if !self.pending_cmds.normals.is_empty() {
             info!(
@@ -1383,7 +1384,6 @@ impl ApplyDelegate {
 
     fn check_log_uptodate_for_merge(
         &mut self,
-        ctx: &mut PollContext,
         merge: &CommitMergeRequest,
         source_region_id: u64,
     ) -> bool {
@@ -1437,7 +1437,7 @@ impl ApplyDelegate {
 
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
-        if !self.check_log_uptodate_for_merge(ctx, merge, source_region.get_id()) {
+        if !self.check_log_uptodate_for_merge(merge, source_region.get_id()) {
             let (tx, rx) = ctx.router.one_shot(self.region_id());
             self.pending_merge_apply = Some(MergeAsyncWait {
                 poller: rx,
@@ -1471,7 +1471,7 @@ impl ApplyDelegate {
                 self.tag, state
             ),
         }
-        let mut exist_region = state.get_region().to_owned();
+        let exist_region = state.get_region().to_owned();
         if *source_region != exist_region {
             panic!(
                 "{} source_region {:?} not match exist region {:?}",
@@ -2194,20 +2194,11 @@ impl<'a> FallbackPoller<'a> {
 pub struct ApplyPoller<'a> {
     delegate: &'a mut ApplyDelegate,
     ctx: &'a mut PollContext,
-    scheduler: &'a Scheduler,
 }
 
 impl<'a> ApplyPoller<'a> {
-    pub fn new(
-        delegate: &'a mut ApplyDelegate,
-        ctx: &'a mut PollContext,
-        scheduler: &'a Scheduler,
-    ) -> ApplyPoller<'a> {
-        ApplyPoller {
-            delegate,
-            ctx,
-            scheduler,
-        }
+    pub fn new(delegate: &'a mut ApplyDelegate, ctx: &'a mut PollContext) -> ApplyPoller<'a> {
+        ApplyPoller { delegate, ctx }
     }
 
     // Return true means poller is ready to handle next task.
@@ -2236,15 +2227,14 @@ impl<'a> ApplyPoller<'a> {
             self.delegate.pending_merge_apply = Some(merge_apply);
             return false;
         }
-        if !merge_apply.pending_entries.is_empty() {
-            if !self
+        if !merge_apply.pending_entries.is_empty()
+            && !self
                 .delegate
                 .handle_raft_committed_entries(&mut self.ctx, merge_apply.pending_entries)
-            {
-                let mut pending_merge = self.delegate.pending_merge_apply.as_mut().unwrap();
-                pending_merge.pending_tasks = merge_apply.pending_tasks;
-                return false;
-            }
+        {
+            let pending_merge = self.delegate.pending_merge_apply.as_mut().unwrap();
+            pending_merge.pending_tasks = merge_apply.pending_tasks;
+            return false;
         }
         if !merge_apply.pending_tasks.is_empty() {
             self.handle_tasks(&mut merge_apply.pending_tasks)
@@ -2334,7 +2324,7 @@ impl<'a> ApplyPoller<'a> {
 
     fn handle_proposal(&mut self, region_proposal: RegionProposal) -> bool {
         assert_eq!(self.delegate.id, region_proposal.id);
-        let mut propose_num = region_proposal.props.len();
+        let propose_num = region_proposal.props.len();
         for p in region_proposal.props {
             let cmd = PendingCmd::new(p.index, p.term, p.cb);
             if p.is_conf_change {
