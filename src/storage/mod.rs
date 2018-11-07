@@ -2035,7 +2035,7 @@ mod tests {
     fn test_sched_too_busy() {
         let read_pool = new_read_pool();
         let mut config = Config::default();
-        config.scheduler_pending_write_threshold = ReadableSize(10);
+        config.scheduler_pending_write_threshold = ReadableSize(36);
         let mut storage = Storage::new(&config, read_pool).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -2104,6 +2104,8 @@ mod tests {
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
