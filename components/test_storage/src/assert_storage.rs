@@ -579,7 +579,7 @@ impl<E: Engine> AssertionStorage<E> {
     ) {
         let result: Vec<KvPair> = self
             .store
-            .raw_scan(self.ctx.clone(), cf, start_key, limit, false)
+            .raw_scan(self.ctx.clone(), cf, start_key, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())

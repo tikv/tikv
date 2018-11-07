@@ -215,10 +215,20 @@ impl<E: Engine> SyncStorage<E> {
         cf: String,
         start_key: Vec<u8>,
         limit: usize,
-        reverse: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, limit, false, reverse)
+            .async_raw_scan(ctx, cf, start_key, limit, false, true)
+            .wait()
+    }
+    pub fn reverse_raw_scan(
+        &self,
+        ctx: Context,
+        cf: String,
+        start_key: Vec<u8>,
+        limit: usize,
+    ) -> Result<Vec<Result<KvPair>>> {
+        self.store
+            .async_raw_scan(ctx, cf, start_key, limit, false, false)
             .wait()
     }
 }
