@@ -1333,26 +1333,29 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
     }
 
     if keys.len() > 20000 {
-        keys = sample(keys, 10000);
+        let len = keys.len();
+        keys = keys.into_iter().step_by(len / 10000).collect();
     }
 
     keys.sort();
 
-    Ok(sample(keys, parts))
+    Ok(sample(keys, parts - 1))
 }
 
-fn sample<T>(mut data: Vec<T>, samples: usize) -> Vec<T> {
-    if samples > data.len() / 2 {
+fn sample<T>(data: Vec<T>, samples: usize) -> Vec<T> {
+    if samples == 0 {
+        return vec![];
+    }
+
+    if samples >= data.len() {
         return data;
     }
 
-    (1..samples)
-        .rev()
-        .map(|i| {
-            let pos = (data.len() - 1) * i / samples;
-            data.swap_remove(pos)
-        })
-        .rev()
+    let len = data.len();
+    data.into_iter()
+        .enumerate()
+        .filter(|(i, _)| i + 1 != len && i * (samples + 1) / len != (i + 1) * (samples + 1) / len)
+        .map(|(_, item)| item)
         .collect()
 }
 
@@ -2052,6 +2055,42 @@ mod tests {
             match expect {
                 Expect::Keep => assert!(data.is_some()),
                 Expect::Remove => assert!(data.is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_vec_sampling() {
+        for size in 0..50 {
+            for sample_size in 0..50 {
+                eprintln!("Sampling {} from {}", sample_size, size);
+                let vec: Vec<_> = (0..size).collect();
+                let samples = sample(vec.clone(), sample_size);
+
+                if sample_size >= size {
+                    assert_eq!(vec, samples);
+                } else {
+                    assert_eq!(samples.len(), sample_size);
+
+                    if sample_size == 0 {
+                        continue;
+                    }
+                    // Samples should distributes evenly.
+                    let mut min_diff = None;
+                    let mut max_diff = None;
+                    for i in 0..sample_size - 1 {
+                        let diff = samples[i + 1] - samples[i];
+                        if min_diff.is_none() || min_diff.unwrap() > diff {
+                            min_diff = Some(diff);
+                        }
+                        if max_diff.is_none() || max_diff.unwrap() < diff {
+                            max_diff = Some(diff)
+                        }
+                    }
+                    if let (Some(min_diff), Some(max_diff)) = (min_diff, max_diff) {
+                        assert!(max_diff - min_diff <= 1);
+                    }
+                }
             }
         }
     }
