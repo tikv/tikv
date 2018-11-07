@@ -230,10 +230,6 @@
 ## Interval (s) to check Region whether the data are consistent.
 # consistency-check-interval = 0
 
-## Whether to enable Delete Range feature.
-## Delete Range can drop a large number of continuous keys.
-# use-delete-range = false
-
 ## Delay time before deleting a stale peer.
 # clean-stale-peer-delay = "10m"
 
