@@ -150,14 +150,47 @@ struct ScheduleState<Ctx> {
     stopped: bool,
 }
 
+pub struct Scheduler<Ctx> {
+    state: Arc<(Mutex<ScheduleState<Ctx>>, Condvar)>,
+    task_count: Arc<AtomicUsize>,
+}
+
+impl<Ctx> Scheduler<Ctx> {
+    pub fn schedule<F>(&self, job: F)
+    where
+        F: FnOnce(&mut Ctx) + Send + 'static,
+        Ctx: Context,
+    {
+        let task = Task::new(job);
+        let &(ref lock, ref cvar) = &*self.state;
+        {
+            let mut state = lock.lock().unwrap();
+            if state.stopped {
+                return;
+            }
+            state.queue.push(task);
+            cvar.notify_one();
+        }
+        self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
+    }
+}
+
+impl<Ctx> Clone for Scheduler<Ctx> {
+    fn clone(&self) -> Self {
+        Scheduler {
+            state: self.state.clone(),
+            task_count: self.task_count.clone(),
+        }
+    }
+}
+
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
 pub struct ThreadPool<Ctx> {
-    state: Arc<(Mutex<ScheduleState<Ctx>>, Condvar)>,
     threads: Vec<JoinHandle<()>>,
-    task_count: Arc<AtomicUsize>,
+    scheduler: Scheduler<Ctx>,
 }
 
 impl<Ctx> ThreadPool<Ctx>
@@ -197,10 +230,13 @@ where
         }
 
         ThreadPool {
-            state,
             threads,
-            task_count,
+            scheduler: Scheduler { state, task_count },
         }
+    }
+
+    pub fn scheduler(&self) -> Scheduler<Ctx> {
+        self.scheduler.clone()
     }
 
     pub fn execute<F>(&self, job: F)
@@ -208,26 +244,16 @@ where
         F: FnOnce(&mut Ctx) + Send + 'static,
         Ctx: Context,
     {
-        let task = Task::new(job);
-        let &(ref lock, ref cvar) = &*self.state;
-        {
-            let mut state = lock.lock().unwrap();
-            if state.stopped {
-                return;
-            }
-            state.queue.push(task);
-            cvar.notify_one();
-        }
-        self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
+        self.scheduler.schedule(job)
     }
 
     #[inline]
     pub fn get_task_count(&self) -> usize {
-        self.task_count.load(AtomicOrdering::SeqCst)
+        self.scheduler.task_count.load(AtomicOrdering::SeqCst)
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        let &(ref lock, ref cvar) = &*self.state;
+        let &(ref lock, ref cvar) = &*self.scheduler.state;
         {
             let mut state = lock.lock().unwrap();
             state.stopped = true;
@@ -322,7 +348,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     use std::sync::atomic::{AtomicIsize, Ordering};
@@ -364,6 +390,27 @@ mod test {
             );
             task_num -= 1;
         }
+        task_pool.stop().unwrap();
+    }
+
+    #[test]
+    fn test_scheduler() {
+        let name = thd_name!("test_scheduler");
+        let mut task_pool = ThreadPoolBuilder::with_default_factory(name).build();
+        let scheduler = task_pool.scheduler();
+        let (tx, rx) = channel();
+
+        for _ in 0..10 {
+            let t = tx.clone();
+            scheduler.schedule(move |_: &mut DefaultContext| {
+                t.send(()).unwrap();
+            });
+        }
+
+        for _ in 0..10 {
+            rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
         task_pool.stop().unwrap();
     }
 

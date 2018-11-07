@@ -310,7 +310,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, limit, false, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -330,7 +330,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .reverse_scan(self.ctx.clone(), key_address, limit, false, ts)
+            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -350,7 +350,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, limit, true, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, true, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -423,12 +423,13 @@ impl<E: Engine> AssertionStorage<E> {
         match err {
             storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
                 start_ts,
-                conflict_ts,
+                conflict_start_ts,
                 ref key,
                 ref primary,
+                ..
             })) => {
                 assert_eq!(cur_start_ts, start_ts);
-                assert_eq!(confl_ts, conflict_ts);
+                assert_eq!(confl_ts, conflict_start_ts);
                 assert_eq!(key.to_owned(), confl_key.to_owned());
                 assert_eq!(primary.to_owned(), cur_primary.to_owned());
             }

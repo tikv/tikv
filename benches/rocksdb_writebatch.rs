@@ -70,12 +70,16 @@ fn bench_writebatch_with_capacity(b: &mut Bencher) {
 }
 
 fn main() {
-    let mut criterion = Criterion::default().sample_size(10);
+    let mut criterion = Criterion::default().sample_size(10).configure_from_args();
 
     criterion.bench_function("without_capacity", bench_writebatch_without_capacity);
     criterion.bench_function("with_capacity", bench_writebatch_with_capacity);
 
-    let batch_sizes = vec![1, 2, 3, 8, 16, 32, 64, 128, 256, 512, 1024];
+    let batch_sizes = if criterion.is_test_mode() {
+        vec![32]
+    } else {
+        vec![1, 2, 3, 8, 16, 32, 64, 128, 256, 512, 1024]
+    };
     criterion.bench_function_over_inputs("writebatch", bench_writebatch, batch_sizes);
 
     criterion.final_summary();

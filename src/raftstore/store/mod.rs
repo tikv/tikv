@@ -40,8 +40,8 @@ pub use self::fsm::{
     StoreStat,
 };
 pub use self::msg::{
-    BatchReadCallback, Callback, Msg, ReadCallback, ReadResponse, SeekRegionCallback,
-    SeekRegionFilter, SeekRegionResult, SignificantMsg, Tick, WriteCallback, WriteResponse,
+    Callback, Msg, ReadCallback, ReadResponse, SeekRegionCallback, SeekRegionFilter,
+    SeekRegionResult, SignificantMsg, Tick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,

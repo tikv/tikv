@@ -13,7 +13,6 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::sync::{mpsc, oneshot};
 use futures::{Future, Stream};
 use protobuf::Message;
 
@@ -21,10 +20,8 @@ use kvproto::coprocessor::{Request, Response};
 use tipb::schema::ColumnInfo;
 use tipb::select::{SelectResponse, StreamResponse};
 
-use tikv::coprocessor::{EndPointTask, RequestTask};
-use tikv::server::OnResponse;
+use tikv::coprocessor::Endpoint;
 use tikv::storage::Engine;
-use tikv::util::worker::Scheduler;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -32,27 +29,20 @@ pub fn next_id() -> i64 {
     ID_GENERATOR.fetch_add(1, Ordering::Relaxed) as i64
 }
 
-pub fn handle_request<E>(end_point_scheduler: &Scheduler<EndPointTask<E>>, req: Request) -> Response
+pub fn handle_request<E>(cop: &Endpoint<E>, req: Request) -> Response
 where
     E: Engine,
 {
-    let (tx, rx) = oneshot::channel();
-    let on_resp = OnResponse::Unary(tx);
-    let req = RequestTask::new(String::from("127.0.0.1"), req, on_resp, 100).unwrap();
-    end_point_scheduler
-        .schedule(EndPointTask::Request(req))
-        .unwrap();
-    rx.wait().unwrap()
+    cop.parse_and_handle_unary_request(req, None)
+        .wait()
+        .unwrap()
 }
 
-pub fn handle_select<E>(
-    end_point_scheduler: &Scheduler<EndPointTask<E>>,
-    req: Request,
-) -> SelectResponse
+pub fn handle_select<E>(cop: &Endpoint<E>, req: Request) -> SelectResponse
 where
     E: Engine,
 {
-    let resp = handle_request(end_point_scheduler, req);
+    let resp = handle_request(cop, req);
     assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
@@ -60,7 +50,7 @@ where
 }
 
 pub fn handle_streaming_select<E, F>(
-    end_point_scheduler: &Scheduler<EndPointTask<E>>,
+    cop: &Endpoint<E>,
     req: Request,
     mut check_range: F,
 ) -> Vec<StreamResponse>
@@ -68,19 +58,8 @@ where
     E: Engine,
     F: FnMut(&Response) + Send + 'static,
 {
-    let (stream_tx, stream_rx) = mpsc::channel(10);
-    let req = RequestTask::new(
-        String::from("127.0.0.1"),
-        req,
-        OnResponse::Streaming(stream_tx),
-        100,
-    ).unwrap();
-    end_point_scheduler
-        .schedule(EndPointTask::Request(req))
-        .unwrap();
-    stream_rx
+    cop.parse_and_handle_stream_request(req, None)
         .wait()
-        .into_iter()
         .map(|resp| {
             let resp = resp.unwrap();
             check_range(&resp);

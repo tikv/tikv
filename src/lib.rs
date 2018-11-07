@@ -55,6 +55,7 @@ extern crate grpcio as grpc;
 extern crate hex;
 extern crate indexmap;
 extern crate kvproto;
+
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
@@ -112,6 +113,8 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
+
+extern crate panic_hook;
 
 #[macro_use]
 pub mod util;

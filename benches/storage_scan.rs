@@ -13,18 +13,13 @@
 
 #![feature(repeat_generic_slice)]
 
-/// This suite contains benchmarks for several different configurations generated
-/// dynamically. Thus it has `harness = false`.
 extern crate criterion;
-
-extern crate clap;
 
 extern crate bench_util;
 extern crate test_storage;
 extern crate test_util;
 extern crate tikv;
 
-use clap::{App, Arg};
 use criterion::{black_box, Bencher, Criterion};
 
 use bench_util::*;
@@ -86,7 +81,14 @@ fn bench_forward_scan_mvcc_deleted(b: &mut Bencher) {
         let (k, _) = kvs.next().unwrap();
         assert!(
             store
-                .scan(new_no_cache_context(), Key::from_raw(&k), 1, false, ts)
+                .scan(
+                    new_no_cache_context(),
+                    Key::from_raw(&k),
+                    None,
+                    1,
+                    false,
+                    ts
+                )
                 .unwrap()
                 .is_empty()
         )
@@ -146,6 +148,7 @@ fn bench_forward_scan(b: &mut Bencher, input: &ScanConfig) {
             .scan(
                 new_no_cache_context(),
                 black_box(Key::from_raw(&[])),
+                None,
                 input.number_of_keys + 1,
                 false,
                 max_ts,
@@ -164,6 +167,7 @@ fn bench_backward_scan(b: &mut Bencher, input: &ScanConfig) {
             .reverse_scan(
                 new_no_cache_context(),
                 black_box(start_key.clone()),
+                None,
                 input.number_of_keys + 1,
                 false,
                 max_ts,
@@ -175,18 +179,7 @@ fn bench_backward_scan(b: &mut Bencher, input: &ScanConfig) {
 
 #[cfg_attr(feature = "cargo-clippy", allow(useless_let_if_seq))]
 fn main() {
-    let matches = App::new("storage_scan_benchmark")
-        .arg(Arg::with_name("bench")
-            .hidden(true)
-            .long("bench"))  // Ignored. May passed by cargo bench.
-        .arg(
-            Arg::with_name("full")
-                .long("full")
-                .help("Run full benchmarks"),
-        )
-        .get_matches();
-
-    let mut criterion = Criterion::default().sample_size(10);
+    let mut criterion = Criterion::default().sample_size(10).configure_from_args();
 
     let mut inputs = vec![];
 
@@ -195,15 +188,15 @@ fn main() {
     let key_len_coll;
     let value_len_coll;
 
-    if matches.is_present("full") {
-        number_of_keys_coll = vec![10000];
-        number_of_versions_coll = vec![1, 2, 5, 10, 50];
-        key_len_coll = vec![32, 100, 200];
-        value_len_coll = vec![5, 100, 200];
+    if criterion.is_test_mode() {
+        number_of_keys_coll = vec![10];
+        number_of_versions_coll = vec![5];
+        key_len_coll = vec![32];
+        value_len_coll = vec![5];
     } else {
         number_of_keys_coll = vec![5000];
         number_of_versions_coll = vec![1, 2, 20];
-        key_len_coll = vec![32];
+        key_len_coll = vec![32, 100];
         value_len_coll = vec![5, 100];
     }
 
@@ -223,7 +216,11 @@ fn main() {
     }
     criterion.bench_function_over_inputs("forward_scan", bench_forward_scan, inputs.clone());
     criterion.bench_function_over_inputs("backward_scan", bench_backward_scan, inputs);
-    criterion.bench_function("forward_scan_mvcc_deleted", bench_forward_scan_mvcc_deleted);
+
+    if !criterion.is_test_mode() {
+        // Only run this bench in bench mode because its preparation costs time.
+        criterion.bench_function("forward_scan_mvcc_deleted", bench_forward_scan_mvcc_deleted);
+    }
 
     criterion.final_summary();
 }

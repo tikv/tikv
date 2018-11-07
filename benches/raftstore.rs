@@ -127,8 +127,16 @@ where
     T: Simulator + 'static,
     F: ClusterFactory<T>,
 {
-    let nodes_coll = vec![1, 3, 5];
-    let value_size_coll = vec![8, 128, 1024, 4096];
+    let nodes_coll = if c.is_test_mode() {
+        vec![5]
+    } else {
+        vec![1, 3, 5]
+    };
+    let value_size_coll = if c.is_test_mode() {
+        vec![8]
+    } else {
+        vec![8, 128, 1024, 4096]
+    };
 
     let mut set_inputs = vec![];
     let mut get_inputs = vec![];
@@ -192,7 +200,7 @@ impl ::std::fmt::Debug for ServerClusterFactory {
 fn main() {
     tikv::util::config::check_max_open_fds(4096).unwrap();
 
-    let mut criterion = Criterion::default().sample_size(10);
+    let mut criterion = Criterion::default().sample_size(10).configure_from_args();
     bench_raft_cluster(&mut criterion, NodeClusterFactory {});
     bench_raft_cluster(&mut criterion, ServerClusterFactory {});
 

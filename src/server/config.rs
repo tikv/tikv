@@ -16,7 +16,6 @@ use std::i32;
 use super::Result;
 use grpc::CompressionAlgorithms;
 
-use coprocessor::DEFAULT_REQUEST_MAX_HANDLE_SECS;
 use util::collections::HashMap;
 use util::config::{self, ReadableDuration, ReadableSize};
 use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
@@ -34,6 +33,10 @@ const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
 // Number of rows in each chunk.
 pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
+
+// If a request has been handled for more than 60 seconds, the client should
+// be timeout already, so it can be safely aborted.
+pub const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 
 // Number of rows in each chunk for streaming coprocessor.
 pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
@@ -125,7 +128,7 @@ impl Default for Config {
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
             end_point_stream_batch_row_limit: DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT,
             end_point_request_max_handle_duration: ReadableDuration::secs(
-                DEFAULT_REQUEST_MAX_HANDLE_SECS,
+                DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
@@ -169,7 +172,9 @@ impl Config {
             return Err(box_err!("server.end-point-recursion-limit is too small"));
         }
 
-        if self.end_point_request_max_handle_duration.as_secs() < DEFAULT_REQUEST_MAX_HANDLE_SECS {
+        if self.end_point_request_max_handle_duration.as_secs()
+            < DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS
+        {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
             ));

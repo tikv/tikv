@@ -242,6 +242,7 @@ impl Debug for Command {
 }
 
 pub const CMD_TAG_GC: &str = "gc";
+pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
 
 impl Command {
     pub fn readonly(&self) -> bool {
@@ -395,8 +396,8 @@ pub struct Storage<E: Engine> {
     engine: E,
 
     // to schedule the execution of storage commands
-    worker: Arc<Mutex<Worker<Msg<E>>>>,
-    worker_scheduler: worker::Scheduler<Msg<E>>,
+    worker: Arc<Mutex<Worker<Msg>>>,
+    worker_scheduler: worker::Scheduler<Msg>,
 
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker<E>,
@@ -436,6 +437,10 @@ impl<E: Engine> Storage<E> {
             gc_worker,
             max_key_size: config.max_key_size,
         })
+    }
+
+    pub fn mut_gc_worker(&mut self) -> &mut GCWorker<E> {
+        &mut self.gc_worker
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -627,6 +632,7 @@ impl<E: Engine> Storage<E> {
         &self,
         ctx: Context,
         start_key: Key,
+        end_key: Option<Key>,
         limit: usize,
         start_ts: u64,
         options: Options,
@@ -660,13 +666,13 @@ impl<E: Engine> Storage<E> {
                             ScanMode::Forward,
                             options.key_only,
                             Some(start_key),
-                            None,
+                            end_key,
                         )?;
                     } else {
                         scanner = snap_store.scanner(
                             ScanMode::Backward,
                             options.key_only,
-                            None,
+                            end_key,
                             Some(start_key),
                         )?;
                     };
@@ -860,6 +866,21 @@ impl<E: Engine> Storage<E> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&[CMD_TAG_GC])
+            .inc();
+        Ok(())
+    }
+
+    pub fn async_unsafe_destroy_range(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        self.gc_worker
+            .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
+        KV_COMMAND_COUNTER_VEC
+            .with_label_values(&[CMD_TAG_UNSAFE_DESTROY_RANGE])
             .inc();
         Ok(())
     }
@@ -1610,6 +1631,7 @@ mod tests {
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"x"),
+                    None,
                     1000,
                     1,
                     Options::default(),
@@ -1651,18 +1673,91 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        // Forward
         expect_multi_values(
             vec![None, None, None],
             storage
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"\x00"),
+                    None,
                     1000,
                     5,
                     Options::default(),
                 )
                 .wait(),
         );
+        // Backward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+
         storage
             .async_commit(
                 Context::new(),
@@ -1677,6 +1772,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        // Forward
         expect_multi_values(
             vec![
                 Some((b"a".to_vec(), b"aa".to_vec())),
@@ -1687,13 +1783,100 @@ mod tests {
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"\x00"),
+                    None,
                     1000,
                     5,
                     Options::default(),
                 )
                 .wait(),
         );
+        // Backward
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+                Some((b"a".to_vec(), b"aa".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
         storage.stop().unwrap();
+        // Forward with limit
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
     }
 
     #[test]
@@ -2106,12 +2289,11 @@ mod tests {
                 .wait(),
         );
 
-        // Delete range ["", ""), it means delete all
         storage
             .async_delete_range(
                 Context::new(),
                 Key::from_raw(b""),
-                Key::from_raw(b""),
+                Key::from_raw(&[255]),
                 expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();

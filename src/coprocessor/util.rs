@@ -14,8 +14,28 @@
 use kvproto::coprocessor as coppb;
 use tipb::schema::ColumnInfo;
 
-use super::codec::datum::Datum;
-use super::codec::mysql;
+use coprocessor::codec::datum::Datum;
+use coprocessor::codec::mysql;
+use coprocessor::*;
+
+pub struct ErrorRequestHandler {
+    error: Option<Error>,
+}
+
+impl ErrorRequestHandler {
+    pub fn new(error: Error) -> ErrorRequestHandler {
+        ErrorRequestHandler { error: Some(error) }
+    }
+}
+
+impl RequestHandler for ErrorRequestHandler {
+    fn handle_request(&mut self) -> Result<coppb::Response> {
+        Err(self.error.take().unwrap())
+    }
+    fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        Err(self.error.take().unwrap())
+    }
+}
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
@@ -113,7 +133,7 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     fn test_prefix_next_once(key: &[u8], expected: &[u8]) {

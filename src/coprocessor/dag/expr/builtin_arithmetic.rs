@@ -292,11 +292,11 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use coprocessor::codec::mysql::{types, Decimal};
     use coprocessor::codec::{mysql, Datum};
-    use coprocessor::dag::expr::test::{
+    use coprocessor::dag::expr::tests::{
         check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
     };
     use coprocessor::dag::expr::*;
@@ -1094,8 +1094,8 @@ mod test {
             let rhs = datum_expr(right);
             let scalar_func = scalar_func_expr(sig, &[lhs, rhs]);
             for (flag, sql_mode, strict_sql_mode, is_ok, has_warning) in &cases {
-                let cfg = EvalConfig::new()
-                    .set_by_flags(*flag)
+                let mut cfg = EvalConfig::new();
+                cfg.set_by_flags(*flag)
                     .set_sql_mode(*sql_mode)
                     .set_strict_sql_mode(*strict_sql_mode);
                 let mut ctx = EvalContext::new(Arc::new(cfg));

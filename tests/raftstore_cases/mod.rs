@@ -21,6 +21,7 @@ mod test_lease_read;
 mod test_merge;
 mod test_multi;
 mod test_prevote;
+mod test_region_change_observer;
 mod test_region_heartbeat;
 mod test_service;
 mod test_single;

@@ -361,7 +361,6 @@ impl RowColsDict {
         let end_offsets = self
             .cols
             .values()
-            .into_iter()
             .map(|meta| meta.offset + meta.length - start)
             .collect();
         (&self.value[start..start + length], end_offsets)
@@ -418,7 +417,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
     use tipb::schema::ColumnInfo;

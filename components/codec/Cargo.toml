@@ -1,0 +1,11 @@
+[package]
+name = "codec"
+version = "0.0.1"
+publish = false
+
+[dependencies]
+quick-error = "1.2"
+panic_hook = { path = "../panic_hook" }
+
+[dev-dependencies]
+rand = "0.5"

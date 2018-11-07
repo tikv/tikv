@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use super::{
-    BatchCallback, Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify,
-    Result, ScanMode, Snapshot, TEMP_DIR,
+    Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
+    ScanMode, Snapshot, TEMP_DIR,
 };
 use kvproto::kvrpcpb::Context;
 use raftstore::store::engine::{IterOption, Peekable};
@@ -33,7 +33,6 @@ pub use raftstore::store::engine::SyncSnapshot as RocksSnapshot;
 enum Task {
     Write(Vec<Modify>, Callback<()>),
     Snapshot(Callback<RocksSnapshot>),
-    SnapshotBatch(usize, BatchCallback<RocksSnapshot>),
 }
 
 impl Display for Task {
@@ -41,7 +40,6 @@ impl Display for Task {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
-            Task::SnapshotBatch(..) => write!(f, "snapshot task batch"),
         }
     }
 }
@@ -56,17 +54,6 @@ impl Runnable<Task> for Runner {
                 CbContext::new(),
                 Ok(RocksSnapshot::new(Arc::clone(&self.0))),
             )),
-            Task::SnapshotBatch(size, on_finished) => {
-                let mut results = Vec::with_capacity(size);
-                for _ in 0..size {
-                    let res = Some((
-                        CbContext::new(),
-                        Ok(RocksSnapshot::new(Arc::clone(&self.0))),
-                    ));
-                    results.push(res);
-                }
-                on_finished(results);
-            }
         }
     }
 }
@@ -85,9 +72,11 @@ impl Drop for RocksEngineCore {
     }
 }
 
+#[derive(Clone)]
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
+    db: Arc<DB>,
 }
 
 impl RocksEngine {
@@ -105,12 +94,17 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = rocksdb::new_engine(&path, cfs, cfs_opts)?;
-        box_try!(worker.start(Runner(Arc::new(db))));
+        let db = Arc::new(rocksdb::new_engine(&path, cfs, cfs_opts)?);
+        box_try!(worker.start(Runner(Arc::clone(&db))));
         Ok(RocksEngine {
             sched: worker.scheduler(),
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
+            db,
         })
+    }
+
+    pub fn get_rocksdb(&self) -> Arc<DB> {
+        Arc::clone(&self.db)
     }
 
     pub fn stop(&self) {
@@ -128,15 +122,6 @@ impl Debug for RocksEngine {
             "Rocksdb [is_temp: {}]",
             self.core.lock().unwrap().temp_dir.is_some()
         )
-    }
-}
-
-impl Clone for RocksEngine {
-    fn clone(&self) -> Self {
-        Self {
-            core: Arc::clone(&self.core),
-            sched: self.sched.clone(),
-        }
     }
 }
 
@@ -195,21 +180,6 @@ impl Engine for RocksEngine {
 
     fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
-        Ok(())
-    }
-
-    fn async_batch_snapshot(
-        &self,
-        batch: Vec<Context>,
-        on_finished: BatchCallback<Self::Snap>,
-    ) -> Result<()> {
-        if batch.is_empty() {
-            return Err(Error::EmptyRequest);
-        }
-        box_try!(
-            self.sched
-                .schedule(Task::SnapshotBatch(batch.len(), on_finished))
-        );
         Ok(())
     }
 }

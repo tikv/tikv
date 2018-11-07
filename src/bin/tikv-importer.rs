@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(use_extern_macros)]
 #![feature(proc_macro_non_items)]
 
 extern crate chrono;
@@ -36,6 +35,7 @@ extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
+#[macro_use]
 extern crate tikv;
 extern crate toml;
 
@@ -52,12 +52,12 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util::panic_hook;
+use tikv::util as tikv_util;
 
 fn main() {
     let matches = App::new("TiKV Importer")
         .long_version(util::tikv_version_info().as_ref())
-        .author("PingCAP Inc. <info@pingcap.com>")
+        .author("TiKV Org.")
         .about("An import server for TiKV")
         .arg(
             Arg::with_name("addr")
@@ -100,12 +100,19 @@ fn main() {
         .get_matches();
 
     let config = setup_config(&matches);
-    init_log(&config);
-    initial_metric(&config.metric, None);
+    let guard = init_log(&config);
+    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
+    initial_metric(&config.metric, None);
     util::print_tikv_info();
-    panic_hook::set_exit_hook(false);
     check_environment_variables();
+
+    if tikv_util::panic_mark_file_exists(&config.storage.data_dir) {
+        fatal!(
+            "panic_mark_file {:?} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&config.storage.data_dir)
+        );
+    }
 
     run_import_server(&config);
 }

@@ -39,7 +39,7 @@ pub struct TableScanExecutor<S: Snapshot> {
     current_range: Option<KeyRange>,
     // The `KeyRange` scaned between `start_scan` and `stop_scan`.
     scan_range: KeyRange,
-    scanner: Option<Scanner<S>>,
+    scanner: Option<dag::Scanner<S>>,
     // The number of scan keys for each range.
     counts: Option<Vec<i64>>,
     metrics: ExecutorMetrics,
@@ -110,10 +110,10 @@ impl<S: Snapshot> TableScanExecutor<S> {
         Ok(None)
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<S>> {
-        Scanner::new(
+    fn new_scanner(&self, range: KeyRange) -> Result<dag::Scanner<S>> {
+        dag::Scanner::new(
             &self.store,
-            ScanOn::Table,
+            dag::ScanOn::Table,
             self.desc,
             self.col_ids.is_empty(),
             range,
@@ -223,7 +223,7 @@ impl<S: Snapshot> Executor for TableScanExecutor<S> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
     use kvproto::kvrpcpb::IsolationLevel;
@@ -232,7 +232,7 @@ mod test {
 
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{
+    use super::super::scanner::tests::{
         get_point_range, get_range, prepare_table_data, Data, TestStore,
     };
     use super::*;

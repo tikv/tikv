@@ -53,16 +53,14 @@ const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
 const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
-pub type BatchResults<T> = Vec<Option<(CbContext, Result<T>)>>;
-pub type BatchCallback<T> = Box<FnBox(BatchResults<T>) + Send>;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CbContext {
     pub term: Option<u64>,
 }
 
 impl CbContext {
-    fn new() -> CbContext {
+    pub fn new() -> CbContext {
         CbContext { term: None }
     }
 }
@@ -80,18 +78,6 @@ pub trait Engine: Send + Debug + Clone + Sized + 'static {
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
-    /// Snapshots are token by `Context`s, the results are send to the `on_finished` callback,
-    /// with the same order. If a read-index is occurred, a `None` is placed in the corresponding
-    /// slot, and the caller is responsible for reissuing it again, in `async_snapshot`.
-    // TODO:
-    //   - replace Option with Result and define an Error for requiring read-index.
-    //   - add a new method for force read-index, that may be done
-    //     by renaming the `async_snapshot`.
-    fn async_batch_snapshot(
-        &self,
-        batch: Vec<Context>,
-        on_finished: BatchCallback<Self::Snap>,
-    ) -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
@@ -823,7 +809,6 @@ pub mod tests {
         test_near_seek(&engine);
         test_cf(&engine);
         test_empty_write(&engine);
-        test_empty_batch_snapshot(&engine);
     }
 
     #[test]
@@ -1137,13 +1122,6 @@ pub mod tests {
 
     fn test_empty_write<E: Engine>(engine: &E) {
         engine.write(&Context::new(), vec![]).unwrap_err();
-    }
-
-    fn test_empty_batch_snapshot<E: Engine>(engine: &E) {
-        let on_finished = box move |_| {};
-        engine
-            .async_batch_snapshot(vec![], on_finished)
-            .unwrap_err();
     }
 
     #[test]

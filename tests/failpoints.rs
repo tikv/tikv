@@ -25,6 +25,7 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 
+extern crate panic_hook;
 extern crate test_coprocessor;
 extern crate test_raftstore;
 extern crate test_storage;
@@ -36,8 +37,6 @@ mod failpoints_cases;
 
 use std::sync::*;
 use std::thread;
-
-use tikv::util::panic_hook;
 
 lazy_static! {
     /// Failpoints are global structs, hence rules set in different cases
