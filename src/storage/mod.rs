@@ -2847,6 +2847,104 @@ mod tests {
     }
 
     #[test]
+    fn test_check_key_ranges() {
+        fn make_ranges(ranges: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<KeyRange> {
+            ranges
+                .into_iter()
+                .map(|(s, e)| {
+                    let mut range = KeyRange::new();
+                    range.set_start_key(s);
+                    if !e.is_empty() {
+                        range.set_end_key(e);
+                    }
+                    range
+                })
+                .collect()
+        }
+
+        let ranges = make_ranges(vec![
+            (b"a".to_vec(), b"a3".to_vec()),
+            (b"b".to_vec(), b"b3".to_vec()),
+            (b"c".to_vec(), b"c3".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a".to_vec(), vec![]),
+            (b"b".to_vec(), vec![]),
+            (b"c".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            false
+        );
+
+        // if end_key is omitted, the next start_key is used instead. so, false is returned.
+        let ranges = make_ranges(vec![
+            (b"c".to_vec(), vec![]),
+            (b"b".to_vec(), vec![]),
+            (b"a".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            false
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"c3".to_vec(), vec![]),
+            (b"b3".to_vec(), vec![]),
+            (b"a3".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a".to_vec(), b"a3".to_vec()),
+            (b"b".to_vec(), b"b3".to_vec()),
+            (b"c".to_vec(), b"c3".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            false
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a3".to_vec(), vec![]),
+            (b"b3".to_vec(), vec![]),
+            (b"c3".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            false
+        );
+    }
+
+    #[test]
     fn test_raw_batch_scan() {
         let read_pool = new_read_pool();
         let config = Config::default();
@@ -3008,61 +3106,6 @@ mod tests {
         );
 
         let results = vec![
-            Some((b"a".to_vec(), b"aa".to_vec())),
-            Some((b"a1".to_vec(), b"aa11".to_vec())),
-            Some((b"a2".to_vec(), b"aa22".to_vec())),
-            Some((b"b".to_vec(), b"bb".to_vec())),
-            Some((b"b1".to_vec(), b"bb11".to_vec())),
-            Some((b"b2".to_vec(), b"bb22".to_vec())),
-            Some((b"c".to_vec(), b"cc".to_vec())),
-            Some((b"c1".to_vec(), b"cc11".to_vec())),
-            Some((b"c2".to_vec(), b"cc22".to_vec())),
-        ];
-        let ranges: Vec<KeyRange> = vec![
-            (b"a".to_vec(), b"a3".to_vec()),
-            (b"b".to_vec(), b"b3".to_vec()),
-            (b"c".to_vec(), b"c3".to_vec()),
-        ].into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::new();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
-        expect_multi_values(
-            results,
-            storage
-                .async_raw_batch_scan(
-                    Context::new(),
-                    "".to_string(),
-                    ranges.clone(),
-                    5,
-                    false,
-                    false,
-                )
-                .wait(),
-        );
-
-        let results = vec![
-            Some((b"a".to_vec(), vec![])),
-            Some((b"a1".to_vec(), vec![])),
-            Some((b"a2".to_vec(), vec![])),
-            Some((b"b".to_vec(), vec![])),
-            Some((b"b1".to_vec(), vec![])),
-            Some((b"b2".to_vec(), vec![])),
-            Some((b"c".to_vec(), vec![])),
-            Some((b"c1".to_vec(), vec![])),
-            Some((b"c2".to_vec(), vec![])),
-        ];
-        expect_multi_values(
-            results,
-            storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true, false)
-                .wait(),
-        );
-
-        let results = vec![
             Some((b"a2".to_vec(), b"aa22".to_vec())),
             Some((b"a1".to_vec(), b"aa11".to_vec())),
             Some((b"a".to_vec(), b"aa".to_vec())),
@@ -3088,14 +3131,30 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(
-                    Context::new(),
-                    "".to_string(),
-                    ranges.clone(),
-                    5,
-                    false,
-                    true,
-                )
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, false, true)
+                .wait(),
+        );
+
+        let results = vec![
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+        ];
+        let ranges: Vec<KeyRange> = vec![b"c3".to_vec(), b"b3".to_vec(), b"a3".to_vec()]
+            .into_iter()
+            .map(|s| {
+                let mut range = KeyRange::new();
+                range.set_start_key(s);
+                range
+            })
+            .collect();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 2, false, true)
                 .wait(),
         );
 
