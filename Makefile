@@ -61,6 +61,7 @@ tikv-ctl:
 	@cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
+
 run:
 	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
