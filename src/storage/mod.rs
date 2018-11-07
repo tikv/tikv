@@ -1134,28 +1134,14 @@ impl<E: Engine> Storage<E> {
         limit: usize,
         statistics: &mut Statistics,
         key_only: bool,
-        reverse: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            if reverse {
-                option.set_lower_bound(end.into_encoded());
-            } else {
-                option.set_upper_bound(end.into_encoded());
-            }
+            option.set_upper_bound(end.into_encoded());
         }
-        let scan_mode = if reverse {
-            ScanMode::Backward
-        } else {
-            ScanMode::Forward
-        };
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, scan_mode)?;
+        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
-        if reverse {
-            if !cursor.reverse_seek(start_key, statistics)? {
-                return Ok(vec![]);
-            }
-        } else if !cursor.seek(start_key, statistics)? {
+        if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
@@ -1168,11 +1154,39 @@ impl<E: Engine> Storage<E> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            if reverse {
-                cursor.prev(statistics);
-            } else {
-                cursor.next(statistics);
-            }
+            cursor.next(statistics);
+        }
+        Ok(pairs)
+    }
+    fn reverse_raw_scan(
+        snapshot: &E::Snap,
+        cf: &str,
+        start_key: &Key,
+        end_key: Option<Key>,
+        limit: usize,
+        statistics: &mut Statistics,
+        key_only: bool,
+    ) -> Result<Vec<Result<KvPair>>> {
+        let mut option = IterOption::default();
+        if let Some(end) = end_key {
+            option.set_lower_bound(end.into_encoded());
+        }
+        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
+        let statistics = statistics.mut_cf_statistics(cf);
+        if !cursor.reverse_seek(start_key, statistics)? {
+            return Ok(vec![]);
+        }
+        let mut pairs = vec![];
+        while cursor.valid() && pairs.len() < limit {
+            pairs.push(Ok((
+                cursor.key(statistics).to_owned(),
+                if key_only {
+                    vec![]
+                } else {
+                    cursor.value(statistics).to_owned()
+                },
+            )));
+            cursor.prev(statistics);
         }
         Ok(pairs)
     }
@@ -1203,16 +1217,27 @@ impl<E: Engine> Storage<E> {
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
-                    let result = Self::raw_scan(
-                        &snapshot,
-                        &cf,
-                        &Key::from_encoded(key),
-                        None,
-                        limit,
-                        &mut statistics,
-                        key_only,
-                        reverse,
-                    ).map_err(Error::from);
+                    let result = if reverse {
+                        Self::reverse_raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            None,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        ).map_err(Error::from)
+                    } else {
+                        Self::raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            None,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        ).map_err(Error::from)
+                    };
 
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
                     thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
@@ -1307,16 +1332,27 @@ impl<E: Engine> Storage<E> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = Self::raw_scan(
-                            &snapshot,
-                            &cf,
-                            &start_key,
-                            end_key,
-                            each_limit,
-                            &mut statistics,
-                            key_only,
-                            reverse,
-                        )?;
+                        let pairs = if reverse {
+                            Self::reverse_raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            )?
+                        } else {
+                            Self::raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            )?
+                        };
                         result.extend(pairs.into_iter());
                     }
 
@@ -2581,7 +2617,28 @@ mod tests {
                 .wait(),
         );
 
-        // end key tests
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .rev()
+            .take(5)
+            .collect();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"z".to_vec(),
+                    5,
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+
+        // End key tests. Confirm that lower/upper bound works correctly.
         let ctx = Context::new();
         let results = vec![
             (b"c1".to_vec(), b"cc11".to_vec()),
@@ -2604,7 +2661,6 @@ mod tests {
                         20,
                         &mut Statistics::default(),
                         false,
-                        false,
                     )
                 })
                 .wait(),
@@ -2613,7 +2669,7 @@ mod tests {
             results.rev().collect(),
             <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
                 .and_then(move |snapshot| {
-                    <Storage<RocksEngine>>::raw_scan(
+                    <Storage<RocksEngine>>::reverse_raw_scan(
                         &snapshot,
                         &"".to_string(),
                         &Key::from_encoded(b"d3".to_vec()),
@@ -2621,7 +2677,6 @@ mod tests {
                         20,
                         &mut Statistics::default(),
                         false,
-                        true,
                     )
                 })
                 .wait(),
