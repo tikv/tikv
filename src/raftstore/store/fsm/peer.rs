@@ -557,9 +557,10 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
                 // Wait till it catching up logs.
                 return Ok(false);
             }
-            if meta.regions.get(&target_region_id).map_or(false, |e| {
+            let b = meta.regions.get(&target_region_id).map_or(false, |e| {
                 e.get_region_epoch().get_version() > merge_target.get_region_epoch().get_version()
-            }) {
+            });
+            if b {
                 // Merge has been applied, callback may not be responded yet.
                 return Ok(false);
             }
