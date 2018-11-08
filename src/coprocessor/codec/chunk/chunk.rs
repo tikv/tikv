@@ -165,27 +165,23 @@ impl<'a> Iterator for RowIterator<'a> {
 
 #[cfg(test)]
 mod tests {
+    use cop_datatype::FieldTypeTp;
+
     use super::*;
+    use coprocessor::codec::chunk::tests::*;
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::*;
-    use tipb::expression::FieldType;
-
-    pub fn field_type(tp: u8) -> FieldType {
-        let mut fp = FieldType::new();
-        fp.set_tp(i32::from(tp));
-        fp
-    }
 
     #[test]
     fn test_append_datum() {
         let fields = vec![
-            field_type(types::LONG_LONG),
-            field_type(types::FLOAT),
-            field_type(types::DATETIME),
-            field_type(types::DURATION),
-            field_type(types::NEW_DECIMAL),
-            field_type(types::JSON),
-            field_type(types::STRING),
+            field_type(FieldTypeTp::LongLong),
+            field_type(FieldTypeTp::Float),
+            field_type(FieldTypeTp::DateTime),
+            field_type(FieldTypeTp::Duration),
+            field_type(FieldTypeTp::NewDecimal),
+            field_type(FieldTypeTp::JSON),
+            field_type(FieldTypeTp::String),
         ];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
         let time: Time = Time::parse_utc_datetime("2012-12-31 11:30:45", -1).unwrap();
@@ -220,12 +216,12 @@ mod tests {
     fn test_codec() {
         let rows = 10;
         let fields = vec![
-            field_type(types::LONG_LONG),
-            field_type(types::LONG_LONG),
-            field_type(types::VARCHAR),
-            field_type(types::VARCHAR),
-            field_type(types::NEW_DECIMAL),
-            field_type(types::JSON),
+            field_type(FieldTypeTp::LongLong),
+            field_type(FieldTypeTp::LongLong),
+            field_type(FieldTypeTp::VarChar),
+            field_type(FieldTypeTp::VarChar),
+            field_type(FieldTypeTp::NewDecimal),
+            field_type(FieldTypeTp::JSON),
         ];
         let mut chunk = Chunk::new(&fields, rows);
 
