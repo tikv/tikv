@@ -27,8 +27,7 @@ use test_storage::*;
 use tikv::coprocessor::codec::{datum, Datum};
 use tikv::server::readpool;
 use tikv::server::Config;
-use tikv::storage::engine::{self, TEMP_DIR};
-use tikv::storage::ALL_CFS;
+use tikv::storage::TestEngineBuilder;
 use tikv::util::codec::number::*;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
@@ -78,7 +77,7 @@ fn test_batch_row_limit() {
     let chunk_datum_limit = batch_row_limit * 3; // we have 3 fields.
     let product = ProductTable::new();
     let (_, endpoint) = {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
         init_data_with_details(
@@ -119,7 +118,7 @@ fn test_stream_batch_row_limit() {
     let product = ProductTable::new();
     let stream_row_limit = 2;
     let (_, endpoint) = {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
         init_data_with_details(
@@ -214,7 +213,7 @@ fn test_scan_detail() {
 
     let product = ProductTable::new();
     let (_, endpoint) = {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
         init_data_with_details(

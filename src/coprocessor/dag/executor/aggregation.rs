@@ -398,6 +398,7 @@ impl StreamAggExecutor {
 mod tests {
     use std::i64;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
@@ -406,7 +407,6 @@ mod tests {
 
     use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::decimal::Decimal;
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
@@ -500,8 +500,8 @@ mod tests {
         let tid = 1;
         let idx_id = 1;
         let col_infos = vec![
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -666,11 +666,11 @@ mod tests {
         // prepare data and store
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
-            new_col_info(4, types::FLOAT),
-            new_col_info(5, types::DOUBLE),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
+            new_col_info(4, FieldTypeTp::Float),
+            new_col_info(5, FieldTypeTp::Double),
         ];
         let raw_data = vec![
             vec![

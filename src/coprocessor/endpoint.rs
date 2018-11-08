@@ -513,7 +513,7 @@ mod tests {
     use tipb::executor::Executor;
     use tipb::expression::Expr;
 
-    use storage::engine::{self, TEMP_DIR};
+    use storage::TestEngineBuilder;
     use util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn test_outdated_request() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -674,7 +674,7 @@ mod tests {
     #[test]
     fn test_stack_guard() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn test_invalid_req_type() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -733,7 +733,7 @@ mod tests {
     #[test]
     fn test_invalid_req_body() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn test_full() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new(
             "readpool",
             &readpool::Config {
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn test_error_unary_response() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -824,7 +824,7 @@ mod tests {
     #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
     fn test_error_streaming_response() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -869,7 +869,7 @@ mod tests {
     #[test]
     fn test_empty_streaming_response() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -889,7 +889,7 @@ mod tests {
     #[test]
     fn test_special_streaming_handlers() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn test_channel_size() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             || ReadPoolContext::new(pd_worker.scheduler())
         });
@@ -1018,7 +1018,7 @@ mod tests {
         const HANDLE_ERROR_MS: i64 = 200;
 
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new(
             "readpool",
             &readpool::Config::default_with_concurrency(1),

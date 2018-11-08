@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeMap;
-use std::ops::Bound;
-
 use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::mvcc::{
@@ -186,11 +183,11 @@ impl<S: Snapshot> Scanner for StoreScanner<S> {
 
 /// A Store that reads on fixtures.
 pub struct FixtureStore {
-    data: BTreeMap<Key, Result<Vec<u8>>>,
+    data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>,
 }
 
 impl FixtureStore {
-    pub fn new(data: BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+    pub fn new(data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore { data }
     }
 }
@@ -221,6 +218,8 @@ impl Store for FixtureStore {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<FixtureStoreScanner> {
+        use std::ops::Bound;
+
         let lower = lower_bound.as_ref().map_or(Bound::Unbounded, |v| {
             if !desc {
                 Bound::Included(v)
@@ -295,10 +294,10 @@ mod tests {
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
+    use storage::engine::{Engine, RocksEngine, RocksSnapshot};
     use storage::mvcc::Error as MvccError;
     use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, Statistics, ALL_CFS};
+    use storage::{Key, KvPair, Mutation, Options, Statistics, TestEngineBuilder};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -314,7 +313,7 @@ mod tests {
 
     impl TestStore {
         fn new(key_num: u64) -> TestStore {
-            let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+            let engine = TestEngineBuilder::new().build().unwrap();
             let keys: Vec<String> = (START_ID..START_ID + key_num)
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();

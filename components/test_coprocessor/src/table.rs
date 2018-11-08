@@ -20,7 +20,7 @@ use tipb::schema::{self, ColumnInfo};
 
 use protobuf::RepeatedField;
 
-use tikv::coprocessor::codec::{datum, table};
+use tikv::coprocessor::codec::table;
 use tikv::util::codec::number::NumberEncoder;
 
 #[derive(Clone)]
