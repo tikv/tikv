@@ -467,6 +467,7 @@ pub struct ApplyDelegate {
     notifier: Router,
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
+    enable_sync_log: bool,
     use_delete_range: bool,
 
     stopping: bool,
@@ -503,6 +504,7 @@ impl ApplyDelegate {
         notifier: Router,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
+        enable_sync_log: bool,
         use_delete_range: bool,
     ) -> ApplyDelegate {
         let reg = Registration::new(peer);
@@ -513,6 +515,7 @@ impl ApplyDelegate {
             notifier,
             host,
             importer,
+            enable_sync_log,
             use_delete_range,
         )
     }
@@ -524,6 +527,7 @@ impl ApplyDelegate {
         notifier: Router,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
+        enable_sync_log: bool,
         use_delete_range: bool,
     ) -> ApplyDelegate {
         ApplyDelegate {
@@ -544,6 +548,7 @@ impl ApplyDelegate {
             host,
             importer,
             use_delete_range,
+            enable_sync_log,
             stopping: false,
         }
     }
@@ -2256,6 +2261,7 @@ impl Runner {
                 notifier.clone(),
                 system.coprocessor_host(),
                 system.importer(),
+                sync_log,
                 use_delete_range,
             );
 
@@ -2379,7 +2385,8 @@ impl Runner {
                     }
 
                     let t = SlowTimer::new();
-                    let ctx = ApplyContext::new(delegate.host.clone(), delegate.importer.clone());
+                    let ctx = ApplyContext::new(delegate.host.clone(), delegate.importer.clone())
+                        .enable_sync_log(delegate.enable_sync_log);
                     box delegate
                         .handle_raft_committed_entries(ctx, apply.entries)
                         .then(move |res| {
@@ -2547,6 +2554,7 @@ impl Runner {
             self.notifier.clone(),
             Arc::clone(&self.host),
             Arc::clone(&self.importer),
+            self.sync_log,
             self.use_delete_range,
         );
 
@@ -3113,6 +3121,7 @@ mod tests {
             router.clone(),
             Arc::new(host),
             Arc::clone(&importer),
+            true,
             true, /* use_delete_range */
         );
 
@@ -3477,6 +3486,7 @@ mod tests {
             router.clone(),
             Arc::new(host),
             Arc::clone(&importer),
+            true,
             false,
         );
 
