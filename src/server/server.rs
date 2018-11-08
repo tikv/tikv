@@ -61,7 +61,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
-    // A helper thread (or pool) for transport layer.
     // Currently load statistics is done in the thread.
     stats_runtime: Arc<Runtime>,
     thread_load: Arc<ThreadLoad>,
@@ -115,7 +114,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(-1)
-            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .build_args();
         let grpc_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -182,7 +180,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         self.grpc_server.start();
 
         let thread_load = Arc::clone(&self.thread_load);
-        let mut load_stats = GrpcThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, thread_load);
+        let mut load_stats =
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, thread_load);
         self.stats_runtime.executor().spawn(
             Interval::new(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())

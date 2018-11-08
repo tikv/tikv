@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use libc::{getpid, pid_t};
 
-use super::server::GRPC_THREAD_PREFIX;
 use util::metrics::{get_thread_ids, Stat};
 
 pub struct ThreadLoad {
@@ -41,7 +40,7 @@ impl ThreadLoad {
 }
 
 #[cfg(target_os = "linux")]
-pub(super) struct GrpcThreadLoadStatistics {
+pub struct ThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,
     slots: usize,
@@ -52,21 +51,21 @@ pub(super) struct GrpcThreadLoadStatistics {
 }
 
 #[cfg(target_os = "linux")]
-impl GrpcThreadLoadStatistics {
-    pub(super) fn new(slots: usize, thread_load: Arc<ThreadLoad>) -> Self {
+impl ThreadLoadStatistics {
+    pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
         let pid: pid_t = unsafe { getpid() };
         let mut tids = vec![];
         let mut cpu_total = 0f64;
         for tid in get_thread_ids(pid).unwrap() {
             if let Ok(stat) = Stat::collect(pid, tid) {
-                if !stat.name().starts_with(GRPC_THREAD_PREFIX) {
+                if !stat.name().starts_with(prefix) {
                     continue;
                 }
                 cpu_total += stat.cpu_total();
                 tids.push(tid);
             }
         }
-        GrpcThreadLoadStatistics {
+        ThreadLoadStatistics {
             pid,
             tids,
             slots,
@@ -77,7 +76,7 @@ impl GrpcThreadLoadStatistics {
         }
     }
 
-    pub(super) fn record(&mut self, instant: Instant) {
+    pub fn record(&mut self, instant: Instant) {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos] = 0f64;
         for tid in &self.tids {
@@ -94,10 +93,57 @@ impl GrpcThreadLoadStatistics {
 
         let millis = (current_instant - earlist_instant).as_millis() as usize;
         if millis > 0 {
-            let cpu_usage = (current_cpu_usage - earlist_cpu_usage) * 1000f64 * 100f64;
-            let cpu_usage = cpu_usage as usize / millis;
+            let cpu_usage = calc_cpu_load(millis, earlist_cpu_usage, current_cpu_usage);
             self.thread_load.load.store(cpu_usage, Ordering::Release);
             self.thread_load.term.fetch_add(1, Ordering::Release);
+        }
+    }
+}
+
+#[inline]
+fn calc_cpu_load(millis: usize, start_usage: f64, end_usage: f64) -> usize {
+    let cpu_usage = (end_usage - start_usage) * 1000f64 * 100f64;
+    cpu_usage as usize / millis
+}
+
+#[cfg(test)]
+mod tests {
+    use libc::{syscall, SYS_gettid};
+
+    use super::*;
+
+    impl ThreadLoadStatistics {
+        fn for_test(slots: usize, thread_load: Arc<ThreadLoad>) -> Self {
+            let pid: pid_t = unsafe { getpid() };
+            let tid: pid_t = unsafe { syscall(SYS_gettid) as pid_t };
+            let stat = Stat::collect(pid, tid).unwrap();
+
+            ThreadLoadStatistics {
+                pid,
+                tids: vec![tid],
+                slots,
+                cur_pos: 0,
+                cpu_usages: vec![stat.cpu_total(); slots],
+                instants: vec![Instant::now(); slots],
+                thread_load,
+            }
+        }
+    }
+
+    #[test]
+    fn test_thread_load_statistic() {
+        let load = Arc::new(ThreadLoad::with_threshold(80));
+        let mut stats = ThreadLoadStatistics::for_test(2, Arc::clone(&load));
+        let start = Instant::now();
+        loop {
+            if (Instant::now() - start).as_millis() > 100 {
+                break;
+            }
+        }
+        stats.record(Instant::now());
+        match load.load() {
+            80...100 => {},
+            e => panic!("the load must be heavy than 80, but got {}", e),
         }
     }
 }
