@@ -48,7 +48,9 @@ pub use self::engine::{
     StatisticsSummary, TEMP_DIR,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
-pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
+#[cfg(test)]
+pub use self::txn::{FixtureStore, FixtureStoreScanner};
+pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -589,32 +591,23 @@ impl<E: Engine> Storage<E> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                     );
-                    let result = snap_store
+                    let kv_pairs: Vec<_> = snap_store
                         .batch_get(&keys, &mut statistics)
-                        // map storage::txn::Error -> storage::Error
-                        .map_err(Error::from)
-                        .map(|results| results
-                            .into_iter()
-                            .zip(keys)
-                            .filter(|&(ref v, ref _k)|
-                                !(v.is_ok() && v.as_ref().unwrap().is_none())
-                            )
-                            .map(|(v, k)| match v {
-                                Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                Err(e) => Err(Error::from(e)),
-                                _ => unreachable!(),
-                            })
-                            .collect()
-                        )
-                        .map(|r: Vec<Result<KvPair>>| {
-                            thread_ctx.collect_key_reads(CMD, r.len() as u64);
-                            r
-                        });
+                        .into_iter()
+                        .zip(keys)
+                        .filter(|&(ref v, ref _k)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .map(|(v, k)| match v {
+                            Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                            Err(e) => Err(Error::from(e)),
+                            _ => unreachable!(),
+                        })
+                        .collect();
 
+                    thread_ctx.collect_key_reads(CMD, kv_pairs.len() as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
-                    result
+                    Ok(kv_pairs)
                 })
                 .then(move |r| {
                     _timer.observe_duration();
@@ -662,19 +655,11 @@ impl<E: Engine> Storage<E> {
 
                     let mut scanner;
                     if !options.reverse_scan {
-                        scanner = snap_store.scanner(
-                            ScanMode::Forward,
-                            options.key_only,
-                            Some(start_key),
-                            end_key,
-                        )?;
+                        scanner =
+                            snap_store.scanner(false, options.key_only, Some(start_key), end_key)?;
                     } else {
-                        scanner = snap_store.scanner(
-                            ScanMode::Backward,
-                            options.key_only,
-                            end_key,
-                            Some(start_key),
-                        )?;
+                        scanner =
+                            snap_store.scanner(true, options.key_only, end_key, Some(start_key))?;
                     };
                     let res = scanner.scan(limit);
 
