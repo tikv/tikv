@@ -64,6 +64,7 @@ extern crate log;
 extern crate mio;
 extern crate murmur3;
 extern crate num;
+extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
 extern crate prometheus_static_metric;
@@ -114,6 +115,7 @@ extern crate zipf;
 #[macro_use]
 extern crate derive_more;
 
+extern crate cop_datatype;
 extern crate panic_hook;
 
 #[macro_use]

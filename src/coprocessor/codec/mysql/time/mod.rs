@@ -16,6 +16,7 @@ mod tz;
 mod weekmode;
 
 use std::cmp::{min, Ordering};
+use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::{mem, str};
@@ -23,12 +24,13 @@ use std::{mem, str};
 use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
+use cop_datatype::FieldTypeTp;
 
 use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
 use coprocessor::codec::mysql::{self, Decimal};
 use coprocessor::codec::{Error, Result, TEN_POW};
+use util::codec::number::{self, NumberEncoder};
+use util::codec::BytesSlice;
 
 use self::extension::*;
 use self::weekmode::WeekMode;
@@ -72,7 +74,7 @@ fn zero_time(tz: Tz) -> DateTime<Tz> {
 
 #[inline]
 pub fn zero_datetime(tz: Tz) -> Time {
-    Time::new(zero_time(tz), mysql::types::DATETIME, mysql::DEFAULT_FSP).unwrap()
+    Time::new(zero_time(tz), TimeType::DateTime, mysql::DEFAULT_FSP).unwrap()
 }
 
 #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
@@ -184,37 +186,68 @@ fn split_ymd_with_frac_as_hms(
     Ok((year, month, day, hour, minute, sec))
 }
 
+#[derive(Clone, Debug, Copy, PartialEq)]
+pub enum TimeType {
+    Date,
+    DateTime,
+    Timestamp,
+}
+
+impl Into<FieldTypeTp> for TimeType {
+    fn into(self) -> FieldTypeTp {
+        match self {
+            TimeType::Date => FieldTypeTp::Date,
+            TimeType::DateTime => FieldTypeTp::DateTime,
+            TimeType::Timestamp => FieldTypeTp::Timestamp,
+        }
+    }
+}
+
+impl TryFrom<FieldTypeTp> for TimeType {
+    type Error = Error;
+
+    fn try_from(value: FieldTypeTp) -> Result<Self> {
+        match value {
+            FieldTypeTp::Date => Ok(TimeType::Date),
+            FieldTypeTp::DateTime => Ok(TimeType::DateTime),
+            FieldTypeTp::Timestamp => Ok(TimeType::Timestamp),
+            FieldTypeTp::Unspecified => Ok(TimeType::DateTime), // FIXME: We should forbid this
+            _ => Err(box_err!("Time does not support field type {}", value)),
+        }
+    }
+}
+
 /// `Time` is the struct for handling datetime, timestamp and date.
 #[derive(Clone, Debug)]
 pub struct Time {
     // TimeZone should be loaded from request context.
     time: DateTime<Tz>,
-    tp: u8,
+    time_type: TimeType,
     fsp: u8,
 }
 
 impl Time {
-    pub fn new(time: DateTime<Tz>, tp: u8, fsp: i8) -> Result<Time> {
+    pub fn new(time: DateTime<Tz>, time_type: TimeType, fsp: i8) -> Result<Time> {
         Ok(Time {
             time,
-            tp,
+            time_type,
             fsp: mysql::check_fsp(fsp)?,
         })
     }
 
-    pub fn get_tp(&self) -> u8 {
-        self.tp
+    pub fn get_time_type(&self) -> TimeType {
+        self.time_type
     }
 
-    pub fn set_tp(&mut self, tp: u8) -> Result<()> {
-        if self.tp != tp && tp == mysql::types::DATE {
+    pub fn set_time_type(&mut self, time_type: TimeType) -> Result<()> {
+        if self.time_type != time_type && time_type == TimeType::Date {
             // Truncate hh:mm::ss part if the type is Date
             self.time = self.time.date().and_hms(0, 0, 0); // TODO: might panic!
         }
-        if self.tp != tp && tp == mysql::types::TIMESTAMP {
+        if self.time_type != time_type && time_type == TimeType::Timestamp {
             return Err(box_err!("can not convert datetime/date to timestamp"));
         }
-        self.tp = tp;
+        self.time_type = time_type;
         Ok(())
     }
 
@@ -243,7 +276,7 @@ impl Time {
     }
 
     fn to_numeric_str(&self) -> String {
-        if self.tp == mysql::types::DATE {
+        if self.time_type == TimeType::Date {
             // TODO: pure calculation should be enough.
             format!("{}", self.time.format("%Y%m%d"))
         } else {
@@ -404,7 +437,7 @@ impl Time {
             sec,
             frac * TEN_POW[9 - fsp as usize],
         )?;
-        Time::new(time, mysql::types::DATETIME as u8, fsp as i8)
+        Time::new(time, TimeType::DateTime, fsp as i8)
     }
 
     pub fn parse_fsp(s: &str) -> i8 {
@@ -416,9 +449,9 @@ impl Time {
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
     /// be a UTC time; otherwise the packed time should be in the same timezone as `tz`
     /// specified.
-    pub fn from_packed_u64(u: u64, tp: u8, fsp: i8, tz: Tz) -> Result<Time> {
+    pub fn from_packed_u64(u: u64, time_type: TimeType, fsp: i8, tz: Tz) -> Result<Time> {
         if u == 0 {
-            return Time::new(zero_time(tz), tp, fsp);
+            return Time::new(zero_time(tz), time_type, fsp);
         }
         let fsp = mysql::check_fsp(fsp)?;
         let ymdhms = u >> 24;
@@ -432,16 +465,16 @@ impl Time {
         let minute = ((hms >> 6) & ((1 << 6) - 1)) as u32;
         let hour = (hms >> 12) as u32;
         let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
-        let t = if tp == mysql::types::TIMESTAMP {
+        let t = if time_type == TimeType::Timestamp {
             let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanosec)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec)?
         };
-        Time::new(t, tp, fsp as i8)
+        Time::new(t, time_type, fsp as i8)
     }
 
-    pub fn from_duration(tz: Tz, tp: u8, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: Tz, time_type: TimeType, d: &MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
             .with_timezone(&tz)
@@ -459,11 +492,11 @@ impl Time {
                 t
             ));
         }
-        if tp == mysql::types::DATE {
+        if time_type == TimeType::Date {
             let t = t.date().and_hms(0, 0, 0); // TODO: might panic!
-            Time::new(t, tp, d.fsp as i8)
+            Time::new(t, time_type, d.fsp as i8)
         } else {
-            Time::new(t, tp, d.fsp as i8)
+            Time::new(t, time_type, d.fsp as i8)
         }
     }
 
@@ -483,7 +516,7 @@ impl Time {
         if self.is_zero() {
             return 0;
         }
-        let t = if self.tp == mysql::types::TIMESTAMP {
+        let t = if self.time_type == TimeType::Timestamp {
             self.time.naive_utc()
         } else {
             self.time.naive_local()
@@ -496,7 +529,7 @@ impl Time {
     }
 
     pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
-        if self.tp == mysql::types::DATE || self.is_zero() {
+        if self.time_type == TimeType::Date || self.is_zero() {
             // date type has no fsp
             return Ok(());
         }
@@ -717,14 +750,14 @@ impl Ord for Time {
 impl Display for Time {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         if self.is_zero() {
-            if self.tp == mysql::types::DATE {
+            if self.time_type == TimeType::Date {
                 return f.write_str(ZERO_DATE_STR);
             }
 
             return f.write_str(ZERO_DATETIME_STR);
         }
 
-        if self.tp == mysql::types::DATE {
+        if self.time_type == TimeType::Date {
             if self.is_zero() {
                 return f.write_str(ZERO_DATE_STR);
             } else {
@@ -747,8 +780,12 @@ impl Display for Time {
 }
 
 impl<T: Write> TimeEncoder for T {}
+
+/// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
     fn encode_time(&mut self, v: &Time) -> Result<()> {
+        use num::ToPrimitive;
+
         if !v.is_zero() {
             self.encode_u16(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
@@ -763,14 +800,17 @@ pub trait TimeEncoder: NumberEncoder {
             self.write_all(&buf)?;
         }
 
-        self.write_u8(v.tp)?;
+        let tp: FieldTypeTp = v.time_type.into();
+        self.write_u8(tp.to_u8().unwrap())?;
         self.write_u8(v.fsp).map_err(From::from)
     }
 }
 
 impl Time {
-    /// `decode` decodes time encoded by `encode_time`.
+    /// `decode` decodes time encoded by `encode_time` for Chunk format.
     pub fn decode(data: &mut BytesSlice) -> Result<Time> {
+        use num_traits::FromPrimitive;
+
         let year = i32::from(number::decode_u16(data)?);
         let (month, day, hour, minute, second) = if data.len() >= 5 {
             (
@@ -786,7 +826,10 @@ impl Time {
         *data = &data[5..];
         let nanoseconds = 1000 * number::decode_u32(data)?;
         let (tp, fsp) = if data.len() >= 2 {
-            (data[0], data[1])
+            (
+                FieldTypeTp::from_u8(data[0]).unwrap_or(FieldTypeTp::Unspecified),
+                data[1],
+            )
         } else {
             return Err(Error::unexpected_eof());
         };
@@ -802,7 +845,7 @@ impl Time {
         {
             return Ok(zero_datetime(tz));
         }
-        let t = if tp == mysql::types::TIMESTAMP {
+        let t = if tp == FieldTypeTp::Timestamp {
             let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanoseconds)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
@@ -817,7 +860,7 @@ impl Time {
                 nanoseconds,
             )?
         };
-        Time::new(t, tp, fsp as i8)
+        Time::new(t, tp.try_into()?, fsp as i8)
     }
 }
 
@@ -829,7 +872,7 @@ mod tests {
 
     use chrono::{Duration, Local};
 
-    use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UN_SPECIFIED_FSP};
+    use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -861,67 +904,63 @@ mod tests {
         let ok_tables = vec![
             (
                 "2012-12-31 11:30:45",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 11:30:45",
             ),
             (
                 "0000-00-00 00:00:00",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "0000-00-00 00:00:00",
             ),
             (
                 "0001-01-01 00:00:00",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "0001-01-01 00:00:00",
             ),
-            ("00-12-31 11:30:45", UN_SPECIFIED_FSP, "2000-12-31 11:30:45"),
-            ("12-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("2012-12-31", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
-            ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
-            ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
-            ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
-            ("12121", UN_SPECIFIED_FSP, "2012-12-01 00:00:00"),
+            ("00-12-31 11:30:45", UNSPECIFIED_FSP, "2000-12-31 11:30:45"),
+            ("12-12-31 11:30:45", UNSPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-12-31", UNSPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("20121231", UNSPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("121231", UNSPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("121231", UNSPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("12121", UNSPECIFIED_FSP, "2012-12-01 00:00:00"),
             (
                 "2012^12^31 11+30+45",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 11:30:45",
             ),
             (
                 "2012^12^31T11+30+45",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 11:30:45",
             ),
-            ("2012-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
-            ("12-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
-            ("20121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("2012-02-29", UN_SPECIFIED_FSP, "2012-02-29 00:00:00"),
+            ("2012-2-1 11:30:45", UNSPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("12-2-1 11:30:45", UNSPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("20121231113045", UNSPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("121231113045", UNSPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-02-29", UNSPECIFIED_FSP, "2012-02-29 00:00:00"),
             ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
             ("20121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
             ("121231113045.9999999", 6, "2012-12-31 11:30:46.000000"),
             ("121231113045.999999", 6, "2012-12-31 11:30:45.999999"),
             ("121231113045.999999", 5, "2012-12-31 11:30:46.00000"),
-            ("17011801101", UN_SPECIFIED_FSP, "2017-01-18 01:10:01"),
-            ("20170118.1", UN_SPECIFIED_FSP, "2017-01-18 01:00:00"),
-            ("20170118.1", UN_SPECIFIED_FSP, "2017-01-18 01:00:00"),
-            ("20170118.11", UN_SPECIFIED_FSP, "2017-01-18 11:00:00"),
-            ("20170118.111", UN_SPECIFIED_FSP, "2017-01-18 11:01:00"),
-            ("20170118.1111", UN_SPECIFIED_FSP, "2017-01-18 11:11:00"),
-            ("20170118.11111", UN_SPECIFIED_FSP, "2017-01-18 11:11:01"),
-            ("20170118.111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
-            ("20170118.1111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
-            ("20170118.11111111", UN_SPECIFIED_FSP, "2017-01-18 11:11:11"),
-            ("1701020301.", UN_SPECIFIED_FSP, "2017-01-02 03:01:00"),
-            ("1701020304.1", UN_SPECIFIED_FSP, "2017-01-02 03:04:01"),
-            ("1701020302.11", UN_SPECIFIED_FSP, "2017-01-02 03:02:11"),
-            ("170102036", UN_SPECIFIED_FSP, "2017-01-02 03:06:00"),
-            ("170102039.", UN_SPECIFIED_FSP, "2017-01-02 03:09:00"),
-            ("170102037.11", UN_SPECIFIED_FSP, "2017-01-02 03:07:11"),
-            (
-                "17011801101.111111",
-                UN_SPECIFIED_FSP,
-                "2017-01-18 01:10:01",
-            ),
+            ("17011801101", UNSPECIFIED_FSP, "2017-01-18 01:10:01"),
+            ("20170118.1", UNSPECIFIED_FSP, "2017-01-18 01:00:00"),
+            ("20170118.1", UNSPECIFIED_FSP, "2017-01-18 01:00:00"),
+            ("20170118.11", UNSPECIFIED_FSP, "2017-01-18 11:00:00"),
+            ("20170118.111", UNSPECIFIED_FSP, "2017-01-18 11:01:00"),
+            ("20170118.1111", UNSPECIFIED_FSP, "2017-01-18 11:11:00"),
+            ("20170118.11111", UNSPECIFIED_FSP, "2017-01-18 11:11:01"),
+            ("20170118.111111", UNSPECIFIED_FSP, "2017-01-18 11:11:11"),
+            ("20170118.1111111", UNSPECIFIED_FSP, "2017-01-18 11:11:11"),
+            ("20170118.11111111", UNSPECIFIED_FSP, "2017-01-18 11:11:11"),
+            ("1701020301.", UNSPECIFIED_FSP, "2017-01-02 03:01:00"),
+            ("1701020304.1", UNSPECIFIED_FSP, "2017-01-02 03:04:01"),
+            ("1701020302.11", UNSPECIFIED_FSP, "2017-01-02 03:02:11"),
+            ("170102036", UNSPECIFIED_FSP, "2017-01-02 03:06:00"),
+            ("170102039.", UNSPECIFIED_FSP, "2017-01-02 03:09:00"),
+            ("170102037.11", UNSPECIFIED_FSP, "2017-01-02 03:07:11"),
+            ("17011801101.111111", UNSPECIFIED_FSP, "2017-01-18 01:10:01"),
         ];
 
         for (input, fsp, exp) in ok_tables {
@@ -935,7 +974,7 @@ mod tests {
                 } else {
                     let exp_t = Time::new(
                         utc_t.time - Duration::seconds(offset),
-                        utc_t.tp,
+                        utc_t.time_type,
                         utc_t.fsp as i8,
                     ).unwrap();
                     assert_eq!(exp_t, t);
@@ -947,25 +986,25 @@ mod tests {
         let ok_tables = vec![
             (
                 "121231.0101",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 00:00:00",
                 "2012-12-31 01:01:00",
             ),
             (
                 "121231.1",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 00:00:00",
                 "2012-12-31 01:00:00",
             ),
             (
                 "19991231.111",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "1999-12-31 00:00:00",
                 "1999-12-31 11:01:00",
             ),
             (
                 "20121231.1",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 00:00:00",
                 "2012-12-31 01:00:00",
             ),
@@ -1019,7 +1058,7 @@ mod tests {
 
         for (tz_name, time_str, utc_timestamp) in ok_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
-            let t = Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).unwrap();
+            let t = Time::parse_datetime(time_str, UNSPECIFIED_FSP, tz).unwrap();
             assert_eq!(t.time.timestamp(), utc_timestamp);
         }
 
@@ -1037,7 +1076,7 @@ mod tests {
 
         for (tz_name, time_str) in fail_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
-            assert!(Time::parse_datetime(time_str, UN_SPECIFIED_FSP, tz).is_err());
+            assert!(Time::parse_datetime(time_str, UNSPECIFIED_FSP, tz).is_err());
         }
     }
 
@@ -1077,7 +1116,7 @@ mod tests {
                 if let Some(local_time) = local_time {
                     let time_str =
                         format!("{}-{}-{} {}:{}:{}", year, month, day, hour, minute, second);
-                    let t = Time::parse_datetime(&time_str, UN_SPECIFIED_FSP, *tz).unwrap();
+                    let t = Time::parse_datetime(&time_str, UNSPECIFIED_FSP, *tz).unwrap();
                     assert_eq!(t.time, local_time);
                 }
             }
@@ -1089,7 +1128,7 @@ mod tests {
         let cases = vec![
             ("2010-10-10 10:11:11", 0),
             ("0001-01-01 00:00:00", 0),
-            ("0001-01-01 00:00:00", UN_SPECIFIED_FSP),
+            ("0001-01-01 00:00:00", UNSPECIFIED_FSP),
             ("2000-01-01 00:00:00.000000", MAX_FSP),
             ("2000-01-01 00:00:00.123456", MAX_FSP),
             ("0001-01-01 00:00:00.123456", MAX_FSP),
@@ -1100,12 +1139,12 @@ mod tests {
                 let t = Time::parse_datetime(s, fsp, tz).unwrap();
                 let packed = t.to_packed_u64();
                 let reverted_datetime =
-                    Time::from_packed_u64(packed, mysql::types::DATETIME, fsp, tz).unwrap();
+                    Time::from_packed_u64(packed, TimeType::DateTime, fsp, tz).unwrap();
                 assert_eq!(reverted_datetime, t);
                 assert_eq!(reverted_datetime.to_packed_u64(), packed);
 
                 let reverted_timestamp =
-                    Time::from_packed_u64(packed, mysql::types::TIMESTAMP, fsp, tz).unwrap();
+                    Time::from_packed_u64(packed, TimeType::Timestamp, fsp, tz).unwrap();
                 assert_eq!(
                     reverted_timestamp.time,
                     reverted_datetime.time + Duration::seconds(offset)
@@ -1161,7 +1200,7 @@ mod tests {
                 assert_eq!(res, datetime_dec);
 
                 t = Time::parse_datetime(t_str, 0, tz).unwrap();
-                t.tp = mysql::types::DATE;
+                t.set_time_type(TimeType::Date).unwrap();
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
             });
@@ -1241,39 +1280,39 @@ mod tests {
         let ok_tables = vec![
             (
                 "2012-12-31 11:30:45",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 11:30:45",
             ),
             (
                 "0000-00-00 00:00:00",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "0000-00-00 00:00:00",
             ),
             (
                 "0001-01-01 00:00:00",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "0001-01-01 00:00:00",
             ),
-            ("00-12-31 11:30:45", UN_SPECIFIED_FSP, "2000-12-31 11:30:45"),
-            ("12-12-31 11:30:45", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("2012-12-31", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
-            ("20121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
-            ("121231", UN_SPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("00-12-31 11:30:45", UNSPECIFIED_FSP, "2000-12-31 11:30:45"),
+            ("12-12-31 11:30:45", UNSPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-12-31", UNSPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("20121231", UNSPECIFIED_FSP, "2012-12-31 00:00:00"),
+            ("121231", UNSPECIFIED_FSP, "2012-12-31 00:00:00"),
             (
                 "2012^12^31 11+30+45",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 11:30:45",
             ),
             (
                 "2012^12^31T11+30+45",
-                UN_SPECIFIED_FSP,
+                UNSPECIFIED_FSP,
                 "2012-12-31 11:30:45",
             ),
-            ("2012-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
-            ("12-2-1 11:30:45", UN_SPECIFIED_FSP, "2012-02-01 11:30:45"),
-            ("20121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("121231113045", UN_SPECIFIED_FSP, "2012-12-31 11:30:45"),
-            ("2012-02-29", UN_SPECIFIED_FSP, "2012-02-29 00:00:00"),
+            ("2012-2-1 11:30:45", UNSPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("12-2-1 11:30:45", UNSPECIFIED_FSP, "2012-02-01 11:30:45"),
+            ("20121231113045", UNSPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("121231113045", UNSPECIFIED_FSP, "2012-12-31 11:30:45"),
+            ("2012-02-29", UNSPECIFIED_FSP, "2012-02-29 00:00:00"),
             ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
             ("20121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
             ("121231113045.9999999", 6, "2012-12-31 11:30:46.000000"),
@@ -1298,9 +1337,9 @@ mod tests {
         ];
 
         for (input, fsp, exp) in ok_tables {
-            let mut utc_t = Time::parse_utc_datetime(input, UN_SPECIFIED_FSP).unwrap();
+            let mut utc_t = Time::parse_utc_datetime(input, UNSPECIFIED_FSP).unwrap();
             utc_t.round_frac(fsp).unwrap();
-            let expect = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
+            let expect = Time::parse_utc_datetime(exp, UNSPECIFIED_FSP).unwrap();
             assert_eq!(
                 utc_t, expect,
                 "input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
@@ -1308,9 +1347,9 @@ mod tests {
             );
 
             for_each_tz(move |tz, offset| {
-                let mut t = Time::parse_datetime(input, UN_SPECIFIED_FSP, tz).unwrap();
+                let mut t = Time::parse_datetime(input, UNSPECIFIED_FSP, tz).unwrap();
                 t.round_frac(fsp).unwrap();
-                let expect = Time::parse_datetime(exp, UN_SPECIFIED_FSP, tz).unwrap();
+                let expect = Time::parse_datetime(exp, UNSPECIFIED_FSP, tz).unwrap();
                 assert_eq!(
                     t, expect,
                     "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
@@ -1328,12 +1367,12 @@ mod tests {
         ];
 
         for (s, exp) in cases {
-            let mut res = Time::parse_utc_datetime(s, UN_SPECIFIED_FSP).unwrap();
-            res.set_tp(mysql::types::DATE).unwrap();
-            res.set_tp(mysql::types::DATETIME).unwrap();
-            let ep = Time::parse_utc_datetime(exp, UN_SPECIFIED_FSP).unwrap();
+            let mut res = Time::parse_utc_datetime(s, UNSPECIFIED_FSP).unwrap();
+            res.set_time_type(TimeType::Date).unwrap();
+            res.set_time_type(TimeType::DateTime).unwrap();
+            let ep = Time::parse_utc_datetime(exp, UNSPECIFIED_FSP).unwrap();
             assert_eq!(res, ep);
-            let res = res.set_tp(mysql::types::TIMESTAMP);
+            let res = res.set_time_type(TimeType::Timestamp);
             assert!(res.is_err());
         }
     }
@@ -1344,7 +1383,7 @@ mod tests {
         let tz = Tz::utc();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(tz, mysql::types::DATETIME, &d).unwrap();
+            let get = Time::from_duration(tz, TimeType::DateTime, &d).unwrap();
             let get_today = get
                 .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
