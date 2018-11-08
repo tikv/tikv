@@ -21,7 +21,7 @@ use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
 use tikv::storage::{
-    self, Engine, Key, KvPair, Mutation, Options, Result, Storage, TempRocksEngineBuilder, Value,
+    self, Engine, Key, KvPair, Mutation, Options, Result, Storage, TestEngineBuilder, Value,
 };
 use tikv::util::collections::HashMap;
 
@@ -33,7 +33,7 @@ pub struct SyncStorage<E: Engine> {
 
 impl SyncStorage<RocksEngine> {
     pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
-        let engine = TempRocksEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,

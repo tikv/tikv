@@ -44,7 +44,7 @@ pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TempRocksEngineBuilder,
+    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
 #[cfg(test)]
@@ -394,14 +394,14 @@ impl Options {
 
 /// A builder to build a temporary `Storage<RocksEngine>`.
 ///
-/// Only be only used for test purpose.
+/// Only used for test purpose.
 #[must_use]
-pub struct TempRocksStorageBuilder {
+pub struct TestStorageBuilder {
     config: Option<Config>,
     engine: Option<RocksEngine>,
 }
 
-impl TempRocksStorageBuilder {
+impl TestStorageBuilder {
     pub fn new() -> Self {
         Self {
             config: None,
@@ -419,7 +419,7 @@ impl TempRocksStorageBuilder {
 
     /// Customize the engine of the `Storage`.
     ///
-    /// By default, an engine created from `TempRocksEngineBuilder` will be used.
+    /// By default, an engine created from `TestEngineBuilder` will be used.
     pub fn engine(mut self, engine: RocksEngine) -> Self {
         self.engine = Some(engine);
         self
@@ -440,7 +440,7 @@ impl TempRocksStorageBuilder {
             })
         };
         let engine = match self.engine {
-            None => TempRocksEngineBuilder::new().build()?,
+            None => TestEngineBuilder::new().build()?,
             Some(e) => e,
         };
         let mut storage = Storage::from_engine(engine, &config, read_pool)?;
@@ -1556,7 +1556,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1609,8 +1609,8 @@ mod tests {
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
-        let engine = TempRocksEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TempRocksStorageBuilder::new()
+        let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
+        let storage = TestStorageBuilder::new()
             .engine(engine)
             .build_and_start()
             .unwrap();
@@ -1674,7 +1674,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1899,7 +1899,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1963,7 +1963,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2039,7 +2039,7 @@ mod tests {
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let storage = TempRocksStorageBuilder::new()
+        let storage = TestStorageBuilder::new()
             .config(&config)
             .build_and_start()
             .unwrap();
@@ -2086,7 +2086,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2117,7 +2117,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -2162,7 +2162,7 @@ mod tests {
     fn test_high_priority_no_block() {
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let storage = TempRocksStorageBuilder::new()
+        let storage = TestStorageBuilder::new()
             .config(&config)
             .build_and_start()
             .unwrap();
@@ -2209,7 +2209,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         // Write x and y.
         storage
@@ -2305,7 +2305,7 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = [
@@ -2419,7 +2419,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_put() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2454,7 +2454,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2492,7 +2492,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_delete() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2591,7 +2591,7 @@ mod tests {
 
     #[test]
     fn test_raw_scan() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2665,7 +2665,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_scan() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2851,7 +2851,7 @@ mod tests {
 
     #[test]
     fn test_scan_lock() {
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -3060,7 +3060,7 @@ mod tests {
     fn test_resolve_lock() {
         use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.

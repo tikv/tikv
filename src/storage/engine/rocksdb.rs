@@ -134,14 +134,14 @@ impl Debug for RocksEngine {
 
 /// A builder to build a temporary `RocksEngine`.
 ///
-/// Only be only used for test purpose.
+/// Only used for test purpose.
 #[must_use]
-pub struct TempRocksEngineBuilder {
+pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
 }
 
-impl TempRocksEngineBuilder {
+impl TestEngineBuilder {
     pub fn new() -> Self {
         Self {
             path: None,

@@ -181,7 +181,7 @@ pub mod tests {
     use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
-    use storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TempRocksEngineBuilder};
+    use storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use storage::mvcc::MvccTxn;
     use storage::{Key, Mutation, Options, SnapshotStore};
     use util::collections::HashMap;
@@ -267,7 +267,7 @@ pub mod tests {
 
     impl TestStore {
         pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
-            let engine = TempRocksEngineBuilder::new().build().unwrap();
+            let engine = TestEngineBuilder::new().build().unwrap();
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {

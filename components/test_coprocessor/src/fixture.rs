@@ -20,7 +20,7 @@ use tikv::coprocessor::{Endpoint, ReadPoolContext};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::Config;
 use tikv::storage::engine::RocksEngine;
-use tikv::storage::{Engine, TempRocksEngineBuilder};
+use tikv::storage::{Engine, TestEngineBuilder};
 use tikv::util::worker::FutureWorker;
 
 /// An example table for test purpose.
@@ -116,7 +116,7 @@ pub fn init_data_with_commit(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
-    let engine = TempRocksEngineBuilder::new().build().unwrap();
+    let engine = TestEngineBuilder::new().build().unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
 

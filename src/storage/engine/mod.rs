@@ -33,7 +33,7 @@ mod rocksdb;
 
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb::{RocksEngine, RocksSnapshot, TempRocksEngineBuilder};
+pub use self::rocksdb::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 
 pub const SEEK_BOUND: u64 = 8;
 
@@ -778,7 +778,7 @@ pub mod tests {
 
     #[test]
     fn rocksdb() {
-        let engine = TempRocksEngineBuilder::new()
+        let engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
@@ -796,7 +796,7 @@ pub mod tests {
     fn rocksdb_reopen() {
         let dir = TempDir::new("rocksdb_test").unwrap();
         {
-            let engine = TempRocksEngineBuilder::new()
+            let engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
                 .build()
@@ -804,7 +804,7 @@ pub mod tests {
             must_put_cf(&engine, "cf", b"k", b"v1");
         }
         {
-            let engine = TempRocksEngineBuilder::new()
+            let engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
                 .build()
@@ -1052,7 +1052,7 @@ pub mod tests {
     // TODO: refactor engine tests
     #[test]
     fn test_linear() {
-        let engine = TempRocksEngineBuilder::new()
+        let engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
@@ -1117,7 +1117,7 @@ pub mod tests {
 
     #[test]
     fn test_statistics() {
-        let engine = TempRocksEngineBuilder::new()
+        let engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();

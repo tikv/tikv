@@ -186,7 +186,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
     use server::readpool::{self, ReadPool};
-    use storage::TempRocksStorageBuilder;
+    use storage::TestStorageBuilder;
     use util::security::SecurityConfig;
     use util::worker::FutureWorker;
 
@@ -246,7 +246,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let storage = TempRocksStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
