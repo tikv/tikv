@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::collections::Bound::{self, Excluded, Included, Unbounded};
 use std::fmt::{self, Debug, Formatter};
+use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
 use kvproto::kvrpcpb::Context;
@@ -25,10 +26,12 @@ use storage::engine::{
 };
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
+type RwLockTree = RwLock<BTreeMap<Key, Value>>;
+
 #[derive(Clone)]
 pub struct BTreeEngine {
     cf_names: Vec<CfName>,
-    cf_contents: Vec<Arc<RwLock<BTreeMap<Key, Value>>>>,
+    cf_contents: Vec<Arc<RwLockTree>>,
 }
 
 impl BTreeEngine {
@@ -58,7 +61,7 @@ impl BTreeEngine {
         Self::new(cfs)
     }
 
-    pub fn get_cf(&self, cf: CfName) -> Arc<RwLock<BTreeMap<Key, Value>>> {
+    pub fn get_cf(&self, cf: CfName) -> Arc<RwLockTree> {
         let index = self.cf_names.iter().position(|&c| c == cf);
         match index {
             None => unreachable!(
@@ -100,19 +103,15 @@ impl Debug for BTreeEngine {
 }
 
 pub struct BTreeEngineIterator {
-    tree: Arc<RwLock<BTreeMap<Key, Value>>>,
+    tree: Arc<RwLockTree>,
     cur_key: Option<Key>,
     cur_value: Option<Value>,
     valid: bool,
-    lower_bound: Bound<Key>,
-    upper_bound: Bound<Key>,
+    bounds: (Bound<Key>, Bound<Key>),
 }
 
 impl BTreeEngineIterator {
-    pub fn new(
-        tree: Arc<RwLock<BTreeMap<Key, Value>>>,
-        iter_opt: IterOption,
-    ) -> BTreeEngineIterator {
+    pub fn new(tree: Arc<RwLockTree>, iter_opt: IterOption) -> BTreeEngineIterator {
         let lower_bound = match iter_opt.lower_bound() {
             None => Unbounded,
             Some(key) => Included(Key::from_raw(key)),
@@ -122,154 +121,66 @@ impl BTreeEngineIterator {
             None => Unbounded,
             Some(key) => Excluded(Key::from_raw(key)),
         };
-        assert!(
-            check_bounds(&lower_bound, &upper_bound),
-            "lower bound must <= upper bound,lower_bound: {:?}, upper_bound:{:?}",
-            lower_bound,
-            upper_bound
-        );
-
+        let bounds = (lower_bound.clone(), upper_bound.clone());
         Self {
             tree: tree.clone(),
             cur_key: None,
             cur_value: None,
             valid: false,
-            lower_bound,
-            upper_bound,
+            bounds,
         }
+    }
+
+    fn seek_and_valid(&mut self, range: (Bound<Key>, Bound<Key>), next_back: bool) -> bool {
+        let tree = self.tree.read().unwrap();
+        let mut range = tree.range(range);
+        let item = match next_back {
+            true => range.next_back(),
+            false => range.next(),
+        };
+        match item {
+            Some((k, v)) if self.bounds.contains(k) => {
+                self.cur_key = Some(k.clone());
+                self.cur_value = Some(v.clone());
+                self.valid = true;
+            }
+            _ => {
+                self.valid = false;
+            }
+        }
+        self.valid()
     }
 }
 
 impl Iterator for BTreeEngineIterator {
     fn next(&mut self) -> bool {
-        let tree = self.tree.read().unwrap();
-        let mut range = tree.range((
-            Excluded(self.cur_key.clone().unwrap()),
-            self.upper_bound.clone(),
-        ));
-        match range.next() {
-            None => {
-                self.valid = false;
-            }
-            Some((k, v)) => {
-                self.cur_key = Some(k.clone());
-                self.cur_value = Some(v.clone());
-                self.valid = true;
-            }
-        }
-        self.valid()
+        let range = (Excluded(self.cur_key.clone().unwrap()), Unbounded);
+        self.seek_and_valid(range, false)
     }
 
     fn prev(&mut self) -> bool {
-        let tree = self.tree.read().unwrap();
-        let mut range = tree.range((
-            self.lower_bound.clone(),
-            Excluded(self.cur_key.clone().unwrap()),
-        ));
-        match range.next_back() {
-            None => {
-                self.valid = false;
-            }
-            Some((k, v)) => {
-                self.cur_key = Some(k.clone());
-                self.cur_value = Some(v.clone());
-                self.valid = true;
-            }
-        }
-        self.valid()
+        let range = (Unbounded, Excluded(self.cur_key.clone().unwrap()));
+        self.seek_and_valid(range, true)
     }
 
     fn seek(&mut self, key: &Key) -> EngineResult<bool> {
-        let key_bound = Included(key.clone());
-        let upper_bound = self.upper_bound.clone();
-        assert!(
-            check_key_in_range(&self.lower_bound, &key_bound, &upper_bound),
-            "Err(KeyNotInRegion),start_key: {:?}, end_key:{:?}",
-            key_bound,
-            upper_bound
-        );
-
-        debug!("Iterator.seek({:?})", unsafe {
-            String::from_utf8_unchecked(key.to_raw().unwrap())
-        });
-        match self
-            .tree
-            .read()
-            .unwrap()
-            .range((key_bound, upper_bound))
-            .next()
-        {
-            None => {
-                self.valid = false;
-            }
-            Some((k, v)) => {
-                self.cur_key = Some(k.clone());
-                self.cur_value = Some(v.clone());
-                self.valid = true;
-            }
-        }
-
-        Ok(self.valid())
+        let range = (Included(key.clone()), Unbounded);
+        Ok(self.seek_and_valid(range, false))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> EngineResult<bool> {
-        let lower_bound = self.lower_bound.clone();
-        let key_bound = Included(key.clone());
-        assert!(
-            check_key_in_range(&lower_bound, &key_bound, &self.upper_bound),
-            "Err(KeyNotInRegion),start_key: {:?}, end_key:{:?}",
-            lower_bound,
-            key_bound
-        );
-
-        let tree = self.tree.read().unwrap();
-        match tree.range((lower_bound, key_bound)).next_back() {
-            None => {
-                self.valid = false;
-            }
-            Some((k, v)) => {
-                self.cur_key = Some(k.clone());
-                self.cur_value = Some(v.clone());
-                self.valid = true;
-            }
-        }
-        Ok(self.valid())
+        let range = (Unbounded, Included(key.clone()));
+        Ok(self.seek_and_valid(range, true))
     }
 
     fn seek_to_first(&mut self) -> bool {
-        let tree = self.tree.read().unwrap();
-        match tree
-            .range((self.lower_bound.clone(), self.upper_bound.clone()))
-            .next()
-        {
-            None => {
-                self.valid = false;
-            }
-            Some((k, v)) => {
-                self.cur_key = Some(k.clone());
-                self.cur_value = Some(v.clone());
-                self.valid = true;
-            }
-        }
-        self.valid()
+        let range = (self.bounds.0.clone(), self.bounds.1.clone());
+        self.seek_and_valid(range, false)
     }
 
     fn seek_to_last(&mut self) -> bool {
-        let tree = self.tree.read().unwrap();
-        match tree
-            .range((self.lower_bound.clone(), self.upper_bound.clone()))
-            .next_back()
-        {
-            None => {
-                self.valid = false;
-            }
-            Some((k, v)) => {
-                self.cur_key = Some(k.clone());
-                self.cur_value = Some(v.clone());
-                self.valid = true;
-            }
-        }
-        self.valid()
+        let range = (self.bounds.0.clone(), self.bounds.1.clone());
+        self.seek_and_valid(range, true)
     }
 
     #[inline]
@@ -357,34 +268,6 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
     Ok(())
 }
 
-// If start > end, return false;
-// If start == end && both bounds are Excluded return false;
-// else return true;
-#[inline]
-fn bound_cmp(start: &Bound<Key>, end: &Bound<Key>) -> bool {
-    match (start, end) {
-        (_, Unbounded) | (Unbounded, _) => true,
-
-        (Excluded(l), Excluded(r)) => l < r,
-
-        (Excluded(l), Included(r)) | (Included(l), Excluded(r)) | (Included(l), Included(r)) => {
-            l <= r
-        }
-    }
-}
-
-fn check_bounds(left: &Bound<Key>, right: &Bound<Key>) -> bool {
-    bound_cmp(left, right)
-}
-
-fn check_key_in_range(
-    lower_bound: &Bound<Key>,
-    key: &Bound<Key>,
-    upper_bound: &Bound<Key>,
-) -> bool {
-    bound_cmp(lower_bound, key) && bound_cmp(key, upper_bound)
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::super::tests::*;
@@ -410,7 +293,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_bound_of_btree_engine() {
+    fn test_bounds_of_btree_engine() {
         let engine = BTreeEngine::default();
         let test_data = vec![
             (b"a1".to_vec(), b"v1".to_vec()),
@@ -421,18 +304,28 @@ pub mod tests {
         for (k, v) in &test_data {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
-
         let snap = engine.snapshot(&Context::new()).unwrap();
+        let mut statistics = CFStatistics::default();
+
+        // lower bound > upper bound, seek() returns false.
+        let mut iter_op = IterOption::default();
+        iter_op.set_lower_bound(b"a7".to_vec());
+        iter_op.set_upper_bound(b"a3".to_vec());
+        let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
+        assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOption::default();
         iter_op.set_lower_bound(b"a3".to_vec());
         iter_op.set_upper_bound(b"a7".to_vec());
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
-        let mut statistics = CFStatistics::default();
+
+        assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
+        assert!(!cursor.seek(&Key::from_raw(b"a8"), &mut statistics).unwrap());
+        assert!(!cursor.seek(&Key::from_raw(b"a0"), &mut statistics).unwrap());
+
         assert!(cursor.seek_to_last(&mut statistics));
 
         let mut ret = vec![];
-
         loop {
             ret.push((
                 Key::from_encoded(cursor.key(&mut statistics).to_vec())
@@ -445,7 +338,6 @@ pub mod tests {
                 break;
             }
         }
-
         ret.sort();
         assert_eq!(ret, test_data[1..3].to_vec());
     }
@@ -501,139 +393,6 @@ pub mod tests {
 
         assert!(iter.seek_for_prev(&Key::from_raw(b"a8")).unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
-    }
-
-    #[test]
-    fn test_valid_bounds() {
-        assert_eq!(
-            false,
-            check_bounds(
-                &Excluded(Key::from_raw(b"1")),
-                &Excluded(Key::from_raw(b"1")),
-            )
-        );
-
-        assert_eq!(
-            true,
-            check_bounds(
-                &Included(Key::from_raw(b"1")),
-                &Included(Key::from_raw(b"1")),
-            )
-        );
-        assert_eq!(
-            true,
-            check_bounds(
-                &Included(Key::from_raw(b"1")),
-                &Excluded(Key::from_raw(b"1")),
-            )
-        );
-        assert_eq!(
-            true,
-            check_bounds(
-                &Excluded(Key::from_raw(b"1")),
-                &Included(Key::from_raw(b"1")),
-            )
-        );
-
-        assert_eq!(
-            true,
-            check_bounds(&Excluded(Key::from_raw(b"1")), &Unbounded)
-        );
-        assert_eq!(
-            true,
-            check_bounds(&Included(Key::from_raw(b"1")), &Unbounded)
-        );
-
-        assert_eq!(
-            true,
-            check_bounds(&Unbounded, &Excluded(Key::from_raw(b"1")))
-        );
-        assert_eq!(
-            true,
-            check_bounds(&Unbounded, &Included(Key::from_raw(b"1")))
-        );
-
-        assert_eq!(
-            false,
-            check_bounds(
-                &Excluded(Key::from_raw(b"2")),
-                &Excluded(Key::from_raw(b"1")),
-            )
-        );
-        assert_eq!(
-            false,
-            check_bounds(
-                &Included(Key::from_raw(b"2")),
-                &Excluded(Key::from_raw(b"1")),
-            )
-        );
-        assert_eq!(
-            false,
-            check_bounds(
-                &Included(Key::from_raw(b"2")),
-                &Included(Key::from_raw(b"1")),
-            )
-        );
-
-        assert_eq!(
-            true,
-            check_bounds(
-                &Excluded(Key::from_raw(b"1")),
-                &Excluded(Key::from_raw(b"2")),
-            )
-        );
-
-        assert_eq!(
-            false,
-            check_key_in_range(
-                &Excluded(Key::from_raw(b"1")),
-                &Excluded(Key::from_raw(b"0")),
-                &Excluded(Key::from_raw(b"2")),
-            )
-        );
-        assert_eq!(
-            true,
-            check_key_in_range(
-                &Excluded(Key::from_raw(b"1")),
-                &Included(Key::from_raw(b"1")),
-                &Excluded(Key::from_raw(b"1")),
-            )
-        );
-        assert_eq!(
-            true,
-            check_key_in_range(
-                &Excluded(Key::from_raw(b"1")),
-                &Included(Key::from_raw(b"2")),
-                &Excluded(Key::from_raw(b"3")),
-            )
-        );
-    }
-
-    #[test]
-    fn test_key_not_in_range() {
-        let engine = BTreeEngine::default();
-        let snap = engine.snapshot(&Context::new()).unwrap();
-        let mut iter_op = IterOption::default();
-
-        iter_op.set_lower_bound(b"a7".to_vec());
-        iter_op.set_upper_bound(b"a3".to_vec());
-        assert!(
-            ::panic_hook::recover_safe(|| snap.iter(iter_op, ScanMode::Forward).unwrap()).is_err()
-        );
-
-        let mut iter_op = IterOption::default();
-        iter_op.set_lower_bound(b"a3".to_vec());
-        iter_op.set_upper_bound(b"a7".to_vec());
-        let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
-        let mut statistics = CFStatistics::default();
-        assert!(
-            ::panic_hook::recover_safe(|| cursor.seek(&Key::from_raw(b"a8"), &mut statistics))
-                .is_err()
-        );
-        assert!(
-            ::panic_hook::recover_safe(|| cursor.seek(&Key::from_raw(b"a0"), &mut statistics))
-                .is_err()
-        );
     }
 
     #[test]
