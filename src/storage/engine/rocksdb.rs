@@ -11,24 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
-    ScanMode, Snapshot, TEMP_DIR,
-};
-use kvproto::kvrpcpb::Context;
-use raftstore::store::engine::{IterOption, Peekable};
-use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use storage::{CfName, Key, Value, CF_DEFAULT};
+
+use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
+
+use raftstore::store::engine::{IterOption, Peekable};
+use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
+use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+
 use util::escape;
 use util::rocksdb;
 use util::rocksdb::CFOptions;
 use util::worker::{Runnable, Scheduler, Worker};
 
+use super::{
+    Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
+    ScanMode, Snapshot,
+};
+
 pub use raftstore::store::engine::SyncSnapshot as RocksSnapshot;
+
+const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
@@ -122,6 +129,61 @@ impl Debug for RocksEngine {
             "Rocksdb [is_temp: {}]",
             self.core.lock().unwrap().temp_dir.is_some()
         )
+    }
+}
+
+/// A builder to build a temporary `RocksEngine`.
+///
+/// Only used for test purpose.
+#[must_use]
+pub struct TestEngineBuilder {
+    path: Option<PathBuf>,
+    cfs: Option<Vec<CfName>>,
+}
+
+impl TestEngineBuilder {
+    pub fn new() -> Self {
+        Self {
+            path: None,
+            cfs: None,
+        }
+    }
+
+    /// Customize the data directory of the temporary engine.
+    ///
+    /// By default, TEMP_DIR will be used.
+    pub fn path(mut self, path: impl AsRef<Path>) -> Self {
+        self.path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Customize the CFs that engine will have.
+    ///
+    /// By default, engine will have all CFs.
+    pub fn cfs(mut self, cfs: impl AsRef<[CfName]>) -> Self {
+        self.cfs = Some(cfs.as_ref().to_vec());
+        self
+    }
+
+    /// Build a `RocksEngine`.
+    pub fn build(self) -> Result<RocksEngine> {
+        let path = match self.path {
+            None => TEMP_DIR.to_owned(),
+            Some(p) => p.to_str().unwrap().to_owned(),
+        };
+        let cfs = self.cfs.unwrap_or_else(|| ::storage::ALL_CFS.to_vec());
+        let cfg_rocksdb = ::config::DbConfig::default();
+        let cfs_opts = cfs
+            .iter()
+            .map(|cf| match *cf {
+                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
+                _ => CFOptions::new(*cf, ::rocksdb::ColumnFamilyOptions::new()),
+            })
+            .collect();
+        RocksEngine::new(&path, &cfs, Some(cfs_opts))
     }
 }
 

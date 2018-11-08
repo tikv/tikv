@@ -381,16 +381,15 @@ impl<S: Snapshot> MvccTxn<S> {
 #[cfg(test)]
 mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use tempdir::TempDir;
 
-    use storage::engine::{self, Engine, TEMP_DIR};
+    use storage::engine::Engine;
     use storage::mvcc::tests::*;
     use storage::mvcc::WriteType;
     use storage::mvcc::{MvccReader, MvccTxn};
-    use storage::{Key, Mutation, Options, ScanMode, ALL_CFS, SHORT_VALUE_MAX_LEN};
+    use storage::{Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_get_none(&engine, k, 1);
 
@@ -420,7 +419,7 @@ mod tests {
     }
 
     fn test_mvcc_txn_prewrite_imp(k: &[u8], v: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);
         // Key is locked.
@@ -451,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_rollback_lock() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
         must_prewrite_put(&engine, k, v, k, 5);
@@ -467,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_rollback_del() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
         must_prewrite_put(&engine, k, v, k, 5);
@@ -490,7 +489,7 @@ mod tests {
     }
 
     fn test_mvcc_txn_commit_ok_imp(k1: &[u8], v1: &[u8], k2: &[u8], k3: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&engine, k1, v1, k1, 10);
         must_prewrite_lock(&engine, k2, k1, 10);
         must_prewrite_delete(&engine, k3, k1, 10);
@@ -518,7 +517,7 @@ mod tests {
     }
 
     fn test_mvcc_txn_commit_err_imp(k: &[u8], v: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Not prewrite yet
         must_commit_err(&engine, k, 1, 2);
@@ -539,7 +538,7 @@ mod tests {
     }
 
     fn test_mvcc_txn_rollback_imp(k: &[u8], v: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);
         must_rollback(&engine, k, 5);
@@ -555,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_after_commit() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k";
         let v = b"v";
@@ -586,7 +585,7 @@ mod tests {
     }
 
     fn test_mvcc_txn_rollback_err_imp(k: &[u8], v: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);
         must_commit(&engine, k, 5, 10);
@@ -604,14 +603,14 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_before_prewrite() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let key = b"key";
         must_rollback(&engine, key, 5);
         must_prewrite_lock_err(&engine, key, key, 5);
     }
 
     fn test_gc_imp(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v1, k, 5);
         must_commit(&engine, k, 5, 10);
@@ -678,7 +677,7 @@ mod tests {
     }
 
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8], k3: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);
         must_seek_write_none(&engine, k, 5);
@@ -713,7 +712,7 @@ mod tests {
     }
 
     fn test_scan_keys_imp(keys: Vec<&[u8]>, values: Vec<&[u8]>) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&engine, keys[0], values[0], keys[0], 1);
         must_commit(&engine, keys[0], 1, 10);
         must_prewrite_lock(&engine, keys[1], keys[1], 1);
@@ -740,7 +739,7 @@ mod tests {
     }
 
     fn test_write_size_imp(k: &[u8], v: &[u8], pk: &[u8]) {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 10, true).unwrap();
@@ -772,7 +771,7 @@ mod tests {
 
     #[test]
     fn test_skip_constraint_check() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let (key, value) = (b"key", b"value");
 
         must_prewrite_put(&engine, key, value, key, 5);
@@ -805,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_read_commit() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let (key, v1, v2) = (b"key", b"v1", b"v2");
 
         must_prewrite_put(&engine, key, v1, key, 5);
@@ -818,7 +817,7 @@ mod tests {
 
     #[test]
     fn test_collapse_prev_rollback() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let (key, value) = (b"key", b"value");
 
         // Add a Rollback whose start ts is 1.
@@ -844,9 +843,7 @@ mod tests {
 
     #[test]
     fn test_scan_values_in_default() {
-        let path = TempDir::new("_test_scan_values_in_default").expect("");
-        let path = path.path().to_str().unwrap();
-        let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(
             &engine,
@@ -902,9 +899,7 @@ mod tests {
 
     #[test]
     fn test_seek_ts() {
-        let path = TempDir::new("_test_seek_ts").expect("");
-        let path = path.path().to_str().unwrap();
-        let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, &[2], b"vv", &[2], 3);
         must_commit(&engine, &[2], 3, 3);

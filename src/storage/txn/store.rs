@@ -302,10 +302,10 @@ mod tests {
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
+    use storage::engine::{Engine, RocksEngine, RocksSnapshot};
     use storage::mvcc::Error as MvccError;
     use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, Statistics, ALL_CFS};
+    use storage::{Key, KvPair, Mutation, Options, Statistics, TestEngineBuilder};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -321,7 +321,7 @@ mod tests {
 
     impl TestStore {
         fn new(key_num: u64) -> TestStore {
-            let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+            let engine = TestEngineBuilder::new().build().unwrap();
             let keys: Vec<String> = (START_ID..START_ID + key_num)
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();

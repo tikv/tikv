@@ -181,9 +181,9 @@ pub mod tests {
     use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::table;
     use coprocessor::util;
-    use storage::engine::{self, Engine, Modify, RocksEngine, RocksSnapshot, TEMP_DIR};
+    use storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use storage::mvcc::MvccTxn;
-    use storage::{Key, Mutation, Options, SnapshotStore, ALL_CFS};
+    use storage::{Key, Mutation, Options, SnapshotStore};
     use util::collections::HashMap;
 
     use super::*;
@@ -267,7 +267,7 @@ pub mod tests {
 
     impl TestStore {
         pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
-            let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+            let engine = TestEngineBuilder::new().build().unwrap();
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
