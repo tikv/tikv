@@ -11,22 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod chunk;
-mod column;
+//! Type definitions
 
-pub use coprocessor::codec::{Error, Result};
+mod eval_type;
+mod field_type;
 
-pub use self::chunk::{Chunk, ChunkEncoder};
+pub use self::eval_type::EvalType;
+pub use self::field_type::{Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 
-#[cfg(test)]
-mod tests {
-    use cop_datatype::FieldTypeAccessor;
-    use cop_datatype::FieldTypeTp;
-    use tipb::expression::FieldType;
-
-    pub fn field_type(tp: FieldTypeTp) -> FieldType {
-        let mut fp = FieldType::new();
-        fp.as_mut_accessor().set_tp(tp);
-        fp
-    }
-}
+/// Length is unspecified, applicable to `FieldType`'s `flen` and `decimal`.
+pub const UNSPECIFIED_LENGTH: isize = -1;

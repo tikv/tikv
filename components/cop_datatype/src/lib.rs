@@ -11,22 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod chunk;
-mod column;
+#![cfg_attr(test, feature(test))]
+#![feature(try_from)]
 
-pub use coprocessor::codec::{Error, Result};
-
-pub use self::chunk::{Chunk, ChunkEncoder};
-
+#[macro_use]
+extern crate bitflags;
+#[macro_use]
+extern crate enum_primitive_derive;
+#[macro_use]
+extern crate quick_error;
+extern crate num_traits;
 #[cfg(test)]
-mod tests {
-    use cop_datatype::FieldTypeAccessor;
-    use cop_datatype::FieldTypeTp;
-    use tipb::expression::FieldType;
+extern crate test;
 
-    pub fn field_type(tp: FieldTypeTp) -> FieldType {
-        let mut fp = FieldType::new();
-        fp.as_mut_accessor().set_tp(tp);
-        fp
-    }
+extern crate tipb;
+
+mod def;
+mod error;
+
+pub mod prelude {
+    pub use super::def::FieldTypeAccessor;
 }
+
+pub use self::def::*;
+pub use self::error::*;
