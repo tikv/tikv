@@ -325,13 +325,17 @@ impl Debugger {
         Ok(errors)
     }
 
-    pub fn recover_regions(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
+    pub fn recover_regions(
+        &self,
+        regions: Vec<Region>,
+        read_only: bool,
+    ) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv;
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = self.recover_region(db, region) {
+            if let Err(e) = self.recover_region(db, region, read_only) {
                 errors.push((region_id, e));
             }
         }
@@ -339,7 +343,7 @@ impl Debugger {
         Ok(errors)
     }
 
-    fn recover_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
+    fn recover_region(&self, db: &Arc<DB>, region: Region, read_only: bool) -> Result<()> {
         let wb = WriteBatch::new();
 
         let mut mvcc_checker = box_try!(MvccChecker::new(
@@ -349,9 +353,13 @@ impl Debugger {
         ));
         mvcc_checker.check_mvcc(&wb, None)?;
 
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        box_try!(db.write_opt(wb, &write_opts));
+        if read_only {
+            println!("Read-only mode: Skip writing {} keys", wb.count());
+        } else {
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            box_try!(db.write_opt(wb, &write_opts));
+        }
 
         println!(
             "total fix default: {}, lock: {}, write: {}",
@@ -389,7 +397,7 @@ impl Debugger {
             }
 
             let thread = ThreadBuilder::new()
-                .name(format!("mvcc-recover-ex-thread-{}", thread_index))
+                .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
                     println!(
                         "thread {}: started on range [\"{}\", \"{}\")",
@@ -2063,7 +2071,6 @@ mod tests {
     fn test_vec_sampling() {
         for size in 0..50 {
             for sample_size in 0..50 {
-                eprintln!("Sampling {} from {}", sample_size, size);
                 let vec: Vec<_> = (0..size).collect();
                 let samples = sample(vec.clone(), sample_size);
 
