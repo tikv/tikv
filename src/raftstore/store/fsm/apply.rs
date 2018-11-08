@@ -276,7 +276,6 @@ impl<'a> PollContext {
         PollContext {
             engines,
             host,
-            cfg,
             importer,
             notifier,
             router,
@@ -288,26 +287,12 @@ impl<'a> PollContext {
             wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: false,
+            enable_sync_log: cfg.sync_log,
             sync_log_hint: false,
             exec_ctx: None,
-            use_delete_range: false,
+            use_delete_range: cfg.use_delete_range,
+            cfg,
         }
-    }
-
-    pub fn enable_sync_log(mut self, eanbled: bool) -> PollContext {
-        self.enable_sync_log = eanbled;
-        self
-    }
-
-    pub fn apply_res_capacity(mut self, cap: usize) -> PollContext {
-        self.apply_res = Vec::with_capacity(cap);
-        self
-    }
-
-    pub fn use_delete_range(mut self, use_delete_range: bool) -> PollContext {
-        self.use_delete_range = use_delete_range;
-        self
     }
 
     /// Prepare for applying entries for `delegate`.
