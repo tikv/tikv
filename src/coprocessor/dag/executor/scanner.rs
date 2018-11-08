@@ -174,11 +174,11 @@ impl<S: Store> Scanner<S> {
 pub mod tests {
     use std::i64;
 
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use tipb::schema::ColumnInfo;
 
     use coprocessor::codec::datum::{self, Datum};
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use coprocessor::util;
     use storage::engine::{self, Engine, Modify, RocksEngine, RocksSnapshot, TEMP_DIR};
@@ -188,9 +188,9 @@ pub mod tests {
 
     use super::*;
 
-    pub fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
+    pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        col_info.set_tp(i32::from(tp));
+        col_info.as_mut_accessor().set_tp(tp);
         col_info.set_column_id(cid);
         col_info
     }
@@ -210,7 +210,7 @@ pub mod tests {
         }
 
         pub fn get_col_pk(&self) -> ColumnInfo {
-            let mut pk_col = new_col_info(0, types::LONG);
+            let mut pk_col = new_col_info(0, FieldTypeTp::Long);
             pk_col.set_pk_handle(true);
             pk_col
         }
@@ -218,9 +218,9 @@ pub mod tests {
 
     pub fn prepare_table_data(key_number: usize, table_id: i64) -> Data {
         let cols = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
 
         let mut kv_data = Vec::new();
