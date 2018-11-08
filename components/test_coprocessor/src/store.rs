@@ -23,14 +23,14 @@ use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::{self, Engine, FixtureStore, Key, Mutation};
 use tikv::util::worker::FutureWorker;
 
-pub struct Insert<'a, S: Store + 'a> {
-    store: &'a mut S,
+pub struct Insert<'a> {
+    store: &'a mut Store,
     table: &'a Table,
     values: BTreeMap<i64, Datum>,
 }
 
-impl<'a, S: Store + 'a> Insert<'a, S> {
-    pub fn new(store: &'a mut S, table: &'a Table) -> Self {
+impl<'a> Insert<'a> {
+    pub fn new(store: &'a mut Store, table: &'a Table) -> Self {
         Insert {
             store,
             table,
@@ -72,13 +72,13 @@ impl<'a, S: Store + 'a> Insert<'a, S> {
     }
 }
 
-pub struct Delete<'a, S: Store + 'a> {
-    store: &'a mut S,
+pub struct Delete<'a> {
+    store: &'a mut Store,
     table: &'a Table,
 }
 
-impl<'a, S: Store + 'a> Delete<'a, S> {
-    pub fn new(store: &'a mut S, table: &'a Table) -> Self {
+impl<'a> Delete<'a> {
+    pub fn new(store: &'a mut Store, table: &'a Table) -> Self {
         Delete { store, table }
     }
 
@@ -105,48 +105,20 @@ impl<'a, S: Store + 'a> Delete<'a, S> {
     }
 }
 
-pub trait Store {
-    fn begin(&mut self);
-
-    fn put(&mut self, ctx: Context, kv: Vec<(Vec<u8>, Vec<u8>)>);
-
-    fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, Self>
-    where
-        Self: Sized,
-    {
-        Insert::new(self, table)
-    }
-
-    fn delete(&mut self, ctx: Context, keys: Vec<Vec<u8>>);
-
-    fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, Self>
-    where
-        Self: Sized,
-    {
-        Delete::new(self, table)
-    }
-
-    fn commit_with_ctx(&mut self, ctx: Context);
-
-    fn commit(&mut self) {
-        self.commit_with_ctx(Context::new());
-    }
-}
-
 /// A store that operates over MVCC and support transactions.
-pub struct MvccTransactionalStore<E: Engine> {
+pub struct Store<E: Engine> {
     store: SyncStorage<E>,
     current_ts: u64,
     handles: Vec<Vec<u8>>,
 }
 
-impl<E: Engine> Store for MvccTransactionalStore<E> {
-    fn begin(&mut self) {
+impl<E: Engine> Store<E> {
+    pub fn begin(&mut self) {
         self.current_ts = next_id() as u64;
         self.handles.clear();
     }
 
-    fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
+    pub fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
         self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
         let pk = kv[0].0.clone();
         let kv = kv
@@ -156,7 +128,14 @@ impl<E: Engine> Store for MvccTransactionalStore<E> {
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
 
-    fn delete(&mut self, ctx: Context, mut keys: Vec<Vec<u8>>) {
+    pub fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, Self>
+        where
+            Self: Sized,
+    {
+        Insert::new(self, table)
+    }
+
+    pub fn delete(&mut self, ctx: Context, mut keys: Vec<Vec<u8>>) {
         self.handles.extend(keys.clone());
         let pk = keys[0].clone();
         let mutations = keys
@@ -168,15 +147,24 @@ impl<E: Engine> Store for MvccTransactionalStore<E> {
             .unwrap();
     }
 
-    fn commit_with_ctx(&mut self, ctx: Context) {
+    pub fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, Self>
+        where
+            Self: Sized,
+    {
+        Delete::new(self, table)
+    }
+
+    pub fn commit_with_ctx(&mut self, ctx: Context) {
         let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         self.store
             .commit(ctx, handles, self.current_ts, next_id() as u64)
             .unwrap();
     }
-}
 
-impl<E: Engine> MvccTransactionalStore<E> {
+    pub fn commit(&mut self) {
+        self.commit_with_ctx(Context::new());
+    }
+
     pub fn new(engine: E) -> Self {
         let pd_worker = FutureWorker::new("test-future–worker");
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
@@ -191,67 +179,6 @@ impl<E: Engine> MvccTransactionalStore<E> {
 
     pub fn get_engine(&self) -> E {
         self.store.get_engine()
-    }
-}
-
-/// A store that operates in memory BTreeMap.
-///
-/// Data will be written to the underlying BTreeMap only after commit and
-/// there is neither support for concurrent transactions nor MVCC.
-///
-/// Since this store produce a final data view for a series of operations,
-/// it is suitable for generating benchmark source so that MVCC cost can be
-/// excluded. It is sufficient for initializing final data view for Coprocessor
-/// query, but may be not useful for other purpose.
-#[derive(Clone, Debug)]
-pub struct SimpleBTreeMapStore {
-    data: BTreeMap<Key, Vec<u8>>,
-    pending_mutations: Vec<Mutation>,
-}
-
-impl Store for SimpleBTreeMapStore {
-    fn begin(&mut self) {
-        self.pending_mutations.clear();
-    }
-
-    fn put(&mut self, _ctx: Context, kv: Vec<(Vec<u8>, Vec<u8>)>) {
-        let mut mutations = kv
-            .into_iter()
-            .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
-            .collect();
-        self.pending_mutations.append(&mut mutations);
-    }
-
-    fn delete(&mut self, _ctx: Context, keys: Vec<Vec<u8>>) {
-        let mut mutations = keys
-            .into_iter()
-            .map(|k| Mutation::Delete(Key::from_raw(&k)))
-            .collect();
-        self.pending_mutations.append(&mut mutations);
-    }
-
-    fn commit_with_ctx(&mut self, _ctx: Context) {
-        let mutations = ::std::mem::replace(&mut self.pending_mutations, Vec::new());
-        mutations.into_iter().for_each(|mutation| match mutation {
-            Mutation::Put((k, v)) => {
-                self.data.insert(k, v);
-            }
-            Mutation::Delete(k) => {
-                self.data.remove(&k);
-            }
-            _ => {
-                unimplemented!();
-            }
-        });
-    }
-}
-
-impl SimpleBTreeMapStore {
-    pub fn new() -> Self {
-        SimpleBTreeMapStore {
-            data: BTreeMap::default(),
-            pending_mutations: Vec::new(),
-        }
     }
 
     pub fn into_map(self) -> BTreeMap<Key, Vec<u8>> {
