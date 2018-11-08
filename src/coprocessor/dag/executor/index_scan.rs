@@ -25,14 +25,14 @@ use coprocessor::codec::{datum, mysql, table};
 use coprocessor::util;
 use coprocessor::*;
 
-use storage::{Key, Snapshot, SnapshotStore};
+use storage::{Key, Store};
 
 use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
 use super::{Executor, Row};
 
-pub struct IndexScanExecutor<S: Snapshot> {
-    store: SnapshotStore<S>,
+pub struct IndexScanExecutor<S: Store> {
+    store: S,
     desc: bool,
     col_ids: Vec<i64>,
     cols: Arc<Vec<ColumnInfo>>,
@@ -50,11 +50,11 @@ pub struct IndexScanExecutor<S: Snapshot> {
     first_collect: bool,
 }
 
-impl<S: Snapshot> IndexScanExecutor<S> {
+impl<S: Store> IndexScanExecutor<S> {
     pub fn new(
         mut meta: IndexScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<S>,
+        store: S,
         unique: bool,
         collect: bool,
     ) -> Result<Self> {
@@ -88,11 +88,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
         })
     }
 
-    pub fn new_with_cols_len(
-        cols: i64,
-        key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<S>,
-    ) -> Result<Self> {
+    pub fn new_with_cols_len(cols: i64, key_ranges: Vec<KeyRange>, store: S) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
         Ok(IndexScanExecutor {
@@ -171,7 +167,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
     }
 }
 
-impl<S: Snapshot> Executor for IndexScanExecutor<S> {
+impl<S: Store> Executor for IndexScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
