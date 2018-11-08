@@ -15,15 +15,16 @@ mod arrow;
 
 use test::Bencher;
 
+use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tipb::expression::FieldType;
 
 use tikv::coprocessor::codec::chunk::{Chunk, ChunkEncoder};
 use tikv::coprocessor::codec::datum::Datum;
 use tikv::coprocessor::codec::mysql::*;
 
-fn field_type(tp: u8) -> FieldType {
+fn field_type(tp: FieldTypeTp) -> FieldType {
     let mut fp = FieldType::new();
-    fp.set_tp(i32::from(tp));
+    fp.as_mut_accessor().set_tp(tp);
     fp
 }
 
@@ -31,12 +32,12 @@ fn field_type(tp: u8) -> FieldType {
 fn bench_encode_chunk(b: &mut Bencher) {
     let rows = 1024;
     let fields = vec![
-        field_type(types::LONG_LONG),
-        field_type(types::LONG_LONG),
-        field_type(types::VARCHAR),
-        field_type(types::VARCHAR),
-        field_type(types::NEW_DECIMAL),
-        field_type(types::JSON),
+        field_type(FieldTypeTp::LongLong),
+        field_type(FieldTypeTp::LongLong),
+        field_type(FieldTypeTp::VarChar),
+        field_type(FieldTypeTp::VarChar),
+        field_type(FieldTypeTp::NewDecimal),
+        field_type(FieldTypeTp::JSON),
     ];
     let mut chunk = Chunk::new(&fields, rows);
     for row_id in 0..rows {
@@ -61,7 +62,10 @@ fn bench_encode_chunk(b: &mut Bencher) {
 #[bench]
 fn bench_chunk_build_tidb(b: &mut Bencher) {
     let rows = 1024;
-    let fields = vec![field_type(types::LONG_LONG), field_type(types::LONG_LONG)];
+    let fields = vec![
+        field_type(FieldTypeTp::LongLong),
+        field_type(FieldTypeTp::LongLong),
+    ];
 
     b.iter(|| {
         let mut chunk = Chunk::new(&fields, rows);
@@ -75,7 +79,10 @@ fn bench_chunk_build_tidb(b: &mut Bencher) {
 #[bench]
 fn bench_chunk_build_offical(b: &mut Bencher) {
     let rows = 1024;
-    let fields = vec![field_type(types::LONG_LONG), field_type(types::LONG_LONG)];
+    let fields = vec![
+        field_type(FieldTypeTp::LongLong),
+        field_type(FieldTypeTp::LongLong),
+    ];
 
     b.iter(|| {
         let mut chunk = arrow::ChunkBuilder::new(fields.len(), rows);
@@ -90,7 +97,10 @@ fn bench_chunk_build_offical(b: &mut Bencher) {
 #[bench]
 fn bench_chunk_iter_tidb(b: &mut Bencher) {
     let rows = 1024;
-    let fields = vec![field_type(types::LONG_LONG), field_type(types::DOUBLE)];
+    let fields = vec![
+        field_type(FieldTypeTp::LongLong),
+        field_type(FieldTypeTp::Double),
+    ];
     let mut chunk = Chunk::new(&fields, rows);
     for row_id in 0..rows {
         if row_id & 1 == 0 {
@@ -123,7 +133,10 @@ fn bench_chunk_iter_tidb(b: &mut Bencher) {
 #[bench]
 fn bench_chunk_iter_offical(b: &mut Bencher) {
     let rows = 1024;
-    let fields = vec![field_type(types::LONG_LONG), field_type(types::DOUBLE)];
+    let fields = vec![
+        field_type(FieldTypeTp::LongLong),
+        field_type(FieldTypeTp::Double),
+    ];
     let mut chunk = arrow::ChunkBuilder::new(fields.len(), rows);
     for row_id in 0..rows {
         if row_id & 1 == 0 {
