@@ -15,7 +15,7 @@ use super::{EvalContext, Result, ScalarFunc};
 use chrono::offset::TimeZone;
 use chrono::Datelike;
 use coprocessor::codec::error::Error;
-use coprocessor::codec::mysql::{self, Time};
+use coprocessor::codec::mysql::{Time, TimeType};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
@@ -49,7 +49,7 @@ impl ScalarFunc {
         let e = match self.children[0].eval_time(ctx, row)? {
             Some(mut t) => if !t.is_zero() {
                 let mut res = t.to_mut().clone();
-                res.set_tp(mysql::types::DATE).unwrap();
+                res.set_time_type(TimeType::Date).unwrap();
                 return Ok(Some(Cow::Owned(res)));
             } else {
                 Error::incorrect_datetime_value(&format!("{}", t))
@@ -74,6 +74,30 @@ impl ScalarFunc {
             None => Error::incorrect_datetime_value("None"),
         };
         Error::handle_invalid_time_error(ctx, e).map(|_| Ok(None))?
+    }
+
+    #[inline]
+    pub fn month_name<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
+            Ok(None) => return Ok(None),
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ).map(|_| None);
+        }
+        use coprocessor::codec::mysql::time::MONTH_NAMES;
+        let month = t.get_time().month() as usize;
+        Ok(Some(Cow::Owned(
+            MONTH_NAMES[month - 1].to_string().into_bytes(),
+        )))
     }
 
     #[inline]
@@ -297,6 +321,53 @@ mod tests {
             Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
         ));
         let f = scalar_func_expr(ScalarFuncSig::Month, &[arg]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        op.eval(&mut ctx, &[]).unwrap_err();
+    }
+
+    #[test]
+    fn test_month_name() {
+        let tests = vec![
+            ("2018-01-01 00:00:00.000000", "January"),
+            ("2018-02-01 00:00:00.000000", "February"),
+            ("2018-03-01 00:00:00.000000", "March"),
+            ("2018-04-01 00:00:00.000000", "April"),
+            ("2018-05-01 00:00:00.000000", "May"),
+            ("2018-06-01 00:00:00.000000", "June"),
+            ("2018-07-01 00:00:00.000000", "July"),
+            ("2018-08-01 00:00:00.000000", "August"),
+            ("2018-09-01 00:00:00.000000", "September"),
+            ("2018-10-01 00:00:00.000000", "October"),
+            ("2018-11-01 00:00:00.000000", "November"),
+            ("2018-12-01 00:00:00.000000", "December"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in tests {
+            let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
+            let exp = Datum::Bytes(exp.as_bytes().to_vec());
+            let f = scalar_func_expr(ScalarFuncSig::MonthName, &[arg]);
+            let op = Expression::build(&mut ctx, f).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        // test NULL case
+        let input = datum_expr(Datum::Null);
+        let f = scalar_func_expr(ScalarFuncSig::MonthName, &[input]);
+        let op = Expression::build(&mut ctx, f).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
+
+        //  test zero case
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        let arg = datum_expr(Datum::Time(
+            Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap(),
+        ));
+        let f = scalar_func_expr(ScalarFuncSig::MonthName, &[arg]);
         let op = Expression::build(&mut ctx, f).unwrap();
         op.eval(&mut ctx, &[]).unwrap_err();
     }

@@ -12,15 +12,17 @@
 // limitations under the License.
 
 use base64;
-use hex;
-use hex::FromHex;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::i64;
 
+use hex::{self, FromHex};
+
+use cop_datatype::prelude::*;
+use cop_datatype::{self, FieldTypeFlag};
+
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::types;
-use coprocessor::codec::{mysql, Datum};
+use coprocessor::codec::Datum;
 use safemem;
 
 const SPACE: u8 = 0o40u8;
@@ -76,7 +78,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn char_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        if types::is_binary_str(self.children[0].get_tp()) {
+        if self.children[0].field_type().is_binary_string_like() {
             let input = try_opt!(self.children[0].eval_string(ctx, row));
             return Ok(Some(input.len() as i64));
         }
@@ -215,7 +217,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        if types::is_binary_str(self.children[0].get_tp()) {
+        if self.children[0].field_type().is_binary_string_like() {
             let s = try_opt!(self.children[0].eval_string(ctx, row));
             return Ok(Some(s));
         }
@@ -229,7 +231,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        if types::is_binary_str(self.children[0].get_tp()) {
+        if self.children[0].field_type().is_binary_string_like() {
             let s = try_opt!(self.children[0].eval_string(ctx, row));
             return Ok(Some(s));
         }
@@ -334,7 +336,9 @@ impl ScalarFunc {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
 
         // TODO: check with maxAllowedPacket
-        if self.tp.get_flen() == -1 || self.tp.get_flen() > types::MAX_BLOB_WIDTH {
+        if self.field_type.get_flen() == -1
+            || self.field_type.get_flen() > cop_datatype::MAX_BLOB_WIDTH
+        {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
@@ -359,21 +363,17 @@ impl ScalarFunc {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
 
         let input_copy = strip_whitespace(&input);
-
         let will_overflow = input_copy
             .len()
             .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
             .is_none();
-
         // mysql will return "" when the input is incorrectly padded
         let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
-
         if will_overflow || invalid_padding {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
         // TODO: check with maxAllowedPacket
-
         match base64::decode_config(&input_copy, base64::STANDARD) {
             Ok(r) => Ok(Some(Cow::Owned(r))),
             _ => Ok(None),
@@ -392,7 +392,11 @@ impl ScalarFunc {
         if delim.is_empty() || count == 0 {
             return Ok(Some(Cow::Borrowed(b"")));
         }
-        let r = if mysql::has_unsigned_flag(self.children[2].get_tp().get_flag()) {
+        let r = if self.children[2]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             substring_index_positive(&s, delim.as_ref(), count as u64 as usize)
         } else if count >= 0 {
             substring_index_positive(&s, delim.as_ref(), count as usize)
@@ -500,14 +504,15 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
-    use coprocessor::codec::mysql::charset::{CHARSET_BIN, COLLATION_BIN_ID};
-    use coprocessor::codec::mysql::types::{BINARY_FLAG, VAR_STRING};
+    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use coprocessor::codec::mysql::charset::CHARSET_BIN;
+    use tipb::expression::{Expr, ScalarFuncSig};
+
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::tests::{
         col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
     };
     use coprocessor::dag::expr::{EvalContext, Expression};
-    use tipb::expression::{Expr, ScalarFuncSig};
 
     #[test]
     fn test_length() {
@@ -759,11 +764,11 @@ mod tests {
         for (arg, exp) in cases {
             let input = string_datum_expr_with_tp(
                 arg,
-                VAR_STRING,
-                BINARY_FLAG,
+                FieldTypeTp::VarString,
+                FieldTypeFlag::BINARY,
                 -1,
                 CHARSET_BIN.to_owned(),
-                COLLATION_BIN_ID,
+                Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::ReverseBinary, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
@@ -985,11 +990,11 @@ mod tests {
         for (input, exp) in cases {
             let input = string_datum_expr_with_tp(
                 input,
-                VAR_STRING,
-                BINARY_FLAG,
+                FieldTypeTp::VarString,
+                FieldTypeFlag::BINARY,
                 -1,
                 CHARSET_BIN.to_owned(),
-                COLLATION_BIN_ID,
+                Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
@@ -1080,11 +1085,11 @@ mod tests {
         for (input, exp) in cases {
             let input = string_datum_expr_with_tp(
                 input,
-                VAR_STRING,
-                BINARY_FLAG,
+                FieldTypeTp::VarString,
+                FieldTypeFlag::BINARY,
                 -1,
                 CHARSET_BIN.to_owned(),
-                COLLATION_BIN_ID,
+                Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::Lower, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
@@ -1203,11 +1208,11 @@ mod tests {
         for (input, exp) in cases {
             let input = string_datum_expr_with_tp(
                 input,
-                VAR_STRING,
-                BINARY_FLAG,
+                FieldTypeTp::VarString,
+                FieldTypeFlag::BINARY,
                 -1,
                 CHARSET_BIN.to_owned(),
-                COLLATION_BIN_ID,
+                Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::CharLength, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
