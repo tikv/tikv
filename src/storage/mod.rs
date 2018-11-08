@@ -1874,13 +1874,7 @@ mod tests {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
         let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        expect_none(
-            storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
-                .wait(),
-        );
         storage
             .async_prewrite(
                 Context::new(),
@@ -1894,36 +1888,6 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                no_expect_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                no_expect_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                no_expect_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
                 vec![Mutation::Put((Key::from_raw(b"x"), b"101".to_vec()))],
                 b"x".to_vec(),
                 101,
@@ -1931,10 +1895,9 @@ mod tests {
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
-
-        for _ in 1..5 + 1 {
-            rx.recv().unwrap();
-        }
+        storage.start(&config).unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
         storage
             .async_prewrite(
                 Context::new(),
