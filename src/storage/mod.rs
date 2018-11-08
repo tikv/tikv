@@ -1480,12 +1480,6 @@ mod tests {
         }
     }
 
-    fn no_expect_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
-        Box::new(move |_x: Result<T>| {
-            done.send(id).unwrap();
-        })
-    }
-
     fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             x.unwrap();
@@ -2035,15 +2029,10 @@ mod tests {
     fn test_sched_too_busy() {
         let read_pool = new_read_pool();
         let mut config = Config::default();
-        config.scheduler_pending_write_threshold = ReadableSize(36);
+        config.scheduler_pending_write_threshold = ReadableSize(1);
         let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        expect_none(
-            storage
-                .async_get(Context::new(), Key::from_raw(b"x"), 100)
-                .wait(),
-        );
+
         storage
             .async_prewrite(
                 Context::new(),
@@ -2052,46 +2041,6 @@ mod tests {
                 100,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                no_expect_callback(tx.clone(), 1),
-            )
-            .unwrap();
-        storage
-            .async_prewrite(
-                Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
-                no_expect_callback(tx.clone(), 1),
             )
             .unwrap();
         storage
@@ -2104,10 +2053,7 @@ mod tests {
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
-        rx.recv().unwrap();
-        rx.recv().unwrap();
-        rx.recv().unwrap();
-        rx.recv().unwrap();
+        storage.start(&config).unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage
