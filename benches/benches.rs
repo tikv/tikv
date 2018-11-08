@@ -19,6 +19,7 @@ extern crate crossbeam_channel;
 extern crate kvproto;
 extern crate log;
 extern crate mio;
+extern crate num_traits;
 extern crate protobuf;
 extern crate raft;
 extern crate rand;
@@ -27,6 +28,7 @@ extern crate tempdir;
 extern crate test;
 extern crate tipb;
 
+extern crate cop_datatype;
 extern crate test_storage;
 extern crate test_util;
 extern crate tikv;

@@ -20,7 +20,9 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::{
+    self, Engine, Key, KvPair, Mutation, Options, Result, Storage, TestEngineBuilder, Value,
+};
 use tikv::util::collections::HashMap;
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
@@ -31,7 +33,8 @@ pub struct SyncStorage<E: Engine> {
 
 impl SyncStorage<RocksEngine> {
     pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
-        let storage = Storage::new(config, read_pool).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
@@ -95,20 +98,8 @@ impl<E: Engine> SyncStorage<E> {
     pub fn scan(
         &self,
         ctx: Context,
-        key: Key,
-        limit: usize,
-        key_only: bool,
-        start_ts: u64,
-    ) -> Result<Vec<Result<KvPair>>> {
-        self.store
-            .async_scan(ctx, key, limit, start_ts, Options::new(0, false, key_only))
-            .wait()
-    }
-
-    pub fn reverse_scan(
-        &self,
-        ctx: Context,
-        key: Key,
+        start_key: Key,
+        end_key: Option<Key>,
         limit: usize,
         key_only: bool,
         start_ts: u64,
@@ -116,7 +107,29 @@ impl<E: Engine> SyncStorage<E> {
         self.store
             .async_scan(
                 ctx,
-                key,
+                start_key,
+                end_key,
+                limit,
+                start_ts,
+                Options::new(0, false, key_only),
+            )
+            .wait()
+    }
+
+    pub fn reverse_scan(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Option<Key>,
+        limit: usize,
+        key_only: bool,
+        start_ts: u64,
+    ) -> Result<Vec<Result<KvPair>>> {
+        self.store
+            .async_scan(
+                ctx,
+                start_key,
+                end_key,
                 limit,
                 start_ts,
                 Options::new(0, false, key_only).reverse_scan(),

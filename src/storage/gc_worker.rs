@@ -525,8 +525,7 @@ mod tests {
     use futures::Future;
     use server::readpool::{self, ReadPool};
     use std::collections::BTreeMap;
-    use storage::engine::{new_local_engine, TEMP_DIR};
-    use storage::{Config, Mutation, Options, ReadPoolContext, Storage, ALL_CFS};
+    use storage::{Config, Mutation, Options, ReadPoolContext, Storage, TestEngineBuilder};
     use util::worker::FutureWorker;
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
@@ -536,6 +535,7 @@ mod tests {
             .async_scan(
                 Context::default(),
                 Key::from_encoded_slice(b""),
+                None,
                 expected_data.len() + 1,
                 1,
                 Options::default(),
@@ -560,7 +560,7 @@ mod tests {
     ) -> Result<()> {
         // Return Result from this function so we can use the `wait_op` macro here.
 
-        let engine = new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
 
         let pd_worker = FutureWorker::new("test-pd-worker");

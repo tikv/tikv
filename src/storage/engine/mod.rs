@@ -18,14 +18,12 @@ use std::fmt::Debug;
 use std::time::Duration;
 use std::{error, result};
 
-use config;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use raftstore::store::engine::IterOption;
 use raftstore::store::{SeekRegionFilter, SeekRegionResult};
-use rocksdb::{ColumnFamilyOptions, TablePropertiesCollection};
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::rocksdb::CFOptions;
+use rocksdb::TablePropertiesCollection;
+use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 mod cursor_builder;
 mod metrics;
@@ -35,10 +33,8 @@ mod rocksdb;
 
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb::{RocksEngine, RocksSnapshot};
+pub use self::rocksdb::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 
-// only used for rocksdb without persistent.
-pub const TEMP_DIR: &str = "";
 pub const SEEK_BOUND: u64 = 8;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -626,23 +622,6 @@ impl<I: Iterator> Cursor<I> {
     }
 }
 
-/// Create a local Rocskdb engine. (Without raft, mainly for tests).
-pub fn new_local_engine(path: &str, cfs: &[CfName]) -> Result<RocksEngine> {
-    let mut cfs_opts = Vec::with_capacity(cfs.len());
-    let cfg_rocksdb = config::DbConfig::default();
-    for cf in cfs {
-        let cf_opt = match *cf {
-            CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
-            CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
-            CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
-            CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
-            _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
-        };
-        cfs_opts.push(cf_opt);
-    }
-    RocksEngine::new(path, cfs, Some(cfs_opts))
-}
-
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -799,8 +778,10 @@ pub mod tests {
 
     #[test]
     fn rocksdb() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
-        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        let engine = TestEngineBuilder::new()
+            .cfs(TEST_ENGINE_CFS)
+            .build()
+            .unwrap();
 
         test_get_put(&engine);
         test_batch(&engine);
@@ -815,11 +796,19 @@ pub mod tests {
     fn rocksdb_reopen() {
         let dir = TempDir::new("rocksdb_test").unwrap();
         {
-            let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+            let engine = TestEngineBuilder::new()
+                .path(dir.path())
+                .cfs(TEST_ENGINE_CFS)
+                .build()
+                .unwrap();
             must_put_cf(&engine, "cf", b"k", b"v1");
         }
         {
-            let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+            let engine = TestEngineBuilder::new()
+                .path(dir.path())
+                .cfs(TEST_ENGINE_CFS)
+                .build()
+                .unwrap();
             assert_has_cf(&engine, "cf", b"k", b"v1");
         }
     }
@@ -1063,8 +1052,10 @@ pub mod tests {
     // TODO: refactor engine tests
     #[test]
     fn test_linear() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
-        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        let engine = TestEngineBuilder::new()
+            .cfs(TEST_ENGINE_CFS)
+            .build()
+            .unwrap();
         for i in 50..50 + SEEK_BOUND * 10 {
             let key = format!("key_{}", i * 2);
             let value = format!("value_{}", i);
@@ -1126,8 +1117,10 @@ pub mod tests {
 
     #[test]
     fn test_statistics() {
-        let dir = TempDir::new("rocksdb_statistics_test").unwrap();
-        let engine = new_local_engine(dir.path().to_str().unwrap(), TEST_ENGINE_CFS).unwrap();
+        let engine = TestEngineBuilder::new()
+            .cfs(TEST_ENGINE_CFS)
+            .build()
+            .unwrap();
 
         must_put(&engine, b"foo", b"bar1");
         must_put(&engine, b"foo2", b"bar2");

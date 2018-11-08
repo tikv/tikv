@@ -13,9 +13,12 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::fs::File;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{io, u64};
 use std::{slice, thread};
@@ -48,6 +51,32 @@ pub mod worker;
 
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
+
+static PANIC_MARK: AtomicBool = AtomicBool::new(false);
+
+pub fn set_panic_mark() {
+    PANIC_MARK.store(true, Ordering::SeqCst);
+}
+
+pub fn panic_mark_is_on() -> bool {
+    PANIC_MARK.load(Ordering::SeqCst)
+}
+
+pub const PANIC_MARK_FILE: &str = "panic_mark_file";
+
+pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
+    data_dir.as_ref().join(PANIC_MARK_FILE)
+}
+
+pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
+    let file = panic_mark_file_path(data_dir);
+    File::create(&file).unwrap();
+}
+
+pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
+    let path = panic_mark_file_path(data_dir);
+    file::file_exists(path)
+}
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
@@ -421,7 +450,11 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(panic_abort: bool, guard: Option<::slog_scope::GlobalLoggerGuard>) {
+pub fn set_exit_hook(
+    panic_abort: bool,
+    guard: Option<::slog_scope::GlobalLoggerGuard>,
+    data_dir: &str,
+) {
     use std::panic;
     use std::process;
     use std::sync::Mutex;
@@ -444,6 +477,7 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<::slog_scope::GlobalLogger
     // Hold the guard.
     let log_guard = Mutex::new(guard);
 
+    let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &panic::PanicInfo| {
         if log_enabled!(::log::LogLevel::Error) {
@@ -474,6 +508,11 @@ pub fn set_exit_hook(panic_abort: bool, guard: Option<::slog_scope::GlobalLogger
         // To collect remaining logs, drop the guard before exit.
         drop(log_guard.lock().unwrap().take());
 
+        // If PANIC_MARK is true, create panic mark file.
+        if panic_mark_is_on() {
+            create_panic_mark_file(data_dir.clone());
+        }
+
         if panic_abort {
             process::abort();
         } else {
@@ -491,6 +530,22 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
+
+    use tempdir::TempDir;
+
+    #[test]
+    fn test_panic_mark_file_path() {
+        let dir = TempDir::new("test_panic_mark_file_path").unwrap();
+        let panic_mark_file = panic_mark_file_path(dir.path());
+        assert_eq!(panic_mark_file, dir.path().join(PANIC_MARK_FILE))
+    }
+
+    #[test]
+    fn test_panic_mark_file_exists() {
+        let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
+        create_panic_mark_file(dir.path());
+        assert!(panic_mark_file_exists(dir.path()));
+    }
 
     #[test]
     fn test_to_socket_addr() {
