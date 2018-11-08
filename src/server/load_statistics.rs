@@ -142,7 +142,7 @@ mod tests {
         }
         stats.record(Instant::now());
         match load.load() {
-            80...100 => {},
+            80...100 => {}
             e => panic!("the load must be heavy than 80, but got {}", e),
         }
     }
