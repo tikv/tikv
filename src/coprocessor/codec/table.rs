@@ -417,7 +417,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
     use tipb::schema::ColumnInfo;

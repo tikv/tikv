@@ -318,7 +318,7 @@ pub fn read_u8(data: &mut BytesSlice) -> Result<u8> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use util::codec::Error;
 

@@ -54,7 +54,7 @@ fn test_raft_storage() {
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(
         storage
-            .scan(ctx.clone(), key.clone(), 1, false, 20)
+            .scan(ctx.clone(), key.clone(), None, 1, false, 20)
             .is_err()
     );
     assert!(
@@ -158,7 +158,7 @@ fn test_raft_storage_store_not_match() {
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(
         storage
-            .scan(ctx.clone(), key.clone(), 1, false, 20)
+            .scan(ctx.clone(), key.clone(), None, 1, false, 20)
             .is_err()
     );
     assert!(
