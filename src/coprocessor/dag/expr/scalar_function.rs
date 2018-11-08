@@ -14,11 +14,13 @@
 use std::borrow::Cow;
 use std::usize;
 
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 use tipb::expression::ScalarFuncSig;
 
 use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Time};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::codec::Datum;
 
 impl ScalarFunc {
@@ -174,6 +176,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Date
             | ScalarFuncSig::LastDay
             | ScalarFuncSig::Month
+            | ScalarFuncSig::MonthName
             | ScalarFuncSig::Year
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
@@ -264,7 +267,8 @@ impl ScalarFunc {
             | ScalarFuncSig::IfJson
             | ScalarFuncSig::LikeSig
             | ScalarFuncSig::Conv
-            | ScalarFuncSig::Trim3Args => (3, 3),
+            | ScalarFuncSig::Trim3Args
+            | ScalarFuncSig::SubstringIndex => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -399,7 +403,6 @@ impl ScalarFunc {
             | ScalarFuncSig::MakeTime
             | ScalarFuncSig::MicroSecond
             | ScalarFuncSig::Minute
-            | ScalarFuncSig::MonthName
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
@@ -453,7 +456,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubStringAndString
             | ScalarFuncSig::SubstringBinary2Args
             | ScalarFuncSig::SubstringBinary3Args
-            | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::SubTimeStringNull
@@ -611,7 +613,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$i_sig => {
                         match self.$i_func(ctx, row, $($i_arg)*) {
                             Ok(Some(i)) => {
-                                if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
+                                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                                     Ok(Datum::U64(i as u64))
                                 } else {
                                     Ok(Datum::I64(i))
@@ -906,6 +908,7 @@ dispatch_call! {
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
+        MonthName => month_name,
         Bin => bin,
         Concat => concat,
         LTrim => ltrim,
@@ -926,6 +929,7 @@ dispatch_call! {
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
         Trim3Args => trim_3_args,
+        SubstringIndex => substring_index,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1238,6 +1242,7 @@ mod tests {
                     ScalarFuncSig::LikeSig,
                     ScalarFuncSig::Conv,
                     ScalarFuncSig::Trim3Args,
+                    ScalarFuncSig::SubstringIndex,
                 ],
                 3,
                 3,
@@ -1411,7 +1416,6 @@ mod tests {
             ScalarFuncSig::MakeTime,
             ScalarFuncSig::MicroSecond,
             ScalarFuncSig::Minute,
-            ScalarFuncSig::MonthName,
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
@@ -1465,7 +1469,6 @@ mod tests {
             ScalarFuncSig::SubStringAndString,
             ScalarFuncSig::SubstringBinary2Args,
             ScalarFuncSig::SubstringBinary3Args,
-            ScalarFuncSig::SubstringIndex,
             ScalarFuncSig::SubTimeDateTimeNull,
             ScalarFuncSig::SubTimeDurationNull,
             ScalarFuncSig::SubTimeStringNull,
