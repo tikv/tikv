@@ -328,20 +328,18 @@ impl ScalarFunc {
         if delim.is_empty() || count == 0 {
             return Ok(Some(Cow::Borrowed(b"")));
         }
-        let r = if self.children[2]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
-            substring_index_positive(&s, delim.as_ref(), count as u64 as usize)
-        } else if count >= 0 {
-            substring_index_positive(&s, delim.as_ref(), count as usize)
+
+        let (count, is_positive) = i64_to_usize(
+            count,
+            self.children[2]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED),
+        );
+
+        let r = if is_positive {
+            substring_index_positive(&s, delim.as_ref(), count)
         } else {
-            let count = if count == i64::min_value() {
-                i64::max_value() as usize + 1
-            } else {
-                -count as usize
-            };
             substring_index_negative(&s, delim.as_ref(), count)
         };
         Ok(Some(Cow::Owned(r.into_bytes())))
@@ -359,16 +357,27 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
-        let start = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
-            find_start(pos as u64 as usize, s.char_indices())
-        } else if pos > 0 {
-            find_start(pos as usize, s.char_indices())
+        // we need to check the unsigned_flag , othewise a input larger than
+        // i64::max_value() will overflow to a negative number
+        let (pos, positive_search) = i64_to_usize(
+            pos,
+            self.children[1]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED),
+        );
+
+        let start = if positive_search {
+            s.char_indices()
+                .enumerate()
+                .find(|(cnt, _)| cnt + 1 == pos)
+                .map(|(_, (i, _))| i)
         } else {
-            let pos = 0_i64
-                .checked_sub(pos)
-                .map(|i| i as usize)
-                .unwrap_or_else(|| i64::max_value() as usize + 1);
-            find_start(pos, s.char_indices().rev())
+            s.char_indices()
+                .rev()
+                .enumerate()
+                .find(|(cnt, _)| cnt + 1 == pos)
+                .map(|(_, (i, _))| i)
         };
 
         if let Some(start) = start {
@@ -387,31 +396,26 @@ impl ScalarFunc {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pos = try_opt!(self.children[1].eval_int(ctx, row));
         let len = try_opt!(self.children[2].eval_int(ctx, row));
-        let mut positive_search = true;
 
-        let pos = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
-            pos as u64 as usize
-        } else if pos > 0 {
-            pos as usize
-        } else {
-            positive_search = false;
-            0_i64
-                .checked_sub(pos)
-                .map(|i| i as usize)
-                .unwrap_or_else(|| i64::max_value() as usize + 1)
-        };
+        let (pos, positive_search) = i64_to_usize(
+            pos,
+            self.children[1]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED),
+        );
+        let (len, len_positive) = i64_to_usize(
+            len,
+            self.children[2]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED),
+        );
 
-        let len = if mysql::has_unsigned_flag(self.children[2].get_tp().get_flag()) {
-            len as u64 as usize
-        } else if len > 0 {
-            len as usize
-        } else {
-            0
-        };
-
-        if pos == 0 || len == 0 {
+        if pos == 0 || len == 0 || !len_positive {
             return Ok(Some(Cow::Borrowed(b"")));
         }
+
         let mut start = None;
         let end = if positive_search {
             s.char_indices()
@@ -453,14 +457,30 @@ impl ScalarFunc {
     }
 }
 
+// Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
+//
+// # Examples
+// ```
+// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
+// assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
+// assert_eq!(i64_to_usize(-1_i64, false), (1_usize, false));
+// assert_eq!(i64_to_usize(u64::max_value() as i64, true), (u64::max_value() as usize, true));
+// assert_eq!(i64_to_usize(u64::max_value() as i64, false), (1_usize, false));
+// ```
 #[inline]
-fn find_start<I>(pos: usize, ci: I) -> Option<usize>
-where
-    I: Iterator<Item = (usize, char)>,
-{
-    ci.enumerate()
-        .find(|(cnt, _)| cnt + 1 == pos)
-        .map(|(_, (i, _))| i)
+fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
+    if is_unsigned {
+        (i as u64 as usize, true)
+    } else if i >= 0 {
+        (i as usize, true)
+    } else {
+        let i = if i == i64::min_value() {
+            i64::max_value() as usize + 1
+        } else {
+            -i as usize
+        };
+        (i, false)
+    }
 }
 
 #[inline]
@@ -1572,6 +1592,11 @@ mod tests {
         let tests = vec![
             ("中文a测试bb", 1, "中文a测试bb"),
             ("中文a测试bb", 2, "文a测试bb"),
+            ("中文a测试bb", 7, "b"),
+            ("中文a测试bb", 8, ""),
+            ("中文a测试bb", -6, "文a测试bb"),
+            ("中文a测试bb", -7, "中文a测试bb"),
+            ("中文a测试bb", -8, ""),
             ("中文a测a试", -1, "试"),
             ("中文a测a试", -2, "a试"),
             ("Quadratically", 5, "ratically"),
