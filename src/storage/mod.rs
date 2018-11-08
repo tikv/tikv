@@ -1556,7 +1556,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1604,13 +1604,15 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TestStorageBuilder::new()
+        let mut storage = TestStorageBuilder::new()
             .engine(engine)
             .build_and_start()
             .unwrap();
@@ -1670,11 +1672,13 @@ mod tests {
                 )
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_scan() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1895,11 +1899,13 @@ mod tests {
                 )
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_batch_get() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1959,11 +1965,13 @@ mod tests {
                 )
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_txn() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2033,13 +2041,15 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let storage = TestStorageBuilder::new()
+        let mut storage = TestStorageBuilder::new()
             .config(&config)
             .build_and_start()
             .unwrap();
@@ -2082,11 +2092,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_cleanup() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2113,11 +2125,13 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_get_put() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -2156,13 +2170,15 @@ mod tests {
             b"100".to_vec(),
             storage.async_get(ctx, Key::from_raw(b"x"), 101).wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_no_block() {
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let storage = TestStorageBuilder::new()
+        let mut storage = TestStorageBuilder::new()
             .config(&config)
             .build_and_start()
             .unwrap();
@@ -2205,11 +2221,13 @@ mod tests {
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_delete_range() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         // Write x and y.
         storage
@@ -2301,11 +2319,13 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_delete_range() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = [
@@ -2415,11 +2435,13 @@ mod tests {
         }
 
         rx.recv().unwrap();
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_put() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2450,11 +2472,13 @@ mod tests {
                     .wait(),
             );
         }
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_get() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2488,11 +2512,13 @@ mod tests {
                 .async_raw_batch_get(Context::new(), "".to_string(), keys)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_delete() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2587,11 +2613,13 @@ mod tests {
                     .wait(),
             );
         }
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_scan() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2661,11 +2689,13 @@ mod tests {
                 .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_scan() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2847,11 +2877,13 @@ mod tests {
                 .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_scan_lock() {
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -3054,13 +3086,15 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_resolve_lock() {
         use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.
@@ -3181,5 +3215,7 @@ mod tests {
                 ts += 10;
             }
         }
+
+        storage.stop().unwrap();
     }
 }
