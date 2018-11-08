@@ -34,7 +34,7 @@ pub struct SyncStorage<E: Engine> {
 impl SyncStorage<RocksEngine> {
     pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
         let engine = TempRocksEngineBuilder::new().build().unwrap();
-        let storage = Storage::from_engine(engine, &config, read_pool).unwrap();
+        let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),
