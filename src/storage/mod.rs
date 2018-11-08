@@ -43,12 +43,13 @@ pub mod types;
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
-    new_local_engine, CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
-    FlowStatistics, Iterator, Modify, RocksEngine, ScanMode, Snapshot, Statistics,
-    StatisticsSummary, TEMP_DIR,
+    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
+    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
-pub use self::txn::{Msg, Scheduler, SnapshotStore, StoreScanner};
+#[cfg(test)]
+pub use self::txn::{FixtureStore, FixtureStoreScanner};
+pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -391,6 +392,63 @@ impl Options {
     }
 }
 
+/// A builder to build a temporary `Storage<RocksEngine>`.
+///
+/// Only used for test purpose.
+#[must_use]
+pub struct TestStorageBuilder {
+    config: Option<Config>,
+    engine: Option<RocksEngine>,
+}
+
+impl TestStorageBuilder {
+    pub fn new() -> Self {
+        Self {
+            config: None,
+            engine: None,
+        }
+    }
+
+    /// Customize the config of the `Storage`.
+    ///
+    /// By default, `Config::default()` will be used.
+    pub fn config(mut self, config: &Config) -> Self {
+        self.config = Some(config.clone());
+        self
+    }
+
+    /// Customize the engine of the `Storage`.
+    ///
+    /// By default, an engine created from `TestEngineBuilder` will be used.
+    pub fn engine(mut self, engine: RocksEngine) -> Self {
+        self.engine = Some(engine);
+        self
+    }
+
+    /// Build a `Storage<RocksEngine>`.
+    pub fn build_and_start(self) -> Result<Storage<RocksEngine>> {
+        use util::worker::FutureWorker;
+
+        let config = match self.config {
+            None => Config::default(),
+            Some(cfg) => cfg,
+        };
+        let read_pool = {
+            let pd_worker = FutureWorker::new("test-future–worker");
+            ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+                || ReadPoolContext::new(pd_worker.scheduler())
+            })
+        };
+        let engine = match self.engine {
+            None => TestEngineBuilder::new().build()?,
+            Some(e) => e,
+        };
+        let mut storage = Storage::from_engine(engine, &config, read_pool)?;
+        storage.start(&config)?;
+        Ok(storage)
+    }
+}
+
 #[derive(Clone)]
 pub struct Storage<E: Engine> {
     engine: E,
@@ -404,13 +462,6 @@ pub struct Storage<E: Engine> {
 
     // Storage configurations.
     max_key_size: usize,
-}
-
-impl Storage<RocksEngine> {
-    pub fn new(config: &Config, read_pool: ReadPool<ReadPoolContext>) -> Result<Self> {
-        let engine = engine::new_local_engine(&config.data_dir, ALL_CFS)?;
-        Storage::from_engine(engine, config, read_pool)
-    }
 }
 
 impl<E: Engine> Storage<E> {
@@ -589,32 +640,23 @@ impl<E: Engine> Storage<E> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                     );
-                    let result = snap_store
+                    let kv_pairs: Vec<_> = snap_store
                         .batch_get(&keys, &mut statistics)
-                        // map storage::txn::Error -> storage::Error
-                        .map_err(Error::from)
-                        .map(|results| results
-                            .into_iter()
-                            .zip(keys)
-                            .filter(|&(ref v, ref _k)|
-                                !(v.is_ok() && v.as_ref().unwrap().is_none())
-                            )
-                            .map(|(v, k)| match v {
-                                Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                Err(e) => Err(Error::from(e)),
-                                _ => unreachable!(),
-                            })
-                            .collect()
-                        )
-                        .map(|r: Vec<Result<KvPair>>| {
-                            thread_ctx.collect_key_reads(CMD, r.len() as u64);
-                            r
-                        });
+                        .into_iter()
+                        .zip(keys)
+                        .filter(|&(ref v, ref _k)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .map(|(v, k)| match v {
+                            Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                            Err(e) => Err(Error::from(e)),
+                            _ => unreachable!(),
+                        })
+                        .collect();
 
+                    thread_ctx.collect_key_reads(CMD, kv_pairs.len() as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
-                    result
+                    Ok(kv_pairs)
                 })
                 .then(move |r| {
                     _timer.observe_duration();
@@ -632,6 +674,7 @@ impl<E: Engine> Storage<E> {
         &self,
         ctx: Context,
         start_key: Key,
+        end_key: Option<Key>,
         limit: usize,
         start_ts: u64,
         options: Options,
@@ -661,19 +704,11 @@ impl<E: Engine> Storage<E> {
 
                     let mut scanner;
                     if !options.reverse_scan {
-                        scanner = snap_store.scanner(
-                            ScanMode::Forward,
-                            options.key_only,
-                            Some(start_key),
-                            None,
-                        )?;
+                        scanner =
+                            snap_store.scanner(false, options.key_only, Some(start_key), end_key)?;
                     } else {
-                        scanner = snap_store.scanner(
-                            ScanMode::Backward,
-                            options.key_only,
-                            None,
-                            Some(start_key),
-                        )?;
+                        scanner =
+                            snap_store.scanner(true, options.key_only, end_key, Some(start_key))?;
                     };
                     let res = scanner.scan(limit);
 
@@ -1454,7 +1489,6 @@ mod tests {
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
     use util::config::ReadableSize;
-    use util::worker::FutureWorker;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
@@ -1520,19 +1554,9 @@ mod tests {
         })
     }
 
-    fn new_read_pool() -> ReadPool<ReadPoolContext> {
-        let pd_worker = FutureWorker::new("test-future–worker");
-        ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
-        })
-    }
-
     #[test]
     fn test_get_put() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1580,17 +1604,18 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_cf_error() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
         // New engine lacks normal column families.
-        let engine = engine::new_local_engine(&config.data_dir, &["foo"]).unwrap();
-        let mut storage = Storage::from_engine(engine, &config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
+        let mut storage = TestStorageBuilder::new()
+            .engine(engine)
+            .build_and_start()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1630,6 +1655,7 @@ mod tests {
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"x"),
+                    None,
                     1000,
                     1,
                     Options::default(),
@@ -1646,15 +1672,13 @@ mod tests {
                 )
                 .wait(),
         );
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_scan() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1671,18 +1695,91 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        // Forward
         expect_multi_values(
             vec![None, None, None],
             storage
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"\x00"),
+                    None,
                     1000,
                     5,
                     Options::default(),
                 )
                 .wait(),
         );
+        // Backward
+        expect_multi_values(
+            vec![None, None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![None, None],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+
         storage
             .async_commit(
                 Context::new(),
@@ -1697,6 +1794,7 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        // Forward
         expect_multi_values(
             vec![
                 Some((b"a".to_vec(), b"aa".to_vec())),
@@ -1707,21 +1805,107 @@ mod tests {
                 .async_scan(
                     Context::new(),
                     Key::from_raw(b"\x00"),
+                    None,
                     1000,
                     5,
                     Options::default(),
                 )
                 .wait(),
         );
+        // Backward
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+                Some((b"a".to_vec(), b"aa".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+        // Forward with bound
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    Some(Key::from_raw(b"c")),
+                    1000,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with bound
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    Some(Key::from_raw(b"b")),
+                    1000,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+
+        // Forward with limit
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    2,
+                    5,
+                    Options::default(),
+                )
+                .wait(),
+        );
+        // Backward with limit
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"b".to_vec(), b"bb".to_vec())),
+            ],
+            storage
+                .async_scan(
+                    Context::new(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    2,
+                    5,
+                    Options::default().reverse_scan(),
+                )
+                .wait(),
+        );
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_batch_get() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1781,15 +1965,13 @@ mod tests {
                 )
                 .wait(),
         );
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_txn() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1859,16 +2041,18 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_sched_too_busy() {
-        let read_pool = new_read_pool();
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new()
+            .config(&config)
+            .build_and_start()
+            .unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1908,15 +2092,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_cleanup() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1943,15 +2125,13 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_get_put() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -1990,16 +2170,18 @@ mod tests {
             b"100".to_vec(),
             storage.async_get(ctx, Key::from_raw(b"x"), 101).wait(),
         );
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_no_block() {
-        let read_pool = new_read_pool();
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new()
+            .config(&config)
+            .build_and_start()
+            .unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -2045,10 +2227,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         // Write x and y.
         storage
@@ -2140,15 +2319,13 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
+
         storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_delete_range() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = [
@@ -2258,14 +2435,13 @@ mod tests {
         }
 
         rx.recv().unwrap();
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_put() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2296,14 +2472,13 @@ mod tests {
                     .wait(),
             );
         }
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_get() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2337,14 +2512,13 @@ mod tests {
                 .async_raw_batch_get(Context::new(), "".to_string(), keys)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_delete() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2439,14 +2613,13 @@ mod tests {
                     .wait(),
             );
         }
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_scan() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2516,14 +2689,13 @@ mod tests {
                 .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_scan() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2705,14 +2877,13 @@ mod tests {
                 .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true)
                 .wait(),
         );
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_scan_lock() {
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2915,16 +3086,15 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        storage.stop().unwrap();
     }
 
     #[test]
     fn test_resolve_lock() {
         use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let read_pool = new_read_pool();
-        let config = Config::default();
-        let mut storage = Storage::new(&config, read_pool).unwrap();
-        storage.start(&config).unwrap();
+        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.
@@ -3045,5 +3215,7 @@ mod tests {
                 ts += 10;
             }
         }
+
+        storage.stop().unwrap();
     }
 }

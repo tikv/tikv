@@ -114,6 +114,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
     }
 
+    if tikv_util::panic_mark_file_exists(&cfg.storage.data_dir) {
+        fatal!(
+            "panic_mark_file {:?} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&cfg.storage.data_dir)
+        );
+    }
+
     // Initialize raftstore channels.
     let mut event_loop = store::create_event_loop(&cfg.raft_store)
         .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
@@ -386,7 +393,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    tikv_util::set_exit_hook(false, Some(guard));
+    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     // Print version information.
     util::print_tikv_info();

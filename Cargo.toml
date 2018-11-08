@@ -77,10 +77,12 @@ crossbeam-channel = "0.2"
 crossbeam = "0.2"
 fxhash = "0.2"
 derive_more = "0.11.0"
-num = "0.2.0"
+num = "0.2"
+num-traits = "0.2"
 hex = "0.3"
 rust-crypto = "^0.2"
 panic_hook = { path = "components/panic_hook" }
+cop_datatype = { path = "components/cop_datatype" }
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
@@ -131,6 +133,7 @@ members = [
   "components/test_util",
   "components/codec",
   "components/panic_hook",
+  "components/cop_datatype",
 ]
 
 [profile.dev]
