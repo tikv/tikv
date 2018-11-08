@@ -1513,12 +1513,6 @@ mod tests {
         }
     }
 
-    fn no_expect_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
-        Box::new(move |_x: Result<T>| {
-            done.send(id).unwrap();
-        })
-    }
-
     fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             x.unwrap();
