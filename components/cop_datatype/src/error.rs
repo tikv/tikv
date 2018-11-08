@@ -11,22 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod chunk;
-mod column;
-
-pub use coprocessor::codec::{Error, Result};
-
-pub use self::chunk::{Chunk, ChunkEncoder};
-
-#[cfg(test)]
-mod tests {
-    use cop_datatype::FieldTypeAccessor;
-    use cop_datatype::FieldTypeTp;
-    use tipb::expression::FieldType;
-
-    pub fn field_type(tp: FieldTypeTp) -> FieldType {
-        let mut fp = FieldType::new();
-        fp.as_mut_accessor().set_tp(tp);
-        fp
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        UnsupportedType(name: String) {
+            display("Unsupported type {}", name)
+            description("Unsupported type")
+        }
     }
 }
+
+pub type Result<T> = ::std::result::Result<T, Error>;

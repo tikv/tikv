@@ -11,6 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::convert::TryInto;
+use std::str;
+
+use rand::XorShiftRng;
+
+use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+
+use cop_datatype::prelude::*;
+use coprocessor::codec::mysql::charset;
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use coprocessor::codec::{self, Datum};
+use util::codec::number;
+
 mod builtin_arithmetic;
 mod builtin_cast;
 mod builtin_compare;
@@ -32,16 +47,6 @@ mod scalar_function;
 pub use self::ctx::*;
 pub use coprocessor::codec::{Error, Result};
 
-use coprocessor::codec::mysql::{charset, types};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use coprocessor::codec::{self, Datum};
-use rand::XorShiftRng;
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::str;
-use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-use util::codec::number;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Constant(Constant),
@@ -52,13 +57,13 @@ pub enum Expression {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Column {
     offset: usize,
-    tp: FieldType,
+    field_type: FieldType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Constant {
     val: Datum,
-    tp: FieldType,
+    field_type: FieldType,
 }
 
 /// A single scalar function call
@@ -66,7 +71,7 @@ pub struct Constant {
 pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
-    tp: FieldType,
+    field_type: FieldType,
     cus_rng: CusRng,
 }
 
@@ -88,29 +93,26 @@ impl PartialEq for CusRng {
 }
 
 impl Expression {
-    fn new_const(v: Datum, field_type: FieldType) -> Expression {
-        Expression::Constant(Constant {
-            val: v,
-            tp: field_type,
-        })
+    fn new_const(val: Datum, field_type: FieldType) -> Expression {
+        Expression::Constant(Constant { val, field_type })
     }
 
     #[inline]
-    fn get_tp(&self) -> &FieldType {
+    fn field_type(&self) -> &FieldType {
         match *self {
-            Expression::Constant(ref c) => &c.tp,
-            Expression::ColumnRef(ref c) => &c.tp,
-            Expression::ScalarFn(ref c) => &c.tp,
+            Expression::Constant(ref c) => &c.field_type,
+            Expression::ColumnRef(ref c) => &c.field_type,
+            Expression::ScalarFn(ref c) => &c.field_type,
         }
     }
 
     #[cfg(test)]
     #[inline]
-    fn mut_tp(&mut self) -> &mut FieldType {
+    fn mut_field_type(&mut self) -> &mut FieldType {
         match *self {
-            Expression::Constant(ref mut c) => &mut c.tp,
-            Expression::ColumnRef(ref mut c) => &mut c.tp,
-            Expression::ScalarFn(ref mut c) => &mut c.tp,
+            Expression::Constant(ref mut c) => &mut c.field_type,
+            Expression::ColumnRef(ref mut c) => &mut c.field_type,
+            Expression::ScalarFn(ref mut c) => &mut c.field_type,
         }
     }
 
@@ -160,15 +162,15 @@ impl Expression {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, str>>> {
         let bytes = try_opt!(self.eval_string(ctx, row));
-        let chrst = self.get_tp().get_charset();
-        if charset::UTF8_CHARSETS.contains(&chrst) {
+        let charset = self.field_type().get_charset();
+        if charset::UTF8_CHARSETS.contains(&charset) {
             let s = match bytes {
                 Cow::Borrowed(bs) => str::from_utf8(bs).map_err(Error::from).map(Cow::Borrowed),
                 Cow::Owned(bs) => String::from_utf8(bs).map_err(Error::from).map(Cow::Owned),
             };
             return s.map(Some);
         }
-        Err(box_err!("unsupported charset: {}", chrst))
+        Err(box_err!("unsupported charset: {}", charset))
     }
 
     fn eval_time<'a, 'b: 'a>(
@@ -206,17 +208,6 @@ impl Expression {
             Expression::ScalarFn(ref f) => f.eval_json(ctx, row),
         }
     }
-
-    /// IsHybridType checks whether a ClassString expression is a hybrid type value which will
-    /// return different types of value in different context.
-    /// For ENUM/SET which is consist of a string attribute `Name` and an int attribute `Value`,
-    /// it will cause an error if we convert ENUM/SET to int as a string value.
-    /// For Bit/Hex, we will get a wrong result if we convert it to int as a string value.
-    /// For example, when convert `0b101` to int, the result should be 5, but we will get
-    /// 101 if we regard it as a string.
-    pub fn is_hybrid_type(&self) -> bool {
-        types::is_hybrid_type(self.get_tp().get_tp() as u8)
-    }
 }
 
 impl Expression {
@@ -239,44 +230,44 @@ impl Expression {
 
     pub fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<Self> {
         debug!("build expr:{:?}", expr);
-        let tp = expr.take_field_type();
+        let field_type = expr.take_field_type();
         match expr.get_tp() {
-            ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
+            ExprType::Null => Ok(Expression::new_const(Datum::Null, field_type)),
             ExprType::Int64 => number::decode_i64(&mut expr.get_val())
                 .map(Datum::I64)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
             ExprType::Uint64 => number::decode_u64(&mut expr.get_val())
                 .map(Datum::U64)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::String | ExprType::Bytes => {
-                Ok(Expression::new_const(Datum::Bytes(expr.take_val()), tp))
-            }
+            ExprType::String | ExprType::Bytes => Ok(Expression::new_const(
+                Datum::Bytes(expr.take_val()),
+                field_type,
+            )),
             ExprType::Float32 | ExprType::Float64 => number::decode_f64(&mut expr.get_val())
                 .map(Datum::F64)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
             ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
                 .map_err(Error::from)
                 .and_then(|i| {
-                    let fsp = tp.get_decimal() as i8;
-                    let t = tp.get_tp() as u8;
-                    Time::from_packed_u64(i, t, fsp, ctx.cfg.tz)
+                    let fsp = field_type.decimal() as i8;
+                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, ctx.cfg.tz)
                 })
-                .map(|t| Expression::new_const(Datum::Time(t), tp)),
+                .map(|t| Expression::new_const(Datum::Time(t), field_type)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
                 .map_err(Error::from)
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
-                .map(|e| Expression::new_const(e, tp)),
+                .map(|e| Expression::new_const(e, field_type)),
             ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
             ExprType::MysqlJson => Json::decode(&mut expr.get_val())
                 .map(Datum::Json)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
                 ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
@@ -288,7 +279,7 @@ impl Expression {
                         Expression::ScalarFn(ScalarFunc {
                             sig: expr.get_sig(),
                             children,
-                            tp,
+                            field_type,
                             cus_rng: CusRng {
                                 rng: RefCell::new(None),
                             },
@@ -297,7 +288,7 @@ impl Expression {
             }
             ExprType::ColumnRef => {
                 let offset = number::decode_i64(&mut expr.get_val()).map_err(Error::from)? as usize;
-                let column = Column { offset, tp };
+                let column = Column { offset, field_type };
                 Ok(Expression::ColumnRef(column))
             }
             unhandled => Err(box_err!("can't handle {:?} expr in DAG mode", unhandled)),
@@ -323,16 +314,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::{i64, u64};
+
+    use cop_datatype::{self, Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+
     use super::{Error, EvalConfig, EvalContext, Expression};
     use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use coprocessor::codec::mysql::json::JsonEncoder;
-    use coprocessor::codec::mysql::{
-        charset, types, Decimal, DecimalEncoder, Duration, Json, Time,
-    };
-    use coprocessor::codec::{convert, mysql, Datum};
-    use std::sync::Arc;
-    use std::{i64, u64};
-    use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
+    use coprocessor::codec::mysql::{charset, Decimal, DecimalEncoder, Duration, Json, Time};
+    use coprocessor::codec::{mysql, Datum};
     use util::codec::number::{self, NumberEncoder};
 
     #[inline]
@@ -385,22 +377,24 @@ mod tests {
 
     pub fn string_datum_expr_with_tp(
         datum: Datum,
-        tp: u8,
-        flag: u64,
-        flen: i32,
+        tp: FieldTypeTp,
+        flag: FieldTypeFlag,
+        flen: isize,
         charset: String,
-        collate: i32,
+        collate: Collation,
     ) -> Expr {
         let mut expr = Expr::new();
         match datum {
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
                 expr.set_val(bs);
-                expr.mut_field_type().set_tp(i32::from(tp));
-                expr.mut_field_type().set_flag(flag as u32);
-                expr.mut_field_type().set_flen(flen);
+                expr.mut_field_type()
+                    .as_mut_accessor()
+                    .set_tp(tp)
+                    .set_flag(flag)
+                    .set_flen(flen)
+                    .set_collation(collate);
                 expr.mut_field_type().set_charset(charset);
-                expr.mut_field_type().set_collate(collate);
             }
             Datum::Null => expr.set_tp(ExprType::Null),
             d => panic!("unsupport datum: {:?}", d),
@@ -422,7 +416,9 @@ mod tests {
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
                 buf.encode_u64(u).unwrap();
                 expr.set_val(buf);
-                expr.mut_field_type().set_flag(types::UNSIGNED_FLAG as u32);
+                expr.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
             }
             Datum::Bytes(bs) => {
                 expr.set_tp(ExprType::Bytes);
@@ -452,8 +448,9 @@ mod tests {
             Datum::Time(t) => {
                 expr.set_tp(ExprType::MysqlTime);
                 let mut ft = FieldType::new();
-                ft.set_tp(i32::from(t.get_tp()));
-                ft.set_decimal(i32::from(t.get_fsp()));
+                ft.as_mut_accessor()
+                    .set_tp(t.get_time_type().into())
+                    .set_decimal(isize::from(t.get_fsp()));
                 expr.set_field_type(ft);
                 let u = t.to_packed_u64();
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
@@ -555,9 +552,9 @@ mod tests {
                 .set_charset(charset::CHARSET_UTF8.to_owned());
             let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
-                .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
-            ex.mut_field_type()
-                .set_flen(convert::UNSPECIFIED_LENGTH as i32);
+                .as_mut_accessor()
+                .set_decimal(cop_datatype::UNSPECIFIED_LENGTH)
+                .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();
             if let Datum::F64(_) = exp {
@@ -569,7 +566,7 @@ mod tests {
         // cases for integer
         let cases = vec![
             (
-                Some(types::UNSIGNED_FLAG),
+                Some(FieldTypeFlag::UNSIGNED),
                 vec![Datum::U64(u64::MAX)],
                 Datum::U64(u64::MAX),
             ),
@@ -580,7 +577,9 @@ mod tests {
             let col_expr = col_expr(0);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
             if flag.is_some() {
-                ex.mut_field_type().set_flag(flag.unwrap() as u32);
+                ex.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(flag.unwrap());
             }
             let e = Expression::build(&mut ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();
