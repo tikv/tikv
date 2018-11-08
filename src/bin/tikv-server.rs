@@ -72,7 +72,7 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -111,6 +111,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         fatal!(
             "lock {:?} failed, maybe another instance is using this directory.",
             store_path
+        );
+    }
+
+    if tikv_util::panic_mark_file_exists(&cfg.storage.data_dir) {
+        fatal!(
+            "panic_mark_file {:?} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&cfg.storage.data_dir)
         );
     }
 
@@ -386,7 +393,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    tikv_util::panic_hook::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     // Print version information.
     util::print_tikv_info();
