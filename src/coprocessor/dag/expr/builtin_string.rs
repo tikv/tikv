@@ -335,7 +335,6 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
 
-        // TODO: check with maxAllowedPacket
         if self.field_type.get_flen() == -1
             || self.field_type.get_flen() > cop_datatype::MAX_BLOB_WIDTH
         {
@@ -373,7 +372,6 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
-        // TODO: check with maxAllowedPacket
         match base64::decode_config(&input_copy, base64::STANDARD) {
             Ok(r) => Ok(Some(Cow::Owned(r))),
             _ => Ok(None),
