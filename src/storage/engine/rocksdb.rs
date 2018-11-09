@@ -122,11 +122,17 @@ impl RocksEngine {
     }
 }
 
+impl Display for RocksEngine {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "RocksDB")
+    }
+}
+
 impl Debug for RocksEngine {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "Rocksdb [is_temp: {}]",
+            "RocksDB [is_temp: {}]",
             self.core.lock().unwrap().temp_dir.is_some()
         )
     }

@@ -22,12 +22,9 @@ use kvproto::tikvpb_grpc::TikvClient;
 
 use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
 use test_storage::new_raft_engine;
-use tikv::server::readpool::{self, ReadPool};
 use tikv::storage;
-use tikv::storage::config::Config;
 use tikv::storage::gc_worker::GC_MAX_PENDING_TASKS;
 use tikv::storage::*;
-use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
 #[test]
@@ -35,13 +32,9 @@ fn test_storage_gcworker_busy() {
     let _guard = ::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let pd_worker = FutureWorker::new("test-future–worker");
-    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(pd_worker.scheduler())
-    });
-    let config = Config::default();
-    let mut storage = Storage::from_engine(engine.clone(), &config, read_pool).unwrap();
-    storage.start(&config).unwrap();
+    let storage = TestStorageBuilder::from_engine(engine.clone())
+        .build()
+        .unwrap();
     fail::cfg(snapshot_fp, "pause").unwrap();
     let (tx1, rx1) = channel();
     // Schedule `GC_MAX_PENDING` GC requests.
@@ -93,15 +86,10 @@ fn test_scheduler_leader_change_twice() {
     let region0 = cluster.get_region(b"");
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
-    let config = Config::default();
-    let pd_worker = FutureWorker::new("test-future–worker");
-    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(pd_worker.scheduler())
-    });
-
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let mut storage0 = Storage::from_engine(engine0.clone(), &config, read_pool).unwrap();
-    storage0.start(&config).unwrap();
+    let storage0 = TestStorageBuilder::from_engine(engine0.clone())
+        .build()
+        .unwrap();
 
     let mut ctx0 = Context::new();
     ctx0.set_region_id(region0.get_id());

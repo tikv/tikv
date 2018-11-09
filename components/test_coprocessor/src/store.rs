@@ -17,11 +17,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use kvproto::kvrpcpb::Context;
 
-use test_storage::SyncStorage;
+use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tikv::coprocessor::codec::{datum, table, Datum};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::{self, Engine, Key, Mutation};
-use tikv::util::worker::FutureWorker;
+use tikv::storage::{Engine, Key, Mutation};
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,
@@ -102,19 +100,15 @@ impl<'a, E: Engine> Delete<'a, E> {
 }
 
 pub struct Store<E: Engine> {
-    store: SyncStorage<E>,
+    store: SyncTestStorage<E>,
     current_ts: u64,
     handles: Vec<Vec<u8>>,
 }
 
 impl<E: Engine> Store<E> {
     pub fn new(engine: E) -> Self {
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
         Self {
-            store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
+            store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
             current_ts: 1,
             handles: vec![],
         }
