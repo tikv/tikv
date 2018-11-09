@@ -11,28 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{BigEndian, ReadBytesExt};
 use std::iter::Peekable;
 use std::mem;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
+use byteorder::{BigEndian, ReadBytesExt};
+
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::{datum, mysql, table};
+use coprocessor::codec::{datum, table};
 use coprocessor::util;
 use coprocessor::*;
 
-use storage::{Key, Snapshot, SnapshotStore};
+use storage::{Key, Store};
 
 use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
 use super::{Executor, Row};
 
-pub struct IndexScanExecutor<S: Snapshot> {
-    store: SnapshotStore<S>,
+pub struct IndexScanExecutor<S: Store> {
+    store: S,
     desc: bool,
     col_ids: Vec<i64>,
     cols: Arc<Vec<ColumnInfo>>,
@@ -50,11 +53,11 @@ pub struct IndexScanExecutor<S: Snapshot> {
     first_collect: bool,
 }
 
-impl<S: Snapshot> IndexScanExecutor<S> {
+impl<S: Store> IndexScanExecutor<S> {
     pub fn new(
         mut meta: IndexScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<S>,
+        store: S,
         unique: bool,
         collect: bool,
     ) -> Result<Self> {
@@ -88,11 +91,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
         })
     }
 
-    pub fn new_with_cols_len(
-        cols: i64,
-        key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<S>,
-    ) -> Result<Self> {
+    pub fn new_with_cols_len(cols: i64, key_ranges: Vec<KeyRange>, store: S) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
         let col_ids: Vec<i64> = (0..cols).collect();
         Ok(IndexScanExecutor {
@@ -136,7 +135,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
         };
 
         if let Some(ref pk_col) = self.pk_col {
-            let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
+            let handle_datum = if pk_col.flag().contains(FieldTypeFlag::UNSIGNED) {
                 // PK column is unsigned
                 datum::Datum::U64(handle as u64)
             } else {
@@ -171,7 +170,7 @@ impl<S: Snapshot> IndexScanExecutor<S> {
     }
 }
 
-impl<S: Snapshot> Executor for IndexScanExecutor<S> {
+impl<S: Store> Executor for IndexScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
@@ -275,12 +274,12 @@ pub mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use std::i64;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
     use coprocessor::codec::datum::{self, Datum};
-    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
     use util::collections::HashMap;
 
@@ -340,8 +339,8 @@ pub mod tests {
         unique: bool,
     ) -> Data {
         let cols = vec![
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
 
         let mut kv_data = Vec::new();

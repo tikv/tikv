@@ -134,9 +134,10 @@ impl BTreeEngineIterator {
     fn seek_and_valid(&mut self, range: (Bound<Key>, Bound<Key>), next_back: bool) -> bool {
         let tree = self.tree.read().unwrap();
         let mut range = tree.range(range);
-        let item = match next_back {
-            true => range.next_back(),
-            false => range.next(),
+        let item = if next_back {
+            range.next_back()
+        } else {
+            range.next()
         };
         match item {
             Some((k, v)) if self.bounds.contains(k) => {
