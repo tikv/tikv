@@ -14,16 +14,16 @@
 use std::borrow::Cow;
 use std::{self, i64, str, u64};
 
+use cop_datatype::{self, FieldTypeTp};
+
 use super::mysql::Res;
 use super::{Error, Result};
 use coprocessor::dag::expr::EvalContext;
-// `UNSPECIFIED_LENGTH` is unspecified length from FieldType
-pub const UNSPECIFIED_LENGTH: i32 = -1;
 
 /// `truncate_binary` truncates a buffer to the specified length.
 #[inline]
 pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
-    if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
+    if flen != cop_datatype::UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
         s.truncate(flen as usize);
     }
 }
@@ -64,7 +64,7 @@ macro_rules! overflow {
 
 /// `convert_uint_to_int` converts an uint value to an int value.
 #[inline]
-pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: u8) -> Result<i64> {
+pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: FieldTypeTp) -> Result<i64> {
     if val > upper_bound as u64 {
         return overflow!(val, tp);
     }
@@ -73,7 +73,12 @@ pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: u8) -> Result<i64> {
 
 /// `convert_float_to_int` converts an f64 value to an i64 value.
 ///  Returns the overflow error if the value exceeds the boundary.
-pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u8) -> Result<i64> {
+pub fn convert_float_to_int(
+    fval: f64,
+    lower_bound: i64,
+    upper_bound: i64,
+    tp: FieldTypeTp,
+) -> Result<i64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
     if val < lower_bound as f64 {
@@ -88,7 +93,7 @@ pub fn convert_float_to_int(fval: f64, lower_bound: i64, upper_bound: i64, tp: u
 
 /// `convert_float_to_uint` converts a f64 value to a u64 value.
 /// Returns the overflow error if the value exceeds the boundary.
-pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: u8) -> Result<u64> {
+pub fn convert_float_to_uint(fval: f64, upper_bound: u64, tp: FieldTypeTp) -> Result<u64> {
     // TODO any performance problem to use round directly?
     let val = fval.round();
     if val < 0f64 {
@@ -328,7 +333,6 @@ mod tests {
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::dag::expr::{EvalConfig, EvalContext};
 
     use super::*;
@@ -482,26 +486,26 @@ mod tests {
 
     #[test]
     fn test_convert_uint_into_int() {
-        assert!(convert_uint_to_int(u64::MAX, i64::MAX, types::LONG_LONG).is_err());
-        let v = convert_uint_to_int(u64::MIN, i64::MAX, types::LONG_LONG).unwrap();
+        assert!(convert_uint_to_int(u64::MAX, i64::MAX, FieldTypeTp::LongLong).is_err());
+        let v = convert_uint_to_int(u64::MIN, i64::MAX, FieldTypeTp::LongLong).unwrap();
         assert_eq!(v, u64::MIN as i64);
         // TODO port tests from tidb(tidb haven't implemented now)
     }
 
     #[test]
     fn test_convert_float_to_int() {
-        assert!(convert_float_to_int(f64::MIN, i64::MIN, i64::MAX, types::DOUBLE).is_err());
-        assert!(convert_float_to_int(f64::MAX, i64::MIN, i64::MAX, types::DOUBLE).is_err());
-        let v = convert_float_to_int(0.1, i64::MIN, i64::MAX, types::DOUBLE).unwrap();
+        assert!(convert_float_to_int(f64::MIN, i64::MIN, i64::MAX, FieldTypeTp::Double).is_err());
+        assert!(convert_float_to_int(f64::MAX, i64::MIN, i64::MAX, FieldTypeTp::Double).is_err());
+        let v = convert_float_to_int(0.1, i64::MIN, i64::MAX, FieldTypeTp::Double).unwrap();
         assert_eq!(v, 0);
         // TODO port tests from tidb(tidb haven't implemented now)
     }
 
     #[test]
     fn test_convert_float_to_uint() {
-        assert!(convert_float_to_uint(f64::MIN, u64::MAX, types::DOUBLE).is_err());
-        assert!(convert_float_to_uint(f64::MAX, u64::MAX, types::DOUBLE).is_err());
-        let v = convert_float_to_uint(0.1, u64::MAX, types::DOUBLE).unwrap();
+        assert!(convert_float_to_uint(f64::MIN, u64::MAX, FieldTypeTp::Double).is_err());
+        assert!(convert_float_to_uint(f64::MAX, u64::MAX, FieldTypeTp::Double).is_err());
+        let v = convert_float_to_uint(0.1, u64::MAX, FieldTypeTp::Double).unwrap();
         assert_eq!(v, 0);
         // TODO port tests from tidb(tidb haven't implemented now)
     }
@@ -510,7 +514,7 @@ mod tests {
     fn test_truncate_binary() {
         let s = b"123456789".to_vec();
         let mut s1 = s.clone();
-        truncate_binary(&mut s1, UNSPECIFIED_LENGTH as isize);
+        truncate_binary(&mut s1, cop_datatype::UNSPECIFIED_LENGTH);
         assert_eq!(s1, s);
         let mut s2 = s.clone();
         truncate_binary(&mut s2, isize::MAX);

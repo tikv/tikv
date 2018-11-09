@@ -13,9 +13,7 @@
 
 //! Core data types.
 
-use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::hash::{Hash, Hasher};
 use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
@@ -55,7 +53,7 @@ pub struct MvccInfo {
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
@@ -224,30 +222,9 @@ impl Clone for Key {
     }
 }
 
-/// Hash for `Key`.
-impl Hash for Key {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_encoded().hash(state)
-    }
-}
-
-/// Display for `Key`.
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", escape(&self.0))
-    }
-}
-
-/// Partial equality for `Key`.
-impl PartialEq for Key {
-    fn eq(&self, other: &Key) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Key) -> Option<Ordering> {
-        Some(self.0.cmp(&other.0))
     }
 }
 
