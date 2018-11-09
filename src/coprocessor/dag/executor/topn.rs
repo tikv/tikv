@@ -164,13 +164,13 @@ pub mod tests {
     use std::cell::RefCell;
     use std::sync::Arc;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::table::{self, RowColsDict};
     use coprocessor::codec::Datum;
     use coprocessor::dag::executor::OriginCols;
@@ -374,9 +374,9 @@ pub mod tests {
         // prepare data and store
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
         let raw_data = vec![
             vec![
@@ -461,9 +461,9 @@ pub mod tests {
         // prepare data and store
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
         let raw_data = vec![vec![
             Datum::I64(1),

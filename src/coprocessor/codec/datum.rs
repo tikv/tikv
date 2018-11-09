@@ -20,6 +20,8 @@ use std::mem;
 use std::str::FromStr;
 use std::{i64, str};
 
+use cop_datatype::FieldTypeTp;
+
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalEncoder, Duration, Json, JsonEncoder,
     PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
@@ -31,17 +33,17 @@ use util::codec::{number, BytesSlice};
 use util::escape;
 
 pub const NIL_FLAG: u8 = 0;
-const BYTES_FLAG: u8 = 1;
-const COMPACT_BYTES_FLAG: u8 = 2;
-const INT_FLAG: u8 = 3;
-const UINT_FLAG: u8 = 4;
-const FLOAT_FLAG: u8 = 5;
-const DECIMAL_FLAG: u8 = 6;
-const DURATION_FLAG: u8 = 7;
-const VAR_INT_FLAG: u8 = 8;
-const VAR_UINT_FLAG: u8 = 9;
-const JSON_FLAG: u8 = 10;
-const MAX_FLAG: u8 = 250;
+pub const BYTES_FLAG: u8 = 1;
+pub const COMPACT_BYTES_FLAG: u8 = 2;
+pub const INT_FLAG: u8 = 3;
+pub const UINT_FLAG: u8 = 4;
+pub const FLOAT_FLAG: u8 = 5;
+pub const DECIMAL_FLAG: u8 = 6;
+pub const DURATION_FLAG: u8 = 7;
+pub const VAR_INT_FLAG: u8 = 8;
+pub const VAR_UINT_FLAG: u8 = 9;
+pub const JSON_FLAG: u8 = 10;
+pub const MAX_FLAG: u8 = 250;
 
 /// `Datum` stores data with different types.
 #[derive(PartialEq, Clone)]
@@ -347,7 +349,7 @@ impl Datum {
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
         let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
-        let tp = mysql::types::LONG_LONG;
+        let tp = FieldTypeTp::LongLong;
         match self {
             Datum::I64(i) => Ok(i),
             Datum::U64(u) => convert::convert_uint_to_int(u, upper_bound, tp),
