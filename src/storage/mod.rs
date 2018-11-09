@@ -2047,9 +2047,17 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
+        use util::worker::FutureWorker;
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let mut storage = Storage::new(&config, read_pool).unwrap();
+        let read_pool = {
+            let pd_worker = FutureWorker::new("test-future–worker");
+            ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+                || ReadPoolContext::new(pd_worker.scheduler())
+            })
+        };
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut storage = Storage::from_engine(engine, &config, read_pool).unwrap();
         let (tx, rx) = channel();
 
         storage
