@@ -2094,8 +2094,8 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"101".to_vec()))],
-                b"x".to_vec(),
+                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                b"y".to_vec(),
                 101,
                 Options::default(),
                 expect_too_busy_callback(tx.clone(), 2),
