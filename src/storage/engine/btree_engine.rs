@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{self, Excluded, Included, Unbounded};
+use std::default::Default;
 use std::fmt::{self, Debug, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
@@ -56,20 +57,20 @@ impl BTreeEngine {
         }
     }
 
-    pub fn default() -> Self {
+    pub fn get_cf(&self, cf: CfName) -> Arc<RwLockTree> {
+        let index = self
+            .cf_names
+            .iter()
+            .position(|&c| c == cf)
+            .expect("Not exist CF!");
+        self.cf_contents[index].clone()
+    }
+}
+
+impl Default for BTreeEngine {
+    fn default() -> Self {
         let cfs = &[CF_WRITE, CF_DEFAULT, CF_LOCK];
         Self::new(cfs)
-    }
-
-    pub fn get_cf(&self, cf: CfName) -> Arc<RwLockTree> {
-        let index = self.cf_names.iter().position(|&c| c == cf);
-        match index {
-            None => unreachable!(
-                "Not exist CF:[{}]! Please create it by BTreeEngine::new(&[CfName])!",
-                cf
-            ),
-            Some(i) => self.cf_contents[i].clone(),
-        }
     }
 }
 
@@ -90,6 +91,7 @@ impl Engine for BTreeEngine {
 
         Ok(())
     }
+    /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
     fn async_snapshot(&self, _ctx: &Context, cb: EngineCallback<Self::Snap>) -> EngineResult<()> {
         cb((CbContext::new(), Ok(BTreeEngineSnapshot::new(&self))));
         Ok(())
