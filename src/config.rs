@@ -86,6 +86,7 @@ macro_rules! cf_config {
             pub cache_index_and_filter_blocks: bool,
             pub pin_l0_filter_and_index_blocks: bool,
             pub use_bloom_filter: bool,
+            pub optimize_filters_for_hits: bool,
             pub whole_key_filtering: bool,
             pub bloom_filter_bits_per_key: i32,
             pub block_based_bloom_filter: bool,
@@ -154,6 +155,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
         cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
+        cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
 
         cf_opts
     }};
@@ -170,6 +172,7 @@ impl Default for DefaultCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -224,6 +227,7 @@ impl Default for WriteCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: false,
             whole_key_filtering: false,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -288,6 +292,7 @@ impl Default for LockCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -337,6 +342,7 @@ impl Default for RaftCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -512,6 +518,7 @@ impl Default for RaftDefaultCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: false,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
