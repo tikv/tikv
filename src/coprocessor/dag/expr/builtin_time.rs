@@ -125,6 +125,80 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn day_name<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
+            Ok(None) => return Ok(None),
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ).map(|_| None);
+        }
+        use coprocessor::codec::mysql::time::WeekdayExtension;
+        let weekday = t.get_time().weekday();
+        Ok(Some(Cow::Owned(weekday.name().to_string().into_bytes())))
+    }
+
+    #[inline]
+    pub fn day_of_month(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
+            Ok(None) => return Ok(None),
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ).map(|_| None);
+        }
+        let day = t.get_time().day();
+        Ok(Some(i64::from(day)))
+    }
+
+    #[inline]
+    pub fn day_of_week(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
+            Ok(None) => return Ok(None),
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ).map(|_| None);
+        }
+        let day = t.get_time().weekday().number_from_sunday();
+        Ok(Some(i64::from(day)))
+    }
+
+    #[inline]
+    pub fn day_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t = match self.children[0].eval_time(ctx, row) {
+            Err(err) => return Error::handle_invalid_time_error(ctx, err).map(|_| None),
+            Ok(None) => return Ok(None),
+            Ok(Some(res)) => res,
+        };
+        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
+            return Error::handle_invalid_time_error(
+                ctx,
+                Error::incorrect_datetime_value(&format!("{}", t)),
+            ).map(|_| None);
+        }
+        use coprocessor::codec::mysql::time::DateTimeExtension;
+        let day = t.get_time().days();
+        Ok(Some(i64::from(day)))
+    }
+
+    #[inline]
     pub fn year<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -504,6 +578,152 @@ mod tests {
             ScalarFuncSig::MonthName,
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
             Datum::Null,
+        );
+    }
+
+    #[test]
+    fn test_day_name() {
+        let cases = vec![
+            ("2018-11-11 00:00:00.000000", "Sunday"),
+            ("2018-11-12 00:00:00.000000", "Monday"),
+            ("2018-11-13 00:00:00.000000", "Tuesday"),
+            ("2018-11-14 00:00:00.000000", "Wednesday"),
+            ("2018-11-15 00:00:00.000000", "Thursday"),
+            ("2018-11-16 00:00:00.000000", "Friday"),
+            ("2018-11-17 00:00:00.000000", "Saturday"),
+            ("2018-11-18 00:00:00.000000", "Sunday"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::DayName,
+                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
+                Datum::Bytes(exp.as_bytes().to_vec()),
+            );
+        }
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::DayName, Datum::Null, Datum::Null);
+        //  test zero case
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        test_err_case_one_arg(
+            &mut ctx,
+            ScalarFuncSig::DayName,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+            Datum::Null
+        );
+    }
+
+    #[test]
+    fn test_day_of_month() {
+        let cases = vec![
+            ("2018-02-01 00:00:00.000000", 1),
+            ("2018-02-15 00:00:00.000000", 15),
+            ("2018-02-28 00:00:00.000000", 28),
+            ("2016-02-29 00:00:00.000000", 29),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::DayOfMonth,
+                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+        // test NULL case
+        test_err_case_one_arg(
+            &mut ctx,
+            ScalarFuncSig::DayOfMonth,
+            Datum::Null,
+            Datum::Null,
+        );
+        //  test zero case
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        test_err_case_one_arg(
+            &mut ctx,
+            ScalarFuncSig::DayOfMonth,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+            Datum::Null
+        );
+    }
+
+    #[test]
+    fn test_day_of_week() {
+        let cases = vec![
+            ("2018-11-11 00:00:00.000000", 1),
+            ("2018-11-12 00:00:00.000000", 2),
+            ("2018-11-13 00:00:00.000000", 3),
+            ("2018-11-14 00:00:00.000000", 4),
+            ("2018-11-15 00:00:00.000000", 5),
+            ("2018-11-16 00:00:00.000000", 6),
+            ("2018-11-17 00:00:00.000000", 7),
+            ("2018-11-18 00:00:00.000000", 1),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::DayOfWeek,
+                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::DayOfWeek, Datum::Null, Datum::Null);
+        //  test zero case
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        test_err_case_one_arg(
+            &mut ctx,
+            ScalarFuncSig::DayOfWeek,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+            Datum::Null
+        );
+    }
+
+    #[test]
+    fn test_day_of_year() {
+        let cases = vec![
+            ("2018-11-11 00:00:00.000000", 315),
+            ("2018-11-12 00:00:00.000000", 316),
+            ("2018-11-30 00:00:00.000000", 334),
+            ("2018-12-31 00:00:00.000000", 365),
+            ("2016-12-31 00:00:00.000000", 366),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::DayOfYear,
+                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::DayOfYear, Datum::Null, Datum::Null);
+        //  test zero case
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
+            .set_strict_sql_mode(true);
+        ctx = EvalContext::new(Arc::new(cfg));
+        test_err_case_one_arg(
+            &mut ctx,
+            ScalarFuncSig::DayOfYear,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+            Datum::Null
         );
     }
 
