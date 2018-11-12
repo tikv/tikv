@@ -614,7 +614,7 @@ mod tests {
             &mut ctx,
             ScalarFuncSig::DayName,
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
-            Datum::Null
+            Datum::Null,
         );
     }
 
@@ -652,7 +652,7 @@ mod tests {
             &mut ctx,
             ScalarFuncSig::DayOfMonth,
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
-            Datum::Null
+            Datum::Null,
         );
     }
 
@@ -689,7 +689,7 @@ mod tests {
             &mut ctx,
             ScalarFuncSig::DayOfWeek,
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
-            Datum::Null
+            Datum::Null,
         );
     }
 
@@ -723,7 +723,7 @@ mod tests {
             &mut ctx,
             ScalarFuncSig::DayOfYear,
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
-            Datum::Null
+            Datum::Null,
         );
     }
 
