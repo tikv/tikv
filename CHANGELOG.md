@@ -2,6 +2,12 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.0-rc.5]
+- Improve the error message of `WriteConflict` [#3750](https://github.com/tikv/tikv/pull/3750)
+- Add the panic mark file [#3746](https://github.com/tikv/tikv/pull/3746)
+- Downgrade grpcio to avoid the segment fault issue caused by the new version of gRPC [#3650](https://github.com/tikv/tikv/pull/3650)
+- Add the upper limit to the `kv_scan` interface [#3749](https://github.com/tikv/tikv/pull/3749)
+
 ## [2.1.0-rc.4]
 - Optimize the RocksDB Write stall issue caused by applying snapshots [#3606](https://github.com/tikv/tikv/pull/3606)
 - Add raftstore `tick` metrics [#3657](https://github.com/tikv/tikv/pull/3657)
