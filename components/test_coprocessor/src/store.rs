@@ -20,17 +20,17 @@ use kvproto::kvrpcpb::Context;
 use test_storage::SyncStorage;
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::{self, Engine, FixtureStore, Key, Mutation};
+use tikv::storage::{self, Engine, FixtureStore, Key, Mutation, RocksEngine, TestEngineBuilder};
 use tikv::util::worker::FutureWorker;
 
-pub struct Insert<'a> {
-    store: &'a mut Store,
+pub struct Insert<'a, E: Engine> {
+    store: &'a mut Store<E>,
     table: &'a Table,
     values: BTreeMap<i64, Datum>,
 }
 
-impl<'a> Insert<'a> {
-    pub fn new(store: &'a mut Store, table: &'a Table) -> Self {
+impl<'a, E: Engine> Insert<'a, E> {
+    pub fn new(store: &'a mut Store<E>, table: &'a Table) -> Self {
         Insert {
             store,
             table,
@@ -72,13 +72,13 @@ impl<'a> Insert<'a> {
     }
 }
 
-pub struct Delete<'a> {
-    store: &'a mut Store,
+pub struct Delete<'a, E: Engine> {
+    store: &'a mut Store<E>,
     table: &'a Table,
 }
 
-impl<'a> Delete<'a> {
-    pub fn new(store: &'a mut Store, table: &'a Table) -> Self {
+impl<'a, E: Engine> Delete<'a, E> {
+    pub fn new(store: &'a mut Store<E>, table: &'a Table) -> Self {
         Delete { store, table }
     }
 
@@ -109,10 +109,30 @@ impl<'a> Delete<'a> {
 pub struct Store<E: Engine> {
     store: SyncStorage<E>,
     current_ts: u64,
+    last_committed_ts: u64,
     handles: Vec<Vec<u8>>,
 }
 
+impl Store<RocksEngine> {
+    pub fn new() -> Self {
+        Self::from_engine(TestEngineBuilder::new().build().unwrap())
+    }
+}
+
 impl<E: Engine> Store<E> {
+    pub fn from_engine(engine: E) -> Self {
+        let pd_worker = FutureWorker::new("test-future–worker");
+        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
+            || storage::ReadPoolContext::new(pd_worker.scheduler())
+        });
+        Self {
+            store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
+            current_ts: 2,
+            last_committed_ts: 1,
+            handles: vec![],
+        }
+    }
+
     pub fn begin(&mut self) {
         self.current_ts = next_id() as u64;
         self.handles.clear();
@@ -128,9 +148,9 @@ impl<E: Engine> Store<E> {
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
 
-    pub fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, Self>
-        where
-            Self: Sized,
+    pub fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, E>
+    where
+        Self: Sized,
     {
         Insert::new(self, table)
     }
@@ -147,49 +167,166 @@ impl<E: Engine> Store<E> {
             .unwrap();
     }
 
-    pub fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, Self>
-        where
-            Self: Sized,
+    pub fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, E>
+    where
+        Self: Sized,
     {
         Delete::new(self, table)
     }
 
     pub fn commit_with_ctx(&mut self, ctx: Context) {
+        let commit_ts = next_id() as u64;
         let handles = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         self.store
-            .commit(ctx, handles, self.current_ts, next_id() as u64)
+            .commit(ctx, handles, self.current_ts, commit_ts)
             .unwrap();
+        self.last_committed_ts = commit_ts;
     }
 
     pub fn commit(&mut self) {
         self.commit_with_ctx(Context::new());
     }
 
-    pub fn new(engine: E) -> Self {
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
-        Self {
-            store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
-            current_ts: 1,
-            handles: vec![],
-        }
-    }
-
     pub fn get_engine(&self) -> E {
         self.store.get_engine()
     }
 
-    pub fn into_map(self) -> BTreeMap<Key, Vec<u8>> {
-        self.data
+    /// Strip off committed MVCC information to get a final data view.
+    ///
+    /// Notice: Only first 100000 records can be retrieved.
+    // TODO: Support unlimited records once #3773 is resolved.
+    pub fn export(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.store
+            .scan(
+                Context::new(),
+                Key::from_encoded(vec![]),
+                None,
+                100000,
+                false,
+                self.last_committed_ts,
+            )
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.is_ok())
+            .map(|item| item.unwrap())
+            .collect()
     }
 
-    pub fn into_map_ok<E>(self) -> BTreeMap<Key, Result<Vec<u8>, E>> {
-        self.data.into_iter().map(|(k, v)| (k, Ok(v))).collect()
+    /// Strip off committed MVCC information to create a `FixtureStore`.
+    pub fn to_fixture_store(&self) -> FixtureStore {
+        let data = self
+            .export()
+            .into_iter()
+            .map(|(key, value)| (Key::from_raw(&key), Ok(value)))
+            .collect();
+        FixtureStore::new(data)
     }
+}
 
-    pub fn into_fixture_store(self) -> FixtureStore {
-        FixtureStore::new(self.into_map_ok())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_export() {
+        let mut store = Store::new();
+        store.begin();
+        store.put(Context::new(), vec![(b"key1".to_vec(), b"value1".to_vec())]);
+        store.put(Context::new(), vec![(b"key2".to_vec(), b"foo".to_vec())]);
+        store.delete(Context::new(), vec![b"key0".to_vec()]);
+        store.commit();
+
+        assert_eq!(
+            store.export(),
+            vec![
+                (b"key1".to_vec(), b"value1".to_vec()),
+                (b"key2".to_vec(), b"foo".to_vec()),
+            ]
+        );
+
+        store.begin();
+        store.put(Context::new(), vec![(b"key1".to_vec(), b"value2".to_vec())]);
+        store.put(Context::new(), vec![(b"key2".to_vec(), b"foo".to_vec())]);
+        store.delete(Context::new(), vec![b"key0".to_vec()]);
+        store.commit();
+
+        assert_eq!(
+            store.export(),
+            vec![
+                (b"key1".to_vec(), b"value2".to_vec()),
+                (b"key2".to_vec(), b"foo".to_vec()),
+            ]
+        );
+
+        store.begin();
+        store.delete(Context::new(), vec![b"key0".to_vec(), b"key2".to_vec()]);
+        store.commit();
+
+        assert_eq!(store.export(), vec![(b"key1".to_vec(), b"value2".to_vec())]);
+
+        store.begin();
+        store.delete(Context::new(), vec![b"key1".to_vec()]);
+        store.commit();
+
+        assert_eq!(store.export(), vec![]);
+
+        store.begin();
+        store.put(Context::new(), vec![(b"key2".to_vec(), b"bar".to_vec())]);
+        store.put(Context::new(), vec![(b"key1".to_vec(), b"foo".to_vec())]);
+        store.put(Context::new(), vec![(b"k".to_vec(), b"box".to_vec())]);
+        store.commit();
+
+        assert_eq!(
+            store.export(),
+            vec![
+                (b"k".to_vec(), b"box".to_vec()),
+                (b"key1".to_vec(), b"foo".to_vec()),
+                (b"key2".to_vec(), b"bar".to_vec()),
+            ]
+        );
+
+        store.begin();
+        store.delete(Context::new(), vec![b"key1".to_vec(), b"key1".to_vec()]);
+        store.commit();
+
+        assert_eq!(
+            store.export(),
+            vec![
+                (b"k".to_vec(), b"box".to_vec()),
+                (b"key2".to_vec(), b"bar".to_vec()),
+            ]
+        );
+
+        store.begin();
+        store.delete(Context::new(), vec![b"key2".to_vec()]);
+
+        assert_eq!(
+            store.export(),
+            vec![
+                (b"k".to_vec(), b"box".to_vec()),
+                (b"key2".to_vec(), b"bar".to_vec()),
+            ]
+        );
+
+        store.commit();
+
+        assert_eq!(store.export(), vec![(b"k".to_vec(), b"box".to_vec())]);
+
+        store.begin();
+        store.put(Context::new(), vec![(b"key1".to_vec(), b"v1".to_vec())]);
+        store.put(Context::new(), vec![(b"key2".to_vec(), b"v2".to_vec())]);
+
+        assert_eq!(store.export(), vec![(b"k".to_vec(), b"box".to_vec())]);
+
+        store.commit();
+
+        assert_eq!(
+            store.export(),
+            vec![
+                (b"k".to_vec(), b"box".to_vec()),
+                (b"key1".to_vec(), b"v1".to_vec()),
+                (b"key2".to_vec(), b"v2".to_vec()),
+            ]
+        );
     }
 }

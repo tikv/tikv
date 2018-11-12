@@ -76,7 +76,7 @@ fn test_checksum() {
 }
 
 fn reversed_checksum_crc64_xor<E: Engine>(
-    store: &MvccTransactionalStore<E>,
+    store: &Store<E>,
     range: KeyRange,
     scan_on: ChecksumScanOn,
 ) -> u64 {

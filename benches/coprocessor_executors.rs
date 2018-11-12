@@ -36,7 +36,7 @@ fn bench_table_scan_primary_key(b: &mut Bencher) {
         .add_col(foo.clone())
         .build();
 
-    let mut store = SimpleBTreeMapStore::new();
+    let mut store = Store::new();
     for i in 0..10 {
         store.begin();
         store
@@ -57,7 +57,7 @@ fn bench_table_scan_primary_key(b: &mut Bencher) {
             let mut executor = TableScanExecutor::new(
                 meta.clone(),
                 vec![table.get_select_range()],
-                store.clone().into_fixture_store(),
+                store.to_fixture_store(),
                 false,
             ).unwrap();
             // There is a step of building scanner in the first `next()` which cost time,

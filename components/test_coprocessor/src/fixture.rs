@@ -68,7 +68,7 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (MvccTransactionalStore<E>, Endpoint<E>) {
+) -> (Store<E>, Endpoint<E>) {
     init_data_with_details(
         ctx,
         engine,
@@ -88,8 +88,8 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
     read_pool_cfg: &readpool::Config,
-) -> (MvccTransactionalStore<E>, Endpoint<E>) {
-    let mut store = MvccTransactionalStore::new(engine);
+) -> (Store<E>, Endpoint<E>) {
+    let mut store = Store::from_engine(engine);
 
     store.begin();
     for &(id, name, count) in vals {
@@ -115,7 +115,7 @@ pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (MvccTransactionalStore<RocksEngine>, Endpoint<RocksEngine>) {
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     let engine = TestEngineBuilder::new().build().unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
@@ -124,6 +124,6 @@ pub fn init_data_with_commit(
 pub fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
-) -> (MvccTransactionalStore<RocksEngine>, Endpoint<RocksEngine>) {
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     init_data_with_commit(tbl, vals, true)
 }
