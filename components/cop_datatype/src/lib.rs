@@ -12,20 +12,26 @@
 // limitations under the License.
 
 #![cfg_attr(test, feature(test))]
+#![feature(try_from)]
 
 #[macro_use]
+extern crate bitflags;
+#[macro_use]
+extern crate enum_primitive_derive;
+#[macro_use]
 extern crate quick_error;
-#[cfg(test)]
-extern crate rand;
+extern crate num_traits;
 #[cfg(test)]
 extern crate test;
 
-mod buffer;
+extern crate tipb;
+
+mod def;
 mod error;
 
 pub mod prelude {
-    pub use super::buffer::{BufferReader, BufferWriter};
+    pub use super::def::FieldTypeAccessor;
 }
 
-pub use self::buffer::{BufferReader, BufferWriter};
-pub use self::error::{Error, Result};
+pub use self::def::*;
+pub use self::error::*;

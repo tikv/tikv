@@ -13,19 +13,16 @@
 
 //! Core data types.
 
-use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::hash::{Hash, Hasher};
 use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
 
+use storage::mvcc::{Lock, Write};
 use util::codec::bytes;
+use util::codec::bytes::BytesEncoder;
 use util::codec::number::{self, NumberEncoder};
 use util::{codec, escape};
-
-use storage::mvcc::{Lock, Write};
-
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -56,7 +53,7 @@ pub struct MvccInfo {
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
@@ -64,7 +61,11 @@ impl Key {
     /// Creates a key from raw bytes.
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
-        Key(codec::bytes::encode_bytes(key))
+        // adding extra length for appending timestamp
+        let len = codec::bytes::max_encoded_bytes_size(key.len()) + codec::number::U64_SIZE;
+        let mut encoded = Vec::with_capacity(len);
+        encoded.encode_bytes(key, false).unwrap();
+        Key(encoded)
     }
 
     /// Gets and moves the raw representation of this key.
@@ -221,30 +222,9 @@ impl Clone for Key {
     }
 }
 
-/// Hash for `Key`.
-impl Hash for Key {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_encoded().hash(state)
-    }
-}
-
-/// Display for `Key`.
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", escape(&self.0))
-    }
-}
-
-/// Partial equality for `Key`.
-impl PartialEq for Key {
-    fn eq(&self, other: &Key) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Key) -> Option<Ordering> {
-        Some(self.0.cmp(&other.0))
     }
 }
 

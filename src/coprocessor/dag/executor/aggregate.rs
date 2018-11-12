@@ -299,7 +299,7 @@ impl AggrFunc for Extremum {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::dag::expr::{EvalConfig, EvalContext};
     use std::ops::Add;
     use std::sync::Arc;

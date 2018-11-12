@@ -119,6 +119,26 @@ pub enum Tick {
     CleanupImportSST,
 }
 
+impl Tick {
+    #[inline]
+    pub fn tag(self) -> &'static str {
+        match self {
+            Tick::Raft => "raft",
+            Tick::RaftLogGc => "raft_log_gc",
+            Tick::SplitRegionCheck => "split_region_check",
+            Tick::CompactCheck => "compact_check",
+            Tick::PdHeartbeat => "pd_heartbeat",
+            Tick::PdStoreHeartbeat => "pd_store_heartbeat",
+            Tick::SnapGc => "snap_gc",
+            Tick::CompactLockCf => "compact_lock_cf",
+            Tick::ConsistencyCheck => "consistency_check",
+            Tick::CheckMerge => "check_merge",
+            Tick::CheckPeerStaleState => "check_peer_stale_state",
+            Tick::CleanupImportSST => "cleanup_import_sst",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum SignificantMsg {
     SnapshotStatus {

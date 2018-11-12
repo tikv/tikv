@@ -49,7 +49,7 @@ clippy: pre-clippy
 		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
 		-A implicit_hasher -A large_enum_variant -A new_without_default \
 		-A new_without_default_derive -A neg_cmp_op_on_partial_ord \
-		-A too_many_arguments -A excessive_precision
+		-A too_many_arguments -A excessive_precision -A collapsible_if
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
