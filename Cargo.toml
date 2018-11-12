@@ -91,7 +91,7 @@ cop_datatype = { path = "components/cop_datatype" }
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/solotzg/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"

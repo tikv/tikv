@@ -29,7 +29,9 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
     store:"127.0.0.1:20160" compact db:KV cf:default range:([], []) success!
     ```
 
-- Local mode: use the `--db` option to specify the local TiKV data directory path
+- Local mode: 
+  - use the `--db` option to specify the local TiKV data directory path
+  - use the `ldb` option to run ldb cmd of RocksDB
 
 Unless otherwise noted, all commands support both the remote mode and the local mode.
 
@@ -255,3 +257,24 @@ success!
 > - This command only supports the local mode. It prints `success!` when successfully run.
 > - The argument of the `-p` option specifies the PD endpoints without the `http` prefix. Specifying the PD endpoints is to query whether the specified `region_id` is validated or not.
 > - You need to run this command for all stores where specified Regions' peers are located.
+
+### Ldb Cmd
+
+The ldb command line tool offers multiple data access and database admin commands. Some examples are listed below. 
+For more information, please consult the help message displayed when running `tikv-ctl ldb` without any arguments 
+or check the documents from RocksDB.
+
+Example data access sequence:
+To dump an existing RocksDB in HEX:
+```bash
+$ tikv-ctl ldb --db=/tmp/test_db dump --hex > /tmp/dbdump
+```
+To dump the manifest of an existing RocksDB:
+```bash
+$ tikv-ctl ldb manifest_dump --path=/tmp/test_db/MANIFEST-000001 --json
+```
+You can specify command line `--column_family=<string>` for which column family your query will be against.
+
+`--try_load_options` will try to load the options file in the DB to open the DB. 
+It is a good idea to always try to have this option on when you operate the DB. 
+If you open the DB with default options, it may mess up LSM-tree structure which can't be recovered automatically.
