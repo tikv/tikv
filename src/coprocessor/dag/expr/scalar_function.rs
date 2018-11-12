@@ -175,6 +175,10 @@ impl ScalarFunc {
             | ScalarFuncSig::CastJsonAsJson
             | ScalarFuncSig::Date
             | ScalarFuncSig::LastDay
+            | ScalarFuncSig::Hour
+            | ScalarFuncSig::Minute
+            | ScalarFuncSig::Second
+            | ScalarFuncSig::MicroSecond
             | ScalarFuncSig::Month
             | ScalarFuncSig::MonthName
             | ScalarFuncSig::Year
@@ -379,7 +383,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetFormat
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
-            | ScalarFuncSig::Hour
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::Instr
@@ -401,8 +404,6 @@ impl ScalarFunc {
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
-            | ScalarFuncSig::MicroSecond
-            | ScalarFuncSig::Minute
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
@@ -424,7 +425,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::Rpad
             | ScalarFuncSig::RpadBinary
-            | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
@@ -732,6 +732,10 @@ dispatch_call! {
         IntDivideDecimal => int_divide_decimal,
         ModInt => mod_int,
 
+        Hour => hour,
+        Minute => minute,
+        Second => second,
+        MicroSecond => micro_second,
         Month => month,
         Year => year,
 
@@ -1152,7 +1156,12 @@ mod tests {
                     ScalarFuncSig::CastJsonAsJson,
                     ScalarFuncSig::Date,
                     ScalarFuncSig::LastDay,
+                    ScalarFuncSig::Hour,
+                    ScalarFuncSig::Minute,
+                    ScalarFuncSig::Second,
+                    ScalarFuncSig::MicroSecond,
                     ScalarFuncSig::Month,
+                    ScalarFuncSig::MonthName,
                     ScalarFuncSig::Year,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
@@ -1392,7 +1401,6 @@ mod tests {
             ScalarFuncSig::GetFormat,
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
-            ScalarFuncSig::Hour,
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
             ScalarFuncSig::Instr,
@@ -1414,8 +1422,6 @@ mod tests {
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
-            ScalarFuncSig::MicroSecond,
-            ScalarFuncSig::Minute,
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
@@ -1437,7 +1443,6 @@ mod tests {
             ScalarFuncSig::RowSig,
             ScalarFuncSig::Rpad,
             ScalarFuncSig::RpadBinary,
-            ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
