@@ -122,7 +122,8 @@ impl ScalarFunc {
             | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::TruncateDecimal
-            | ScalarFuncSig::Trim2Args => (2, 2),
+            | ScalarFuncSig::Trim2Args
+            | ScalarFuncSig::Substring2Args => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -272,7 +273,8 @@ impl ScalarFunc {
             | ScalarFuncSig::LikeSig
             | ScalarFuncSig::Conv
             | ScalarFuncSig::Trim3Args
-            | ScalarFuncSig::SubstringIndex => (3, 3),
+            | ScalarFuncSig::SubstringIndex
+            | ScalarFuncSig::Substring3Args => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -450,8 +452,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::SubDurationAndString
-            | ScalarFuncSig::Substring2Args
-            | ScalarFuncSig::Substring3Args
             | ScalarFuncSig::SubStringAndDuration
             | ScalarFuncSig::SubStringAndString
             | ScalarFuncSig::SubstringBinary2Args
@@ -934,6 +934,8 @@ dispatch_call! {
         Trim2Args => trim_2_args,
         Trim3Args => trim_3_args,
         SubstringIndex => substring_index,
+        Substring2Args => substring_2_args,
+        Substring3Args => substring_3_args,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1099,6 +1101,7 @@ mod tests {
                     ScalarFuncSig::RoundWithFracInt,
                     ScalarFuncSig::RoundWithFracReal,
                     ScalarFuncSig::Trim2Args,
+                    ScalarFuncSig::Substring2Args,
                 ],
                 2,
                 2,
@@ -1252,6 +1255,7 @@ mod tests {
                     ScalarFuncSig::Conv,
                     ScalarFuncSig::Trim3Args,
                     ScalarFuncSig::SubstringIndex,
+                    ScalarFuncSig::Substring3Args,
                 ],
                 3,
                 3,
@@ -1468,8 +1472,6 @@ mod tests {
             ScalarFuncSig::SubDatetimeAndString,
             ScalarFuncSig::SubDurationAndDuration,
             ScalarFuncSig::SubDurationAndString,
-            ScalarFuncSig::Substring2Args,
-            ScalarFuncSig::Substring3Args,
             ScalarFuncSig::SubStringAndDuration,
             ScalarFuncSig::SubStringAndString,
             ScalarFuncSig::SubstringBinary2Args,
