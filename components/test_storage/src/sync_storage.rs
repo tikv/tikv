@@ -52,8 +52,8 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
         let mut builder = TestStorageBuilder::from_engine(self.engine);
-        if self.config.is_some() {
-            builder = builder.config(self.config.take().unwrap());
+        if let Some(config) = self.config.take() {
+            builder = builder.config(config);
         }
         Ok(SyncTestStorage {
             store: builder.build()?,

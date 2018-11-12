@@ -39,7 +39,7 @@ fn new_kv_server() -> (ImportKVServer, ImportKvClient, TempDir) {
     };
     let client = ImportKvClient::new(ch);
 
-    // Return temp_dir as well, so that temp dir will be property deleted when it is dropped.
+    // Return temp_dir as well, so that temp dir will be properly deleted when it is dropped.
     (server, client, temp_dir)
 }
 

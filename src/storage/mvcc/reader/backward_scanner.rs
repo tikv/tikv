@@ -1203,8 +1203,6 @@ mod tests {
         assert_eq!(scanner.read_next().unwrap(), None);
     }
 
-    // This test runs slow, so we ignore it.
-    #[ignore]
     #[test]
     fn test_many_tombstones() {
         let engine = TestEngineBuilder::new().build().unwrap();
