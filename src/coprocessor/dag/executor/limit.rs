@@ -71,18 +71,18 @@ impl<'a> Executor for LimitExecutor<'a> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
 
     use coprocessor::codec::datum::Datum;
-    use coprocessor::codec::mysql::types;
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::test::gen_table_data;
+    use super::super::topn::tests::gen_table_data;
     use super::*;
 
     #[test]
@@ -90,8 +90,8 @@ mod test {
         // prepare data and store
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
         ];
         let raw_data = vec![
             vec![Datum::I64(1), Datum::Bytes(b"a".to_vec())],

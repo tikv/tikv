@@ -299,7 +299,7 @@ impl Duration {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use coprocessor::codec::mysql::MAX_FSP;
     use util::escape;

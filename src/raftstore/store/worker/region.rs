@@ -638,7 +638,7 @@ impl RunnableWithTimer<Task, Event> for Runner {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::io;
     use std::sync::atomic::AtomicUsize;
     use std::sync::{mpsc, Arc};
@@ -648,7 +648,7 @@ mod test {
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use raftstore::store::engine::{Mutable, Peekable};
     use raftstore::store::peer_storage::JOB_STATUS_PENDING;
-    use raftstore::store::snap::test::get_test_db_for_regions;
+    use raftstore::store::snap::tests::get_test_db_for_regions;
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::{keys, Engines, SnapKey, SnapManager};
     use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};

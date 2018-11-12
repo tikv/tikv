@@ -348,7 +348,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     use std::sync::atomic::{AtomicIsize, Ordering};

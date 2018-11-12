@@ -1168,7 +1168,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use tempdir::TempDir;
 
     use super::*;
