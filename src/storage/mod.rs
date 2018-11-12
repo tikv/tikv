@@ -140,8 +140,10 @@ pub enum Command {
         start_key: Key,
         end_key: Key,
     },
+    // only for test, keep the latches of keys for a while
     Pause {
         ctx: Context,
+        keys: Vec<Key>,
         duration: u64,
     },
     MvccByKey {
@@ -222,9 +224,17 @@ impl Display for Command {
                 "kv::command::delete range [{:?}, {:?}) | {:?}",
                 start_key, end_key, ctx
             ),
-            Command::Pause { ref ctx, duration } => {
-                write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
-            }
+            Command::Pause {
+                ref ctx,
+                ref keys,
+                duration,
+            } => write!(
+                f,
+                "kv::command::pause keys:({}) {} ms | {:?}",
+                keys.len(),
+                duration,
+                ctx
+            ),
             Command::MvccByKey { ref ctx, ref key } => {
                 write!(f, "kv::command::mvccbykey {:?} | {:?}", key, ctx)
             }
@@ -253,7 +263,6 @@ impl Command {
             // must guarantee that there is no other read or write on these keys, so
             // we can treat DeleteRange as readonly Command.
             Command::DeleteRange { .. } |
-            Command::Pause { .. } |
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
@@ -361,6 +370,11 @@ impl Command {
             },
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
+            }
+            Command::Pause { ref keys, .. } => {
+                for key in keys {
+                    bytes += key.as_encoded().len();
+                }
             }
             _ => {}
         }
@@ -735,8 +749,18 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::Pause { ctx, duration };
+    pub fn async_pause(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        duration: u64,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cmd = Command::Pause {
+            ctx,
+            keys,
+            duration,
+        };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
@@ -2047,26 +2071,23 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        use util::worker::FutureWorker;
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let read_pool = {
-            let pd_worker = FutureWorker::new("test-future–worker");
-            ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-                || ReadPoolContext::new(pd_worker.scheduler())
-            })
-        };
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let mut storage = Storage::from_engine(engine, &config, read_pool).unwrap();
+        let mut storage = TestStorageBuilder::new()
+            .config(&config)
+            .build_and_start()
+            .unwrap();
         let (tx, rx) = channel();
-
+        expect_none(
+            storage
+                .async_get(Context::new(), Key::from_raw(b"x"), 100)
+                .wait(),
+        );
         storage
-            .async_prewrite(
+            .async_pause(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
+                vec![Key::from_raw(b"x")],
+                1000,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2080,7 +2101,6 @@ mod tests {
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
-        storage.start(&config).unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage
@@ -2213,7 +2233,12 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .async_pause(Context::new(), 1000, expect_ok_callback(tx.clone(), 3))
+            .async_pause(
+                Context::new(),
+                vec![],
+                1000,
+                expect_ok_callback(tx.clone(), 3),
+            )
             .unwrap();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
