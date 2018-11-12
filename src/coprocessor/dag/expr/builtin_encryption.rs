@@ -21,6 +21,7 @@ use crypto::{
     sha1::Sha1,
     sha2::{Sha224, Sha256, Sha384, Sha512},
 };
+use hex;
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;
@@ -36,8 +37,10 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         let mut hasher = Md5::new();
+        let mut buff: [u8; 16] = [0; 16];
         hasher.input(input.as_ref());
-        let md5 = hasher.result_str().into_bytes();
+        hasher.result(&mut buff);
+        let md5 = hex::encode(buff).into_bytes();
         Ok(Some(Cow::Owned(md5)))
     }
 
@@ -48,8 +51,10 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         let mut hasher = Sha1::new();
+        let mut buff: [u8; 20] = [0; 20];
         hasher.input(input.as_ref());
-        let sha1 = hasher.result_str().into_bytes();
+        hasher.result(&mut buff);
+        let sha1 = hex::encode(buff).into_bytes();
         Ok(Some(Cow::Owned(sha1)))
     }
 
@@ -89,9 +94,9 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 

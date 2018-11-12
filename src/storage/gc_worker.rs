@@ -1064,8 +1064,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use storage::engine::Result as EngineResult;
-    use storage::engine::{new_local_engine, TEMP_DIR};
-    use storage::{Config, Mutation, Options, ReadPoolContext, Storage, ALL_CFS};
+    use storage::{Config, Mutation, Options, ReadPoolContext, Storage, TestEngineBuilder};
     use util::worker::FutureWorker;
 
     struct MockSafePointProvider {
@@ -1381,6 +1380,7 @@ mod tests {
             .async_scan(
                 Context::default(),
                 Key::from_encoded_slice(b""),
+                None,
                 expected_data.len() + 1,
                 1,
                 Options::default(),
@@ -1405,7 +1405,7 @@ mod tests {
     ) -> Result<()> {
         // Return Result from this function so we can use the `wait_op` macro here.
 
-        let engine = new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
 
         let pd_worker = FutureWorker::new("test-pd-worker");
