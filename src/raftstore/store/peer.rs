@@ -824,6 +824,8 @@ impl Peer {
                         "{} becomes leader and lease expired time is {:?}",
                         self.tag, self.leader_lease
                     );
+                    // make approximate size and keys updated after leader transfer, cause new leader may have a stale size and keys.
+                    self.size_diff_hint = self.cfg.region_split_check_diff.0;
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {

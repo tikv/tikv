@@ -23,8 +23,7 @@ use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
-use tikv::storage::{CF_RAFT, CF_WRITE};
-use tikv::util::config::*;
+use tikv::storage::CF_RAFT;
 use tikv::util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
@@ -433,82 +432,6 @@ fn test_node_merge_brain_split() {
     cluster.must_put(b"k12", b"v12");
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(3), b"k12", b"v12");
-}
-
-/// Test whether approximate size and keys are updated after merge
-#[test]
-fn test_merge_approximate_size_and_keys() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
-    cluster.run();
-
-    let mut range = 1..;
-    let middle_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
-    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, 100, &mut range);
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    let region = pd_client.get_region(b"").unwrap();
-
-    cluster.must_split(&region, &middle_key);
-    // make sure split check is invoked so size and keys are updated.
-    thread::sleep(Duration::from_millis(100));
-
-    let left = pd_client.get_region(b"").unwrap();
-    let right = pd_client.get_region(&max_key).unwrap();
-    assert_ne!(left, right);
-
-    // make sure all peer's approximate size is not None.
-    cluster.must_transfer_leader(right.get_id(), right.get_peers()[0].clone());
-    thread::sleep(Duration::from_millis(100));
-    cluster.must_transfer_leader(right.get_id(), right.get_peers()[1].clone());
-    thread::sleep(Duration::from_millis(100));
-    cluster.must_transfer_leader(right.get_id(), right.get_peers()[2].clone());
-    thread::sleep(Duration::from_millis(100));
-
-    let size = pd_client
-        .get_region_approximate_size(right.get_id())
-        .unwrap();
-    assert_ne!(size, 0);
-    let keys = pd_client
-        .get_region_approximate_keys(right.get_id())
-        .unwrap();
-    assert_ne!(keys, 0);
-
-    pd_client.must_merge(left.get_id(), right.get_id());
-    // make sure split check is invoked so size and keys are updated.
-    thread::sleep(Duration::from_millis(100));
-
-    let region = pd_client.get_region(b"").unwrap();
-    // size and keys should be updated.
-    assert_ne!(
-        pd_client
-            .get_region_approximate_size(region.get_id())
-            .unwrap(),
-        size
-    );
-    assert_ne!(
-        pd_client
-            .get_region_approximate_keys(region.get_id())
-            .unwrap(),
-        keys
-    );
-
-    // after merge and then transfer leader, if not update new leader's approximate size, it maybe be stale.
-    cluster.must_transfer_leader(region.get_id(), region.get_peers()[0].clone());
-    // make sure split check is invoked
-    thread::sleep(Duration::from_millis(100));
-    assert_ne!(
-        pd_client
-            .get_region_approximate_size(region.get_id())
-            .unwrap(),
-        size
-    );
-    assert_ne!(
-        pd_client
-            .get_region_approximate_keys(region.get_id())
-            .unwrap(),
-        keys
-    );
 }
 
 #[test]

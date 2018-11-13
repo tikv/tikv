@@ -1271,11 +1271,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = region.get_id();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         peer.set_region(region);
-        // make approximate size and keys updated in time.
-        // the reason why follower need to update is that there is a issue that after merge
-        // and then transfer leader, the new leader may have stale size and keys.
-        peer.size_diff_hint = self.cfg.region_split_check_diff.0;
         if peer.is_leader() {
+            // make approximate size and keys updated in time.
+            peer.size_diff_hint = self.cfg.region_split_check_diff.0;
             info!("notify pd with merge {:?} into {:?}", source, peer.region());
             peer.heartbeat_pd(&self.pd_worker);
         }
