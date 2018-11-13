@@ -603,9 +603,9 @@ fn process_write_impl<S: Snapshot>(
             };
             (pr, modifies, rows, ctx)
         }
-        Command::Pause { duration, .. } => {
+        Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
-            (ProcessResult::Res, vec![], 0, Context::new())
+            (ProcessResult::Res, vec![], 0, ctx)
         }
         _ => panic!("unsupported write command"),
     };
