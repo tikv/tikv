@@ -118,9 +118,9 @@ impl<T> Sender<T> {
             match self.sender.try_send(t) {
                 Ok(_) => {
                     self.notify();
-                    return Ok(());
+                    Ok(())
                 }
-                Err(e) => return Err(TrySendError::Full(e.into_inner())),
+                Err(e) => Err(TrySendError::Full(e.into_inner())),
             };
         } else {
             Err(TrySendError::Disconnected(t))
@@ -150,13 +150,13 @@ impl<T> Receiver<T> {
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match self.receiver.recv_timeout(timeout) {
-            Ok(t) => return Ok(t),
+            Ok(t) => Ok(t),
             Err(e) => match e {
                 crossbeam_channel::RecvTimeoutError::Timeout => {
-                    return Err(RecvTimeoutError::Timeout)
+                    Err(RecvTimeoutError::Timeout)
                 }
                 crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    return Err(RecvTimeoutError::Disconnected)
+                    Err(RecvTimeoutError::Disconnected)
                 }
             },
         }
