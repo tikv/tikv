@@ -14,10 +14,10 @@
 #[macro_use]
 extern crate criterion;
 
+extern crate kvproto;
 extern crate test_coprocessor;
 extern crate tikv;
 extern crate tipb;
-extern crate kvproto;
 
 use criterion::{black_box, Bencher, Criterion};
 
@@ -25,15 +25,15 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 
 use test_coprocessor::*;
-use tikv::storage::RocksEngine;
 use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::dag::executor::{Executor, TableScanExecutor};
+use tikv::storage::RocksEngine;
 
 fn bench_table_scan_next(
     b: &mut Bencher,
     meta: &TableScan,
     ranges: &[KeyRange],
-    store: &Store<RocksEngine>
+    store: &Store<RocksEngine>,
 ) {
     b.iter_with_setup(
         || {
@@ -384,10 +384,15 @@ fn bench_table_scan_point_range(c: &mut Criterion) {
         meta.mut_columns().push(id.get_column_info());
 
         // We pass 2 point-ranges instead of 1 point-range, because there is a warm-up next().
-        bench_table_scan_next(b, &meta, &[
-            table.get_point_select_range(0),
-            table.get_point_select_range(1),
-        ], &store);
+        bench_table_scan_next(
+            b,
+            &meta,
+            &[
+                table.get_point_select_range(0),
+                table.get_point_select_range(1),
+            ],
+            &store,
+        );
     });
 }
 
@@ -428,12 +433,9 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
                 for i in 0..1001 {
                     ranges.push(table.get_point_select_range(i));
                 }
-                let mut executor = TableScanExecutor::new(
-                    meta.clone(),
-                    ranges,
-                    store.to_fixture_store(),
-                    false,
-                ).unwrap();
+                let mut executor =
+                    TableScanExecutor::new(meta.clone(), ranges, store.to_fixture_store(), false)
+                        .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next().unwrap().unwrap();
@@ -502,7 +504,8 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches,
+criterion_group!(
+    benches,
     bench_table_scan_primary_key,
     bench_table_scan_datum_front,
     bench_table_scan_datum_multi_front,
