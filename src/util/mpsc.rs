@@ -152,9 +152,7 @@ impl<T> Receiver<T> {
         match self.receiver.recv_timeout(timeout) {
             Ok(t) => Ok(t),
             Err(e) => match e {
-                crossbeam_channel::RecvTimeoutError::Timeout => {
-                    Err(RecvTimeoutError::Timeout)
-                }
+                crossbeam_channel::RecvTimeoutError::Timeout => Err(RecvTimeoutError::Timeout),
                 crossbeam_channel::RecvTimeoutError::Disconnected => {
                     Err(RecvTimeoutError::Disconnected)
                 }
