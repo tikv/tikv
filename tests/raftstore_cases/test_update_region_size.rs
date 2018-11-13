@@ -86,9 +86,9 @@ fn test_server_update_region_size() {
     test_update_regoin_size(&mut cluster);
 }
 
-/// Test whether approximate size and keys are updated after merge
+/// Test whether approximate size and keys are updated after transfer leader
 #[test]
-fn test_transfer_approximate_size_and_keys() {
+fn test_transfer_leader_approximate_size_and_keys() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.region_split_check_diff = ReadableSize(100);
