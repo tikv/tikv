@@ -25,13 +25,14 @@ use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::TablePropertiesCollection;
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
-pub mod btree_engine;
+mod btree_engine;
 mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
 mod rocksdb;
 
+pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb::{RocksEngine, RocksSnapshot, TestEngineBuilder};

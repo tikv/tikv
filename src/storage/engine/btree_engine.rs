@@ -29,6 +29,9 @@ use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
+/// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and benchmarks.
+/// Note: The `snapshot()` and `async_snapshot()` methods are fake, the returned snapshot is not isolated,
+/// they will be affected by the later modifies.
 #[derive(Clone)]
 pub struct BTreeEngine {
     cf_names: Vec<CfName>,
@@ -62,7 +65,7 @@ impl BTreeEngine {
             .cf_names
             .iter()
             .position(|&c| c == cf)
-            .expect("Not exist CF!");
+            .expect("CF not exist!");
         self.cf_contents[index].clone()
     }
 }
@@ -133,13 +136,16 @@ impl BTreeEngineIterator {
         }
     }
 
-    fn seek_and_valid(&mut self, range: (Bound<Key>, Bound<Key>), next_back: bool) -> bool {
+    /// In general, there are 2 endpoints in a range, the left one and the right one.
+    /// This method will seek to the left one if left is `true`, else seek to the right one.
+    /// Returns true when the endpoint is valid, which means the endpoint exist and in `self.bounds`.
+    fn seek_to_range_endpoint(&mut self, range: (Bound<Key>, Bound<Key>), left: bool) -> bool {
         let tree = self.tree.read().unwrap();
         let mut range = tree.range(range);
-        let item = if next_back {
-            range.next_back()
+        let item = if left {
+            range.next() // move to the left endpoint
         } else {
-            range.next()
+            range.next_back() // move to the right endpoint
         };
         match item {
             Some((k, v)) if self.bounds.contains(k) => {
@@ -158,32 +164,32 @@ impl BTreeEngineIterator {
 impl Iterator for BTreeEngineIterator {
     fn next(&mut self) -> bool {
         let range = (Excluded(self.cur_key.clone().unwrap()), Unbounded);
-        self.seek_and_valid(range, false)
+        self.seek_to_range_endpoint(range, true)
     }
 
     fn prev(&mut self) -> bool {
         let range = (Unbounded, Excluded(self.cur_key.clone().unwrap()));
-        self.seek_and_valid(range, true)
+        self.seek_to_range_endpoint(range, false)
     }
 
     fn seek(&mut self, key: &Key) -> EngineResult<bool> {
         let range = (Included(key.clone()), Unbounded);
-        Ok(self.seek_and_valid(range, false))
+        Ok(self.seek_to_range_endpoint(range, true))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> EngineResult<bool> {
         let range = (Unbounded, Included(key.clone()));
-        Ok(self.seek_and_valid(range, true))
+        Ok(self.seek_to_range_endpoint(range, false))
     }
 
     fn seek_to_first(&mut self) -> bool {
         let range = (self.bounds.0.clone(), self.bounds.1.clone());
-        self.seek_and_valid(range, false)
+        self.seek_to_range_endpoint(range, true)
     }
 
     fn seek_to_last(&mut self) -> bool {
         let range = (self.bounds.0.clone(), self.bounds.1.clone());
-        self.seek_and_valid(range, true)
+        self.seek_to_range_endpoint(range, false)
     }
 
     #[inline]
