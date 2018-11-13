@@ -28,6 +28,10 @@ name = "raftstore"
 harness = false
 
 [[bench]]
+name = "coprocessor_executors"
+harness = false
+
+[[bench]]
 name = "benches"
 
 [dependencies]

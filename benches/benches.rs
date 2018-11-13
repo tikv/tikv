@@ -29,6 +29,7 @@ extern crate test;
 extern crate tipb;
 
 extern crate cop_datatype;
+extern crate test_coprocessor;
 extern crate test_storage;
 extern crate test_util;
 extern crate tikv;

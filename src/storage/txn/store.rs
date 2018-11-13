@@ -181,25 +181,17 @@ impl<S: Snapshot> Scanner for StoreScanner<S> {
     }
 }
 
-#[cfg(test)]
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::ops::Bound;
-
 /// A Store that reads on fixtures.
-#[cfg(test)]
 pub struct FixtureStore {
-    data: BTreeMap<Key, Result<Vec<u8>>>,
+    data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>,
 }
 
-#[cfg(test)]
 impl FixtureStore {
-    pub fn new(data: BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+    pub fn new(data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore { data }
     }
 }
 
-#[cfg(test)]
 impl Store for FixtureStore {
     type Scanner = FixtureStoreScanner;
 
@@ -226,6 +218,8 @@ impl Store for FixtureStore {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<FixtureStoreScanner> {
+        use std::ops::Bound;
+
         let lower = lower_bound.as_ref().map_or(Bound::Unbounded, |v| {
             if !desc {
                 Bound::Included(v)
@@ -273,12 +267,10 @@ impl Store for FixtureStore {
 }
 
 /// A Scanner that scans on fixtures.
-#[cfg(test)]
 pub struct FixtureStoreScanner {
     data: ::std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
 }
 
-#[cfg(test)]
 impl Scanner for FixtureStoreScanner {
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {

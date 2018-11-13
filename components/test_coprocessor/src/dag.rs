@@ -67,7 +67,7 @@ impl DAGSelect {
         }
     }
 
-    pub fn from_index(table: &Table, index: Column) -> DAGSelect {
+    pub fn from_index(table: &Table, index: &Column) -> DAGSelect {
         let idx = index.index;
         let mut exec = Executor::new();
         exec.set_tp(ExecType::TypeIndexScan);
@@ -98,7 +98,7 @@ impl DAGSelect {
         self
     }
 
-    pub fn order_by(mut self, col: Column, desc: bool) -> DAGSelect {
+    pub fn order_by(mut self, col: &Column, desc: bool) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut item = ByItem::new();
         let mut expr = Expr::new();
@@ -117,7 +117,7 @@ impl DAGSelect {
         self
     }
 
-    pub fn aggr_col(mut self, col: Column, aggr_t: ExprType) -> DAGSelect {
+    pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::new();
         col_expr.set_tp(ExprType::ColumnRef);
@@ -129,39 +129,39 @@ impl DAGSelect {
         self
     }
 
-    pub fn first(self, col: Column) -> DAGSelect {
+    pub fn first(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::First)
     }
 
-    pub fn sum(self, col: Column) -> DAGSelect {
+    pub fn sum(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Sum)
     }
 
-    pub fn avg(self, col: Column) -> DAGSelect {
+    pub fn avg(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Avg)
     }
 
-    pub fn max(self, col: Column) -> DAGSelect {
+    pub fn max(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Max)
     }
 
-    pub fn min(self, col: Column) -> DAGSelect {
+    pub fn min(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Min)
     }
 
-    pub fn bit_and(self, col: Column) -> DAGSelect {
+    pub fn bit_and(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Agg_BitAnd)
     }
 
-    pub fn bit_or(self, col: Column) -> DAGSelect {
+    pub fn bit_or(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Agg_BitOr)
     }
 
-    pub fn bit_xor(self, col: Column) -> DAGSelect {
+    pub fn bit_xor(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Agg_BitXor)
     }
 
-    pub fn group_by(mut self, cols: &[Column]) -> DAGSelect {
+    pub fn group_by(mut self, cols: &[&Column]) -> DAGSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
             let mut expr = Expr::new();
