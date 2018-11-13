@@ -48,9 +48,9 @@ impl ProductTable {
             .index_key(idx_id)
             .build();
         let table = TableBuilder::new()
-            .add_col(id)
-            .add_col(name)
-            .add_col(count)
+            .add_col(id.clone())
+            .add_col(name.clone())
+            .add_col(count.clone())
             .build();
 
         ProductTable {
@@ -89,15 +89,15 @@ pub fn init_data_with_details<E: Engine>(
     cfg: &Config,
     read_pool_cfg: &readpool::Config,
 ) -> (Store<E>, Endpoint<E>) {
-    let mut store = Store::new(engine);
+    let mut store = Store::from_engine(engine);
 
     store.begin();
     for &(id, name, count) in vals {
         store
             .insert_into(&tbl.table)
-            .set(tbl.id, Datum::I64(id))
-            .set(tbl.name, name.map(|s| s.as_bytes()).into())
-            .set(tbl.count, Datum::I64(count))
+            .set(&tbl.id, Datum::I64(id))
+            .set(&tbl.name, name.map(|s| s.as_bytes()).into())
+            .set(&tbl.count, Datum::I64(count))
             .execute_with_ctx(ctx.clone());
     }
     if commit {
