@@ -130,7 +130,7 @@ impl Runnable<Task> for Runner {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
