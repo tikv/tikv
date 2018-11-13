@@ -186,7 +186,7 @@ mod tests {
     use raftstore::store::*;
     use raftstore::Result as RaftStoreResult;
     use server::readpool::{self, ReadPool};
-    use storage::{self, Config as StorageConfig, Storage};
+    use storage::TestStorageBuilder;
     use util::security::SecurityConfig;
     use util::worker::FutureWorker;
 
@@ -244,17 +244,9 @@ mod tests {
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     fn test_peer_resolve() {
         let mut cfg = Config::default();
-        let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let pd_worker = FutureWorker::new("test-future-worker");
-        let storage_read_pool = ReadPool::new(
-            "storage-readpool",
-            &readpool::Config::default_for_test(),
-            || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-        );
-        let mut storage = Storage::new(&storage_cfg, storage_read_pool).unwrap();
-        storage.start(&storage_cfg).unwrap();
+        let storage = TestStorageBuilder::new().build_and_start().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();

@@ -11,11 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use arrow::array;
 use arrow::datatypes::{self, DataType, Field};
 use arrow::record_batch::RecordBatch;
-use std::sync::Arc;
-use tikv::coprocessor::codec::mysql::types;
+
+use cop_datatype::prelude::*;
+use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 use tikv::coprocessor::codec::Datum;
 use tipb::expression::FieldType;
 
@@ -24,21 +27,21 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn get_datum(&self, col_id: usize, row_id: usize, tp: &FieldType) -> Datum {
+    pub fn get_datum(&self, col_id: usize, row_id: usize, field_type: &FieldType) -> Datum {
         if let Some(bitmap) = self.data.column(col_id).validity_bitmap() {
             if !bitmap.is_set(row_id) {
                 return Datum::Null;
             }
         }
 
-        match tp.get_tp() as u8 {
-            types::TINY
-            | types::SHORT
-            | types::INT24
-            | types::LONG
-            | types::LONG_LONG
-            | types::YEAR => {
-                if types::has_unsigned_flag(tp.get_flag()) {
+        match field_type.tp() {
+            FieldTypeTp::Tiny
+            | FieldTypeTp::Short
+            | FieldTypeTp::Int24
+            | FieldTypeTp::Long
+            | FieldTypeTp::LongLong
+            | FieldTypeTp::Year => {
+                if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                     let data = self
                         .data
                         .column(col_id)
@@ -58,7 +61,7 @@ impl Chunk {
                     Datum::I64(*data.get(row_id))
                 }
             }
-            types::FLOAT | types::DOUBLE => {
+            FieldTypeTp::Float | FieldTypeTp::Double => {
                 let data = self
                     .data
                     .column(col_id)
@@ -86,21 +89,21 @@ impl ChunkBuilder {
     pub fn build(self, tps: &[FieldType]) -> Chunk {
         let mut fields = Vec::with_capacity(tps.len());
         let mut arrays: Vec<Arc<array::Array>> = Vec::with_capacity(tps.len());
-        for (tp, column) in tps.iter().zip(self.columns.into_iter()) {
-            let (field, data) = match tp.get_tp() as u8 {
-                types::TINY
-                | types::SHORT
-                | types::INT24
-                | types::LONG
-                | types::LONG_LONG
-                | types::YEAR => {
-                    if types::has_unsigned_flag(tp.get_flag()) {
+        for (field_type, column) in tps.iter().zip(self.columns.into_iter()) {
+            let (field, data) = match field_type.tp() {
+                FieldTypeTp::Tiny
+                | FieldTypeTp::Short
+                | FieldTypeTp::Int24
+                | FieldTypeTp::Long
+                | FieldTypeTp::LongLong
+                | FieldTypeTp::Year => {
+                    if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                         column.into_u64_array()
                     } else {
                         column.into_i64_array()
                     }
                 }
-                types::FLOAT | types::DOUBLE => column.into_f64_array(),
+                FieldTypeTp::Float | FieldTypeTp::Double => column.into_f64_array(),
                 _ => unreachable!(),
             };
             fields.push(field);
