@@ -20,7 +20,9 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::{
+    self, Engine, Key, KvPair, Mutation, Options, Result, Storage, TestEngineBuilder, Value,
+};
 use tikv::util::collections::HashMap;
 
 /// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
@@ -31,7 +33,8 @@ pub struct SyncStorage<E: Engine> {
 
 impl SyncStorage<RocksEngine> {
     pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
-        let storage = Storage::new(config, read_pool).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = Storage::from_engine(engine, config, read_pool).unwrap();
         let mut s = SyncStorage {
             store: storage,
             cnt: Arc::new(AtomicUsize::new(0)),

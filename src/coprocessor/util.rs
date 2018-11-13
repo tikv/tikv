@@ -15,7 +15,6 @@ use kvproto::coprocessor as coppb;
 use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::datum::Datum;
-use coprocessor::codec::mysql;
 use coprocessor::*;
 
 pub struct ErrorRequestHandler {
@@ -124,7 +123,9 @@ pub fn is_point(range: &coppb::KeyRange) -> bool {
 
 #[inline]
 pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
-    if mysql::has_unsigned_flag(col.get_flag() as u64) {
+    use cop_datatype::{FieldTypeAccessor, FieldTypeFlag};
+
+    if col.flag().contains(FieldTypeFlag::UNSIGNED) {
         // PK column is unsigned
         Datum::U64(h as u64)
     } else {
