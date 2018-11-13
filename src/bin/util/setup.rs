@@ -80,6 +80,8 @@ pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
         let decorator = PlainDecorator::new(logger);
         let drain = logger::TikvFormat::new(decorator).fuse();
         let drain = Async::new(drain)
+            .chan_size(SLOG_CHANNEL_SIZE)
+            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("file-slogger"))
             .build()
             .fuse();
