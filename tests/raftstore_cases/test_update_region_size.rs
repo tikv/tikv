@@ -12,13 +12,13 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::{thread, time};
 use std::time::Duration;
+use std::{thread, time};
 
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::util::config::*;
 use tikv::storage::CF_WRITE;
+use tikv::util::config::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
@@ -86,7 +86,6 @@ fn test_server_update_region_size() {
     test_update_regoin_size(&mut cluster);
 }
 
-
 /// Test whether approximate size and keys are updated after merge
 #[test]
 fn test_transfer_approximate_size_and_keys() {
@@ -108,7 +107,7 @@ fn test_transfer_approximate_size_and_keys() {
     thread::sleep(Duration::from_millis(100));
     cluster.must_transfer_leader(region.get_id(), region.get_peers()[2].clone());
     thread::sleep(Duration::from_millis(100));
-    
+
     let old_size = pd_client
         .get_region_approximate_size(region.get_id())
         .unwrap();
@@ -134,7 +133,6 @@ fn test_transfer_approximate_size_and_keys() {
         .unwrap();
     assert_ne!(old_size, new_size);
 }
-
 
 /// Test whether approximate size and keys are updated after merge
 #[test]
