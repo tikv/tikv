@@ -508,6 +508,8 @@ impl Peer {
         }
 
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
+        self.stopped = true;
+        self.pending_remove = true;
 
         Ok(())
     }
@@ -1807,8 +1809,11 @@ impl Peer {
 
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
+        let term = self.term();
         for mut read in self.pending_reads.reads.drain(..) {
-            read.cmds.clear();
+            for (_, cb) in read.cmds.drain(..) {
+                apply::notify_stale_req(term, cb);
+            }
         }
     }
 }

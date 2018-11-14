@@ -416,8 +416,19 @@ impl Batch {
     }
 
     fn remove(&mut self, index: usize) {
-        self.fsm_holders.pop().unwrap();
-        self.applys.swap_remove(index);
+        let mut holder = self.fsm_holders.pop().unwrap();
+        let mut apply = self.applys.swap_remove(index);
+        let mail_box = apply.mail_box.take().unwrap();
+        if mail_box.sender.is_empty() {
+            mem::replace(&mut *holder, FsmTypes::Apply(apply));
+            mail_box.state.release_fsm(holder);
+        } else {
+            apply.mail_box = Some(mail_box);
+            mem::replace(&mut *holder, FsmTypes::Apply(apply));
+            let last_index = self.applys.len();
+            self.push(holder);
+            self.applys.swap(index, last_index);
+        }
     }
 
     #[inline]
@@ -464,9 +475,15 @@ impl Batch {
         }
     }
 
-    fn remove_fallback(&mut self) {
-        self.fsm_holders.pop();
-        self.fallback.take();
+    fn remove_fallback(&mut self, fallback: &MailBox<Task>) {
+        let mut holder = self.fsm_holders.pop().unwrap();
+        let f = self.fallback.take().unwrap();
+        mem::replace(&mut *holder, FsmTypes::Fallback(f));
+        if fallback.sender.is_empty() {
+            fallback.state.release_fsm(holder);
+        } else {
+            self.push(holder);
+        }
     }
 }
 
@@ -574,7 +591,7 @@ impl Poller {
                     fallback.poll(&f.receiver, &mut msgs)
                 };
                 if batches.fallback.as_ref().unwrap().delegate.stopped {
-                    batches.remove_fallback();
+                    batches.remove_fallback(&self.scheduler.router.fallback);
                 } else if let Some(pos) = mark {
                     batches.release_fallback(&self.scheduler.router.fallback, pos);
                 }

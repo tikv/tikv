@@ -788,7 +788,6 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             "{} starts destroy [merged_by_target: {}]",
             self.peer.tag, merged_by_target
         );
-        self.peer.stopped = true;
         let region_id = self.region_id();
 
         // We can't destroy a peer which is applying snapshot.
@@ -1573,6 +1572,11 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             _ => (),
         }
 
+        if self.peer.pending_remove {
+            super::apply::notify_req_region_removed(self.region_id(), cb);
+            return;
+        }
+
         if let Err(e) = self.check_merge_proposal(&msg) {
             warn!(
                 "{} failed to propose merge: {:?}: {}",
@@ -2232,6 +2236,7 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
 
     pub fn poll(&mut self, receiver: &Receiver<PeerMsg>, buf: &mut Vec<PeerMsg>) -> Option<usize> {
         let mut mark = None;
+        let mut shutdown = false;
         if self.peer.pending_merge_apply.is_some() {
             mark = Some(receiver.len());
             if !self
@@ -2257,7 +2262,7 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.stop();
+                    shutdown = true;
                     mark = Some(0);
                     break;
                 }
@@ -2265,6 +2270,9 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         }
         for m in buf.drain(..) {
             self.on_peer_msg(m);
+        }
+        if shutdown {
+            self.stop();
         }
         mark
     }

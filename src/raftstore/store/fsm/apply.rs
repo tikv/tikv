@@ -276,7 +276,6 @@ impl<'a> PollContext {
         PollContext {
             engines,
             host,
-            cfg,
             importer,
             notifier,
             router,
@@ -288,26 +287,12 @@ impl<'a> PollContext {
             wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: false,
+            enable_sync_log: cfg.sync_log,
             sync_log_hint: false,
             exec_ctx: None,
-            use_delete_range: false,
+            use_delete_range: cfg.use_delete_range,
+            cfg,
         }
-    }
-
-    pub fn enable_sync_log(mut self, eanbled: bool) -> PollContext {
-        self.enable_sync_log = eanbled;
-        self
-    }
-
-    pub fn apply_res_capacity(mut self, cap: usize) -> PollContext {
-        self.apply_res = Vec::with_capacity(cap);
-        self
-    }
-
-    pub fn use_delete_range(mut self, use_delete_range: bool) -> PollContext {
-        self.use_delete_range = use_delete_range;
-        self
     }
 
     /// Prepare for applying entries for `delegate`.
@@ -2014,6 +1999,16 @@ impl RegionProposal {
             props,
         }
     }
+
+    pub fn notify_region_removed(self) {
+        info!(
+            "[region {}] {} is removed, notify all callbacks",
+            self.region_id, self.id
+        );
+        for prop in self.props {
+            notify_req_region_removed(self.region_id, prop.cb);
+        }
+    }
 }
 
 pub struct Destroy {
@@ -2141,29 +2136,34 @@ impl<'a> FallbackPoller<'a> {
                 },
                 Task::Destroy(d) => {
                     let region_id = d.region_id;
-                    let res = self.ctx.router.try_send_task(region_id, Task::Destroy(d));
-                    error!("[region {}] failed to send destroy: {:?}", region_id, res);
+                    if let Err(e) = self.ctx.router.try_send_task(region_id, Task::Destroy(d)) {
+                        error!("[region {}] failed to send destroy: {:?}", region_id, e);
+                    }
                 }
                 Task::Apply(a) => {
                     let region_id = a.region_id;
-                    let res = self.ctx.router.try_send_task(region_id, Task::Apply(a));
-                    error!("[region {}] failed to send apply: {:?}", region_id, res);
+                    if let Err(e) = self.ctx.router.try_send_task(region_id, Task::Apply(a)) {
+                        error!("[region {}] failed to send apply: {:?}", region_id, e);
+                    }
                 }
                 Task::CatchUpLogs { req, notifier } => {
                     let region_id = req.get_source().get_id();
-                    let res = self
+                    if let Err(e) = self
                         .ctx
                         .router
-                        .try_send_task(region_id, Task::CatchUpLogs { req, notifier });
-                    error!(
-                        "[region {}] failed to send catchuplogs: {:?}",
-                        region_id, res
-                    );
+                        .try_send_task(region_id, Task::CatchUpLogs { req, notifier })
+                    {
+                        error!("[region {}] failed to send catchuplogs: {:?}", region_id, e);
+                    }
                 }
                 Task::Proposal(p) => {
                     let region_id = p.region_id;
-                    let res = self.ctx.router.try_send_task(region_id, Task::Proposal(p));
-                    error!("[region {}] failed to send proposal: {:?}", region_id, res);
+                    if let Err(SendError(Task::Proposal(prop))) =
+                        self.ctx.router.try_send_task(region_id, Task::Proposal(p))
+                    {
+                        error!("[region {}] failed to send proposal", region_id);
+                        prop.notify_region_removed();
+                    }
                 }
                 Task::Noop => {}
             }
@@ -2325,19 +2325,26 @@ impl<'a> ApplyPoller<'a> {
     fn handle_proposal(&mut self, region_proposal: RegionProposal) -> bool {
         assert_eq!(self.delegate.id, region_proposal.id);
         let propose_num = region_proposal.props.len();
-        for p in region_proposal.props {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
-            if p.is_conf_change {
-                if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
-                    // if it loses leadership before conf change is replicated, there may be
-                    // a stale pending conf change before next conf change is applied. If it
-                    // becomes leader again with the stale pending conf change, will enter
-                    // this block, so we notify leadership may have been changed.
-                    notify_stale_command(&self.delegate.tag, self.delegate.term, cmd);
+        // TODO: check pending remove instead.
+        if !self.delegate.stopped {
+            for p in region_proposal.props {
+                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                if p.is_conf_change {
+                    if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
+                        // if it loses leadership before conf change is replicated, there may be
+                        // a stale pending conf change before next conf change is applied. If it
+                        // becomes leader again with the stale pending conf change, will enter
+                        // this block, so we notify leadership may have been changed.
+                        notify_stale_command(&self.delegate.tag, self.delegate.term, cmd);
+                    }
+                    self.delegate.pending_cmds.set_conf_change(cmd);
+                } else {
+                    self.delegate.pending_cmds.append_normal(cmd);
                 }
-                self.delegate.pending_cmds.set_conf_change(cmd);
-            } else {
-                self.delegate.pending_cmds.append_normal(cmd);
+            }
+        } else {
+            for p in region_proposal.props {
+                notify_req_region_removed(self.delegate.region_id(), p.cb);
             }
         }
         APPLY_PROPOSAL.observe(propose_num as f64);
