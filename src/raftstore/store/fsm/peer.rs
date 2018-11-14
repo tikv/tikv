@@ -788,7 +788,6 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             "{} starts destroy [merged_by_target: {}]",
             self.peer.tag, merged_by_target
         );
-        self.peer.stopped = true;
         let region_id = self.region_id();
 
         // We can't destroy a peer which is applying snapshot.

@@ -1999,6 +1999,16 @@ impl RegionProposal {
             props,
         }
     }
+
+    pub fn notify_region_removed(self) {
+        info!(
+            "[region {}] {} is removed, notify all callbacks",
+            self.region_id, self.id
+        );
+        for prop in self.props {
+            notify_req_region_removed(self.region_id, prop.cb);
+        }
+    }
 }
 
 pub struct Destroy {
@@ -2126,29 +2136,34 @@ impl<'a> FallbackPoller<'a> {
                 },
                 Task::Destroy(d) => {
                     let region_id = d.region_id;
-                    let res = self.ctx.router.try_send_task(region_id, Task::Destroy(d));
-                    error!("[region {}] failed to send destroy: {:?}", region_id, res);
+                    if let Err(e) = self.ctx.router.try_send_task(region_id, Task::Destroy(d)) {
+                        error!("[region {}] failed to send destroy: {:?}", region_id, e);
+                    }
                 }
                 Task::Apply(a) => {
                     let region_id = a.region_id;
-                    let res = self.ctx.router.try_send_task(region_id, Task::Apply(a));
-                    error!("[region {}] failed to send apply: {:?}", region_id, res);
+                    if let Err(e) = self.ctx.router.try_send_task(region_id, Task::Apply(a)) {
+                        error!("[region {}] failed to send apply: {:?}", region_id, e);
+                    }
                 }
                 Task::CatchUpLogs { req, notifier } => {
                     let region_id = req.get_source().get_id();
-                    let res = self
+                    if let Err(e) = self
                         .ctx
                         .router
-                        .try_send_task(region_id, Task::CatchUpLogs { req, notifier });
-                    error!(
-                        "[region {}] failed to send catchuplogs: {:?}",
-                        region_id, res
-                    );
+                        .try_send_task(region_id, Task::CatchUpLogs { req, notifier })
+                    {
+                        error!("[region {}] failed to send catchuplogs: {:?}", region_id, e);
+                    }
                 }
                 Task::Proposal(p) => {
                     let region_id = p.region_id;
-                    let res = self.ctx.router.try_send_task(region_id, Task::Proposal(p));
-                    error!("[region {}] failed to send proposal: {:?}", region_id, res);
+                    if let Err(SendError(Task::Proposal(prop))) =
+                        self.ctx.router.try_send_task(region_id, Task::Proposal(p))
+                    {
+                        error!("[region {}] failed to send proposal", region_id);
+                        prop.notify_region_removed();
+                    }
                 }
                 Task::Noop => {}
             }

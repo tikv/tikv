@@ -600,6 +600,12 @@ pub struct PeerFsm {
     receiver: mpsc::Receiver<PeerMsg>,
 }
 
+impl Drop for PeerFsm {
+    fn drop(&mut self) {
+        self.peer.stop();
+    }
+}
+
 pub struct StoreFsm {
     store: StoreCore,
     receiver: mpsc::Receiver<StoreMsg>,
@@ -846,10 +852,13 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
         if !proposals.is_empty() {
             // TODO: verify if it's shutting down.
             for prop in proposals {
-                let _ = self
+                if let Err(SendError(ApplyTask::Proposal(prop))) = self
                     .ctx
                     .apply_router
-                    .force_send_task(prop.region_id, ApplyTask::Proposal(prop));
+                    .force_send_task(prop.region_id, ApplyTask::Proposal(prop))
+                {
+                    prop.notify_region_removed();
+                }
             }
             self.ctx.trans.flush();
         }
