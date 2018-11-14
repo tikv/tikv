@@ -265,7 +265,9 @@ impl ScalarFunc {
             | ScalarFuncSig::MD5
             | ScalarFuncSig::Radians
             | ScalarFuncSig::Exp
-            | ScalarFuncSig::Trim1Arg => (1, 1),
+            | ScalarFuncSig::Trim1Arg
+            | ScalarFuncSig::FromBase64
+            | ScalarFuncSig::ToBase64 => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -378,7 +380,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
             | ScalarFuncSig::FoundRows
-            | ScalarFuncSig::FromBase64
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::FromUnixTime1Arg
             | ScalarFuncSig::FromUnixTime2Arg
@@ -474,7 +475,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeStringTimeDiff
             | ScalarFuncSig::TimeTimeTimeDiff
             | ScalarFuncSig::TimeToSec
-            | ScalarFuncSig::ToBase64
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::Uncompress
@@ -933,6 +933,9 @@ dispatch_call! {
         SHA1 => sha1,
         SHA2 => sha2,
         Elt => elt,
+        FromBase64 => from_base64,
+        ToBase64 => to_base64,
+
         Conv => conv,
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
@@ -1246,6 +1249,8 @@ mod tests {
                     ScalarFuncSig::Radians,
                     ScalarFuncSig::Exp,
                     ScalarFuncSig::Trim1Arg,
+                    ScalarFuncSig::FromBase64,
+                    ScalarFuncSig::ToBase64,
                 ],
                 1,
                 1,
@@ -1402,7 +1407,6 @@ mod tests {
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
             ScalarFuncSig::FoundRows,
-            ScalarFuncSig::FromBase64,
             ScalarFuncSig::FromDays,
             ScalarFuncSig::FromUnixTime1Arg,
             ScalarFuncSig::FromUnixTime2Arg,
@@ -1498,7 +1502,6 @@ mod tests {
             ScalarFuncSig::TimeStringTimeDiff,
             ScalarFuncSig::TimeTimeTimeDiff,
             ScalarFuncSig::TimeToSec,
-            ScalarFuncSig::ToBase64,
             ScalarFuncSig::ToDays,
             ScalarFuncSig::ToSeconds,
             ScalarFuncSig::Uncompress,
