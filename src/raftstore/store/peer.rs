@@ -508,6 +508,8 @@ impl Peer {
         }
 
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
+        self.stopped = true;
+        self.pending_remove = true;
 
         Ok(())
     }

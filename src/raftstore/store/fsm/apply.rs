@@ -2325,19 +2325,26 @@ impl<'a> ApplyPoller<'a> {
     fn handle_proposal(&mut self, region_proposal: RegionProposal) -> bool {
         assert_eq!(self.delegate.id, region_proposal.id);
         let propose_num = region_proposal.props.len();
-        for p in region_proposal.props {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
-            if p.is_conf_change {
-                if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
-                    // if it loses leadership before conf change is replicated, there may be
-                    // a stale pending conf change before next conf change is applied. If it
-                    // becomes leader again with the stale pending conf change, will enter
-                    // this block, so we notify leadership may have been changed.
-                    notify_stale_command(&self.delegate.tag, self.delegate.term, cmd);
+        // TODO: check pending remove instead.
+        if !self.delegate.stopped {
+            for p in region_proposal.props {
+                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                if p.is_conf_change {
+                    if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
+                        // if it loses leadership before conf change is replicated, there may be
+                        // a stale pending conf change before next conf change is applied. If it
+                        // becomes leader again with the stale pending conf change, will enter
+                        // this block, so we notify leadership may have been changed.
+                        notify_stale_command(&self.delegate.tag, self.delegate.term, cmd);
+                    }
+                    self.delegate.pending_cmds.set_conf_change(cmd);
+                } else {
+                    self.delegate.pending_cmds.append_normal(cmd);
                 }
-                self.delegate.pending_cmds.set_conf_change(cmd);
-            } else {
-                self.delegate.pending_cmds.append_normal(cmd);
+            }
+        } else {
+            for p in region_proposal.props {
+                notify_req_region_removed(self.delegate.region_id(), p.cb);
             }
         }
         APPLY_PROPOSAL.observe(propose_num as f64);

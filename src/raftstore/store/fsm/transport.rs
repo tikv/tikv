@@ -643,8 +643,19 @@ impl Batch {
     }
 
     fn remove_peer(&mut self, index: usize) {
-        self.fsm_holders.pop().unwrap();
-        self.peers.swap_remove(index);
+        let mut holder = self.fsm_holders.pop().unwrap();
+        let mut peer = self.peers.swap_remove(index);
+        let mail_box = peer.mail_box.take().unwrap();
+        if mail_box.sender.is_empty() {
+            mem::replace(&mut *holder, FsmTypes::Peer(peer));
+            mail_box.state.release_fsm(holder);
+        } else {
+            peer.mail_box = Some(mail_box);
+            mem::replace(&mut *holder, FsmTypes::Peer(peer));
+            let last_index = self.peers.len();
+            self.push(holder);
+            self.peers.swap(index, last_index);
+        }
     }
 
     #[inline]
@@ -692,9 +703,15 @@ impl Batch {
         }
     }
 
-    fn remove_store(&mut self) {
-        self.fsm_holders.pop().unwrap();
-        self.store.take().unwrap();
+    fn remove_store(&mut self, mail_box: &MailBox<StoreMsg>) {
+        let mut holder = self.fsm_holders.pop().unwrap();
+        let s = self.store.take().unwrap();
+        mem::replace(&mut *holder, FsmTypes::Store(s));
+        if mail_box.sender.is_empty() {
+            mail_box.state.release_fsm(holder);
+        } else {
+            self.push(holder);
+        }
     }
 }
 
@@ -968,7 +985,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     store.poll(&s.receiver, &mut store_msgs)
                 };
                 if batches.store.as_ref().unwrap().store.stopped {
-                    batches.remove_store();
+                    batches.remove_store(&self.scheduler.router.store_box);
                 } else if let Some(pos) = mark {
                     batches.release_store(&self.scheduler.router.store_box, pos);
                 }
