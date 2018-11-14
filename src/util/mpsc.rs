@@ -136,28 +136,20 @@ impl<T> Receiver<T> {
 
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        match self.receiver.try_recv() {
-            Ok(t) => Ok(t),
-            Err(_) => {
-                if !self.state.is_sender_closed() {
-                    return Err(TryRecvError::Empty);
-                }
-                self.receiver.try_recv().or(Err(TryRecvError::Disconnected))
-            }
-        }
+        self.receiver.try_recv().map_err(|err| match err {
+            crossbeam_channel::TryRecvError::Empty => TryRecvError::Empty,
+            crossbeam_channel::TryRecvError::Disconnected => TryRecvError::Disconnected,
+        })
     }
 
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
-        match self.receiver.recv_timeout(timeout) {
-            Ok(t) => Ok(t),
-            Err(e) => match e {
-                crossbeam_channel::RecvTimeoutError::Timeout => Err(RecvTimeoutError::Timeout),
-                crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    Err(RecvTimeoutError::Disconnected)
-                }
-            },
-        }
+        self.receiver
+            .recv_timeout(timeout)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => RecvTimeoutError::Timeout,
+                crossbeam_channel::RecvTimeoutError::Disconnected => RecvTimeoutError::Disconnected,
+            })
     }
 }
 
