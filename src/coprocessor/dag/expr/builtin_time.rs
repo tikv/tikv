@@ -238,15 +238,10 @@ mod tests {
         op.eval(ctx, &[])
     }
 
-    fn test_ok_case_one_arg(
-        ctx: &mut EvalContext,
-        sig: ScalarFuncSig,
-        arg: Datum,
-        exp: Option<Datum>,
-    ) {
+    fn test_ok_case_one_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, arg: Datum, exp: Datum) {
         let children = &[datum_expr(arg)];
         match expr_build(ctx, sig, children) {
-            Ok(got) => assert_eq!(Some(got), exp),
+            Ok(got) => assert_eq!(got, exp),
             Err(_) => assert!(false, "eval failed"),
         }
     }
@@ -264,11 +259,11 @@ mod tests {
         sig: ScalarFuncSig,
         arg1: Datum,
         arg2: Datum,
-        exp: Option<Datum>,
+        exp: Datum,
     ) {
         let children = &[datum_expr(arg1), datum_expr(arg2)];
         match expr_build(ctx, sig, children) {
-            Ok(got) => assert_eq!(Some(got), exp),
+            Ok(got) => assert_eq!(got, exp),
             Err(_) => assert!(false, "eval failed"),
         }
     }
@@ -329,7 +324,7 @@ mod tests {
                 ScalarFuncSig::DateFormatSig,
                 Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()),
                 Datum::Bytes(arg2.to_string().into_bytes()),
-                Some(Datum::Bytes(exp.to_string().into_bytes())),
+                Datum::Bytes(exp.to_string().into_bytes()),
             );
         }
         // test NULL case
@@ -365,7 +360,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::Date,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap())),
+                Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap()),
             );
         }
         // test NULL case
@@ -401,32 +396,12 @@ mod tests {
             ("272:59:59.99", 0, 273, 0, 0, 0),
         ];
         let mut ctx = EvalContext::default();
-        for (arg, fsp, hour, min, sec, micro_sec) in cases {
-            let arg = Datum::Dur(Duration::parse(arg.as_bytes(), fsp).unwrap());
-            test_ok_case_one_arg(
-                &mut ctx,
-                ScalarFuncSig::Hour,
-                arg.clone(),
-                Some(Datum::I64(hour)),
-            );
-            test_ok_case_one_arg(
-                &mut ctx,
-                ScalarFuncSig::Minute,
-                arg.clone(),
-                Some(Datum::I64(min)),
-            );
-            test_ok_case_one_arg(
-                &mut ctx,
-                ScalarFuncSig::Second,
-                arg.clone(),
-                Some(Datum::I64(sec)),
-            );
-            test_ok_case_one_arg(
-                &mut ctx,
-                ScalarFuncSig::MicroSecond,
-                arg.clone(),
-                Some(Datum::I64(micro_sec)),
-            );
+        for (arg, fsp, h, m, s, ms) in cases {
+            let d = Datum::Dur(Duration::parse(arg.as_bytes(), fsp).unwrap());
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(h));
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(m));
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(s));
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, d, Datum::I64(ms));
         }
         // test NULL case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Hour, Datum::Null);
@@ -434,30 +409,11 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Second, Datum::Null);
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, Datum::Null);
         // test zero case
-        test_ok_case_one_arg(
-            &mut ctx,
-            ScalarFuncSig::Hour,
-            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
-            Some(Datum::I64(0)),
-        );
-        test_ok_case_one_arg(
-            &mut ctx,
-            ScalarFuncSig::Minute,
-            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
-            Some(Datum::I64(0)),
-        );
-        test_ok_case_one_arg(
-            &mut ctx,
-            ScalarFuncSig::Second,
-            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
-            Some(Datum::I64(0)),
-        );
-        test_ok_case_one_arg(
-            &mut ctx,
-            ScalarFuncSig::MicroSecond,
-            Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap()),
-            Some(Datum::I64(0)),
-        );
+        let d = Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap());
+        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(0));
+        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(0));
+        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(0));
+        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, d, Datum::I64(0));
     }
 
     #[test]
@@ -483,7 +439,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::Month,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::I64(exp)),
+                Datum::I64(exp),
             );
         }
         // test NULL case
@@ -523,7 +479,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::MonthName,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::Bytes(exp.as_bytes().to_vec())),
+                Datum::Bytes(exp.as_bytes().to_vec()),
             );
         }
         // test NULL case
@@ -559,7 +515,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::DayName,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::Bytes(exp.as_bytes().to_vec())),
+                Datum::Bytes(exp.as_bytes().to_vec()),
             );
         }
         // test NULL case
@@ -587,7 +543,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::DayOfMonth,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::I64(exp)),
+                Datum::I64(exp),
             );
         }
         // test NULL case
@@ -623,7 +579,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::DayOfWeek,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::I64(exp)),
+                Datum::I64(exp),
             );
         }
         // test NULL case
@@ -651,7 +607,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::DayOfYear,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::I64(exp)),
+                Datum::I64(exp),
             );
         }
         // test NULL case
@@ -680,7 +636,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::LastDay,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap())),
+                Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap()),
             );
         }
         // test NULL case
@@ -717,7 +673,7 @@ mod tests {
                 &mut ctx,
                 ScalarFuncSig::Year,
                 Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Some(Datum::I64(exp)),
+                Datum::I64(exp),
             );
         }
         // test NULL case
