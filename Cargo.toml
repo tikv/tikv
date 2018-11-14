@@ -88,8 +88,8 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 branch = "release-2.0"
 
 [dependencies.kvproto]
-git = "https://github.com/MyonKeminta/kvproto.git"
-rev = "1488e9bb760ca83fdc7dbf77bf0412bcd0f3cd77"
+git = "https://github.com/pingcap/kvproto.git"
+branch = "release-2.0"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
