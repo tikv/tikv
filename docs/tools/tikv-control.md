@@ -30,8 +30,8 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
     ```
 
 - Local mode: 
-  - use the `--db` option to specify the local TiKV data directory path
-  - use the `ldb` option to run ldb cmd of RocksDB
+  - Use the `--db` option to specify the local TiKV data directory path
+  - Use the `ldb` option to run the ldb command of RocksDB
 
 Unless otherwise noted, all commands support both the remote mode and the local mode.
 
@@ -258,23 +258,26 @@ success!
 > - The argument of the `-p` option specifies the PD endpoints without the `http` prefix. Specifying the PD endpoints is to query whether the specified `region_id` is validated or not.
 > - You need to run this command for all stores where specified Regions' peers are located.
 
-### Ldb Cmd
+### Ldb Command
 
-The ldb command line tool offers multiple data access and database admin commands. Some examples are listed below. 
-For more information, please consult the help message displayed when running `tikv-ctl ldb` without any arguments 
+The ldb command line tool offers multiple data access and database administration commands. Some examples are listed below. 
+For more information, refer to the help message displayed when running `tikv-ctl ldb` without any arguments 
 or check the documents from RocksDB.
 
-Example data access sequence:
+Examples of data access sequence:
+
 To dump an existing RocksDB in HEX:
+
 ```bash
 $ tikv-ctl ldb --db=/tmp/test_db dump --hex > /tmp/dbdump
 ```
+
 To dump the manifest of an existing RocksDB:
+
 ```bash
 $ tikv-ctl ldb manifest_dump --path=/tmp/test_db/MANIFEST-000001 --json
 ```
-You can specify command line `--column_family=<string>` for which column family your query will be against.
 
-`--try_load_options` will try to load the options file in the DB to open the DB. 
-It is a good idea to always try to have this option on when you operate the DB. 
-If you open the DB with default options, it may mess up LSM-tree structure which can't be recovered automatically.
+You can specify the column family that your query is against using the `--column_family=<string>` command line.
+
+`--try_load_options` loads the database options file to open the database. It is recommended to always keep this option on when the database is running. If you open the database with default options, the LSM-tree might be messed up, which cannot be recovered automatically.
