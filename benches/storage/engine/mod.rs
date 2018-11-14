@@ -28,7 +28,7 @@ const ITERATIONS: usize = 1000;
 
 fn prepare_engine<E: Engine>(
     engine: &E,
-    target_kvs: &Vec<(Vec<u8>, Vec<u8>)>,
+    target_kvs: &[(Vec<u8>, Vec<u8>)],
     add_target_kvs_to_engine: bool,
     expect_engine_size: usize,
 ) {
@@ -36,7 +36,7 @@ fn prepare_engine<E: Engine>(
     let mut modifies: Vec<Modify> = vec![];
     if add_target_kvs_to_engine {
         for (key, value) in target_kvs {
-            if gap_size <= 0 {
+            if gap_size == 0 {
                 break;
             }
             modifies.push(Modify::Put(CF_DEFAULT, Key::from_raw(&key), value.clone()));
@@ -60,7 +60,7 @@ fn engine_snapshot_bench<E: Engine>(
     engine_size: usize,
     bencher: &mut Bencher,
 ) {
-    prepare_engine(engine, &vec![], false, engine_size);
+    prepare_engine(engine, &[], false, engine_size);
     let ctx = Context::new();
 
     bencher.iter(|| {
