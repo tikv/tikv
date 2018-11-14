@@ -169,7 +169,7 @@ fn bench_crossbeam_channel(b: &mut Bencher) {
         tx.send(1)
     });
 
-    tx.send(0);
+    tx.send(0).unwrap();
     let n2 = t.join().unwrap();
     assert_eq!(n1, n2);
 }

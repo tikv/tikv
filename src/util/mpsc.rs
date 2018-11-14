@@ -101,27 +101,28 @@ impl<T> Sender<T> {
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         if !self.state.is_receiver_closed() {
-            match self.sender.send(t) {
-                Ok(_) => {
+            self.sender
+                .send(t)
+                .map(|_| {
                     self.notify();
-                    return Ok(());
-                }
-                Err(e) => return Err(SendError(e.into_inner())),
-            };
+                    ()
+                })
+                .map_err(|err| SendError(err.into_inner()))
+        } else {
+            Err(SendError(t))
         }
-        Err(SendError(t))
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         if !self.state.is_receiver_closed() {
-            match self.sender.try_send(t) {
-                Ok(_) => {
+            self.sender
+                .try_send(t)
+                .map(|_| {
                     self.notify();
-                    return Ok(());
-                }
-                Err(e) => return Err(TrySendError::Full(e.into_inner())),
-            };
+                    ()
+                })
+                .map_err(|err| TrySendError::Full(err.into_inner()))
         } else {
             Err(TrySendError::Disconnected(t))
         }
