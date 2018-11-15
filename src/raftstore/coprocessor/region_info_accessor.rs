@@ -151,7 +151,7 @@ impl RegionCollection {
     /// operation is caused by a stale message. Then this function should fail.
     ///
     /// Returns a bool value indicating whether checking succeeded.
-    fn check_end_key_collision(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
+    fn check_exist(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
         if let Some(collided_region_id) = self.region_ranges.get(end_key).cloned() {
             // There is already another region with the same end_key
             assert_ne!(collided_region_id, region_id);
@@ -175,41 +175,40 @@ impl RegionCollection {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
-        if !self.check_end_key_collision(
-            region_id,
-            region.get_region_epoch().get_version(),
-            &end_key,
-        ) {
+        if !self.check_exist(region_id, region.get_region_epoch().get_version(), &end_key) {
+            warn!(
+                "region_collection: creating region {} but it's end_key collides with another \
+                 newer region.",
+                region.get_id()
+            );
             return;
         }
 
         // Create new region
+
         self.region_ranges.insert(end_key, region.get_id());
 
         // TODO: Should we set it follower?
-        if self
-            .regions
-            .insert(
-                region.get_id(),
-                RegionInfo::new(region, StateRole::Follower),
-            )
-            .is_some()
-        {
-            panic!(
-                "region_collection: trying to create new region {} but it already exists.",
-                region_id,
-            );
-        }
+        assert!(
+            self.regions
+                .insert(
+                    region.get_id(),
+                    RegionInfo::new(region, StateRole::Follower)
+                )
+                .is_none(),
+            "region_collection: trying to create new region {} but it already exists.",
+            region_id
+        );
     }
 
     fn handle_create_or_update_region(&mut self, region: Region) {
-        let mut need_create_new_region = true;
+        let mut existing = false;
         let mut end_key_updated = false;
 
-        if let Some(ref mut old_region_info) = self.regions.get_mut(&region.get_id()) {
-            need_create_new_region = false;
+        if let Some(ref mut existing_region_info) = self.regions.get_mut(&region.get_id()) {
+            existing = true;
 
-            let old_region = &mut old_region_info.region;
+            let old_region = &mut existing_region_info.region;
             assert_eq!(old_region.get_id(), region.get_id());
 
             // If the end_key changed, the old item in `region_ranges` should be removed.
@@ -232,7 +231,7 @@ impl RegionCollection {
             // However, if the new_end_key has already mapped to another region, we should only
             // keep the one with higher `version`.
             let end_key = data_end_key(region.get_end_key());
-            if !self.check_end_key_collision(
+            if !self.check_exist(
                 region.get_id(),
                 region.get_region_epoch().get_version(),
                 &end_key,
@@ -244,7 +243,7 @@ impl RegionCollection {
             self.region_ranges.insert(end_key, region.get_id());
         }
 
-        if need_create_new_region {
+        if !existing {
             // It's a new region. Create it.
             self.create_region(region);
         }
@@ -693,7 +692,7 @@ mod tests {
         must_update_region(&mut c, &new_region(2, b"k1", b"k9", 1));
         must_change_role(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Leader);
         must_update_region(&mut c, &new_region(2, b"k1", b"k5", 2));
-        // TODO: In fact, region 2's role should be follower. However because it's revious state was
+        // TODO: In fact, region 2's role should be follower. However because it's previous state was
         // removed while creating updating region 4, it can't be successfully updated. Fortunately
         // this case may hardly happen so it can be fixed later.
         check_collection(
