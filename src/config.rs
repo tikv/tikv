@@ -1233,11 +1233,11 @@ mod tests {
 
     #[test]
     fn test_create_parent_dir_if_missing() {
-        let tmp_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
-        let pathbuf = tmp_path.into_path().join("not_exist_dir");
+        let root_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let path = root_path.path().join("not_exist_dir");
 
         let mut tikv_cfg = TiKvConfig::default();
-        tikv_cfg.storage.data_dir = pathbuf.as_path().to_str().unwrap().to_owned();
+        tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
         assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
     }
 

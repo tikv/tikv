@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::result;
 use std::sync::mpsc;
@@ -245,6 +245,12 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
         "cmd type not match, want {:?}, got {:?}!",
         exp, act
     ))
+}
+
+impl<S: RaftStoreRouter> Display for RaftKv<S> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "RaftKv")
+    }
 }
 
 impl<S: RaftStoreRouter> Debug for RaftKv<S> {
