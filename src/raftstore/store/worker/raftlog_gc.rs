@@ -13,6 +13,7 @@
 
 use raftstore::store::engine::Iterable;
 use raftstore::store::keys;
+use raftstore::store::util::MAX_DELETE_BATCH_SIZE;
 use util::worker::Runnable;
 
 use rocksdb::{Writable, WriteBatch, DB};
@@ -83,13 +84,20 @@ impl Runner {
             info!("[region {}] no need to gc", region_id);
             return Ok(0);
         }
-        let raft_wb = WriteBatch::new();
+        let mut raft_wb = WriteBatch::new();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
+            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+                // Avoid large write batch to reduce latency.
+                raft_engine.write(raft_wb).unwrap();
+                raft_wb = WriteBatch::new();
+            }
         }
         // TODO: disable WAL here.
-        raft_engine.write(raft_wb).unwrap();
+        if !raft_wb.is_empty() {
+            raft_engine.write(raft_wb).unwrap();
+        }
         Ok(end_idx - first_idx)
     }
 
