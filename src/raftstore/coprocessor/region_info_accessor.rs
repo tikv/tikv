@@ -206,6 +206,18 @@ impl RegionCollection {
         let mut end_key_updated = false;
 
         if let Some(ref mut existing_region_info) = self.regions.get_mut(&region.get_id()) {
+            // The region already exists. Update it.
+            // Ignore stale messages or messages with nothing updating
+            {
+                let epoch = region.get_region_epoch();
+                let existing_epoch = existing_region_info.region.get_region_epoch();
+                if epoch.get_version() <= existing_epoch.get_version()
+                    && epoch.get_conf_ver() <= existing_epoch.get_conf_ver()
+                {
+                    return;
+                }
+            }
+
             existing = true;
 
             let old_region = &mut existing_region_info.region;
@@ -226,6 +238,8 @@ impl RegionCollection {
             *old_region = region.clone();
         }
 
+        // The new region info has a different end_key, so we need to update it in the
+        // `region_ranges` map.
         if end_key_updated {
             // If the region already exists, then `region_ranges` need to be updated.
             // However, if the new_end_key has already mapped to another region, we should only
@@ -243,6 +257,7 @@ impl RegionCollection {
             self.region_ranges.insert(end_key, region.get_id());
         }
 
+        // The region didn't exist. We should create it.
         if !existing {
             // It's a new region. Create it.
             self.create_region(region);
