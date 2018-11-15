@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::collections::Bound::{self, Excluded, Included, Unbounded};
 use std::default::Default;
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
@@ -101,9 +101,16 @@ impl Engine for BTreeEngine {
     }
 }
 
-impl Debug for BTreeEngine {
+impl Display for BTreeEngine {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "BTreeEngine []",)
+        write!(f, "BTreeEngine",)
+    }
+}
+
+impl Debug for BTreeEngine {
+    // TODO: Provide more debug info.
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "BTreeEngine",)
     }
 }
 
