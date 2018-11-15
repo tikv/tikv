@@ -21,14 +21,13 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use raftstore::store::engine::IterOption;
 use server::readpool::{self, ReadPool};
 use std::boxed::FnBox;
-use std::cmp;
-use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{Arc, Mutex};
-use std::u64;
+use std::{cmp, error, u64};
 use util;
 use util::collections::HashMap;
+use util::rocksdb::{CompactionStats, StorageListener};
 use util::worker::{self, Builder, ScheduleError, Worker};
 
 pub mod config;
@@ -65,6 +64,9 @@ pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+
+// used to periodically recaculate write limit.
+pub const WRITE_LIMIT_RECACULATE_INTERVAL: u64 = 60; // seconds
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -391,6 +393,15 @@ impl Options {
     }
 }
 
+pub fn new_storage_listener<E: Engine>(scheduler: worker::Scheduler<Msg>) -> StorageListener {
+    let handler = box move |compaction_stats: CompactionStats| {
+        if let Err(e) = scheduler.schedule(Msg::CompactionStats(compaction_stats)) {
+            error!("Send compaction to storage scheduler failed: {:?}", e)
+        }
+    };
+    StorageListener::new(handler)
+}
+
 #[derive(Clone)]
 pub struct Storage<E: Engine> {
     engine: E,
@@ -455,7 +466,8 @@ impl<E: Engine> Storage<E> {
             sched_worker_pool_size,
             sched_pending_write_threshold,
         );
-        worker.start(scheduler)?;
+        let timer = scheduler.new_timer();
+        worker.start_with_timer(scheduler, timer)?;
         self.gc_worker.start()?;
         Ok(())
     }
@@ -483,6 +495,10 @@ impl<E: Engine> Storage<E> {
     }
 
     #[inline]
+    pub fn get_scheduler(&self) -> worker::Scheduler<Msg> {
+        self.worker_scheduler.clone()
+    }
+
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
         match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {

@@ -30,6 +30,7 @@ pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-
 pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
 pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
+pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
 pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
@@ -1151,6 +1152,11 @@ lazy_static! {
         "tikv_engine_decompression_time_nanos",
         "Histogram of decompression time nanos",
         &["db", "type"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_FLUSH_DURATIONS_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_engine_flush_duration_seconds",
+        "Histogram of compaction duration seconds",
+        &["db", "cf"]
     ).unwrap();
     pub static ref STORE_ENGINE_PENDING_COMACTION_BYTES_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_pending_compaction_bytes",

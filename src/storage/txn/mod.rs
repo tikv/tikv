@@ -15,6 +15,7 @@ mod latch;
 mod process;
 mod scheduler;
 mod store;
+mod write_limiter;
 
 use std::error;
 use std::io::Error as IoError;

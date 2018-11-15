@@ -17,7 +17,9 @@ pub mod metrics_flusher;
 pub mod properties;
 pub mod stats;
 
-pub use self::event_listener::{CompactedEvent, CompactionListener, EventListener};
+pub use self::event_listener::{
+    CompactedEvent, CompactionListener, CompactionStats, MetricsListener, StorageListener,
+};
 pub use self::metrics_flusher::MetricsFlusher;
 
 use std::cmp;
@@ -39,7 +41,7 @@ use util::file::{calc_crc32, copy_and_sync};
 use util::rocksdb;
 use util::rocksdb::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 
 pub use rocksdb::CFHandle;
@@ -284,6 +286,10 @@ pub fn get_engine_compression_ratio_at_level(
 pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
     engine.get_property_int_cf(handle, &prop)
+}
+
+pub fn get_cf_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
 }
 
 pub fn auto_compactions_is_disabled(engine: &DB) -> bool {

@@ -38,20 +38,24 @@ use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
 use storage::engine::Result as EngineResult;
-use storage::Key;
-use storage::{Command, Engine, Error as StorageError, StorageCb};
+use storage::{Command, Engine, Error as StorageError, Key, StorageCb};
 use util::collections::HashMap;
+use util::rocksdb::CompactionStats;
 use util::threadpool::{ThreadPool, ThreadPoolBuilder};
-use util::worker::{self, Runnable};
+use util::time::Duration;
+use util::timer::Timer;
+use util::worker::{self, Runnable, RunnableWithTimer};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
 use super::process::{
     execute_callback, Executor, ProcessResult, SchedContext, SchedContextFactory, Task,
 };
+use super::write_limiter::WriteLimiter;
 use super::Error;
 
 pub const CMD_BATCH_SIZE: usize = 256;
+const WRITE_LIMIT_RECACULATE_INTERVAL: u64 = 10;
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
@@ -76,6 +80,7 @@ pub enum Msg {
         err: Error,
         tag: &'static str,
     },
+    CompactionStats(CompactionStats),
 }
 
 /// Debug for messages.
@@ -94,6 +99,7 @@ impl Display for Msg {
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
+            Msg::CompactionStats(_) => write!(f, "Compaction statss"),
         }
     }
 }
@@ -158,18 +164,14 @@ pub struct Scheduler<E: Engine> {
     // write concurrency control
     latches: Latches,
 
-    // TODO: Dynamically calculate this value according to processing
-    // speed of recent write requests.
-    sched_pending_write_threshold: usize,
-
     // worker pool
     worker_pool: ThreadPool<SchedContext<E>>,
 
     // high priority commands will be delivered to this pool
     high_priority_pool: ThreadPool<SchedContext<E>>,
 
-    // used to control write flow
-    running_write_bytes: usize,
+    // write limiter
+    write_limiter: WriteLimiter<E>,
 }
 
 impl<E: Engine> Scheduler<E> {
@@ -183,20 +185,19 @@ impl<E: Engine> Scheduler<E> {
     ) -> Self {
         let factory = SchedContextFactory::new(engine.clone());
         Scheduler {
-            engine,
+            engine: engine.clone(),
             // TODO: GC these two maps.
             pending_tasks: Default::default(),
             task_contexts: Default::default(),
             scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
-            sched_pending_write_threshold,
             worker_pool: ThreadPoolBuilder::new(thd_name!("sched-worker-pool"), factory.clone())
                 .thread_count(worker_pool_size)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory)
                 .build(),
-            running_write_bytes: 0,
+            write_limiter: WriteLimiter::new(engine, sched_pending_write_threshold),
         }
     }
 
@@ -221,9 +222,7 @@ impl<E: Engine> Scheduler<E> {
             TaskContext::new(lock, callback, cmd)
         };
 
-        self.running_write_bytes += tctx.write_bytes;
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
-
+        self.write_limiter.on_task_begin(tctx.write_bytes);
         if self.pending_tasks.insert(cid, task).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
@@ -236,8 +235,7 @@ impl<E: Engine> Scheduler<E> {
     fn dequeue_task_context(&mut self, cid: u64) -> TaskContext {
         let tctx = self.task_contexts.remove(&cid).unwrap();
 
-        self.running_write_bytes -= tctx.write_bytes;
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        self.write_limiter.on_task_finish(tctx.write_bytes);
         SCHED_CONTEX_GAUGE.set(self.pending_tasks.len() as i64);
 
         tctx
@@ -296,14 +294,9 @@ impl<E: Engine> Scheduler<E> {
         }
     }
 
-    fn too_busy(&self) -> bool {
-        fail_point!("txn_scheduler_busy", |_| true);
-        self.running_write_bytes >= self.sched_pending_write_threshold
-    }
-
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
-        if cmd.need_flow_control() && self.too_busy() {
+        if self.write_limiter.should_limit(&cmd) {
             SCHED_TOO_BUSY_COUNTER_VEC
                 .with_label_values(&[cmd.tag()])
                 .inc();
@@ -442,6 +435,12 @@ impl<E: Engine> Scheduler<E> {
             self.try_to_wake_up(wcid);
         }
     }
+
+    fn new_timer(&mut self) -> Timer<()> {
+        let timer = Timer::new(1);
+        timer.add_task(Duration::from_secs(WRITE_LIMIT_RECACULATE_INTERVAL), ());
+        timer
+    }
 }
 
 impl<E: Engine> Runnable<Msg> for Scheduler<E> {
@@ -461,6 +460,7 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
                     result,
                 } => self.on_write_finished(cid, pr, result, tag),
                 Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
+                Msg::CompactionStats(stats) => self.write_limiter.update_stats(stats),
             }
         }
     }
@@ -473,6 +473,13 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
             error!("scheduler run err when high priority pool stop:{:?}", e);
         }
         info!("scheduler stopped");
+    }
+}
+
+impl<E: Engine> RunnableWithTimer<Msg, ()> for Scheduler<E> {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        self.write_limiter.recaculate_limit();
+        timer.add_task(Duration::from_secs(WRITE_LIMIT_RECACULATE_INTERVAL), ());
     }
 }
 

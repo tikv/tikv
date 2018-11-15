@@ -139,13 +139,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let pd_sender = pd_worker.scheduler();
 
     // Create kv engine, storage.
-    let mut kv_db_opts = cfg.rocksdb.build_opt();
-    kv_db_opts.add_event_listener(compaction_listener);
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
-    let kv_engine = Arc::new(
-        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-            .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
-    );
     let storage_read_pool =
         ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
             let pd_sender = pd_sender.clone();
@@ -159,6 +152,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     storage
         .mut_gc_worker()
         .set_raft_store_router(raft_router.clone());
+
+    let storage_listener = new_storage_listener(storage.worker_scheduler.clone());
+    let mut kv_db_opts = cfg.rocksdb.build_opt();
+    kv_db_opts.add_event_listener(compaction_listener);
+    kv_db_opts.add_event_listener(storage_listener);
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+    let kv_engine = Arc::new(
+        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
+            .unwrap_or_else(|s| fatal!("failed to create kv engine: {:?}", s)),
+    );
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
