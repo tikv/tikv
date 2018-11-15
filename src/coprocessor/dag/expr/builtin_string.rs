@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use base64;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::i64;
@@ -18,12 +19,22 @@ use std::i64;
 use hex::{self, FromHex};
 
 use cop_datatype::prelude::*;
-use cop_datatype::FieldTypeFlag;
+use cop_datatype::{self, FieldTypeFlag};
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
+use safemem;
 
 const SPACE: u8 = 0o40u8;
+
+// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
+// mysql base64 doc: A newline is added after each 76 characters of encoded output
+const BASE64_LINE_WRAP_LENGTH: usize = 76;
+
+// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
+const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
+const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
+const BASE64_LINE_WRAP: u8 = b'\n';
 
 enum TrimDirection {
     Both = 1,
@@ -317,6 +328,57 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn to_base64<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+
+        if self.field_type.get_flen() == -1
+            || self.field_type.get_flen() > cop_datatype::MAX_BLOB_WIDTH
+        {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+
+        if let Some(size) = encoded_size(s.len()) {
+            let mut buf = vec![0; size];
+            let len_without_wrap =
+                base64::encode_config_slice(s.as_ref(), base64::STANDARD, &mut buf);
+            line_wrap(&mut buf, len_without_wrap);
+            Ok(Some(Cow::Owned(buf)))
+        } else {
+            Ok(Some(Cow::Borrowed(b"")))
+        }
+    }
+
+    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
+    #[inline]
+    pub fn from_base64<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+
+        let input_copy = strip_whitespace(&input);
+        let will_overflow = input_copy
+            .len()
+            .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
+            .is_none();
+        // mysql will return "" when the input is incorrectly padded
+        let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
+        if will_overflow || invalid_padding {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+
+        match base64::decode_config(&input_copy, base64::STANDARD) {
+            Ok(r) => Ok(Some(Cow::Owned(r))),
+            _ => Ok(None),
+        }
+    }
+
+    #[inline]
     pub fn substring_index<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -484,6 +546,52 @@ fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
 }
 
 #[inline]
+fn strip_whitespace(input: &[u8]) -> Vec<u8> {
+    let mut input_copy = Vec::<u8>::with_capacity(input.len());
+    input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
+    input_copy
+}
+
+#[inline]
+fn encoded_size(len: usize) -> Option<usize> {
+    if len == 0 {
+        return Some(0);
+    }
+    // size_without_wrap = (len + (3 - 1)) / 3 * 4
+    // size = size_without_wrap + (size_withou_wrap - 1) / 76
+    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
+        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
+        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
+        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
+}
+
+// similar logic to crate `line-wrap`, since we had call `encoded_size` before,
+// there is no need to use checked_xxx math operation like `line-wrap` does.
+#[inline]
+fn line_wrap(buf: &mut [u8], input_len: usize) {
+    let line_len = BASE64_LINE_WRAP_LENGTH;
+    if input_len <= line_len {
+        return;
+    }
+    let last_line_len = if input_len % line_len == 0 {
+        line_len
+    } else {
+        input_len % line_len
+    };
+    let lines_with_ending = (input_len - 1) / line_len;
+    let line_with_ending_len = line_len + 1;
+    let mut old_start = input_len - last_line_len;
+    let mut new_start = buf.len() - last_line_len;
+    safemem::copy_over(buf, old_start, new_start, last_line_len);
+    for _ in 0..lines_with_ending {
+        old_start -= line_len;
+        new_start -= line_with_ending_len;
+        safemem::copy_over(buf, old_start, new_start, line_len);
+        buf[new_start + line_len] = BASE64_LINE_WRAP;
+    }
+}
+
+#[inline]
 fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
     let mut bg = 0;
     let mut cnt = 0;
@@ -528,11 +636,11 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 
 #[cfg(test)]
 mod tests {
+    use super::{encoded_size, TrimDirection};
     use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use coprocessor::codec::mysql::charset::CHARSET_BIN;
     use tipb::expression::{Expr, ScalarFuncSig};
 
-    use super::TrimDirection;
-    use coprocessor::codec::mysql::charset::CHARSET_BIN;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::tests::{
         col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
@@ -1496,6 +1604,97 @@ mod tests {
         ];
         let got = eval_func(ScalarFuncSig::Trim3Args, &args);
         assert!(got.is_err());
+    }
+
+    #[test]
+    fn test_encoded_size() {
+        assert_eq!(encoded_size(0).unwrap(), 0);
+        assert_eq!(encoded_size(54).unwrap(), 72);
+        assert_eq!(encoded_size(58).unwrap(), 81);
+        assert!(encoded_size(usize::max_value()).is_none());
+    }
+
+    #[test]
+    fn test_to_base64() {
+        let tests = vec![
+            ("", ""),
+            ("abc", "YWJj"),
+            ("ab c", "YWIgYw=="),
+            ("1", "MQ=="),
+            ("1.1", "MS4x"),
+            ("ab\nc", "YWIKYw=="),
+            ("ab\tc", "YWIJYw=="),
+            ("qwerty123456", "cXdlcnR5MTIzNDU2"),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==",
+            ),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv",
+            ),
+            (
+                "ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/",
+                "QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=",
+            ),
+            (
+                "000000000000000000000000000000000000000000000000000000000",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+            ),
+            (
+                "0000000000000000000000000000000000000000000000000000000000",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMA==",
+            ),
+            (
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+            )
+        ];
+        for (s, exp) in tests {
+            let s = Datum::Bytes(s.to_string().into_bytes());
+            let exp = Datum::Bytes(exp.to_string().into_bytes());
+            let got = eval_func(ScalarFuncSig::ToBase64, &[s]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_from_base64() {
+        let tests = vec![
+            ("", ""),
+            ("YWJj", "abc"),
+            ("YWIgYw==", "ab c"),
+            ("YWIKYw==", "ab\nc"),
+            ("YWIJYw==", "ab\tc"),
+            ("cXdlcnR5MTIzNDU2", "qwerty123456"),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+            (
+                "QUJDREVGR0hJSkt\tMTU5PUFFSU1RVVld\nYWVphYmNkZ\rWZnaGlqa2xt   bm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkrLw==",
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            ),
+        ];
+        for (s, exp) in tests {
+            let s = Datum::Bytes(s.to_string().into_bytes());
+            let exp = Datum::Bytes(exp.to_string().into_bytes());
+            let got = eval_func(ScalarFuncSig::FromBase64, &[s]).unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let s = Datum::Bytes(b"src".to_vec());
+        let exp = Datum::Bytes(b"".to_vec());
+        let got = eval_func(ScalarFuncSig::FromBase64, &[s]).unwrap();
+        assert_eq!(got, exp);
     }
 
     #[test]
