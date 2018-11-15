@@ -30,7 +30,7 @@ pub use coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 /// An array of datums in the same data type and is column oriented.
 ///
 /// Stores datums of multiple rows of one column.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum BatchColumn {
     Int(Vec<Option<Int>>),
     Real(Vec<Option<Real>>),
@@ -59,6 +59,32 @@ macro_rules! match_self {
             BatchColumn::Json($($ref)+ $var) => $expr,
         }
     }};
+}
+
+#[inline]
+fn clone_vec_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
+    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
+    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
+    // here.
+    let mut new_vec = Vec::with_capacity(vec.capacity());
+    new_vec.extend_from_slice(vec);
+    new_vec
+}
+
+impl Clone for BatchColumn {
+    #[inline]
+    fn clone(&self) -> Self {
+        // Implement `Clone` manually so that capacity can be preserved after clone.
+        match self {
+            BatchColumn::Int(ref vec) => BatchColumn::Int(clone_vec_with_capacity(vec)),
+            BatchColumn::Real(ref vec) => BatchColumn::Real(clone_vec_with_capacity(vec)),
+            BatchColumn::Decimal(ref vec) => BatchColumn::Decimal(clone_vec_with_capacity(vec)),
+            BatchColumn::Bytes(ref vec) => BatchColumn::Bytes(clone_vec_with_capacity(vec)),
+            BatchColumn::DateTime(ref vec) => BatchColumn::DateTime(clone_vec_with_capacity(vec)),
+            BatchColumn::Duration(ref vec) => BatchColumn::Duration(clone_vec_with_capacity(vec)),
+            BatchColumn::Json(ref vec) => BatchColumn::Json(clone_vec_with_capacity(vec)),
+        }
+    }
 }
 
 impl BatchColumn {
@@ -585,6 +611,8 @@ mod tests {
         assert!(column.is_empty());
         assert_eq!(column.as_real_slice(), &[]);
         assert_eq!(column.as_mut_real_slice(), &mut []);
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(Some(1.0));
         assert_eq!(column.len(), 1);
@@ -592,6 +620,8 @@ mod tests {
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0)]);
         assert_eq!(column.as_mut_real_slice(), &mut [Some(1.0)]);
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
         assert_eq!(column.len(), 2);
@@ -599,6 +629,8 @@ mod tests {
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
         assert_eq!(column.as_mut_real_slice(), &mut [Some(1.0), None]);
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(Some(4.5));
         assert_eq!(column.len(), 3);
@@ -609,6 +641,8 @@ mod tests {
             column.as_mut_real_slice(),
             &mut [Some(1.0), None, Some(4.5)]
         );
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.push_real(None);
         assert_eq!(column.len(), 4);
@@ -619,6 +653,8 @@ mod tests {
             column.as_mut_real_slice(),
             &mut [Some(1.0), None, Some(4.5), None]
         );
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.as_mut_real_slice()[2] = None;
         assert_eq!(column.len(), 4);
@@ -629,6 +665,8 @@ mod tests {
             column.as_mut_real_slice(),
             &mut [Some(1.0), None, None, None]
         );
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.truncate(2);
         assert_eq!(column.len(), 2);
@@ -636,6 +674,8 @@ mod tests {
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
         assert_eq!(column.as_mut_real_slice(), &mut [Some(1.0), None]);
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         column.as_mut_real_slice()[0] = Some(3.7);
         assert_eq!(column.len(), 2);
@@ -643,6 +683,8 @@ mod tests {
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(3.7), None]);
         assert_eq!(column.as_mut_real_slice(), &mut [Some(3.7), None]);
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
         let mut column = BatchColumn::with_capacity(10, EvalType::DateTime);
         assert_eq!(column.eval_type(), EvalType::DateTime);
@@ -651,6 +693,11 @@ mod tests {
         assert!(column.is_empty());
         assert_eq!(column.as_date_time_slice(), &[]);
         assert_eq!(column.as_mut_date_time_slice(), &mut []);
+        assert_eq!(column.clone().capacity(), column.capacity());
+        assert_eq!(
+            column.clone().as_date_time_slice(),
+            column.as_date_time_slice()
+        );
     }
 
     #[test]
