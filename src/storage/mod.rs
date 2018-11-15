@@ -11,26 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::gc_worker::GCWorker;
-use self::metrics::*;
-use self::mvcc::Lock;
-use self::txn::CMD_BATCH_SIZE;
-use futures::{future, Future};
-use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
-use raftstore::store::engine::IterOption;
-use server::readpool::{self, ReadPool};
-use std::boxed::FnBox;
-use std::cmp;
-use std::error;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
-use std::sync::{Arc, Mutex};
-use std::u64;
-use util;
-use util::collections::HashMap;
-use util::worker::{self, Builder, ScheduleError, Worker};
-
 pub mod config;
 pub mod engine;
 pub mod gc_worker;
@@ -39,6 +19,32 @@ pub mod mvcc;
 mod readpool_context;
 pub mod txn;
 pub mod types;
+
+use std::boxed::FnBox;
+use std::cmp;
+use std::error;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::sync::{atomic, Arc, Mutex};
+use std::u64;
+
+use futures::{future, Future};
+use kvproto::errorpb;
+use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
+
+use rocksdb::DB;
+
+use raftstore::store::engine::IterOption;
+use server::readpool::{self, ReadPool};
+use server::ServerRaftStoreRouter;
+use util;
+use util::collections::HashMap;
+use util::worker::{self, Builder, ScheduleError, Worker};
+
+use self::gc_worker::GCWorker;
+use self::metrics::*;
+use self::mvcc::Lock;
+use self::txn::CMD_BATCH_SIZE;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
@@ -391,76 +397,155 @@ impl Options {
     }
 }
 
-/// A builder to build a temporary `Storage<RocksEngine>`.
+/// A builder to build a temporary `Storage<E>`.
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder {
-    config: Option<Config>,
-    engine: Option<RocksEngine>,
+pub struct TestStorageBuilder<E: Engine> {
+    engine: E,
+    config: Config,
+    local_storage: Option<Arc<DB>>,
+    raft_store_router: Option<ServerRaftStoreRouter>,
 }
 
-impl TestStorageBuilder {
+impl TestStorageBuilder<RocksEngine> {
+    /// Build `Storage<RocksEngine>`.
     pub fn new() -> Self {
         Self {
-            config: None,
-            engine: None,
+            engine: TestEngineBuilder::new().build().unwrap(),
+            config: Config::default(),
+            local_storage: None,
+            raft_store_router: None,
+        }
+    }
+}
+
+impl<E: Engine> TestStorageBuilder<E> {
+    pub fn from_engine(engine: E) -> Self {
+        Self {
+            engine,
+            config: Config::default(),
+            local_storage: None,
+            raft_store_router: None,
         }
     }
 
     /// Customize the config of the `Storage`.
     ///
     /// By default, `Config::default()` will be used.
-    pub fn config(mut self, config: &Config) -> Self {
-        self.config = Some(config.clone());
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = config;
         self
     }
 
-    /// Customize the engine of the `Storage`.
+    /// Set local storage for GCWorker.
     ///
-    /// By default, an engine created from `TestEngineBuilder` will be used.
-    pub fn engine(mut self, engine: RocksEngine) -> Self {
-        self.engine = Some(engine);
+    /// By default, `None` will be used.
+    pub fn local_storage(mut self, local_storage: Arc<DB>) -> Self {
+        self.local_storage = Some(local_storage);
         self
     }
 
-    /// Build a `Storage<RocksEngine>`.
-    pub fn build_and_start(self) -> Result<Storage<RocksEngine>> {
+    /// Set raft store router for GCWorker.
+    ///
+    /// By default, `None` will be used.
+    pub fn raft_store_router(mut self, raft_store_router: ServerRaftStoreRouter) -> Self {
+        self.raft_store_router = Some(raft_store_router);
+        self
+    }
+
+    /// Build a `Storage<E>`.
+    pub fn build(self) -> Result<Storage<E>> {
         use util::worker::FutureWorker;
 
-        let config = match self.config {
-            None => Config::default(),
-            Some(cfg) => cfg,
-        };
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
             ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
                 || ReadPoolContext::new(pd_worker.scheduler())
             })
         };
-        let engine = match self.engine {
-            None => TestEngineBuilder::new().build()?,
-            Some(e) => e,
-        };
-        let mut storage = Storage::from_engine(engine, &config, read_pool)?;
-        storage.start(&config)?;
-        Ok(storage)
+        Storage::from_engine(
+            self.engine,
+            &self.config,
+            read_pool,
+            self.local_storage,
+            self.raft_store_router,
+        )
     }
 }
 
-#[derive(Clone)]
 pub struct Storage<E: Engine> {
+    // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    // to schedule the execution of storage commands
+    /// To schedule the execution of storage commands
     worker: Arc<Mutex<Worker<Msg>>>,
     worker_scheduler: worker::Scheduler<Msg>,
 
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker<E>,
 
-    // Storage configurations.
+    /// How many strong references. Thread pool and workers will be stopped
+    /// once there are no more references.
+    refs: Arc<atomic::AtomicUsize>,
+
+    // Fields below are storage configurations.
     max_key_size: usize,
+}
+
+impl<E: Engine> Clone for Storage<E> {
+    #[inline]
+    fn clone(&self) -> Self {
+        let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
+
+        debug!(
+            "Storage ({} engine) referenced (reference count before operation: {})",
+            self.engine, refs
+        );
+
+        Self {
+            engine: self.engine.clone(),
+            worker: self.worker.clone(),
+            worker_scheduler: self.worker_scheduler.clone(),
+            read_pool: self.read_pool.clone(),
+            gc_worker: self.gc_worker.clone(),
+            refs: self.refs.clone(),
+            max_key_size: self.max_key_size,
+        }
+    }
+}
+
+impl<E: Engine> Drop for Storage<E> {
+    #[inline]
+    fn drop(&mut self) {
+        let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
+
+        debug!(
+            "Storage ({} engine) de-referenced (reference count before operation: {})",
+            self.engine, refs
+        );
+
+        if refs != 1 {
+            return;
+        }
+
+        let mut worker = self.worker.lock().unwrap();
+        if let Err(e) = worker.schedule(Msg::Quit) {
+            error!("Failed to ask scheduler to quit: {:?}", e);
+        }
+
+        let h = worker.stop().unwrap();
+        if let Err(e) = h.join() {
+            error!("Failed to join sched_handle: {:?}", e);
+        }
+
+        let r = self.gc_worker.stop();
+        if let Err(e) = r {
+            error!("Failed to stop gc_worker: {:?}", e);
+        }
+
+        info!("Storage ({} engine) stopped.", self.engine);
+    }
 }
 
 impl<E: Engine> Storage<E> {
@@ -468,9 +553,9 @@ impl<E: Engine> Storage<E> {
         engine: E,
         config: &Config,
         read_pool: ReadPool<ReadPoolContext>,
+        local_storage: Option<Arc<DB>>,
+        raft_store_router: Option<ServerRaftStoreRouter>,
     ) -> Result<Self> {
-        info!("storage {:?} started.", engine);
-
         let worker = Arc::new(Mutex::new(
             Builder::new("storage-scheduler")
                 .batch_size(CMD_BATCH_SIZE)
@@ -478,54 +563,34 @@ impl<E: Engine> Storage<E> {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
-        let gc_worker = GCWorker::new(engine.clone(), config.gc_ratio_threshold);
+        let runner = Scheduler::new(
+            engine.clone(),
+            worker_scheduler.clone(),
+            config.scheduler_concurrency,
+            config.scheduler_worker_pool_size,
+            config.scheduler_pending_write_threshold.0 as usize,
+        );
+        let mut gc_worker = GCWorker::new(
+            engine.clone(),
+            local_storage,
+            raft_store_router,
+            config.gc_ratio_threshold,
+        );
+
+        worker.lock().unwrap().start(runner)?;
+        gc_worker.start()?;
+
+        info!("Storage ({} engine) started.", engine);
+
         Ok(Storage {
             engine,
             worker,
             worker_scheduler,
             read_pool,
             gc_worker,
+            refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
         })
-    }
-
-    pub fn mut_gc_worker(&mut self) -> &mut GCWorker<E> {
-        &mut self.gc_worker
-    }
-
-    pub fn start(&mut self, config: &Config) -> Result<()> {
-        let sched_concurrency = config.scheduler_concurrency;
-        let sched_worker_pool_size = config.scheduler_worker_pool_size;
-        let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
-        let mut worker = self.worker.lock().unwrap();
-        let scheduler = Scheduler::new(
-            self.engine.clone(),
-            worker.scheduler(),
-            sched_concurrency,
-            sched_worker_pool_size,
-            sched_pending_write_threshold,
-        );
-        worker.start(scheduler)?;
-        self.gc_worker.start()?;
-        Ok(())
-    }
-
-    pub fn stop(&mut self) -> Result<()> {
-        let mut worker = self.worker.lock().unwrap();
-        if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("send quit cmd to scheduler failed, error:{:?}", e);
-            return Err(box_err!("failed to ask sched to quit: {:?}", e));
-        }
-
-        let h = worker.stop().unwrap();
-        if let Err(e) = h.join() {
-            return Err(box_err!("failed to join sched_handle, err:{:?}", e));
-        }
-
-        self.gc_worker.stop()?;
-
-        info!("storage {:?} closed.", self.engine);
-        Ok(())
     }
 
     pub fn get_engine(&self) -> E {
@@ -1555,7 +1620,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1603,18 +1668,13 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let mut storage = TestStorageBuilder::new()
-            .engine(engine)
-            .build_and_start()
-            .unwrap();
+        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1671,13 +1731,11 @@ mod tests {
                 )
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_scan() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1898,13 +1956,11 @@ mod tests {
                 )
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_batch_get() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1964,13 +2020,11 @@ mod tests {
                 )
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_txn() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2040,18 +2094,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let mut storage = TestStorageBuilder::new()
-            .config(&config)
-            .build_and_start()
-            .unwrap();
+        let storage = TestStorageBuilder::new().config(config).build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -2091,13 +2140,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_cleanup() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2124,13 +2171,11 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_get_put() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -2169,18 +2214,13 @@ mod tests {
             b"100".to_vec(),
             storage.async_get(ctx, Key::from_raw(b"x"), 101).wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_no_block() {
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let mut storage = TestStorageBuilder::new()
-            .config(&config)
-            .build_and_start()
-            .unwrap();
+        let storage = TestStorageBuilder::new().config(config).build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -2220,13 +2260,11 @@ mod tests {
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_delete_range() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         // Write x and y.
         storage
@@ -2318,13 +2356,11 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_delete_range() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = [
@@ -2434,13 +2470,11 @@ mod tests {
         }
 
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_put() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2471,13 +2505,11 @@ mod tests {
                     .wait(),
             );
         }
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_get() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2511,13 +2543,11 @@ mod tests {
                 .async_raw_batch_get(Context::new(), "".to_string(), keys)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_delete() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2612,13 +2642,11 @@ mod tests {
                     .wait(),
             );
         }
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_scan() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2688,13 +2716,11 @@ mod tests {
                 .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_scan() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2876,13 +2902,11 @@ mod tests {
                 .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_scan_lock() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -3085,15 +3109,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_resolve_lock() {
         use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.
@@ -3214,7 +3236,5 @@ mod tests {
                 ts += 10;
             }
         }
-
-        storage.stop().unwrap();
     }
 }

@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -23,12 +22,10 @@ use rand::random;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_storage::*;
-use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::gc_worker::GC_BATCH_SIZE;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::{self, Engine, Key, Mutation, TestEngineBuilder, CF_DEFAULT, CF_LOCK};
-use tikv::util::worker::FutureWorker;
+use tikv::storage::{Engine, Key, Mutation, CF_DEFAULT, CF_LOCK};
 
 #[test]
 fn test_txn_store_get() {
@@ -861,7 +858,7 @@ impl Oracle {
 
 const INC_MAX_RETRY: usize = 100;
 
-fn inc<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
+fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
@@ -942,7 +939,7 @@ fn format_key(x: usize) -> Vec<u8> {
     format!("k{}", x).into_bytes()
 }
 
-fn inc_multi<E: Engine>(store: &SyncStorage<E>, oracle: &Oracle, n: usize) -> bool {
+fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
         let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
@@ -1051,66 +1048,4 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
             store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
         }
     });
-}
-
-#[test]
-fn test_conflict_commands_on_fault_engine() {
-    let engine = TestEngineBuilder::new().build().unwrap();
-    let pd_worker = FutureWorker::new("test-future–worker");
-    let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-        || storage::ReadPoolContext::new(pd_worker.scheduler())
-    });
-    let config = Default::default();
-    let mut store = SyncStorage::prepare(engine.clone(), &config, read_pool);
-    let async_storage = store.get_storage();
-    let storage = AssertionStorage {
-        store: store.clone(),
-        ctx: Context::new(),
-    };
-
-    let (k, v) = (b"k".to_vec(), b"v".to_vec());
-    let start_ts = 10;
-    let commit_ts = 20;
-
-    let (tx, rx) = channel();
-    async_storage
-        .async_prewrite(
-            storage.ctx.clone(),
-            vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
-            k.clone(),
-            start_ts,
-            Default::default(),
-            box move |res| {
-                tx.send(res).unwrap();
-            },
-        )
-        .unwrap();
-    async_storage
-        .async_commit(
-            storage.ctx.clone(),
-            vec![Key::from_raw(&k)],
-            start_ts,
-            commit_ts,
-            box |_| {},
-        )
-        .unwrap();
-    async_storage
-        .async_cleanup(storage.ctx.clone(), Key::from_raw(&k), start_ts, box |_| {})
-        .unwrap();
-    async_storage
-        .async_rollback(
-            storage.ctx.clone(),
-            vec![Key::from_raw(&k)],
-            start_ts,
-            box |_| {},
-        )
-        .unwrap();
-
-    // Stop the engine,
-    engine.stop();
-    // then start the Storage, so that it recives a batch of commands that are conflict.
-    store.start(&config);
-
-    // The first command should return an error and the other will be re-scheduled.
-    rx.recv().unwrap().unwrap_err();
 }
