@@ -26,25 +26,25 @@ const KEY_LENGTH: usize = 64;
 const VALUE_LENGTH: usize = 128;
 const ITERATIONS: usize = 1000;
 
-fn prepare_engine<E: Engine>(
+fn fill_engine_with<E: Engine>(
     engine: &E,
     target_kvs: &[(Vec<u8>, Vec<u8>)],
     add_target_kvs_to_engine: bool,
-    expect_engine_size: usize,
+    expect_engine_key_count: usize,
 ) {
-    let mut gap_size = expect_engine_size;
+    let mut key_count_gap = expect_engine_key_count;
     let mut modifies: Vec<Modify> = vec![];
     if add_target_kvs_to_engine {
         for (key, value) in target_kvs {
-            if gap_size == 0 {
+            if key_count_gap == 0 {
                 break;
             }
             modifies.push(Modify::Put(CF_DEFAULT, Key::from_raw(&key), value.clone()));
-            gap_size -= 1;
+            key_count_gap -= 1;
         }
     }
-    if gap_size > 0 {
-        let kvs = generate_random_kvs(gap_size, KEY_LENGTH, VALUE_LENGTH);
+    if key_count_gap > 0 {
+        let kvs = generate_random_kvs(key_count_gap, KEY_LENGTH, VALUE_LENGTH);
         for (key, value) in kvs {
             modifies.push(Modify::Put(CF_DEFAULT, Key::from_raw(&key), value))
         }
@@ -60,7 +60,7 @@ fn engine_snapshot_bench<E: Engine>(
     engine_size: usize,
     bencher: &mut Bencher,
 ) {
-    prepare_engine(engine, &[], false, engine_size);
+    fill_engine_with(engine, &[], false, engine_size);
     let ctx = Context::new();
 
     bencher.iter(|| {
@@ -79,7 +79,7 @@ fn engine_get_bench<E: Engine>(
     bencher: &mut Bencher,
 ) {
     let target_kvs = generate_random_kvs(iterations, KEY_LENGTH, VALUE_LENGTH);
-    prepare_engine(engine, &target_kvs, add_target_kvs_to_engine, engine_size);
+    fill_engine_with(engine, &target_kvs, add_target_kvs_to_engine, engine_size);
     let ctx = Context::new();
 
     bencher.iter(|| {

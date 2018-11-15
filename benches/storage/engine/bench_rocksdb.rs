@@ -39,6 +39,7 @@ fn bench_engine_get_rocks_1000_times_from_100_000_size(bencher: &mut Bencher) {
     engine_get_bench(&engine, ITERATIONS, 100_000, false, bencher);
 }
 
+#[ignore]
 #[bench]
 fn bench_engine_get_rocks_1000_times_from_1_000_000_size(bencher: &mut Bencher) {
     let engine = TestEngineBuilder::new().build().unwrap();
@@ -57,6 +58,7 @@ fn bench_engine_put_rocks_010_000_items(bencher: &mut Bencher) {
     engine_put_bench(&engine, 10_000, bencher);
 }
 
+#[ignore]
 #[bench]
 fn bench_engine_put_rocks_100_000_items(bencher: &mut Bencher) {
     let engine = TestEngineBuilder::new().build().unwrap();
@@ -87,6 +89,7 @@ fn bench_engine_snapshot_rocks_1000_times_from_100_000_size(bencher: &mut Benche
     engine_snapshot_bench(&engine, ITERATIONS, 100_000, bencher);
 }
 
+#[ignore]
 #[bench]
 fn bench_engine_snapshot_rocks_1000_times_from_1_000_000_size(bencher: &mut Bencher) {
     let engine = TestEngineBuilder::new().build().unwrap();
