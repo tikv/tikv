@@ -22,7 +22,11 @@ use tikv::storage::{self, Mutation};
 use tikv::storage::{engine, mvcc, txn, Engine, Key};
 use tikv::util::HandyRwLock;
 
-fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
+fn new_raft_storage() -> (
+    Cluster<ServerCluster>,
+    SyncTestStorage<SimulateEngine>,
+    Context,
+) {
     new_raft_storage_with_store_count(1, "")
 }
 
