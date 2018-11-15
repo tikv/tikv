@@ -261,8 +261,7 @@ success!
 ### Ldb Command
 
 The ldb command line tool offers multiple data access and database administration commands. Some examples are listed below. 
-For more information, refer to the help message displayed when running `tikv-ctl ldb` without any arguments 
-or check the documents from RocksDB.
+For more information, refer to the help message displayed when running `tikv-ctl ldb` without any arguments or check the documents from RocksDB.
 
 Examples of data access sequence:
 
