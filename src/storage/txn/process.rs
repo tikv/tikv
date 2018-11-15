@@ -462,10 +462,6 @@ fn process_read_impl<E: Engine>(
                 })
             }
         }
-        Command::Pause { duration, .. } => {
-            thread::sleep(Duration::from_millis(duration));
-            Ok(ProcessResult::Res)
-        }
         _ => panic!("unsupported read command"),
     }
 }
@@ -606,6 +602,10 @@ fn process_write_impl<S: Snapshot>(
                 }
             };
             (pr, modifies, rows, ctx)
+        }
+        Command::Pause { ctx, duration, .. } => {
+            thread::sleep(Duration::from_millis(duration));
+            (ProcessResult::Res, vec![], 0, ctx)
         }
         _ => panic!("unsupported write command"),
     };
