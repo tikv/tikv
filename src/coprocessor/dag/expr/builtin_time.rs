@@ -19,6 +19,10 @@ use coprocessor::codec::mysql::{Time, TimeType};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
+fn handle_incorrect_datetime_error(ctx: &mut EvalContext, t: Cow<'_, Time>) -> Result<()> {
+    Error::handle_invalid_time_error(ctx, Error::incorrect_datetime_value(&format!("{}", t)))
+}
+
 impl ScalarFunc {
     #[inline]
     pub fn date_format<'a, 'b: 'a>(
@@ -28,10 +32,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.invalid_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
         let format_mask = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let t = t.date_format(format_mask.into_owned())?;
@@ -46,10 +47,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let mut t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
         let mut res = t.to_mut().clone();
         res.set_time_type(TimeType::Date).unwrap();
@@ -89,10 +87,7 @@ impl ScalarFunc {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             if ctx.cfg.mode_no_zero_date_mode() {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value(&format!("{}", t)),
-                ).map(|_| None);
+                return handle_incorrect_datetime_error(ctx, t).map(|_| None);
             }
             return Ok(Some(0));
         }
@@ -108,10 +103,7 @@ impl ScalarFunc {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         let month = t.get_time().month() as usize;
         if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         } else if month == 0 || t.is_zero() {
             return Ok(Some(Cow::Owned("".to_string().into_bytes())));
         }
@@ -129,10 +121,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
         use coprocessor::codec::mysql::time::WeekdayExtension;
         let weekday = t.get_time().weekday();
@@ -144,10 +133,7 @@ impl ScalarFunc {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             if ctx.cfg.mode_no_zero_date_mode() {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value(&format!("{}", t)),
-                ).map(|_| None);
+                return handle_incorrect_datetime_error(ctx, t).map(|_| None);
             }
             return Ok(Some(0));
         }
@@ -159,10 +145,7 @@ impl ScalarFunc {
     pub fn day_of_week(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
         let day = t.get_time().weekday().number_from_sunday();
         Ok(Some(i64::from(day)))
@@ -172,10 +155,7 @@ impl ScalarFunc {
     pub fn day_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
         use coprocessor::codec::mysql::time::DateTimeExtension;
         let day = t.get_time().days();
@@ -187,10 +167,7 @@ impl ScalarFunc {
         let t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             if ctx.cfg.mode_no_zero_date_mode() {
-                return Error::handle_invalid_time_error(
-                    ctx,
-                    Error::incorrect_datetime_value(&format!("{}", t)),
-                ).map(|_| None);
+                return handle_incorrect_datetime_error(ctx, t).map(|_| None);
             }
             return Ok(Some(0));
         }
@@ -205,10 +182,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let mut t = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            return Error::handle_invalid_time_error(
-                ctx,
-                Error::incorrect_datetime_value(&format!("{}", t)),
-            ).map(|_| None);
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
         let time = t.get_time();
         let mut res = t.to_mut().clone();
