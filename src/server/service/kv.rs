@@ -966,11 +966,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
 
-        let storage = self.storage.clone();
-
         let key = Key::from_raw(req.get_key());
         let (cb, f) = paired_future_callback();
-        let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
+        let res = self
+            .storage
+            .async_mvcc_by_key(req.take_context(), key.clone(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1006,11 +1006,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .mvcc_get_by_start_ts
             .start_coarse_timer();
 
-        let storage = self.storage.clone();
-
         let (cb, f) = paired_future_callback();
-
-        let res = storage.async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
+        let res = self
+            .storage
+            .async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
