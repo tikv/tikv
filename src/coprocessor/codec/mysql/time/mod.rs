@@ -30,7 +30,7 @@ use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC,
 use coprocessor::codec::mysql::{self, Decimal};
 use coprocessor::codec::{Error, Result, TEN_POW};
 
-use self::extension::*;
+pub use self::extension::*;
 use self::weekmode::WeekMode;
 
 pub use self::tz::Tz;
