@@ -47,7 +47,7 @@ const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
-pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, E: Engine> {
+pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     // Grpc server.
     grpc_server: GrpcServer,
@@ -55,8 +55,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
     // Transport.
     trans: ServerTransport<T, S>,
     raft_router: T,
-    // The kv storage.
-    storage: Storage<E>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
@@ -66,9 +64,9 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, 
     thread_load: Arc<ThreadLoad>,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S, E> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
-    pub fn new(
+    pub fn new<E: Engine>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E>,
@@ -99,13 +97,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
         );
 
         let snap_worker = Worker::new("snap-handler");
-        let kv_service = KvService::new(
-            storage.clone(),
-            cop,
-            raft_router.clone(),
-            snap_worker.scheduler(),
-        );
 
+        let kv_service = KvService::new(storage, cop, raft_router.clone(), snap_worker.scheduler());
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
@@ -154,7 +147,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
             local_addr: addr,
             trans,
             raft_router,
-            storage,
             snap_mgr,
             snap_worker,
             stats_runtime,
@@ -197,9 +189,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, E: Engine> Server<T, S,
 
     pub fn stop(&mut self) -> Result<()> {
         self.snap_worker.stop();
-        if let Err(e) = self.storage.stop() {
-            error!("failed to stop store: {:?}", e);
-        }
         self.grpc_server.shutdown();
         Ok(())
     }
@@ -291,7 +280,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();

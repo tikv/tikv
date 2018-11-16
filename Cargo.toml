@@ -28,6 +28,10 @@ name = "raftstore"
 harness = false
 
 [[bench]]
+name = "coprocessor_executors"
+harness = false
+
+[[bench]]
 name = "benches"
 
 [dependencies]
@@ -83,6 +87,8 @@ num-traits = "0.2"
 hex = "0.3"
 rust-crypto = "^0.2"
 panic_hook = { path = "components/panic_hook" }
+base64 = "0.10"
+safemem = "0.3"
 cop_datatype = { path = "components/cop_datatype" }
 
 [replace]

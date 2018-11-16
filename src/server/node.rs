@@ -31,8 +31,10 @@ use raftstore::store::{
     self, keys, Config as StoreConfig, Engines, Msg, Peekable, ReadTask, SignificantMsg,
     SnapManager, Store, StoreChannel, Transport,
 };
+use rocksdb::DB;
 use server::readpool::ReadPool;
 use server::Config as ServerConfig;
+use server::ServerRaftStoreRouter;
 use storage::{self, Config as StorageConfig, RaftKv, Storage};
 use util::transport::SendCh;
 use util::worker::{FutureWorker, Worker};
@@ -44,12 +46,14 @@ pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
     read_pool: ReadPool<storage::ReadPoolContext>,
+    local_storage: Option<Arc<DB>>,
+    raft_store_router: Option<ServerRaftStoreRouter>,
 ) -> Result<Storage<RaftKv<S>>>
 where
     S: RaftStoreRouter + 'static,
 {
     let engine = RaftKv::new(router);
-    let store = Storage::from_engine(engine, cfg, read_pool)?;
+    let store = Storage::from_engine(engine, cfg, read_pool, local_storage, raft_store_router)?;
     Ok(store)
 }
 

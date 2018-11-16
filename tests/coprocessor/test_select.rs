@@ -229,7 +229,7 @@ fn test_scan_detail() {
 
     let reqs = vec![
         DAGSelect::from(&product.table).build(),
-        DAGSelect::from_index(&product.table, product.name).build(),
+        DAGSelect::from_index(&product.table, &product.name).build(),
     ];
 
     for mut req in reqs {
@@ -260,7 +260,7 @@ fn test_group_by() {
     let (_, endpoint) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from(&product.table)
-        .group_by(&[product.name])
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     // should only have name:0, name:2 and name:1
@@ -298,7 +298,7 @@ fn test_aggr_count() {
     // for dag
     let req = DAGSelect::from(&product.table)
         .count()
-        .group_by(&[product.name])
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -324,7 +324,7 @@ fn test_aggr_count() {
     // for dag
     let req = DAGSelect::from(&product.table)
         .count()
-        .group_by(&[product.name, product.count])
+        .group_by(&[&product.name, &product.count])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -368,8 +368,8 @@ fn test_aggr_first() {
 
     // for dag
     let req = DAGSelect::from(&product.table)
-        .first(product.id)
-        .group_by(&[product.name])
+        .first(&product.id)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -395,8 +395,8 @@ fn test_aggr_first() {
 
     // for dag
     let req = DAGSelect::from(&product.table)
-        .first(product.name)
-        .group_by(&[product.count])
+        .first(&product.name)
+        .group_by(&[&product.count])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -429,9 +429,9 @@ fn test_aggr_avg() {
     store.begin();
     store
         .insert_into(&product.table)
-        .set(product.id, Datum::I64(8))
-        .set(product.name, Datum::Bytes(b"name:4".to_vec()))
-        .set(product.count, Datum::Null)
+        .set(&product.id, Datum::I64(8))
+        .set(&product.name, Datum::Bytes(b"name:4".to_vec()))
+        .set(&product.count, Datum::Null)
         .execute();
     store.commit();
 
@@ -444,8 +444,8 @@ fn test_aggr_avg() {
     ];
     // for dag
     let req = DAGSelect::from(&product.table)
-        .avg(product.count)
-        .group_by(&[product.name])
+        .avg(&product.count)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -483,8 +483,8 @@ fn test_aggr_sum() {
     ];
     // for dag
     let req = DAGSelect::from(&product.table)
-        .sum(product.count)
-        .group_by(&[product.name])
+        .sum(&product.count)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -518,9 +518,9 @@ fn test_aggr_extre() {
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
         store
             .insert_into(&product.table)
-            .set(product.id, Datum::I64(id))
-            .set(product.name, Datum::Bytes(name.to_vec()))
-            .set(product.count, Datum::Null)
+            .set(&product.id, Datum::I64(id))
+            .set(&product.name, Datum::Bytes(name.to_vec()))
+            .set(&product.count, Datum::Null)
             .execute();
     }
     store.commit();
@@ -547,9 +547,9 @@ fn test_aggr_extre() {
 
     // for dag
     let req = DAGSelect::from(&product.table)
-        .max(product.count)
-        .min(product.count)
-        .group_by(&[product.name])
+        .max(&product.count)
+        .min(&product.count)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -583,9 +583,9 @@ fn test_aggr_bit_ops() {
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
         store
             .insert_into(&product.table)
-            .set(product.id, Datum::I64(id))
-            .set(product.name, Datum::Bytes(name.to_vec()))
-            .set(product.count, Datum::Null)
+            .set(&product.id, Datum::I64(id))
+            .set(&product.name, Datum::Bytes(name.to_vec()))
+            .set(&product.count, Datum::Null)
             .execute();
     }
     store.commit();
@@ -620,10 +620,10 @@ fn test_aggr_bit_ops() {
 
     // for dag
     let req = DAGSelect::from(&product.table)
-        .bit_and(product.count)
-        .bit_or(product.count)
-        .bit_xor(product.count)
-        .group_by(&[product.name])
+        .bit_and(&product.count)
+        .bit_or(&product.count)
+        .bit_xor(&product.count)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -663,8 +663,8 @@ fn test_order_by_column() {
     let (_, endpoint) = init_with_data(&product, &data);
     // for dag
     let req = DAGSelect::from(&product.table)
-        .order_by(product.count, true)
-        .order_by(product.name, false)
+        .order_by(&product.count, true)
+        .order_by(&product.name, false)
         .limit(5)
         .build();
     let mut resp = handle_select(&endpoint, req);
@@ -698,8 +698,8 @@ fn test_order_by_pk_with_select_from_index() {
     let (_, endpoint) = init_with_data(&product, &data);
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
-        .order_by(product.id, true)
+    let req = DAGSelect::from_index(&product.table, &product.name)
+        .order_by(&product.id, true)
         .limit(5)
         .build();
     let mut resp = handle_select(&endpoint, req);
@@ -763,7 +763,7 @@ fn test_reverse() {
     // for dag
     let req = DAGSelect::from(&product.table)
         .limit(5)
-        .order_by(product.id, true)
+        .order_by(&product.id, true)
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -792,7 +792,7 @@ fn test_index() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.id).build();
+    let req = DAGSelect::from_index(&product.table, &product.id).build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
@@ -821,9 +821,9 @@ fn test_index_reverse_limit() {
     data.reverse();
     let expect: Vec<_> = data.drain(..5).collect();
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.id)
+    let req = DAGSelect::from_index(&product.table, &product.id)
         .limit(5)
-        .order_by(product.id, true)
+        .order_by(&product.id, true)
         .build();
 
     let mut resp = handle_select(&endpoint, req);
@@ -852,7 +852,7 @@ fn test_limit_oom() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.id)
+    let req = DAGSelect::from_index(&product.table, &product.id)
         .limit(100000000)
         .build();
     let mut resp = handle_select(&endpoint, req);
@@ -890,7 +890,7 @@ fn test_del_select() {
     store.commit();
 
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.id).build();
+    let req = DAGSelect::from_index(&product.table, &product.id).build();
     let mut resp = handle_select(&endpoint, req);
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
     let mut row_count = 0;
@@ -912,8 +912,8 @@ fn test_index_group_by() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
-        .group_by(&[product.name])
+    let req = DAGSelect::from_index(&product.table, &product.name)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     // should only have name:0, name:2 and name:1
@@ -942,7 +942,7 @@ fn test_index_aggr_count() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
+    let req = DAGSelect::from_index(&product.table, &product.name)
         .count()
         .build();
     let mut resp = handle_select(&endpoint, req);
@@ -961,9 +961,9 @@ fn test_index_aggr_count() {
         (Datum::Bytes(b"name:5".to_vec()), 2),
     ];
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
+    let req = DAGSelect::from_index(&product.table, &product.name)
         .count()
-        .group_by(&[product.name])
+        .group_by(&[&product.name])
         .build();
     resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -985,9 +985,9 @@ fn test_index_aggr_count() {
         (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
         (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
     ];
-    let req = DAGSelect::from_index(&product.table, product.name)
+    let req = DAGSelect::from_index(&product.table, &product.name)
         .count()
-        .group_by(&[product.name, product.count])
+        .group_by(&[&product.name, &product.count])
         .build();
     resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -1025,9 +1025,9 @@ fn test_index_aggr_first() {
         (Datum::Bytes(b"name:5".to_vec()), 5),
     ];
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
-        .first(product.id)
-        .group_by(&[product.name])
+    let req = DAGSelect::from_index(&product.table, &product.name)
+        .first(&product.id)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -1060,9 +1060,9 @@ fn test_index_aggr_avg() {
     store.begin();
     store
         .insert_into(&product.table)
-        .set(product.id, Datum::I64(8))
-        .set(product.name, Datum::Bytes(b"name:4".to_vec()))
-        .set(product.count, Datum::Null)
+        .set(&product.id, Datum::I64(8))
+        .set(&product.name, Datum::Bytes(b"name:4".to_vec()))
+        .set(&product.count, Datum::Null)
         .execute();
     store.commit();
 
@@ -1074,9 +1074,9 @@ fn test_index_aggr_avg() {
         (Datum::Bytes(b"name:5".to_vec()), (Datum::Dec(8.into()), 2)),
     ];
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
-        .avg(product.count)
-        .group_by(&[product.name])
+    let req = DAGSelect::from_index(&product.table, &product.name)
+        .avg(&product.count)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -1113,9 +1113,9 @@ fn test_index_aggr_sum() {
         (Datum::Bytes(b"name:5".to_vec()), 8),
     ];
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
-        .sum(product.count)
-        .group_by(&[product.name])
+    let req = DAGSelect::from_index(&product.table, &product.name)
+        .sum(&product.count)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -1149,9 +1149,9 @@ fn test_index_aggr_extre() {
     for &(id, name) in &[(8, b"name:5"), (9, b"name:6")] {
         store
             .insert_into(&product.table)
-            .set(product.id, Datum::I64(id))
-            .set(product.name, Datum::Bytes(name.to_vec()))
-            .set(product.count, Datum::Null)
+            .set(&product.id, Datum::I64(id))
+            .set(&product.name, Datum::Bytes(name.to_vec()))
+            .set(&product.count, Datum::Null)
             .execute();
     }
     store.commit();
@@ -1176,10 +1176,10 @@ fn test_index_aggr_extre() {
         (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null),
     ];
     // for dag
-    let req = DAGSelect::from_index(&product.table, product.name)
-        .max(product.count)
-        .min(product.count)
-        .group_by(&[product.name])
+    let req = DAGSelect::from_index(&product.table, &product.name)
+        .max(&product.count)
+        .min(&product.count)
+        .group_by(&[&product.name])
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
@@ -1367,12 +1367,15 @@ fn test_default_val() {
     ];
 
     let product = ProductTable::new();
-    let added = ColumnBuilder::new().col_type(TYPE_LONG).default(3).build();
+    let added = ColumnBuilder::new()
+        .col_type(TYPE_LONG)
+        .default(Datum::I64(3))
+        .build();
     let mut tbl = TableBuilder::new()
-        .add_col(product.id)
-        .add_col(product.name)
-        .add_col(product.count)
-        .add_col(added)
+        .add_col(product.id.clone())
+        .add_col(product.name.clone())
+        .add_col(product.count.clone())
+        .add_col(added.clone())
         .build();
     tbl.id = product.table.id;
 
@@ -1448,7 +1451,7 @@ fn test_key_is_locked_for_index() {
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
-    let req = DAGSelect::from_index(&product.table, product.name).build();
+    let req = DAGSelect::from_index(&product.table, &product.name).build();
     let resp = handle_request(&endpoint, req);
     assert!(resp.get_data().is_empty(), "{:?}", resp);
     assert!(resp.has_locked(), "{:?}", resp);

@@ -14,7 +14,7 @@
 use std::boxed::FnBox;
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::time::Duration;
 use std::{error, result};
 
@@ -25,12 +25,14 @@ use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::TablePropertiesCollection;
 use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
+mod btree_engine;
 mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
 mod rocksdb;
 
+pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb::{RocksEngine, RocksSnapshot, TestEngineBuilder};
@@ -68,7 +70,7 @@ pub enum Modify {
     DeleteRange(CfName, Key, Key),
 }
 
-pub trait Engine: Send + Debug + Clone + Sized + 'static {
+pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
     type Iter: Iterator;
     type Snap: Snapshot<Iter = Self::Iter>;
 
@@ -673,11 +675,9 @@ pub mod tests {
     use super::*;
     use kvproto::kvrpcpb::Context;
     use storage::{CfName, Key, CF_DEFAULT};
-    use tempdir::TempDir;
     use util::codec::bytes;
     use util::escape;
-
-    const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+    pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
@@ -724,7 +724,7 @@ pub mod tests {
         assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
     }
 
-    pub fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
@@ -735,7 +735,7 @@ pub mod tests {
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
-    pub fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
@@ -748,7 +748,7 @@ pub mod tests {
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
-    pub fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
         let mut statistics = CFStatistics::default();
         assert!(
             cursor
@@ -760,7 +760,7 @@ pub mod tests {
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
-    pub fn assert_near_reverse_seek<I: Iterator>(
+    fn assert_near_reverse_seek<I: Iterator>(
         cursor: &mut Cursor<I>,
         key: &[u8],
         pair: (&[u8], &[u8]),
@@ -776,41 +776,14 @@ pub mod tests {
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
-    #[test]
-    fn rocksdb() {
-        let engine = TestEngineBuilder::new()
-            .cfs(TEST_ENGINE_CFS)
-            .build()
-            .unwrap();
-
-        test_get_put(&engine);
-        test_batch(&engine);
-        test_empty_seek(&engine);
-        test_seek(&engine);
-        test_near_seek(&engine);
-        test_cf(&engine);
-        test_empty_write(&engine);
-    }
-
-    #[test]
-    fn rocksdb_reopen() {
-        let dir = TempDir::new("rocksdb_test").unwrap();
-        {
-            let engine = TestEngineBuilder::new()
-                .path(dir.path())
-                .cfs(TEST_ENGINE_CFS)
-                .build()
-                .unwrap();
-            must_put_cf(&engine, "cf", b"k", b"v1");
-        }
-        {
-            let engine = TestEngineBuilder::new()
-                .path(dir.path())
-                .cfs(TEST_ENGINE_CFS)
-                .build()
-                .unwrap();
-            assert_has_cf(&engine, "cf", b"k", b"v1");
-        }
+    pub fn test_base_curd_options<E: Engine>(engine: &E) {
+        test_get_put(engine);
+        test_batch(engine);
+        test_empty_seek(engine);
+        test_seek(engine);
+        test_near_seek(engine);
+        test_cf(engine);
+        test_empty_write(engine);
     }
 
     fn test_get_put<E: Engine>(engine: &E) {
@@ -1049,17 +1022,11 @@ pub mod tests {
         }
     }
 
-    // TODO: refactor engine tests
-    #[test]
-    fn test_linear() {
-        let engine = TestEngineBuilder::new()
-            .cfs(TEST_ENGINE_CFS)
-            .build()
-            .unwrap();
+    pub fn test_linear<E: Engine>(engine: &E) {
         for i in 50..50 + SEEK_BOUND * 10 {
             let key = format!("key_{}", i * 2);
             let value = format!("value_{}", i);
-            must_put(&engine, key.as_bytes(), value.as_bytes());
+            must_put(engine, key.as_bytes(), value.as_bytes());
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
@@ -1115,30 +1082,23 @@ pub mod tests {
         engine.write(&Context::new(), vec![]).unwrap_err();
     }
 
-    #[test]
-    fn test_statistics() {
-        let engine = TestEngineBuilder::new()
-            .cfs(TEST_ENGINE_CFS)
-            .build()
-            .unwrap();
-
-        must_put(&engine, b"foo", b"bar1");
-        must_put(&engine, b"foo2", b"bar2");
-        must_put(&engine, b"foo3", b"bar3"); // deleted
-        must_put(&engine, b"foo4", b"bar4");
-        must_put(&engine, b"foo42", b"bar42"); // deleted
-        must_put(&engine, b"foo5", b"bar5"); // deleted
-        must_put(&engine, b"foo6", b"bar6");
-        must_delete(&engine, b"foo3");
-        must_delete(&engine, b"foo42");
-        must_delete(&engine, b"foo5");
+    pub fn test_cfs_statistics<E: Engine>(engine: &E) {
+        must_put(engine, b"foo", b"bar1");
+        must_put(engine, b"foo2", b"bar2");
+        must_put(engine, b"foo3", b"bar3"); // deleted
+        must_put(engine, b"foo4", b"bar4");
+        must_put(engine, b"foo42", b"bar42"); // deleted
+        must_put(engine, b"foo5", b"bar5"); // deleted
+        must_put(engine, b"foo6", b"bar6");
+        must_delete(engine, b"foo3");
+        must_delete(engine, b"foo42");
+        must_delete(engine, b"foo5");
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
@@ -1146,9 +1106,7 @@ pub mod tests {
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
         assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.seek, 1);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
-        let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
@@ -1157,27 +1115,22 @@ pub mod tests {
         assert_eq!(iter.value(&mut statistics), b"bar6");
         assert_eq!(statistics.seek, 0);
         assert_eq!(statistics.next, 1);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        let perf_statistics = PerfStatisticsInstant::new();
         let mut statistics = CFStatistics::default();
         iter.prev(&mut statistics);
 
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
         assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.prev, 1);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         iter.prev(&mut statistics);
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo2"));
         assert_eq!(iter.value(&mut statistics), b"bar2");
         assert_eq!(statistics.prev, 2);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
 
         iter.prev(&mut statistics);
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
         assert_eq!(iter.value(&mut statistics), b"bar1");
         assert_eq!(statistics.prev, 3);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
 }
