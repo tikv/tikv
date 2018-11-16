@@ -1161,9 +1161,9 @@ impl ApplyDelegate {
             }
             if req.get_new_peer_ids().len() != derived.get_peers().len() {
                 return Err(box_err!(
-                    "invalid new peer id count, need {}, but got {}",
-                    derived.get_peers().len(),
-                    req.get_new_peer_ids().len()
+                    "invalid new peer id count, need {:?}, but got {:?}",
+                    derived.get_peers(),
+                    req.get_new_peer_ids()
                 ));
             }
             keys.push_back(split_key.to_vec());
