@@ -20,6 +20,7 @@ use tipb::schema::{self, ColumnInfo};
 
 use protobuf::RepeatedField;
 
+use tikv::coprocessor;
 use tikv::coprocessor::codec::table;
 use tikv::util::codec::number::NumberEncoder;
 
@@ -77,6 +78,16 @@ impl Table {
         let mut range = KeyRange::new();
         range.set_start(table::encode_row_key(self.id, ::std::i64::MIN));
         range.set_end(table::encode_row_key(self.id, ::std::i64::MAX));
+        range
+    }
+
+    pub fn get_point_select_range(&self, handle_id: i64) -> KeyRange {
+        let start_key = table::encode_row_key(self.id, handle_id);
+        let mut end_key = start_key.clone();
+        coprocessor::util::convert_to_prefix_next(&mut end_key);
+        let mut range = KeyRange::new();
+        range.set_start(start_key);
+        range.set_end(end_key);
         range
     }
 
