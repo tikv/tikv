@@ -490,6 +490,7 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             latches.gen_lock(keys)
         }
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
+        Command::Pause { ref keys, .. } => latches.gen_lock(keys),
         _ => Lock::new(vec![]),
     }
 }
