@@ -1,6 +1,16 @@
-# TiKV
+![tikv_logo](images/logo.png)
 
 [![Build Status](https://circleci.com/gh/tikv/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/tikv/tikv) [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
+
+
+TiKV is an open source distributed Key-Value storage system; Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value style APIs, but also ACID semantic APIs.
+
+The design of TiKV is deeply influenced by some great distributed systems by Google, including BigTable, Spanner and Percolator, combined some of the latest achievements in academia in recent year, e.g. Raft consensus algorithm;
+![cncf_logo](images/cncf.png)
+
+TiKV is now hosted by the Cloud Native Computing Foundation (CNCF), If you are a company that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
+
+---
 
 TiKV ("Ti" stands for Titanium) is a distributed transactional key-value database, originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol. TiKV is built in Rust and powered by Raft, and was inspired by the design of Google Spanner and HBase, but without dependency on any specific distributed file system.
 
