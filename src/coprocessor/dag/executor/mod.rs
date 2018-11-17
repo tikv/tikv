@@ -213,7 +213,7 @@ impl OriginCols {
     // in expression.
     pub fn inflate_cols_with_offsets(
         &self,
-        ctx: &mut EvalContext,
+        ctx: &EvalContext,
         offsets: &[usize],
     ) -> Result<Vec<Datum>> {
         let mut res = vec![Datum::Null; self.cols.len()];
