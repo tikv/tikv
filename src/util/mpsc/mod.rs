@@ -10,7 +10,6 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 /*!
 
 This module provides an implementation of mpsc channel based on
@@ -19,20 +18,18 @@ supports closed detection and try operations.
 
 */
 
-#![cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
+pub mod batch;
 
 use crossbeam::sync::AtomicOption;
 use crossbeam_channel;
+pub use crossbeam_channel::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
 use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
-use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 struct State {
-    sender_cnt: AtomicIsize,
-    receiver_cnt: AtomicIsize,
     // Because we don't support sending messages asychrounously, so
     // only recv_task needs to be kept.
     recv_task: AtomicOption<Task>,
@@ -41,20 +38,8 @@ struct State {
 impl State {
     fn new() -> State {
         State {
-            sender_cnt: AtomicIsize::new(1),
-            receiver_cnt: AtomicIsize::new(1),
             recv_task: AtomicOption::new(),
         }
-    }
-
-    #[inline]
-    fn is_receiver_closed(&self) -> bool {
-        self.receiver_cnt.load(Ordering::Acquire) == 0
-    }
-
-    #[inline]
-    fn is_sender_closed(&self) -> bool {
-        self.sender_cnt.load(Ordering::Acquire) == 0
     }
 }
 
@@ -66,10 +51,9 @@ pub struct Sender<T> {
 impl<T> Clone for Sender<T> {
     #[inline]
     fn clone(&self) -> Sender<T> {
-        self.state.sender_cnt.fetch_add(1, Ordering::AcqRel);
         Sender {
             sender: self.sender.clone(),
-            state: self.state.clone(),
+            state: Arc::clone(&self.state),
         }
     }
 }
@@ -77,10 +61,7 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
-        self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
-        if self.state.is_sender_closed() {
-            self.notify();
-        }
+        self.notify();
     }
 }
 
@@ -100,67 +81,33 @@ impl<T> Sender<T> {
 
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        if !self.state.is_receiver_closed() {
-            self.sender.send(t);
-            self.notify();
-            return Ok(());
-        }
-        Err(SendError(t))
+        self.sender.send(t)?;
+        self.notify();
+        Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        if !self.state.is_receiver_closed() {
-            crossbeam_channel::select! {
-                send(self.sender, t) => {},
-                default => return Err(TrySendError::Full(t)),
-            }
-            self.notify();
-            Ok(())
-        } else {
-            Err(TrySendError::Disconnected(t))
-        }
+        self.sender.try_send(t)?;
+        self.notify();
+        Ok(())
     }
 }
 
 impl<T> Receiver<T> {
     #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
-        match self.receiver.recv() {
-            Some(t) => Ok(t),
-            None => Err(RecvError),
-        }
+        self.receiver.recv()
     }
 
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        match self.receiver.try_recv() {
-            Some(t) => Ok(t),
-            None => {
-                if !self.state.is_sender_closed() {
-                    return Err(TryRecvError::Empty);
-                }
-                self.receiver.try_recv().ok_or(TryRecvError::Disconnected)
-            }
-        }
+        self.receiver.try_recv()
     }
 
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
-        crossbeam_channel::select! {
-            recv(self.receiver, task) => match task {
-                Some(t) => Ok(t),
-                None => Err(RecvTimeoutError::Disconnected),
-            }
-            recv(crossbeam_channel::after(timeout)) => Err(RecvTimeoutError::Timeout),
-        }
-    }
-}
-
-impl<T> Drop for Receiver<T> {
-    #[inline]
-    fn drop(&mut self) {
-        self.state.receiver_cnt.fetch_add(-1, Ordering::AcqRel);
+        self.receiver.recv_timeout(timeout)
     }
 }
 
@@ -268,11 +215,13 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
-    use futures::sync::mpsc;
-    use futures::{Future, Sink, Stream};
-    use std::sync::mpsc::*;
     use std::thread;
     use std::time::*;
+
+    use futures::sync::mpsc;
+    use futures::{Future, Sink, Stream};
+
+    use super::*;
 
     #[test]
     fn test_bounded() {

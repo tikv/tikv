@@ -32,14 +32,13 @@ use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use util::mpsc::{self, Receiver, Sender};
+use util::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 use util::time::{Instant, SlowTimer};
 use util::timer::Timer;
 
