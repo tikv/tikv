@@ -182,6 +182,10 @@ impl ScalarFunc {
             | ScalarFuncSig::MicroSecond
             | ScalarFuncSig::Month
             | ScalarFuncSig::MonthName
+            | ScalarFuncSig::DayName
+            | ScalarFuncSig::DayOfMonth
+            | ScalarFuncSig::DayOfWeek
+            | ScalarFuncSig::DayOfYear
             | ScalarFuncSig::Year
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
@@ -360,10 +364,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Database
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::DateLiteral
-            | ScalarFuncSig::DayName
-            | ScalarFuncSig::DayOfMonth
-            | ScalarFuncSig::DayOfWeek
-            | ScalarFuncSig::DayOfYear
             | ScalarFuncSig::DecimalAnyValue
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
@@ -737,6 +737,9 @@ dispatch_call! {
         Second => second,
         MicroSecond => micro_second,
         Month => month,
+        DayOfMonth => day_of_month,
+        DayOfWeek => day_of_week,
+        DayOfYear => day_of_year,
         Year => year,
 
         LogicalAnd => logical_and,
@@ -913,6 +916,7 @@ dispatch_call! {
         Lower => lower,
         DateFormatSig => date_format,
         MonthName => month_name,
+        DayName => day_name,
         Bin => bin,
         Concat => concat,
         LTrim => ltrim,
@@ -1168,6 +1172,10 @@ mod tests {
                     ScalarFuncSig::MicroSecond,
                     ScalarFuncSig::Month,
                     ScalarFuncSig::MonthName,
+                    ScalarFuncSig::DayName,
+                    ScalarFuncSig::DayOfMonth,
+                    ScalarFuncSig::DayOfWeek,
+                    ScalarFuncSig::DayOfYear,
                     ScalarFuncSig::Year,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
@@ -1383,10 +1391,6 @@ mod tests {
             ScalarFuncSig::Database,
             ScalarFuncSig::DateDiff,
             ScalarFuncSig::DateLiteral,
-            ScalarFuncSig::DayName,
-            ScalarFuncSig::DayOfMonth,
-            ScalarFuncSig::DayOfWeek,
-            ScalarFuncSig::DayOfYear,
             ScalarFuncSig::DecimalAnyValue,
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
