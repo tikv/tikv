@@ -25,7 +25,7 @@ use tipb::expression::{ByItem, Expr, ExprType};
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest};
 
-use tikv::coprocessor::codec::{datum, table, Datum};
+use tikv::coprocessor::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::util::codec::number::NumberEncoder;
 
@@ -45,24 +45,20 @@ impl DAGSelect {
         let mut exec = Executor::new();
         exec.set_tp(ExecType::TypeTableScan);
         let mut tbl_scan = TableScan::new();
-        let mut table_info = table.get_table_info();
+        let mut table_info = table.table_info();
         tbl_scan.set_table_id(table_info.get_table_id());
         let columns_info = table_info.take_columns();
         tbl_scan.set_columns(columns_info);
         exec.set_tbl_scan(tbl_scan);
 
-        let mut range = KeyRange::new();
-        range.set_start(table::encode_row_key(table.id, ::std::i64::MIN));
-        range.set_end(table::encode_row_key(table.id, ::std::i64::MAX));
-
         DAGSelect {
             execs: vec![exec],
-            cols: table.get_table_columns(),
+            cols: table.columns_info(),
             order_by: vec![],
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: range,
+            key_range: table.record_select_all(),
             output_offsets: None,
         }
     }
@@ -72,7 +68,7 @@ impl DAGSelect {
         let mut exec = Executor::new();
         exec.set_tp(ExecType::TypeIndexScan);
         let mut scan = IndexScan::new();
-        let mut index_info = table.get_index_info(idx, true);
+        let mut index_info = table.index_info(idx, true);
         scan.set_table_id(index_info.get_table_id());
         scan.set_index_id(idx);
 
@@ -80,7 +76,7 @@ impl DAGSelect {
         scan.set_columns(columns_info.clone());
         exec.set_idx_scan(scan);
 
-        let range = table.get_index_range(idx);
+        let range = table.index_select_all(idx);
         DAGSelect {
             execs: vec![exec],
             cols: columns_info.to_vec(),

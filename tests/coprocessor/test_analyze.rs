@@ -40,7 +40,7 @@ fn new_analyze_column_req(
     cm_sketch_width: i32,
 ) -> Request {
     let mut col_req = AnalyzeColumnsReq::new();
-    col_req.set_columns_info(RepeatedField::from_vec(table.get_table_columns()));
+    col_req.set_columns_info(RepeatedField::from_vec(table.columns_info()));
     col_req.set_bucket_size(bucket_size);
     col_req.set_sketch_size(fm_sketch_size);
     col_req.set_sample_size(sample_size);
@@ -52,7 +52,7 @@ fn new_analyze_column_req(
     analy_req.set_col_req(col_req);
     new_analyze_req(
         analy_req.write_to_bytes().unwrap(),
-        table.get_select_range(),
+        table.record_select_all(),
     )
 }
 
@@ -74,7 +74,7 @@ fn new_analyze_index_req(
     analy_req.set_idx_req(idx_req);
     new_analyze_req(
         analy_req.write_to_bytes().unwrap(),
-        table.get_index_range(idx),
+        table.index_select_all(idx),
     )
 }
 
@@ -91,7 +91,7 @@ fn test_analyze_column_with_lock() {
     for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
-        let mut req = new_analyze_column_req(&product.table, 3, 3, 3, 4, 32);
+        let mut req = new_analyze_column_req(product.as_table(), 3, 3, 3, 4, 32);
         let mut ctx = Context::new();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
@@ -125,7 +125,7 @@ fn test_analyze_column() {
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
 
-    let req = new_analyze_column_req(&product.table, 3, 3, 3, 4, 32);
+    let req = new_analyze_column_req(product.as_table(), 3, 3, 3, 4, 32);
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeColumnsResp::new();
@@ -136,7 +136,7 @@ fn test_analyze_column() {
     let collectors = analyze_resp.get_collectors().to_vec();
     assert_eq!(
         collectors.len(),
-        product.table.get_table_columns().len() - 1
+        product.as_table().columns_info().len() - 1
     );
     assert_eq!(collectors[0].get_null_count(), 1);
     assert_eq!(collectors[0].get_count(), 3);
@@ -159,7 +159,7 @@ fn test_analyze_index_with_lock() {
     for &iso_level in &[IsolationLevel::SI, IsolationLevel::RC] {
         let (_, endpoint) = init_data_with_commit(&product, &data, false);
 
-        let mut req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
+        let mut req = new_analyze_index_req(product.as_table(), 3, product["name"].index, 4, 32);
         let mut ctx = Context::new();
         ctx.set_isolation_level(iso_level);
         req.set_context(ctx);
@@ -193,7 +193,7 @@ fn test_analyze_index() {
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
 
-    let req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
+    let req = new_analyze_index_req(product.as_table(), 3, product["name"].index, 4, 32);
     let resp = handle_request(&endpoint, req);
     assert!(!resp.get_data().is_empty());
     let mut analyze_resp = AnalyzeIndexResp::new();
@@ -218,7 +218,7 @@ fn test_invalid_range() {
 
     let product = ProductTable::new();
     let (_, endpoint) = init_data_with_commit(&product, &data, true);
-    let mut req = new_analyze_index_req(&product.table, 3, product.name.index, 4, 32);
+    let mut req = new_analyze_index_req(product.as_table(), 3, product["name"].index, 4, 32);
     let mut key_range = KeyRange::new();
     key_range.set_start(b"xxx".to_vec());
     key_range.set_end(b"zzz".to_vec());

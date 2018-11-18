@@ -55,13 +55,13 @@ fn test_checksum() {
     let product = ProductTable::new();
     let (store, endpoint) = init_data_with_commit(&product, &data, true);
 
-    for column in &[product.id, product.name, product.count] {
+    for column in &[&product["id"], &product["name"], &product["count"]] {
         assert!(column.index >= 0);
         let (range, scan_on) = if column.index == 0 {
-            let range = product.table.get_select_range();
+            let range = product.as_table().record_select_all();
             (range, ChecksumScanOn::Table)
         } else {
-            let range = product.table.get_index_range(column.index);
+            let range = product.as_table().index_select_all(column.index);
             (range, ChecksumScanOn::Index)
         };
         let request = new_checksum_request(range.clone(), scan_on);

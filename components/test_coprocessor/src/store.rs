@@ -37,7 +37,7 @@ impl<'a, E: Engine> Insert<'a, E> {
     }
 
     pub fn set(mut self, col: &Column, value: Datum) -> Self {
-        assert!(self.table.cols.contains_key(&col.id));
+        assert!(self.table.column_by_id(col.id).is_some());
         self.values.insert(col.id, value);
         self
     }
@@ -85,10 +85,13 @@ impl<'a, E: Engine> Delete<'a, E> {
     }
 
     pub fn execute_with_ctx(self, ctx: Context, id: i64, row: Vec<Datum>) {
-        let mut values = HashMap::new();
-        for (&id, v) in self.table.cols.keys().zip(row) {
-            values.insert(id, v);
-        }
+        let values: HashMap<_, _> = self
+            .table
+            .columns
+            .iter()
+            .map(|(_, col)| col.id)
+            .zip(row)
+            .collect();
         let key = table::encode_row_key(self.table.id, id);
         let mut keys = vec![];
         keys.push(key);
