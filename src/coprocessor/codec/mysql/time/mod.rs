@@ -32,7 +32,7 @@ use coprocessor::codec::{Error, Result, TEN_POW};
 use util::codec::number::{self, NumberEncoder};
 use util::codec::BytesSlice;
 
-use self::extension::*;
+pub use self::extension::*;
 use self::weekmode::WeekMode;
 
 pub use self::tz::Tz;
