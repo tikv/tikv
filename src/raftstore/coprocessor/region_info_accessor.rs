@@ -162,10 +162,11 @@ impl RegionCollection {
                 .get_version();
             if version < collided_region_version {
                 // Another region is the actual new region. Now we are trying to create a region
-                // because of a old message. Fail.
+                // because of an old message. Fail.
                 return false;
             }
-            // Another region is stale. Remove it.
+            // Another region is older. Remove it.
+            info!("region_collection: remove region {} because colliding with region {}", collided_region_id, region_id);
             self.regions.remove(&collided_region_id);
         }
         true
@@ -185,7 +186,6 @@ impl RegionCollection {
         }
 
         // Create new region
-
         self.region_ranges.insert(end_key, region.get_id());
 
         // TODO: Should we set it follower?
