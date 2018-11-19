@@ -45,6 +45,8 @@ pub const VAR_UINT_FLAG: u8 = 9;
 pub const JSON_FLAG: u8 = 10;
 pub const MAX_FLAG: u8 = 250;
 
+pub const DATUM_DATA_NULL: &[u8; 1] = &[NIL_FLAG];
+
 /// `Datum` stores data with different types.
 #[derive(PartialEq, Clone)]
 pub enum Datum {
