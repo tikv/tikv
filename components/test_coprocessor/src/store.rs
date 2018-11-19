@@ -17,11 +17,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use kvproto::kvrpcpb::Context;
 
-use test_storage::SyncStorage;
+use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tikv::coprocessor::codec::{datum, table, Datum};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::{self, Engine, FixtureStore, Key, Mutation, RocksEngine, TestEngineBuilder};
-use tikv::util::worker::FutureWorker;
+use tikv::storage::{Engine, FixtureStore, Key, Mutation, RocksEngine, TestEngineBuilder};
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,
@@ -107,7 +105,7 @@ impl<'a, E: Engine> Delete<'a, E> {
 
 /// A store that operates over MVCC and support transactions.
 pub struct Store<E: Engine> {
-    store: SyncStorage<E>,
+    store: SyncTestStorage<E>,
     current_ts: u64,
     last_committed_ts: u64,
     handles: Vec<Vec<u8>>,
@@ -121,14 +119,10 @@ impl Store<RocksEngine> {
 
 impl<E: Engine> Store<E> {
     pub fn from_engine(engine: E) -> Self {
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
         Self {
-            store: SyncStorage::from_engine(engine, &Default::default(), read_pool),
-            current_ts: 2,
-            last_committed_ts: 1,
+            store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
+            current_ts: 1,
+            last_committed_ts: 0,
             handles: vec![],
         }
     }
@@ -148,10 +142,7 @@ impl<E: Engine> Store<E> {
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
 
-    pub fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, E>
-    where
-        Self: Sized,
-    {
+    pub fn insert_into<'a>(&'a mut self, table: &'a Table) -> Insert<'a, E> {
         Insert::new(self, table)
     }
 
@@ -167,10 +158,7 @@ impl<E: Engine> Store<E> {
             .unwrap();
     }
 
-    pub fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, E>
-    where
-        Self: Sized,
-    {
+    pub fn delete_from<'a>(&'a mut self, table: &'a Table) -> Delete<'a, E> {
         Delete::new(self, table)
     }
 

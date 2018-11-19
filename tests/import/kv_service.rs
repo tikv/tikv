@@ -24,7 +24,7 @@ use kvproto::import_kvpb_grpc::*;
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
 
-fn new_kv_server() -> (ImportKVServer, ImportKvClient) {
+fn new_kv_server() -> (ImportKVServer, ImportKvClient, TempDir) {
     let temp_dir = TempDir::new("test_import_kv_server").unwrap();
 
     let mut cfg = TiKvConfig::default();
@@ -39,12 +39,13 @@ fn new_kv_server() -> (ImportKVServer, ImportKvClient) {
     };
     let client = ImportKvClient::new(ch);
 
-    (server, client)
+    // Return temp_dir as well, so that temp dir will be properly deleted when it is dropped.
+    (server, client, temp_dir)
 }
 
 #[test]
 fn test_kv_service() {
-    let (mut server, client) = new_kv_server();
+    let (mut server, client, _) = new_kv_server();
     server.start();
 
     let uuid = Uuid::new_v4().as_bytes().to_vec();
