@@ -23,12 +23,12 @@ extern crate log;
 extern crate protobuf;
 extern crate raft;
 extern crate rocksdb;
-extern crate rustc_serialize;
 #[macro_use]
 extern crate tikv;
 extern crate toml;
 #[macro_use(slog_o, slog_kv)]
 extern crate slog;
+extern crate hex;
 #[cfg(unix)]
 extern crate nix;
 #[cfg(unix)]
@@ -40,8 +40,8 @@ extern crate slog_term;
 
 mod util;
 
-use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
 use std::cmp::Ordering;
+use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -79,6 +79,7 @@ const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
+const RUN_LDB_CMD_KEY_WORD: &str = "ldb";
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
@@ -979,6 +980,10 @@ fn main() {
                 .help("pd address"),
         )
         .subcommand(
+            SubCommand::with_name(RUN_LDB_CMD_KEY_WORD)
+                .about("run ldb cmd of RocksDB")
+        )
+        .subcommand(
             SubCommand::with_name("raft")
                 .about("print raft log entry")
                 .subcommand(
@@ -1538,6 +1543,13 @@ fn main() {
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
         );
 
+    // tikv-ctl just encapsulates the related module in rust-rocksdb. So, we don't need to parse
+    // the cmd here. Run cmd `./path-to-tikv-ctl ldb` and the help information will be printed.
+    if let Some(ldb_args) = check_run_ldb_cmd() {
+        rocksdb::run_ldb_tool(&ldb_args);
+        return;
+    }
+
     let matches = app.clone().get_matches();
     if matches.args.is_empty() {
         let _ = app.print_help();
@@ -1550,7 +1562,7 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        println!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -1815,11 +1827,11 @@ fn get_module_type(module: &str) -> MODULE {
     }
 }
 
-fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
+fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
     if key.starts_with("0x") || key.starts_with("0X") {
-        return key[2..].from_hex();
+        return hex::decode(&key[2..]);
     }
-    key.from_hex()
+    hex::decode(key)
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
@@ -1998,6 +2010,24 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
         ))
     }
     list
+}
+
+// check if the key word "ldb" exists as the first argv and format the cmd line
+// to meet the requirements of ldb_tool.
+fn check_run_ldb_cmd() -> Option<Vec<String>> {
+    let mut res = Vec::new();
+    for x in env::args_os() {
+        if let Some(s) = x.to_os_string().to_str() {
+            res.push(s.to_string());
+        } else {
+            return None;
+        }
+    }
+    if res.len() > 1 && res[1] == RUN_LDB_CMD_KEY_WORD {
+        res.remove(1);
+        return Some(res);
+    }
+    None
 }
 
 #[cfg(test)]

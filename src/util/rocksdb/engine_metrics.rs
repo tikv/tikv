@@ -1229,6 +1229,12 @@ lazy_static! {
         "Number of files at each level",
         &["db", "cf", "level"]
     ).unwrap();
+
+    pub static ref STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_stall_conditions_changed",
+        "Stall conditions changed of each column family",
+        &["db", "cf", "type"]
+    ).unwrap();
 }
 
 #[cfg(test)]

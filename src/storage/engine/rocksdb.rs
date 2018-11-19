@@ -11,24 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
-    ScanMode, Snapshot, TEMP_DIR,
-};
-use kvproto::kvrpcpb::Context;
-use raftstore::store::engine::{IterOption, Peekable};
-use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use storage::{CfName, Key, Value, CF_DEFAULT};
+
+use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
+
+use raftstore::store::engine::{IterOption, Peekable};
+use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
+use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+
 use util::escape;
 use util::rocksdb;
 use util::rocksdb::CFOptions;
 use util::worker::{Runnable, Scheduler, Worker};
 
+use super::{
+    Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
+    ScanMode, Snapshot,
+};
+
 pub use raftstore::store::engine::SyncSnapshot as RocksSnapshot;
+
+const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
@@ -115,13 +122,74 @@ impl RocksEngine {
     }
 }
 
+impl Display for RocksEngine {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "RocksDB")
+    }
+}
+
 impl Debug for RocksEngine {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "Rocksdb [is_temp: {}]",
+            "RocksDB [is_temp: {}]",
             self.core.lock().unwrap().temp_dir.is_some()
         )
+    }
+}
+
+/// A builder to build a temporary `RocksEngine`.
+///
+/// Only used for test purpose.
+#[must_use]
+pub struct TestEngineBuilder {
+    path: Option<PathBuf>,
+    cfs: Option<Vec<CfName>>,
+}
+
+impl TestEngineBuilder {
+    pub fn new() -> Self {
+        Self {
+            path: None,
+            cfs: None,
+        }
+    }
+
+    /// Customize the data directory of the temporary engine.
+    ///
+    /// By default, TEMP_DIR will be used.
+    pub fn path(mut self, path: impl AsRef<Path>) -> Self {
+        self.path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Customize the CFs that engine will have.
+    ///
+    /// By default, engine will have all CFs.
+    pub fn cfs(mut self, cfs: impl AsRef<[CfName]>) -> Self {
+        self.cfs = Some(cfs.as_ref().to_vec());
+        self
+    }
+
+    /// Build a `RocksEngine`.
+    pub fn build(self) -> Result<RocksEngine> {
+        let path = match self.path {
+            None => TEMP_DIR.to_owned(),
+            Some(p) => p.to_str().unwrap().to_owned(),
+        };
+        let cfs = self.cfs.unwrap_or_else(|| ::storage::ALL_CFS.to_vec());
+        let cfg_rocksdb = ::config::DbConfig::default();
+        let cfs_opts = cfs
+            .iter()
+            .map(|cf| match *cf {
+                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
+                _ => CFOptions::new(*cf, ::rocksdb::ColumnFamilyOptions::new()),
+            })
+            .collect();
+        RocksEngine::new(&path, &cfs, Some(cfs_opts))
     }
 }
 
@@ -256,4 +324,111 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
     fn value(&self) -> &[u8] {
         DBIterator::value(self)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    pub use super::super::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+    use super::super::tests::*;
+    use super::super::CFStatistics;
+    use super::*;
+    use tempdir::TempDir;
+
+    #[test]
+    fn test_rocksdb() {
+        let engine = TestEngineBuilder::new()
+            .cfs(TEST_ENGINE_CFS)
+            .build()
+            .unwrap();
+        test_base_curd_options(&engine)
+    }
+
+    #[test]
+    fn test_rocksdb_linear() {
+        let engine = TestEngineBuilder::new()
+            .cfs(TEST_ENGINE_CFS)
+            .build()
+            .unwrap();
+        test_linear(&engine);
+    }
+
+    #[test]
+    fn test_rocksdb_statistic() {
+        let engine = TestEngineBuilder::new()
+            .cfs(TEST_ENGINE_CFS)
+            .build()
+            .unwrap();
+        test_cfs_statistics(&engine);
+    }
+
+    #[test]
+    fn rocksdb_reopen() {
+        let dir = TempDir::new("rocksdb_test").unwrap();
+        {
+            let engine = TestEngineBuilder::new()
+                .path(dir.path())
+                .cfs(TEST_ENGINE_CFS)
+                .build()
+                .unwrap();
+            must_put_cf(&engine, "cf", b"k", b"v1");
+        }
+        {
+            let engine = TestEngineBuilder::new()
+                .path(dir.path())
+                .cfs(TEST_ENGINE_CFS)
+                .build()
+                .unwrap();
+            assert_has_cf(&engine, "cf", b"k", b"v1");
+        }
+    }
+
+    #[test]
+    fn test_rocksdb_perf_statistics() {
+        let engine = TestEngineBuilder::new()
+            .cfs(TEST_ENGINE_CFS)
+            .build()
+            .unwrap();
+        test_perf_statistics(&engine);
+    }
+
+    pub fn test_perf_statistics<E: Engine>(engine: &E) {
+        must_put(engine, b"foo", b"bar1");
+        must_put(engine, b"foo2", b"bar2");
+        must_put(engine, b"foo3", b"bar3"); // deleted
+        must_put(engine, b"foo4", b"bar4");
+        must_put(engine, b"foo42", b"bar42"); // deleted
+        must_put(engine, b"foo5", b"bar5"); // deleted
+        must_put(engine, b"foo6", b"bar6");
+        must_delete(engine, b"foo3");
+        must_delete(engine, b"foo42");
+        must_delete(engine, b"foo5");
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut iter = snapshot
+            .iter(IterOption::default(), ScanMode::Forward)
+            .unwrap();
+
+        let mut statistics = CFStatistics::default();
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
+            .unwrap();
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
+            .unwrap();
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        iter.prev(&mut statistics);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+
+        iter.prev(&mut statistics);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+
+        iter.prev(&mut statistics);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+    }
+
 }

@@ -64,7 +64,7 @@ This section describes how to deploy TiKV on a single machine installed with the
                     --log-file=tikv3.log
     ```
 
-You can use the [pd-ctl](https://github.com/pingcap/pd/tree/master/pdctl) tool to verify whether PD and TiKV are successfully deployed:
+You can use the [pd-ctl](https://github.com/pingcap/pd/tree/master/tools/pd-ctl) tool to verify whether PD and TiKV are successfully deployed:
 
 ```
 ./bin/pd-ctl store -d -u http://127.0.0.1:2379
@@ -142,7 +142,7 @@ To deploy a TiKV cluster with multiple nodes for test, take the following steps:
                     --log-file=tikv3.log
     ```
 
-You can use the [pd-ctl](https://github.com/pingcap/pd/tree/master/pdctl) tool to verify whether PD and TiKV are successfully deployed:
+You can use the [pd-ctl](https://github.com/pingcap/pd/tree/master/tools/pd-ctl) tool to verify whether PD and TiKV are successfully deployed:
 
 ```
 ./pd-ctl store -d -u http://192.168.199.113:2379

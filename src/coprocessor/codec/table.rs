@@ -11,20 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use kvproto::coprocessor::KeyRange;
+use std::convert::TryInto;
 use std::io::Write;
 use std::{cmp, u8};
+
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeTp;
+use kvproto::coprocessor::KeyRange;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::dag::expr::EvalContext;
-use util::collections::{HashMap, HashSet};
-use util::escape;
-
 //use super::datum::DatumDecoder;
-use super::mysql::{types, Duration, Time};
+use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
+use coprocessor::dag::expr::EvalContext;
 use util::codec::number::{self, NumberEncoder};
 use util::codec::BytesSlice;
+use util::collections::{HashMap, HashSet};
+use util::escape;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -186,7 +189,7 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 
 // `decode_index_key` decodes datums from an index key.
 pub fn decode_index_key(
-    ctx: &mut EvalContext,
+    ctx: &EvalContext,
     mut encoded: &[u8],
     infos: &[ColumnInfo],
 ) -> Result<Vec<Datum>> {
@@ -206,42 +209,41 @@ pub fn decode_index_key(
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(ctx: &mut EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Datum> {
+fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &FieldTypeAccessor) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }
-    if col.get_tp() > i32::from(u8::MAX) || col.get_tp() < 0 {
-        error!("unknown type {} {:?}", col.get_tp(), datum);
-    }
-    match col.get_tp() as u8 {
-        types::FLOAT => Ok(Datum::F64(f64::from(datum.f64() as f32))),
-        types::DATE | types::DATETIME | types::TIMESTAMP => {
-            let fsp = col.get_decimal() as i8;
-            let t = Time::from_packed_u64(datum.u64(), col.get_tp() as u8, fsp, ctx.cfg.tz)?;
+    let tp = field_type.tp();
+    match tp {
+        FieldTypeTp::Float => Ok(Datum::F64(f64::from(datum.f64() as f32))),
+        FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
+            let fsp = field_type.decimal() as i8;
+            let t = Time::from_packed_u64(datum.u64(), tp.try_into()?, fsp, ctx.cfg.tz)?;
             Ok(Datum::Time(t))
         }
-        types::DURATION => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
-        types::ENUM | types::SET | types::BIT => {
-            Err(box_err!("unflatten column {:?} is not supported yet.", col))
-        }
+        FieldTypeTp::Duration => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
+        FieldTypeTp::Enum | FieldTypeTp::Set | FieldTypeTp::Bit => Err(box_err!(
+            "unflatten field type {} is not supported yet.",
+            tp
+        )),
         t => {
             debug_assert!(
                 [
-                    types::TINY,
-                    types::SHORT,
-                    types::YEAR,
-                    types::INT24,
-                    types::LONG,
-                    types::LONG_LONG,
-                    types::DOUBLE,
-                    types::TINY_BLOB,
-                    types::MEDIUM_BLOB,
-                    types::BLOB,
-                    types::LONG_BLOB,
-                    types::VARCHAR,
-                    types::STRING,
-                    types::NEW_DECIMAL,
-                    types::JSON
+                    FieldTypeTp::Tiny,
+                    FieldTypeTp::Short,
+                    FieldTypeTp::Year,
+                    FieldTypeTp::Int24,
+                    FieldTypeTp::Long,
+                    FieldTypeTp::LongLong,
+                    FieldTypeTp::Double,
+                    FieldTypeTp::TinyBlob,
+                    FieldTypeTp::MediumBlob,
+                    FieldTypeTp::Blob,
+                    FieldTypeTp::LongBlob,
+                    FieldTypeTp::VarChar,
+                    FieldTypeTp::String,
+                    FieldTypeTp::NewDecimal,
+                    FieldTypeTp::JSON
                 ].contains(&t),
                 "unknown type {} {:?}",
                 t,
@@ -255,7 +257,7 @@ fn unflatten(ctx: &mut EvalContext, datum: Datum, col: &ColumnInfo) -> Result<Da
 // `decode_col_value` decodes data to a Datum according to the column info.
 pub fn decode_col_value(
     data: &mut BytesSlice,
-    ctx: &mut EvalContext,
+    ctx: &EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
     let d = datum::decode_datum(data)?;
@@ -423,7 +425,6 @@ mod tests {
     use tipb::schema::ColumnInfo;
 
     use coprocessor::codec::datum::{self, Datum};
-    use coprocessor::codec::mysql::types;
     use util::collections::{HashMap, HashSet};
 
     use super::*;
@@ -441,19 +442,19 @@ mod tests {
     fn test_index_key_codec() {
         let tests = vec![Datum::U64(1), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)];
         let types = vec![
-            new_col_info(types::LONG_LONG),
-            new_col_info(types::VARCHAR),
-            new_col_info(types::LONG_LONG),
+            new_col_info(FieldTypeTp::LongLong),
+            new_col_info(FieldTypeTp::VarChar),
+            new_col_info(FieldTypeTp::LongLong),
         ];
         let buf = datum::encode_key(&tests).unwrap();
         let encoded = encode_index_seek_key(1, 2, &buf);
-        let mut ctx = EvalContext::default();
-        assert_eq!(tests, decode_index_key(&mut ctx, &encoded, &types).unwrap());
+        let ctx = EvalContext::default();
+        assert_eq!(tests, decode_index_key(&ctx, &encoded, &types).unwrap());
     }
 
-    fn new_col_info(tp: u8) -> ColumnInfo {
+    fn new_col_info(tp: FieldTypeTp) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
-        col_info.set_tp(i32::from(tp));
+        col_info.as_mut_accessor().set_tp(tp);
         col_info
     }
 
@@ -484,10 +485,10 @@ mod tests {
     #[test]
     fn test_row_codec() {
         let mut cols = map![
-            1 => new_col_info(types::LONG_LONG),
-            2 => new_col_info(types::VARCHAR),
-            3 => new_col_info(types::NEW_DECIMAL),
-            5 => new_col_info(types::JSON)
+            1 => new_col_info(FieldTypeTp::LongLong),
+            2 => new_col_info(FieldTypeTp::VarChar),
+            3 => new_col_info(FieldTypeTp::NewDecimal),
+            5 => new_col_info(FieldTypeTp::JSON)
         ];
 
         let mut row = map![
@@ -518,7 +519,7 @@ mod tests {
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert_eq!(col_encoded, datums);
 
-        cols.insert(4, new_col_info(types::FLOAT));
+        cols.insert(4, new_col_info(FieldTypeTp::Float));
         let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
@@ -553,22 +554,22 @@ mod tests {
     fn test_idx_codec() {
         let mut col_ids = vec![1, 2, 3];
         let col_types = vec![
-            new_col_info(types::LONG_LONG),
-            new_col_info(types::VARCHAR),
-            new_col_info(types::NEW_DECIMAL),
+            new_col_info(FieldTypeTp::LongLong),
+            new_col_info(FieldTypeTp::VarChar),
+            new_col_info(FieldTypeTp::NewDecimal),
         ];
         let col_values = vec![
             Datum::I64(100),
             Datum::Bytes(b"abc".to_vec()),
             Datum::Dec(10.into()),
         ];
-        let mut ctx = EvalContext::default();
+        let ctx = EvalContext::default();
         let mut col_encoded: HashMap<_, _> = col_ids
             .iter()
             .zip(&col_types)
             .zip(&col_values)
             .map(|((id, t), v)| {
-                let unflattened = super::unflatten(&mut ctx, v.clone(), t).unwrap();
+                let unflattened = super::unflatten(&ctx, v.clone(), t).unwrap();
                 let encoded = datum::encode_key(&[unflattened]).unwrap();
                 (*id, encoded)
             })
@@ -577,8 +578,8 @@ mod tests {
         let key = datum::encode_key(&col_values).unwrap();
         let bs = encode_index_seek_key(1, 1, &key);
         assert!(!bs.is_empty());
-        let mut ctx = EvalContext::default();
-        let r = decode_index_key(&mut ctx, &bs, &col_types).unwrap();
+        let ctx = EvalContext::default();
+        let r = decode_index_key(&ctx, &bs, &col_types).unwrap();
         assert_eq!(col_values, r);
 
         let mut res: (HashMap<_, _>, _) = cut_idx_key_as_owned(&bs, &col_ids);
@@ -602,7 +603,7 @@ mod tests {
 
         let bs = encode_index_seek_key(1, 1, &[]);
         assert!(!bs.is_empty());
-        assert!(decode_index_key(&mut ctx, &bs, &[]).unwrap().is_empty());
+        assert!(decode_index_key(&ctx, &bs, &[]).unwrap().is_empty());
         res = cut_idx_key_as_owned(&bs, &[]);
         assert!(res.0.is_empty());
         assert!(res.1.is_none());

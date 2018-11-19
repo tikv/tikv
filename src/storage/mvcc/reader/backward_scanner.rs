@@ -481,16 +481,14 @@ impl<S: Snapshot> BackwardScanner<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::engine::{self, TEMP_DIR};
     use storage::mvcc::tests::*;
-    use storage::ALL_CFS;
-    use storage::{Engine, Key};
+    use storage::{Engine, Key, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
     #[test]
     fn test_basic() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
         let k = &[10 as u8];
@@ -738,7 +736,7 @@ mod tests {
     /// Case 1. prev out of bound, next_version is None.
     #[test]
     fn test_reverse_get_out_of_bound_1() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate N/2 rollback for [b].
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
@@ -806,7 +804,7 @@ mod tests {
     /// Case 2. prev out of bound, next_version is Some.
     #[test]
     fn test_reverse_get_out_of_bound_2() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put and N/2 rollback for [b].
         must_prewrite_put(&engine, b"b", b"value_b", b"b", 0);
@@ -879,7 +877,7 @@ mod tests {
     /// Case 1. prev() out of bound
     #[test]
     fn test_move_prev_user_key_out_of_bound_1() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [c].
         must_prewrite_put(&engine, b"c", b"value", b"c", 1);
@@ -950,7 +948,7 @@ mod tests {
     /// Case 2. seek_for_prev() out of bound
     #[test]
     fn test_move_prev_user_key_out_of_bound_2() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [c].
         must_prewrite_put(&engine, b"c", b"value", b"c", 1);
@@ -1027,7 +1025,7 @@ mod tests {
     /// Case 3. a more complicated case
     #[test]
     fn test_move_prev_user_key_out_of_bound_3() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // N denotes for SEEK_BOUND, M denotes for REVERSE_SEEK_BOUND
 
@@ -1109,7 +1107,7 @@ mod tests {
     /// Range is left open right closed.
     #[test]
     fn test_range() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [1], [2] ... [6].
         for i in 1..7 {
@@ -1207,7 +1205,7 @@ mod tests {
 
     #[test]
     fn test_many_tombstones() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate RocksDB tombstones in write cf.
         let start_ts = 1;
