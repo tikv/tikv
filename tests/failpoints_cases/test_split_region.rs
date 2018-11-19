@@ -18,7 +18,7 @@ use fail;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use tikv::raftstore::store::util::is_vote_msg;
-use tikv::raftstore::{store::Callback, Result};
+use tikv::raftstore::Result;
 use tikv::util::HandyRwLock;
 
 use test_raftstore::*;
@@ -88,32 +88,4 @@ impl Filter<RaftMessage> for PrevoteRangeFilter {
         }
         Ok(())
     }
-}
-
-#[test]
-fn test_split_after_conf_change() {
-    let _guard = ::setup();
-
-    let mut cluster = new_node_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    cluster.run();
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-
-    fail::cfg("pd_handle_ask_batch_split", "sleep(200)").unwrap();
-    let region = cluster.get_region(b"");
-    let (tx, rx) = mpsc::channel();
-    cluster.split_region(
-        &region,
-        b"k2",
-        Callback::Write(box move |resp| {
-            tx.send(resp).unwrap();
-        }),
-    );
-
-    pd_client.must_remove_peer(1, new_peer(2, 2));
-    fail::cfg("pd_handle_ask_batch_split", "off").unwrap();
-
-    let resp = rx.recv_timeout(Duration::from_secs(20)).unwrap();
-    println!("resp: {:?}", resp);
 }

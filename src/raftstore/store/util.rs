@@ -1630,6 +1630,7 @@ mod tests {
 
         // These admin commands requires epoch.conf_version.
         for ty in &[
+            AdminCmdType::Split,
             AdminCmdType::ChangePeer,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
