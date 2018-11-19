@@ -58,7 +58,7 @@ impl DAGSelect {
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: table.record_select_all(),
+            key_range: table.get_record_range_all(),
             output_offsets: None,
         }
     }
@@ -76,7 +76,7 @@ impl DAGSelect {
         scan.set_columns(columns_info.clone());
         exec.set_idx_scan(scan);
 
-        let range = table.index_select_all(idx);
+        let range = table.get_index_range_all(idx);
         DAGSelect {
             execs: vec![exec],
             cols: columns_info.to_vec(),

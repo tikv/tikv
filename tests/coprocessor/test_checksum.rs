@@ -58,10 +58,10 @@ fn test_checksum() {
     for column in &[&product["id"], &product["name"], &product["count"]] {
         assert!(column.index >= 0);
         let (range, scan_on) = if column.index == 0 {
-            let range = product.as_table().record_select_all();
+            let range = product.get_record_range_all();
             (range, ChecksumScanOn::Table)
         } else {
-            let range = product.as_table().index_select_all(column.index);
+            let range = product.get_index_range_all(column.index);
             (range, ChecksumScanOn::Index)
         };
         let request = new_checksum_request(range.clone(), scan_on);

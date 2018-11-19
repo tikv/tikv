@@ -48,10 +48,6 @@ impl ProductTable {
             .build();
         ProductTable(table)
     }
-
-    pub fn as_table(&self) -> &Table {
-        &self.0
-    }
 }
 
 impl ::std::ops::Deref for ProductTable {
@@ -94,7 +90,7 @@ pub fn init_data_with_details<E: Engine>(
     store.begin();
     for &(id, name, count) in vals {
         store
-            .insert_into(tbl.as_table())
+            .insert_into(&tbl)
             .set(&tbl["id"], Datum::I64(id))
             .set(&tbl["name"], name.map(|s| s.as_bytes()).into())
             .set(&tbl["count"], Datum::I64(count))

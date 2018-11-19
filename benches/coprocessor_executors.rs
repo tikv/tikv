@@ -86,7 +86,7 @@ fn bench_table_scan_primary_key(c: &mut Criterion) {
         meta.set_desc(false);
         meta.mut_columns().push(table["id"].as_column_info());
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -123,7 +123,7 @@ fn bench_table_scan_datum_front(c: &mut Criterion) {
         meta.set_desc(false);
         meta.mut_columns().push(table["col0"].as_column_info());
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -161,7 +161,7 @@ fn bench_table_scan_long_datum_front(c: &mut Criterion) {
         meta.set_desc(false);
         meta.mut_columns().push(table["col0"].as_column_info());
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -198,7 +198,7 @@ fn bench_table_scan_datum_multi_front(c: &mut Criterion) {
         meta.mut_columns().push(table["col0"].as_column_info());
         meta.mut_columns().push(table["col1"].as_column_info());
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -233,7 +233,7 @@ fn bench_table_scan_datum_end(c: &mut Criterion) {
         meta.set_desc(false);
         meta.mut_columns().push(table["col99"].as_column_info());
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -271,7 +271,7 @@ fn bench_table_scan_datum_all(c: &mut Criterion) {
         meta.set_desc(false);
         meta.set_columns(RepeatedField::from_vec(table.columns_info()));
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -308,7 +308,7 @@ fn bench_table_scan_datum_absent(c: &mut Criterion) {
         meta.set_desc(false);
         meta.mut_columns().push(table["col0"].as_column_info());
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -345,7 +345,7 @@ fn bench_table_scan_datum_absent_large_row(c: &mut Criterion) {
         meta.set_desc(false);
         meta.mut_columns().push(table["col0"].as_column_info());
 
-        bench_table_scan_next(b, &meta, &[table.record_select_all()], &store);
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -382,7 +382,7 @@ fn bench_table_scan_point_range(c: &mut Criterion) {
         bench_table_scan_next(
             b,
             &meta,
-            &[table.record_select_one(0), table.record_select_one(1)],
+            &[table.get_record_range_one(0), table.get_record_range_one(1)],
             &store,
         );
     });
@@ -423,7 +423,7 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
                 let mut ranges = vec![];
                 // Generate 1001 ranges, because there will be a warm-up next().
                 for i in 0..1001 {
-                    ranges.push(table.record_select_one(i));
+                    ranges.push(table.get_record_range_one(i));
                 }
                 let mut executor =
                     TableScanExecutor::new(meta.clone(), ranges, store.to_fixture_store(), false)
@@ -477,7 +477,7 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
             || {
                 let mut executor = TableScanExecutor::new(
                     meta.clone(),
-                    vec![table.record_select_all()],
+                    vec![table.get_record_range_all()],
                     store.to_fixture_store(),
                     false,
                 ).unwrap();
