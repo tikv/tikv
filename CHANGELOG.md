@@ -2,6 +2,12 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.9]
+### Bug Fixes
+* Add the `end-key` limit to the `kv_scan` interface [#3749](https://github.com/tikv/tikv/pull/3749)
+* Abandon the `max-tasks-xxx` configuration and add `max-tasks-per-worker-xxx` [#3093](https://github.com/tikv/tikv/pull/3093)
+* Fix the `CompactFiles` issue in RocksDB [#3789](https://github.com/tikv/tikv/pull/3789)
+
 ## [2.0.8]
 ### Bug Fix
 * Fix the issue that the memory consumed by Raftstore `EntryCache` keeps increasing when a node goes down [3529](https://github.com/tikv/tikv/pull/3529)
