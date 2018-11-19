@@ -50,8 +50,8 @@ type SimulateServerTransport =
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
-    node: Node<SimulateServerTransport, TestPdClient>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
+    node: Node<TestPdClient>,
+    server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     internal_router: Router,
@@ -133,9 +133,13 @@ impl Simulator for ServerCluster {
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
                 || storage::ReadPoolContext::new(pd_worker.scheduler())
             });
-        let mut store =
-            create_raft_storage(sim_router.clone(), &cfg.storage, storage_read_pool).unwrap();
-        store.start(&cfg.storage).unwrap();
+        let store = create_raft_storage(
+            sim_router.clone(),
+            &cfg.storage,
+            storage_read_pool,
+            None,
+            None,
+        ).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         // Create import service.

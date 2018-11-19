@@ -22,7 +22,11 @@ use tikv::storage::{self, Mutation};
 use tikv::storage::{engine, mvcc, txn, Engine, Key};
 use tikv::util::HandyRwLock;
 
-fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
+fn new_raft_storage() -> (
+    Cluster<ServerCluster>,
+    SyncTestStorage<SimulateEngine>,
+    Context,
+) {
     new_raft_storage_with_store_count(1, "")
 }
 
@@ -54,7 +58,7 @@ fn test_raft_storage_basic() {
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(
         storage
-            .scan(ctx.clone(), key.clone(), 1, false, 20)
+            .scan(ctx.clone(), key.clone(), None, 1, false, 20)
             .is_err()
     );
     assert!(
@@ -158,7 +162,7 @@ fn test_raft_storage_store_not_match() {
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(
         storage
-            .scan(ctx.clone(), key.clone(), 1, false, 20)
+            .scan(ctx.clone(), key.clone(), None, 1, false, 20)
             .is_err()
     );
     assert!(

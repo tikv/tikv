@@ -1279,12 +1279,19 @@ fn future_scan<E: Engine>(
     storage: &Storage<E>,
     mut req: ScanRequest,
 ) -> impl Future<Item = ScanResponse, Error = Error> {
+    let end_key = if req.get_end_key().is_empty() {
+        None
+    } else {
+        Some(Key::from_raw(req.get_end_key()))
+    };
+
     let mut options = Options::default();
     options.key_only = req.get_key_only();
     options.reverse_scan = req.get_reverse();
     let scan_result = storage.async_scan(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
+        end_key,
         req.get_limit() as usize,
         req.get_version(),
         options,
@@ -1713,6 +1720,7 @@ fn future_raw_scan<E: Engine>(
             req.take_start_key(),
             req.get_limit() as usize,
             req.get_key_only(),
+            req.get_reverse(),
         )
         .then(|v| {
             let mut resp = RawScanResponse::new();
@@ -1736,6 +1744,7 @@ fn future_raw_batch_scan<E: Engine>(
             req.take_ranges().into_vec(),
             req.get_each_limit() as usize,
             req.get_key_only(),
+            req.get_reverse(),
         )
         .then(|v| {
             let mut resp = RawBatchScanResponse::new();
@@ -1836,13 +1845,14 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         // failed in prewrite
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
             start_ts,
-            conflict_ts,
+            conflict_start_ts,
             ref key,
             ref primary,
+            ..
         })) => {
             let mut write_conflict = WriteConflict::new();
             write_conflict.set_start_ts(start_ts);
-            write_conflict.set_conflict_ts(conflict_ts);
+            write_conflict.set_conflict_ts(conflict_start_ts);
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
             key_error.set_conflict(write_conflict);
@@ -1963,19 +1973,21 @@ mod tests {
     #[test]
     fn test_extract_key_error_write_conflict() {
         let start_ts = 110;
-        let conflict_ts = 108;
+        let conflict_start_ts = 108;
+        let conflict_commit_ts = 109;
         let key = b"key".to_vec();
         let primary = b"primary".to_vec();
         let case = storage::Error::from(TxnError::from(MvccError::WriteConflict {
             start_ts,
-            conflict_ts,
+            conflict_start_ts,
+            conflict_commit_ts,
             key: key.clone(),
             primary: primary.clone(),
         }));
         let mut expect = KeyError::new();
         let mut write_conflict = WriteConflict::new();
         write_conflict.set_start_ts(start_ts);
-        write_conflict.set_conflict_ts(conflict_ts);
+        write_conflict.set_conflict_ts(conflict_start_ts);
         write_conflict.set_key(key);
         write_conflict.set_primary(primary);
         expect.set_conflict(write_conflict);

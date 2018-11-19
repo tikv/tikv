@@ -15,10 +15,13 @@ use std::borrow::Cow;
 use std::cmp::{max, min, Ordering};
 use std::{f64, i64};
 
-use super::{Error, EvalContext, Result, ScalarFunc};
 use chrono::TimeZone;
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
+
+use super::{Error, EvalContext, Result, ScalarFunc};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
 use coprocessor::codec::{datum, mysql, Datum};
 use coprocessor::dag::expr::Expression;
 
@@ -42,8 +45,14 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_int(ctx, row);
         do_compare(e, op, |l, r| {
-            let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
-            let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+            let lhs_unsigned = self.children[0]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED);
+            let rhs_unsigned = self.children[1]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED);
             Ok(cmp_i64_with_unsigned_flag(l, lhs_unsigned, r, rhs_unsigned))
         })
     }
@@ -235,7 +244,7 @@ impl ScalarFunc {
                 mysql::time::MAX_TIMESTAMP,
                 mysql::time::MAX_TIME_NANOSECONDS,
             ),
-            mysql::types::DATETIME,
+            TimeType::DateTime,
             mysql::MAX_FSP,
         )?;
 
@@ -269,8 +278,14 @@ impl ScalarFunc {
             self,
             |v| v.eval_int(ctx, row),
             |l, r| {
-                let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
-                let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+                let lhs_unsigned = self.children[0]
+                    .field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED);
+                let rhs_unsigned = self.children[1]
+                    .field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED);
                 Ok(cmp_i64_with_unsigned_flag(
                     *l,
                     lhs_unsigned,
@@ -314,7 +329,10 @@ impl ScalarFunc {
             None => return Ok(Some(-1)),
             Some(v) => v,
         };
-        let tus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+        let tus = self.children[0]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
 
         let mut left = 1;
         let mut right = self.children.len();
@@ -322,7 +340,10 @@ impl ScalarFunc {
             let mid = left + (right - left) / 2;
             let m = self.children[mid].eval_int(ctx, row)?.unwrap_or(target);
 
-            let mus = mysql::has_unsigned_flag(self.children[mid].get_tp().get_flag());
+            let mus = self.children[mid]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED);
 
             let cmp = match (tus, mus) {
                 (false, false) => target < m,
