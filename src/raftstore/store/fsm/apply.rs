@@ -2300,7 +2300,10 @@ impl<'a> ApplyPoller<'a> {
 
     // Return true means it's OK to handle next apply.
     fn handle_apply(&mut self, apply: Apply) -> bool {
-        if apply.entries.is_empty() || self.ctx.merged_regions.contains(&apply.region_id) {
+        if apply.entries.is_empty()
+            || self.ctx.merged_regions.contains(&apply.region_id)
+            || self.delegate.pending_remove
+        {
             return true;
         }
 
@@ -2367,6 +2370,9 @@ impl<'a> ApplyPoller<'a> {
     }
 
     fn handle_destroy(&mut self, d: Destroy) -> bool {
+        if self.delegate.pending_remove {
+            return false;
+        }
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.
         info!("{} remove from apply delegates", self.delegate.tag);

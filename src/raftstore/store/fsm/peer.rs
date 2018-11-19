@@ -370,6 +370,10 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             return Ok(());
         }
 
+        if self.peer.pending_remove {
+            return Ok(());
+        }
+
         if msg.get_is_tombstone() {
             // we receive a message tells us to remove ourself.
             self.handle_gc_peer_msg(&msg);
