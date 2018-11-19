@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::i64;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -222,7 +223,7 @@ impl RaftClient {
                 }
             }
         }
-        RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as i64);
+        RAFT_MESSAGE_FLUSH_COUNTER.inc_by(i64::from(counter));
     }
 }
 
