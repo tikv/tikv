@@ -256,9 +256,10 @@ pub fn check_region_epoch(
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
             | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split | AdminCmdType::BatchSplit => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::PrepareMerge
+            AdminCmdType::Split
+            | AdminCmdType::BatchSplit
+            | AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
             | AdminCmdType::RollbackMerge
             | AdminCmdType::TransferLeader => {
