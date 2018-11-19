@@ -201,12 +201,11 @@ impl RegionCollection {
         );
     }
 
-    fn handle_create_or_update_region(&mut self, region: Region) {
-        let mut existing = false;
+    fn update_region(&mut self, region: Region) {
         let mut end_key_updated = false;
 
-        if let Some(ref mut existing_region_info) = self.regions.get_mut(&region.get_id()) {
-            // The region already exists. Update it.
+        {
+            let existing_region_info = self.regions.get_mut(&region.get_id()).unwrap();
             // Ignore stale messages or messages with nothing updating
             {
                 let epoch = region.get_region_epoch();
@@ -217,8 +216,6 @@ impl RegionCollection {
                     return;
                 }
             }
-
-            existing = true;
 
             let old_region = &mut existing_region_info.region;
             assert_eq!(old_region.get_id(), region.get_id());
@@ -256,10 +253,16 @@ impl RegionCollection {
             // Insert new entry to `region_ranges`.
             self.region_ranges.insert(end_key, region.get_id());
         }
+    }
 
-        // The region didn't exist. We should create it.
-        if !existing {
-            // It's a new region. Create it.
+    fn handle_create_or_update(&mut self, region: Region) {
+        // This function handles both create and update event.
+        // During tests, we found that the `Create` event may arrive multiple times. And when we
+        // receive an `Update` message, the region may have been deleted for some reason. So we
+        // handle it according to whether the region exists in the collection.
+        if self.regions.contains_key(&region.get_id()) {
+            self.update_region(region);
+        } else {
             self.create_region(region);
         }
     }
@@ -275,7 +278,7 @@ impl RegionCollection {
             if removed_version > region.get_region_epoch().get_version()
                 || removed_conf > region.get_region_epoch().get_conf_ver()
             {
-                // It shouldn't be deleted. Put it back.
+                // It shouldn't be deleted because the message is stale. Put it back.
                 removed_region_info.region = removed_region;
                 self.regions.insert(region.get_id(), removed_region_info);
                 return;
@@ -310,11 +313,8 @@ impl RegionCollection {
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
-            RaftStoreEvent::CreateRegion { region } => {
-                self.handle_create_or_update_region(region);
-            }
-            RaftStoreEvent::UpdateRegion { region } => {
-                self.handle_create_or_update_region(region);
+            RaftStoreEvent::CreateRegion { region } | RaftStoreEvent::UpdateRegion { region } => {
+                self.handle_create_or_update(region);
             }
             RaftStoreEvent::DestroyRegion { region } => {
                 self.handle_destroy_region(region);
@@ -463,7 +463,7 @@ mod tests {
     fn must_create_region(c: &mut RegionCollection, region: &Region) {
         assert!(c.regions.get(&region.get_id()).is_none());
 
-        c.handle_create_or_update_region(region.clone());
+        c.handle_create_or_update(region.clone());
 
         assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
@@ -478,7 +478,7 @@ mod tests {
             .get(&region.get_id())
             .map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_create_or_update_region(region.clone());
+        c.handle_create_or_update(region.clone());
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.region, *region);
