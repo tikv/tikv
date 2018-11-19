@@ -164,7 +164,7 @@ impl RegionCollection {
     /// operation is caused by a stale message. Then this function should fail.
     ///
     /// Returns a bool value indicating whether checking succeeded.
-    fn check_end_key_collision(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
+    fn check_exist(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
         if let Some(collided_region_id) = self.region_ranges.get(end_key).cloned() {
             // There is already another region with the same end_key
             assert_ne!(collided_region_id, region_id);
@@ -175,10 +175,11 @@ impl RegionCollection {
                 .get_version();
             if version < collided_region_version {
                 // Another region is the actual new region. Now we are trying to create a region
-                // because of a old message. Fail.
+                // because of an old message. Fail.
                 return false;
             }
-            // Another region is stale. Remove it.
+            // Another region is older. Remove it.
+            info!("region_collection: remove region {} because colliding with region {}", collided_region_id, region_id);
             self.regions.remove(&collided_region_id);
         }
         true
@@ -188,11 +189,12 @@ impl RegionCollection {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
-        if !self.check_end_key_collision(
-            region_id,
-            region.get_region_epoch().get_version(),
-            &end_key,
-        ) {
+        if !self.check_exist(region_id, region.get_region_epoch().get_version(), &end_key) {
+            warn!(
+                "region_collection: creating region {} but it's end_key collides with another \
+                 newer region.",
+                region.get_id()
+            );
             return;
         }
 
@@ -200,29 +202,35 @@ impl RegionCollection {
         self.region_ranges.insert(end_key, region.get_id());
 
         // TODO: Should we set it follower?
-        if self
-            .regions
-            .insert(
-                region.get_id(),
-                RegionInfo::new(region, StateRole::Follower),
-            )
-            .is_some()
-        {
-            panic!(
-                "region_collection: trying to create new region {} but it already exists.",
-                region_id,
-            );
-        }
+        assert!(
+            self.regions
+                .insert(
+                    region.get_id(),
+                    RegionInfo::new(region, StateRole::Follower)
+                )
+                .is_none(),
+            "region_collection: trying to create new region {} but it already exists.",
+            region_id
+        );
     }
 
-    fn handle_create_or_update_region(&mut self, region: Region) {
-        let mut need_create_new_region = true;
+    fn update_region(&mut self, region: Region) {
         let mut end_key_updated = false;
 
-        if let Some(ref mut old_region_info) = self.regions.get_mut(&region.get_id()) {
-            need_create_new_region = false;
+        {
+            let existing_region_info = self.regions.get_mut(&region.get_id()).unwrap();
+            // Ignore stale messages or messages with nothing updating
+            {
+                let epoch = region.get_region_epoch();
+                let existing_epoch = existing_region_info.region.get_region_epoch();
+                if epoch.get_version() <= existing_epoch.get_version()
+                    && epoch.get_conf_ver() <= existing_epoch.get_conf_ver()
+                {
+                    return;
+                }
+            }
 
-            let old_region = &mut old_region_info.region;
+            let old_region = &mut existing_region_info.region;
             assert_eq!(old_region.get_id(), region.get_id());
 
             // If the end_key changed, the old item in `region_ranges` should be removed.
@@ -240,12 +248,14 @@ impl RegionCollection {
             *old_region = region.clone();
         }
 
+        // The new region info has a different end_key, so we need to update it in the
+        // `region_ranges` map.
         if end_key_updated {
             // If the region already exists, then `region_ranges` need to be updated.
             // However, if the new_end_key has already mapped to another region, we should only
             // keep the one with higher `version`.
             let end_key = data_end_key(region.get_end_key());
-            if !self.check_end_key_collision(
+            if !self.check_exist(
                 region.get_id(),
                 region.get_region_epoch().get_version(),
                 &end_key,
@@ -256,9 +266,16 @@ impl RegionCollection {
             // Insert new entry to `region_ranges`.
             self.region_ranges.insert(end_key, region.get_id());
         }
+    }
 
-        if need_create_new_region {
-            // It's a new region. Create it.
+    fn handle_create_or_update(&mut self, region: Region) {
+        // This function handles both create and update event.
+        // During tests, we found that the `Create` event may arrive multiple times. And when we
+        // receive an `Update` message, the region may have been deleted for some reason. So we
+        // handle it according to whether the region exists in the collection.
+        if self.regions.contains_key(&region.get_id()) {
+            self.update_region(region);
+        } else {
             self.create_region(region);
         }
     }
@@ -274,7 +291,7 @@ impl RegionCollection {
             if removed_version > region.get_region_epoch().get_version()
                 || removed_conf > region.get_region_epoch().get_conf_ver()
             {
-                // It shouldn't be deleted. Put it back.
+                // It shouldn't be deleted because the message is stale. Put it back.
                 removed_region_info.region = removed_region;
                 self.regions.insert(region.get_id(), removed_region_info);
                 return;
@@ -343,11 +360,8 @@ impl RegionCollection {
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
-            RaftStoreEvent::CreateRegion { region } => {
-                self.handle_create_or_update_region(region);
-            }
-            RaftStoreEvent::UpdateRegion { region } => {
-                self.handle_create_or_update_region(region);
+            RaftStoreEvent::CreateRegion { region } | RaftStoreEvent::UpdateRegion { region } => {
+                self.handle_create_or_update(region);
             }
             RaftStoreEvent::DestroyRegion { region } => {
                 self.handle_destroy_region(region);
@@ -539,7 +553,7 @@ mod tests {
     fn must_create_region(c: &mut RegionCollection, region: &Region) {
         assert!(c.regions.get(&region.get_id()).is_none());
 
-        c.handle_create_or_update_region(region.clone());
+        c.handle_create_or_update(region.clone());
 
         assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
@@ -554,7 +568,7 @@ mod tests {
             .get(&region.get_id())
             .map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_create_or_update_region(region.clone());
+        c.handle_create_or_update(region.clone());
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.region, *region);
@@ -783,7 +797,7 @@ mod tests {
         must_update_region(&mut c, &new_region(2, b"k1", b"k9", 1));
         must_change_role(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Leader);
         must_update_region(&mut c, &new_region(2, b"k1", b"k5", 2));
-        // TODO: In fact, region 2's role should be follower. However because it's revious state was
+        // TODO: In fact, region 2's role should be follower. However because it's previous state was
         // removed while creating updating region 4, it can't be successfully updated. Fortunately
         // this case may hardly happen so it can be fixed later.
         check_collection(
