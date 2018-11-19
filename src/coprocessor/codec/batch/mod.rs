@@ -11,4 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod expr;
+mod column;
+mod rows;
+
+pub use self::column::BatchColumn;
+pub use self::rows::BatchRows;
