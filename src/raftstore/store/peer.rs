@@ -1131,6 +1131,10 @@ impl Peer {
         merged: bool,
         apply_metrics: &ApplyMetrics,
     ) -> bool {
+        // TODO: remove following check
+        if self.stopped {
+            return false;
+        }
         let mut has_ready = false;
         if self.is_applying_snapshot() {
             panic!("{} should not applying snapshot.", self.tag);
