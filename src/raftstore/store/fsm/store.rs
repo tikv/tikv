@@ -290,7 +290,7 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
 
     fn on_compact_check_tick(&mut self) {
         if self.ctx.compact_scheduler.is_busy() {
-            debug!(
+            info!(
                 "{} compact worker is busy, check space redundancy next time",
                 self.core.tag
             );
