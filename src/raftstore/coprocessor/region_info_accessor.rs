@@ -34,7 +34,7 @@ const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 /// happens (such as creating and deleting regions), `RegionEventListener` simply send the events
 /// through a channel.
 /// In the mean time, `RegionCollection` keeps fetching messages from the channel, and mutate
-/// the collection according tho the messages. When an accessor method of `RegionInfoAccessor` is
+/// the collection according to the messages. When an accessor method of `RegionInfoAccessor` is
 /// called, it also simply send a message to `RegionCollection`, and the result will be send
 /// back through as soon as it's finished.
 /// In fact, the channel mentioned above is actually a `util::worker::Worker`.
