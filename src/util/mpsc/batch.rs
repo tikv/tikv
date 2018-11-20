@@ -39,8 +39,8 @@ impl State {
     }
 
     #[inline]
-    fn inc_send_and_maybe_notify(&self) {
-        let old_pending = self.old_pending.fetch_add(1, Ordering::SeqCst);
+    fn try_notiry_post_send(&self) {
+        let old_pending = self.old_pending.fetch_add(1, Ordering::AcqRel);
         if old_pending >= self.notify_size - 1 {
             self.notify();
         }
@@ -50,7 +50,7 @@ impl State {
     fn notify(&self) {
         let task = self.recv_task.take(Ordering::AcqRel);
         if let Some(t) = task {
-            self.old_pending.store(0, Ordering::SeqCst);
+            self.old_pending.store(0, Ordering::AcqRel);
             t.notify();
         }
     }
@@ -69,7 +69,7 @@ impl Drop for Notifier {
     #[inline]
     fn drop(&mut self) {
         let notifier_registered = &self.0.notifier_registered;
-        if !notifier_registered.compare_and_swap(true, false, Ordering::SeqCst) {
+        if !notifier_registered.compare_and_swap(true, false, Ordering::AcqRel) {
             unreachable!("notifier_registered must be true");
         }
         self.0.notify();
@@ -107,21 +107,21 @@ impl<T> Sender<T> {
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.send(t)?;
-        self.state.inc_send_and_maybe_notify();
+        self.state.try_notiry_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         self.sender.try_send(t)?;
-        self.state.inc_send_and_maybe_notify();
+        self.state.try_notiry_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn get_notifier(&self) -> Option<Notifier> {
         let notifier_registered = &self.state.notifier_registered;
-        if !notifier_registered.compare_and_swap(false, true, Ordering::SeqCst) {
+        if !notifier_registered.compare_and_swap(false, true, Ordering::AcqRel) {
             return Some(Notifier(Arc::clone(&self.state)));
         }
         None
@@ -280,7 +280,7 @@ mod tests {
         let msg_counter1 = Arc::clone(&msg_counter);
         let pool = CpuPool::new(1);
         pool.spawn(rx.for_each(move |v| {
-            msg_counter1.fetch_add(v.len(), Ordering::SeqCst);
+            msg_counter1.fetch_add(v.len(), Ordering::AcqRel);
             Ok(())
         })).forget();
         thread::sleep(time::Duration::from_millis(10));
@@ -288,20 +288,20 @@ mod tests {
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());
         thread::sleep(time::Duration::from_millis(10));
-        assert_eq!(msg_counter.load(Ordering::SeqCst), 0);
+        assert_eq!(msg_counter.load(Ordering::AcqRel), 0);
 
         // Send with notify.
         let notifier = tx.get_notifier().unwrap();
         assert!(tx.get_notifier().is_none());
         notifier.notify();
         thread::sleep(time::Duration::from_millis(10));
-        assert_eq!(msg_counter.load(Ordering::SeqCst), 1);
+        assert_eq!(msg_counter.load(Ordering::AcqRel), 1);
 
         // Auto notify with more sendings.
         for _ in 0..4 {
             assert!(tx.send(0).is_ok());
         }
         thread::sleep(time::Duration::from_millis(10));
-        assert_eq!(msg_counter.load(Ordering::SeqCst), 5);
+        assert_eq!(msg_counter.load(Ordering::AcqRel), 5);
     }
 }
