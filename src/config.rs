@@ -559,8 +559,8 @@ impl RaftDefaultCfConfig {
 
 // RocksDB Env associate thread pools of multiple instances from the same process.
 // When construct Options, options.env is set to same singleton Env::Default() object.
-// If we set same env parameter in different instance, we may overwrite other instance's config.
-// So we only set max_background_jobs in default rocksdb.
+// So total max_background_jobs = max(rocksdb.max_background_jobs, raftdb.max_background_jobs)
+// But each instance will limit their background jobs according to their own max_background_jobs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -571,6 +571,7 @@ pub struct RaftDbConfig {
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
+    pub max_background_jobs: i32,
     pub max_manifest_file_size: ReadableSize,
     pub create_if_missing: bool,
     pub max_open_files: i32,
@@ -599,6 +600,7 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
+            max_background_jobs: 6,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -630,6 +632,7 @@ impl RaftDbConfig {
         }
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
+        opts.set_max_background_jobs(self.max_background_jobs);
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
@@ -659,6 +662,7 @@ impl RaftDbConfig {
         opts.add_event_listener(EventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
+        // TODO maybe create a new env for raft engine
 
         opts
     }
