@@ -21,7 +21,7 @@ mod metrics;
 mod readpool_context;
 mod statistics;
 mod tracker;
-mod util;
+pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
