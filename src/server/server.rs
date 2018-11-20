@@ -171,9 +171,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();
 
-        let thread_load = Arc::clone(&self.thread_load);
-        let mut load_stats =
-            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, thread_load);
+        let mut load_stats = {
+            let tl = Arc::clone(&self.thread_load);
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
+        };
         self.stats_runtime.executor().spawn(
             Interval::new(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())

@@ -100,6 +100,16 @@ impl ThreadLoadStatistics {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+pub struct ThreadLoadStatistics {}
+#[cfg(not(target_os = "linux"))]
+impl ThreadLoadStatistics {
+    pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
+        ThreadLoadStatistics {}
+    }
+    pub fn record(&mut self, instant: Instant) {}
+}
+
 #[inline]
 fn calc_cpu_load(millis: usize, start_usage: f64, end_usage: f64) -> usize {
     let cpu_usage = (end_usage - start_usage) * 1000f64 * 100f64;
