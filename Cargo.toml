@@ -26,13 +26,16 @@ name = "tikv-importer"
 [[bench]]
 name = "raftstore"
 harness = false
+path = "benches/raftstore/mod.rs"
 
 [[bench]]
 name = "coprocessor_executors"
 harness = false
+path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
 name = "benches"
+path = "benches/misc/mod.rs"
 
 [dependencies]
 log = { version = "0.3", features = ["release_max_level_debug"] }
