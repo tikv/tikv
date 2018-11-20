@@ -175,7 +175,6 @@ impl RegionCollection {
                 another_region_id, region_id
             );
             self.regions.remove(&another_region_id);
-            need_remove = true
         }
 
         self.region_ranges.remove(end_key);
