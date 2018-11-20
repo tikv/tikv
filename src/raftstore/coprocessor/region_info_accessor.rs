@@ -28,9 +28,11 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 
-/// `RegionInfoAccessor` is used to collect all regions on this TiKV into a collection so that other
-/// parts of TiKV can get region information from it. It registers a observer to raftstore, which
-/// is named `RegionEventListener`, and it simply send some specific types of events through a channel.
+/// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
+/// so that other parts of TiKV can get region information from it. It registers a observer to
+/// raftstore, which is named `RegionEventListener`. When the events that we are interested in
+/// happens (such as creating and deleting regions), `RegionEventListener` simply send the events
+/// through a channel.
 /// In the mean time, `RegionCollection` keeps fetching messages from the channel, and mutate
 /// the collection according tho the messages. When an accessor method of `RegionInfoAccessor` is
 /// called, it also simply send a message to `RegionCollection`, and the result will be send
