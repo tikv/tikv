@@ -148,32 +148,38 @@ impl RegionCollection {
         }
     }
 
-    /// Check if the end_key has collided with another region. If so, try to clean it.
-    /// If the collided region has a greater version than the current one, it means that the current
-    /// operation is caused by a stale message. Then this function should fail.
+    /// Check if the end_key is the same with another region's (suppose the region is `R`). If so,
+    /// try to clean it.
+    /// If `R` has a greater version or conf_ver than the current one, it means that the current
+    /// operation is caused by a stale message. Then this function should fail (return false).
     ///
     /// Returns a bool value indicating whether checking succeeded.
     fn check_exist(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
-        if let Some(collided_region_id) = self.region_ranges.get(end_key).cloned() {
+        if let Some(another_region_id) = self.region_ranges.get(end_key).cloned() {
             // There is already another region with the same end_key
-            assert_ne!(collided_region_id, region_id);
+            assert_ne!(another_region_id, region_id);
 
-            let collided_region_version = self.regions[&collided_region_id]
+            let another_region_version = self.regions[&another_region_id]
                 .region
                 .get_region_epoch()
                 .get_version();
-            if version < collided_region_version {
+            if version < another_region_version {
                 // Another region is the actual new region. Now we are trying to create a region
-                // because of an old message. Fail.
+                // because of an old message, ignore it.
                 return false;
             }
             // Another region is older. Remove it.
             info!(
-                "region_collection: remove region {} because colliding with region {}",
-                collided_region_id, region_id
+                "region_collection: remove region {} because its end_key is the same with newer \
+                 region {}",
+                another_region_id, region_id
             );
-            self.regions.remove(&collided_region_id);
+            self.regions.remove(&another_region_id);
+            need_remove = true
         }
+
+        self.region_ranges.remove(end_key);
+
         true
     }
 
@@ -183,8 +189,8 @@ impl RegionCollection {
 
         if !self.check_exist(region_id, region.get_region_epoch().get_version(), &end_key) {
             warn!(
-                "region_collection: creating region {} but it's end_key collides with another \
-                 newer region.",
+                "region_collection: creating region {} but it's end_key is the same as another \
+                 newer region's end_key.",
                 region.get_id()
             );
             return;
