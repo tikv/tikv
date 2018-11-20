@@ -1445,7 +1445,11 @@ impl<T: Transport, C: PdClient> BatchSystem<T, C> {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(Arc::clone(&self.engines.kv));
+        let compact_runner = {
+            let kv = Arc::clone(&self.engines.kv);
+            let sub_compactions = self.cfg.region_compact_sub_compactions;
+            CompactRunner::new(kv, sub_compactions)
+        };
         box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(

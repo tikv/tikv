@@ -72,6 +72,7 @@ pub struct Config {
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
     pub region_compact_tombstones_percent: u64,
+    pub region_compact_sub_compactions: u32,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -168,6 +169,7 @@ impl Default for Config {
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
+            region_compact_sub_compactions: 2,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
