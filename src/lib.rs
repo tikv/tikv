@@ -119,8 +119,8 @@ extern crate safemem;
 extern crate smallvec;
 #[macro_use]
 extern crate more_asserts;
-
 extern crate base64;
+
 extern crate cop_datatype;
 extern crate panic_hook;
 
