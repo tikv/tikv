@@ -64,6 +64,7 @@ struct ReadIndexRequest {
     id: u64,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
+    read_index: Option<u64>,
 }
 
 impl ReadIndexRequest {
@@ -93,6 +94,26 @@ impl ReadIndexQueue {
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
+        }
+    }
+
+    fn advance(&mut self, id: &[u8], read_index: u64) {
+        if let Some(i) = self.reads.iter().position(|x| x.binary_id() == id) {
+            for pos in 0..=i {
+                let req = &mut self.reads[pos];
+                let index = req.read_index.get_or_insert(read_index);
+                if *index > read_index {
+                    *index = read_index;
+                }
+            }
+            if self.ready_cnt < i + 1 {
+                self.ready_cnt = i + 1;
+            }
+        } else {
+            error!(
+                "cannot find corresponding read from pending reads: {:?}, read_index: {}",
+                id, read_index
+            );
         }
     }
 
@@ -573,6 +594,11 @@ impl Peer {
         self.raft_group.raft.state == StateRole::Leader
     }
 
+    pub fn addtion_readable_state(&self) -> bool {
+        // excepet the normal follower peer, the learner also in StateRole::Follower.
+        self.raft_group.raft.state == StateRole::Follower
+    }
+
     #[inline]
     pub fn get_store(&self) -> &PeerStorage {
         self.raft_group.get_store()
@@ -866,6 +892,22 @@ impl Peer {
     }
 
     #[inline]
+    fn ready_to_handle_read_with_index(&self, read_index: u64) -> bool {
+        // There may be some values that are not applied by this leader yet not by the follower,
+        // should let self_applied_index >= leader_commit_index = read_index >= leader_applied_index
+        self.get_store().applied_index() >= read_index
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elected a new leader while
+            // the old leader still think it owns the splitted range.
+            && !self.is_splitting()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.is_merging()
+    }
+
+    #[inline]
     fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
     }
@@ -1095,8 +1137,21 @@ impl Peer {
         self.proposals.gc();
     }
 
-    fn apply_reads(&mut self, ready: &Ready) {
+    fn process_read_state_with_index(&mut self, ready: &Ready) {
+        for state in &ready.read_states {
+            self.pending_reads
+                .advance(state.request_ctx.as_slice(), state.index);
+            self.post_pending_reads();
+        }
+    }
+
+    pub fn apply_reads(&mut self, ready: &Ready) {
         let mut propose_time = None;
+        if self.addtion_readable_state() {
+            return self.process_read_state_with_index(&ready);
+        }
+
+        // process in leader
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
@@ -1133,6 +1188,29 @@ impl Peer {
         }
     }
 
+    pub fn post_pending_reads(&mut self) {
+        if self.pending_reads.ready_cnt > 0 {
+            for _ in 0..self.pending_reads.ready_cnt {
+                let read_index = self
+                    .pending_reads
+                    .reads
+                    .front()
+                    .unwrap()
+                    .read_index
+                    .unwrap();
+
+                if !self.ready_to_handle_read_with_index(read_index) {
+                    break;
+                }
+                let mut read = self.pending_reads.reads.pop_front().unwrap();
+                for (req, cb) in read.cmds.drain(..) {
+                    cb.invoke_read(self.handle_read(req, true));
+                }
+                self.pending_reads.ready_cnt -= 1;
+            }
+        }
+    }
+
     pub fn post_apply(
         &mut self,
         groups: &mut HashSet<u64>,
@@ -1163,15 +1241,18 @@ impl Peer {
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
             self.mark_to_be_checked(groups);
         }
-
-        if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
-            for _ in 0..self.pending_reads.ready_cnt {
-                let mut read = self.pending_reads.reads.pop_front().unwrap();
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(req, true));
+        if !self.is_leader() {
+            self.post_pending_reads()
+        } else {
+            if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
+                for _ in 0..self.pending_reads.ready_cnt {
+                    let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    for (req, cb) in read.cmds.drain(..) {
+                        cb.invoke_read(self.handle_read(req, true));
+                    }
                 }
+                self.pending_reads.ready_cnt = 0;
             }
-            self.pending_reads.ready_cnt = 0;
         }
         self.pending_reads.gc();
 
@@ -1542,10 +1623,14 @@ impl Peer {
         metrics.read_index += 1;
 
         let renew_lease_time = monotonic_raw_now();
-        if let Some(read) = self.pending_reads.reads.back_mut() {
-            if read.renew_lease_time + self.cfg.raft_store_max_leader_lease() > renew_lease_time {
-                read.cmds.push((req, cb));
-                return false;
+        if self.is_leader() {
+            // batch to last read if in lease
+            if let Some(read) = self.pending_reads.reads.back_mut() {
+                if read.renew_lease_time + self.cfg.raft_store_max_leader_lease() > renew_lease_time
+                {
+                    read.cmds.push((req, cb));
+                    return false;
+                }
             }
         }
 
@@ -1562,6 +1647,7 @@ impl Peer {
 
         if pending_read_count == last_pending_read_count
             && ready_read_count == last_ready_read_count
+            && self.is_leader()
         {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
@@ -1574,11 +1660,14 @@ impl Peer {
             id,
             cmds,
             renew_lease_time,
+            read_index: None,
         });
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
+        if self.is_leader()
+            && self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect
+        {
             let req = RaftCmdRequest::new();
             if let Ok(index) = self.propose_normal(req, metrics) {
                 let meta = ProposalMeta {
@@ -1948,6 +2037,8 @@ pub trait RequestInspector {
     fn has_applied_to_current_term(&mut self) -> bool;
     /// Inspects its lease.
     fn inspect_lease(&mut self) -> LeaseState;
+    /// whether the request on the leader.
+    fn is_leader(&self) -> bool;
 
     /// Inspect a request, return a policy that tells us how to
     /// handle the request.
@@ -1991,6 +2082,10 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ReadIndex);
         }
 
+        if req.get_header().get_allow_follower_read() && !self.is_leader() {
+            return Ok(RequestPolicy::ReadIndex);
+        }
+
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
         if !self.has_applied_to_current_term() {
@@ -2029,6 +2124,10 @@ impl RequestInspector for Peer {
             self.leader_lease.expire();
         }
         state
+    }
+
+    fn is_leader(&self) -> bool {
+        self.raft_group.raft.state == StateRole::Leader
     }
 }
 
@@ -2107,6 +2206,7 @@ impl ReadExecutor {
                     )
                 })
         };
+
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
         }
@@ -2324,6 +2424,9 @@ mod tests {
             }
             fn inspect_lease(&mut self) -> LeaseState {
                 self.lease_state
+            }
+            fn is_leader(&self) -> bool {
+                true
             }
         }
 

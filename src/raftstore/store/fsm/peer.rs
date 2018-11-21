@@ -1490,7 +1490,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
 
-        if !peer.is_leader() {
+        if !peer.is_leader() && !msg.get_header().get_allow_follower_read() {
             self.raft_metrics.invalid_proposal.not_leader += 1;
             return Err(Error::NotLeader(
                 region_id,

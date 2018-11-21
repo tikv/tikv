@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use kvproto::kvrpcpb::Context;
+use std::thread;
+use std::time::Duration;
 
 use test_raftstore::*;
 use tikv::raftstore::store::engine::IterOption;
@@ -79,6 +81,57 @@ fn test_read_leader_in_lease() {
 
     // leader still in lease, check if can read on leader
     assert_eq!(can_read(&ctx, &storage, k2, v2), true);
+}
+
+#[test]
+fn test_read_on_follower() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+
+    let k1 = b"k1";
+    let (k2, v2) = (b"k2", b"v2");
+
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(k1), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader.clone());
+
+    // write some data
+    let peers = region.get_peers();
+    assert_none(&ctx, &storage, k2);
+    must_put(&ctx, &storage, k2, v2);
+
+    thread::sleep(Duration::from_secs(5));
+    // read on follower
+    let mut follower_peer = None;
+    for p in peers {
+        if p.get_id() != leader.get_id() {
+            follower_peer = Some(p.clone());
+            break;
+        }
+    }
+
+    assert!(follower_peer.is_some());
+    //ctx.set_peer(follower_peer.unwrap());
+    ctx.set_allow_follower_read(true);
+    let resp = read_on_follower_peer(
+        &mut cluster,
+        follower_peer.unwrap(),
+        region.clone(),
+        Key::from_raw(k2).as_encoded(),
+        false,
+        Duration::from_secs(5),
+    );
+    assert!(!resp.as_ref().unwrap().get_header().has_error());
+    assert_eq!(resp.unwrap().get_responses()[0].get_get().get_value(), v2);
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {

@@ -390,6 +390,25 @@ pub fn read_on_peer<T: Simulator>(
     cluster.call_command(request, timeout)
 }
 
+pub fn read_on_follower_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_allow_follower_read(true);
+    request.mut_header().set_peer(peer);
+    cluster.call_command(request, timeout)
+}
+
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
         panic!("failed to read {:?}", resp);

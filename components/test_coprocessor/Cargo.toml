@@ -11,6 +11,7 @@ futures = "0.1"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "follower-read"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

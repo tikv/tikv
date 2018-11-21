@@ -434,6 +434,11 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             LeaseState::Expired
         }
     }
+
+    fn is_leader(&self) -> bool {
+        // local reader only hand on leader.
+        true
+    }
 }
 
 impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
