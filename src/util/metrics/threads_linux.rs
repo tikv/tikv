@@ -19,6 +19,8 @@ use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
 
+use procinfo::pid;
+
 /// monitor current process's threads.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
@@ -92,18 +94,14 @@ impl Collector for ThreadsCollector {
 
         let tids = get_thread_ids(self.pid).unwrap();
         for tid in tids {
-            if let Ok(Stat {
-                name,
-                state,
-                utime,
-                stime,
-            }) = Stat::collect(self.pid, tid)
-            {
+            if let Ok(stat) = Stat::collect(self.pid, tid) {
+                let name = stat.name();
+                let state = stat.state();
                 // sanitize thread name before push metrics.
                 let name = sanitize_thread_name(tid, &name);
 
                 // Threads CPU time.
-                let total = (utime + stime) / *CLK_TCK;
+                let total = stat.cpu_total();
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
@@ -157,47 +155,31 @@ impl Collector for ThreadsCollector {
 }
 
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
-    let mut tids = Vec::new();
-    let dirs = fs::read_dir(format!("/proc/{}/task", pid))?;
-    for task in dirs {
-        let file_name = match task {
-            Ok(t) => t.file_name(),
-            Err(e) => {
-                error!("fail to read task of {}, error {:?}", pid, e);
-                continue;
-            }
-        };
-
-        let tid = match file_name.to_str() {
-            Some(tid) => match tid.parse() {
-                Ok(tid) => tid,
+    Ok(fs::read_dir(format!("/proc/{}/task", pid))?
+        .filter_map(|task| {
+            let file_name = match task {
+                Ok(t) => t.file_name(),
                 Err(e) => {
                     error!("fail to read task of {}, error {:?}", pid, e);
-                    continue;
+                    return None;
                 }
-            },
-            None => {
-                error!("fail to read task of {}", pid);
-                continue;
+            };
+
+            match file_name.to_str() {
+                Some(tid) => match tid.parse() {
+                    Ok(tid) => Some(tid),
+                    Err(e) => {
+                        error!("fail to read task of {}, error {:?}", pid, e);
+                        None
+                    }
+                },
+                None => {
+                    error!("fail to read task of {}", pid);
+                    None
+                }
             }
-        };
-        tids.push(tid);
-    }
-
-    Ok(tids)
-}
-
-fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
-    let start = stat.find('(');
-    let end = stat.rfind(')');
-    if let (Some(start), Some(end)) = (start, end) {
-        return Ok((&stat[start + 1..end], end));
-    }
-
-    Err(to_io_err(format!(
-        "can not find thread name, stat: {}",
-        stat
-    )))
+        })
+        .collect())
 }
 
 // get thread name and the index of the last character(including ')').
@@ -227,60 +209,39 @@ fn to_io_err(s: String) -> Error {
 }
 
 pub struct Stat {
-    name: String,
-    state: String,
-    utime: f64,
-    stime: f64,
+    procinfo_stat: pid::Stat,
 }
 
 impl Stat {
-    /// See more man proc.
-    /// Index of utime and stime.
-    const CPU_INDEX: [usize; 2] = [14 - 1, 15 - 1];
-    /// Index of state.
-    const PROCESS_STATE_INDEX: usize = 3 - 1;
-
     pub fn collect(pid: pid_t, tid: pid_t) -> Result<Stat> {
-        let mut stat = String::new();
-        fs::File::open(format!("/proc/{}/task/{}/stat", pid, tid))
-            .and_then(|mut f| f.read_to_string(&mut stat))?;
-        get_thread_stat_internal(&stat)
+        pid::stat_task(pid, tid).map(|stat| Stat {
+            procinfo_stat: stat,
+        })
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        &self.procinfo_stat.command
+    }
+
+    pub fn state(&self) -> &str {
+        match self.procinfo_stat.state {
+            pid::State::Running => "R",
+            pid::State::Sleeping => "S",
+            pid::State::Waiting => "D",
+            pid::State::Zombie => "Z",
+            pid::State::Stopped => "T",
+            pid::State::TraceStopped => "t",
+            pid::State::Paging => "W",
+            pid::State::Dead => "X",
+            pid::State::Wakekill => "K",
+            pid::State::Waking => "W",
+            pid::State::Parked => "P",
+        }
     }
 
     pub fn cpu_total(&self) -> f64 {
-        (self.utime + self.stime) / *CLK_TCK
+        (self.procinfo_stat.utime + self.procinfo_stat.stime) as f64 / *CLK_TCK
     }
-}
-
-// Extracted from `Stat::collect`, for test purpose.
-fn get_thread_stat_internal(stat: &str) -> Result<Stat> {
-    let (name, end) = get_thread_name(stat)?;
-
-    let stats: Vec<_> = (&stat[end + 2..]).split_whitespace().collect(); // excluding ") ".
-    let utime = stats
-        .get(Stat::CPU_INDEX[0] - 2) // -2 because pid and comm is truncated.
-        .unwrap_or(&"0")
-        .parse()
-        .map_err(|e| to_io_err(format!("{:?}: {}", e, stat)))?;
-    let stime = stats
-        .get(Stat::CPU_INDEX[1] - 2)
-        .unwrap_or(&"0")
-        .parse()
-        .map_err(|e| to_io_err(format!("{:?}: {}", e, stat)))?;
-    let state = stats
-        .get(Stat::PROCESS_STATE_INDEX - 2)
-        .unwrap_or(&"unknown")
-        .to_string();
-    Ok(Stat {
-        name: name.to_owned(),
-        state,
-        utime,
-        stime,
-    })
 }
 
 // I/O statistics for threads.
@@ -383,7 +344,7 @@ mod tests {
         tids.iter()
             .find(|t| {
                 Stat::collect(pid, **t)
-                    .map(|stat| stat.name == name)
+                    .map(|stat| stat.name() == name)
                     .unwrap_or(false)
             })
             .unwrap();
@@ -413,26 +374,6 @@ mod tests {
         let (raw_name, _) = get_thread_name("(@#)").unwrap();
         assert_eq!(sanitize_thread_name(1, raw_name), "1");
         assert!(get_thread_name("invalid_stat").is_err());
-    }
-
-    #[test]
-    fn test_get_thread_stat() {
-        let sample = "2810 (test thd) S 2550 2621 2621 0 -1 4210688 2632 0 52 0 839 138 0 \
-                      0 20 0 4 0 13862 709652480 3647 18446744073709551615 4194304 4319028 \
-                      140732554845776 140732554845392 140439688777693 0 0 4096 16384 0 0 0 17 3 \
-                      0 0 245 0 0 6417696 6421000 8478720 140732554851684 140732554851747 \
-                      140732554851747 140732554854339 0";
-
-        let Stat {
-            name,
-            state,
-            utime,
-            stime,
-        } = get_thread_stat_internal(sample).unwrap();
-        assert_eq!(name, "test thd");
-        assert_eq!(state, "S");
-        assert_eq!(utime as i64, 839);
-        assert_eq!(stime as i64, 138);
     }
 
     #[test]

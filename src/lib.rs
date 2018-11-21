@@ -68,6 +68,7 @@ extern crate num;
 extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
+extern crate procinfo;
 extern crate prometheus_static_metric;
 extern crate protobuf;
 #[macro_use]
