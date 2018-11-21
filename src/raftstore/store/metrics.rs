@@ -135,6 +135,13 @@ lazy_static! {
             "Total number of GC raft log."
         ).unwrap();
 
+    pub static ref PEER_RAFT_LOG_NOT_GC: Histogram =
+        register_histogram!(
+            "tikv_raftstore_log_not_gc",
+            "Raft log not gc",
+            exponential_buckets(5.0, 2.0, 20).unwrap()
+        ).unwrap();
+
     pub static ref UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER: IntCounter =
         register_int_counter!(
             "update_region_size_count_by_compaction",

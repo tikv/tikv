@@ -1729,6 +1729,7 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         self.propose_raft_command(request, Callback::None);
 
         PEER_GC_RAFT_LOG_COUNTER.inc_by((compact_idx - first_idx) as i64);
+        PEER_RAFT_LOG_NOT_GC.observe((last_idx - compact_idx) as f64);
     }
 
     #[inline]
