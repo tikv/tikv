@@ -940,7 +940,12 @@ pub struct GCWorker<E: Engine> {
 }
 
 impl<E: Engine> GCWorker<E> {
-    pub fn new(engine: E, ratio_threshold: f64) -> GCWorker<E> {
+    pub fn new(
+        engine: E,
+        local_storage: Option<Arc<DB>>,
+        raft_store_router: Option<ServerRaftStoreRouter>,
+        ratio_threshold: f64,
+    ) -> GCWorker<E> {
         let worker = Arc::new(Mutex::new(
             WorkerBuilder::new("gc-worker")
                 .pending_capacity(GC_MAX_PENDING_TASKS)
@@ -949,26 +954,13 @@ impl<E: Engine> GCWorker<E> {
         let worker_scheduler = worker.lock().unwrap().scheduler();
         GCWorker {
             engine,
-            local_storage: None,
-            raft_store_router: None,
+            local_storage,
+            raft_store_router,
             ratio_threshold,
             worker,
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
         }
-    }
-
-    /// This method should be called before `start`.
-    /// Set `local_storage`, the underlying RocksDB of the `engine`. `local_storage` is where we
-    /// will run `destroy_range` on. If it was set, the `gc_worker` will be able to handle
-    /// `destroy_range`. Since we cant't simply get it from `engine`, we need the caller to set it
-    /// explicitly.
-    pub fn set_local_storage(&mut self, local_storage: Arc<DB>) {
-        self.local_storage = Some(local_storage);
-    }
-
-    pub fn set_raft_store_router(&mut self, router: ServerRaftStoreRouter) {
-        self.raft_store_router = Some(router);
     }
 
     pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
@@ -1060,12 +1052,10 @@ mod tests {
     use futures::Future;
     use kvproto::metapb;
     use raftstore::store::SeekRegionFilter;
-    use server::readpool::{self, ReadPool};
     use std::collections::BTreeMap;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use storage::engine::Result as EngineResult;
-    use storage::{Config, Mutation, Options, ReadPoolContext, Storage, TestEngineBuilder};
-    use util::worker::FutureWorker;
+    use storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
 
     struct MockSafePointProvider {
         rx: Receiver<u64>,
@@ -1407,16 +1397,10 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
-
-        let pd_worker = FutureWorker::new("test-pd-worker");
-        let read_pool = ReadPool::new(
-            "storage-readpool",
-            &readpool::Config::default_for_test(),
-            || || ReadPoolContext::new(pd_worker.scheduler()),
-        );
-        let mut storage = Storage::from_engine(engine, &Config::default(), read_pool).unwrap();
-        storage.mut_gc_worker().set_local_storage(db);
-        storage.start(&Config::default()).unwrap();
+        let storage = TestStorageBuilder::from_engine(engine)
+            .local_storage(db)
+            .build()
+            .unwrap();
 
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1480,7 +1464,6 @@ mod tests {
         // Check remaining data is as expected.
         check_data(&storage, &data);
 
-        storage.stop().unwrap();
         Ok(())
     }
 

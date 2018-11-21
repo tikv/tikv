@@ -11,67 +11,68 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::server::readpool::ReadPool;
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
 use tikv::storage::{
-    self, AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options,
-    RegionInfoProvider, Result, Storage, TestEngineBuilder, Value,
+    AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
+    Result, Storage, Value,
 };
+use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv::util::collections::HashMap;
 
-/// `SyncStorage` wraps `Storage` with sync API, usually used for testing.
-pub struct SyncStorage<E: Engine> {
-    store: Storage<E>,
-    cnt: Arc<AtomicUsize>,
+/// A builder to build a `SyncTestStorage`.
+///
+/// Only used for test purpose.
+pub struct SyncTestStorageBuilder<E: Engine> {
+    engine: E,
+    config: Option<Config>,
 }
 
-impl SyncStorage<RocksEngine> {
-    pub fn new(config: &Config, read_pool: ReadPool<storage::ReadPoolContext>) -> Self {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = Storage::from_engine(engine, config, read_pool).unwrap();
-        let mut s = SyncStorage {
-            store: storage,
-            cnt: Arc::new(AtomicUsize::new(0)),
-        };
-        s.start(config);
-        s
-    }
-}
-
-impl<E: Engine> SyncStorage<E> {
-    pub fn from_engine(
-        engine: E,
-        config: &Config,
-        read_pool: ReadPool<storage::ReadPoolContext>,
-    ) -> Self {
-        let mut s = SyncStorage::prepare(engine, config, read_pool);
-        s.start(config);
-        s
-    }
-
-    pub fn prepare(
-        engine: E,
-        config: &Config,
-        read_pool: ReadPool<storage::ReadPoolContext>,
-    ) -> Self {
-        let storage = Storage::from_engine(engine, config, read_pool).unwrap();
+impl SyncTestStorageBuilder<RocksEngine> {
+    pub fn new() -> Self {
         Self {
-            store: storage,
-            cnt: Arc::new(AtomicUsize::new(0)),
+            engine: TestEngineBuilder::new().build().unwrap(),
+            config: None,
+        }
+    }
+}
+
+impl<E: Engine> SyncTestStorageBuilder<E> {
+    pub fn from_engine(engine: E) -> Self {
+        Self {
+            engine,
+            config: None,
         }
     }
 
-    pub fn start(&mut self, config: &Config) {
-        self.store.start(config).unwrap();
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = Some(config);
+        self
     }
 
+    pub fn build(mut self) -> Result<SyncTestStorage<E>> {
+        let mut builder = TestStorageBuilder::from_engine(self.engine);
+        if let Some(config) = self.config.take() {
+            builder = builder.config(config);
+        }
+        Ok(SyncTestStorage {
+            store: builder.build()?,
+        })
+    }
+}
+
+/// A `Storage` like structure with sync API.
+///
+/// Only used for test purpose.
+#[derive(Clone)]
+pub struct SyncTestStorage<E: Engine> {
+    store: Storage<E>,
+}
+
+impl<E: Engine> SyncTestStorage<E> {
     pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
         &mut self,
         cfg: AutoGCConfig<S, R>,
@@ -228,25 +229,18 @@ impl<E: Engine> SyncStorage<E> {
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, limit, false)
+            .async_raw_scan(ctx, cf, start_key, limit, false, false)
             .wait()
     }
-}
-
-impl<E: Engine> Clone for SyncStorage<E> {
-    fn clone(&self) -> Self {
-        self.cnt.fetch_add(1, Ordering::SeqCst);
-        Self {
-            store: self.store.clone(),
-            cnt: Arc::clone(&self.cnt),
-        }
-    }
-}
-
-impl<E: Engine> Drop for SyncStorage<E> {
-    fn drop(&mut self) {
-        if self.cnt.fetch_sub(1, Ordering::SeqCst) == 0 {
-            self.store.stop().unwrap()
-        }
+    pub fn reverse_raw_scan(
+        &self,
+        ctx: Context,
+        cf: String,
+        start_key: Vec<u8>,
+        limit: usize,
+    ) -> Result<Vec<Result<KvPair>>> {
+        self.store
+            .async_raw_scan(ctx, cf, start_key, limit, false, true)
+            .wait()
     }
 }

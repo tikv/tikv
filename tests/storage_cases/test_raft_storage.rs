@@ -20,14 +20,16 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::readpool::{self, ReadPool};
 use tikv::storage::config::Config;
 use tikv::storage::{self, AutoGCConfig, Engine, Key, Mutation};
 use tikv::storage::{engine, mvcc, txn};
-use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
-fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
+fn new_raft_storage() -> (
+    Cluster<ServerCluster>,
+    SyncTestStorage<SimulateEngine>,
+    Context,
+) {
     new_raft_storage_with_store_count(1, "")
 }
 
@@ -211,7 +213,7 @@ fn test_engine_leader_change_twice() {
 }
 
 fn write_test_data<E: Engine>(
-    storage: &SyncStorage<E>,
+    storage: &SyncTestStorage<E>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
     mut ts: u64,
@@ -236,7 +238,7 @@ fn write_test_data<E: Engine>(
 
 fn check_data<E: Engine>(
     cluster: &mut Cluster<ServerCluster>,
-    storages: &HashMap<u64, SyncStorage<E>>,
+    storages: &HashMap<u64, SyncTestStorage<E>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: u64,
     expect_success: bool,
@@ -277,17 +279,13 @@ fn test_auto_gc() {
         .storages
         .iter()
         .map(|(id, engine)| {
-            let pd_worker = FutureWorker::new(format!("test-future–worker-{}", id).as_str());
-            let read_pool = ReadPool::new(
-                format!("readpool-{}", id).as_str(),
-                &readpool::Config::default_for_test(),
-                || || storage::ReadPoolContext::new(pd_worker.scheduler()),
-            );
-
             let mut config = Config::default();
             // Do not skip GC
             config.gc_ratio_threshold = 0.9;
-            let mut storage = SyncStorage::from_engine(engine.clone(), &config, read_pool);
+            let mut storage = SyncTestStorageBuilder::from_engine(engine.clone())
+                .config(config)
+                .build()
+                .unwrap();
             let tx = finish_signal_tx.clone();
 
             let mut cfg = AutoGCConfig::new_test_cfg(Arc::clone(&pd_client), engine.clone(), *id);

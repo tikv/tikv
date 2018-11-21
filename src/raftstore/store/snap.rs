@@ -574,11 +574,11 @@ impl Snap {
         Ok(())
     }
 
-    fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
+    fn get_display_path(dir_path: impl AsRef<Path>, prefix: &str) -> String {
         let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
         format!(
             "{}/{}_{}{}",
-            dir_path.display(),
+            dir_path.as_ref().display(),
             prefix,
             cf_names,
             SST_FILE_SUFFIX
@@ -979,11 +979,11 @@ impl Snapshot for Snap {
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
                 let path = cf_file.clone_path.to_str().unwrap();
-                box_try!(
-                    options
-                        .db
-                        .ingest_external_file_cf(cf_handle, &ingest_opt, &[path])
-                );
+                box_try!(options.db.ingest_external_file_optimized(
+                    cf_handle,
+                    &ingest_opt,
+                    &[path]
+                ));
             }
         }
         Ok(())
@@ -1637,7 +1637,7 @@ pub mod tests {
         let dir = TempDir::new("test-display-path").unwrap();
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        let display_path = Snap::get_display_path(&dir.into_path(), &prefix);
+        let display_path = Snap::get_display_path(dir.path(), &prefix);
         assert_ne!(display_path, "");
     }
 
