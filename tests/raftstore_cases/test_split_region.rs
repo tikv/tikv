@@ -291,6 +291,9 @@ fn test_delay_split_region() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 500;
     cluster.cfg.raft_store.merge_max_log_gap = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
+    // To stable the test, we use a large hearbeat timeout 200ms(100ms * 2).
+    // And to elect leader quickly, set election timeout to 1s(100ms * 10).
+    configure_for_lease_read(&mut cluster, Some(100), Some(10));
 
     // We use three nodes for this test.
     cluster.run();
@@ -328,12 +331,12 @@ fn test_delay_split_region() {
     // Split should be bcast eagerly, otherwise following must_put will fail
     // as no leader is available.
     cluster.must_split(&region, k2);
-    cluster.must_put(b"k0", b"v0");
+    cluster.must_put(b"k6", b"v6");
 
     sleep_ms(100);
     // After split, skip bcast is enabled again, so all followers should not
     // commit the log.
-    check_cluster(&mut cluster, b"k0", b"v0", false);
+    check_cluster(&mut cluster, b"k6", b"v6", false);
 }
 
 fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
