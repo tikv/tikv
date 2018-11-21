@@ -34,7 +34,7 @@ harness = false
 path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
-name = "benches"
+name = "misc"
 path = "benches/misc/mod.rs"
 
 [dependencies]
