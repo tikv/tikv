@@ -14,32 +14,25 @@
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::config::Config;
 use tikv::storage::engine::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
-use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
 use super::*;
 
 #[derive(Clone)]
 pub struct AssertionStorage<E: Engine> {
-    pub store: SyncStorage<E>,
+    pub store: SyncTestStorage<E>,
     pub ctx: Context,
 }
 
 impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
         AssertionStorage {
             ctx: Context::new(),
-            store: SyncStorage::new(&Config::default(), read_pool),
+            store: SyncTestStorageBuilder::new().build().unwrap(),
         }
     }
 }
@@ -66,11 +59,7 @@ impl AssertionStorage<SimulateEngine> {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
-        self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
+        self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     }
 
     pub fn delete_ok_for_cluster(
