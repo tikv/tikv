@@ -2,7 +2,7 @@
 
 [![Build Status](https://circleci.com/gh/tikv/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/tikv/tikv) [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
 
-TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Rust, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
+TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
 The design of TiKV is inspired by some great distributed systems from Google, such as BigTable, Spanner, and Percolator, and some of the latest achievements in the academia in recent years, such as the Raft consensus algorithm.
 
