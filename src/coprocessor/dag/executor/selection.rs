@@ -52,7 +52,7 @@ impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let row = row.take_origin();
-            let cols = row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)?;
+            let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
             for filter in &self.conditions {
                 let val = filter.eval(&mut self.ctx, &cols)?;
                 if !val.into_bool(&mut self.ctx)?.unwrap_or(false) {

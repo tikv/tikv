@@ -20,7 +20,8 @@ use tipb::schema::{self, ColumnInfo};
 
 use protobuf::RepeatedField;
 
-use tikv::coprocessor::codec::{datum, table, Datum};
+use tikv::coprocessor;
+use tikv::coprocessor::codec::table;
 use tikv::util::codec::number::NumberEncoder;
 
 #[derive(Clone)]
@@ -42,14 +43,7 @@ impl Table {
     pub fn get_table_columns(&self) -> Vec<ColumnInfo> {
         let mut tb_info = Vec::new();
         for col in self.cols.values() {
-            let mut c_info = ColumnInfo::new();
-            c_info.set_column_id(col.id);
-            c_info.set_tp(col.col_type);
-            c_info.set_pk_handle(col.index == 0);
-            if let Some(dv) = col.default_val {
-                c_info.set_default_val(datum::encode_value(&[Datum::I64(dv)]).unwrap())
-            }
-            tb_info.push(c_info);
+            tb_info.push(col.get_column_info());
         }
         tb_info
     }
@@ -60,7 +54,7 @@ impl Table {
         idx_info.set_index_id(index);
         let mut has_pk = false;
         for col_id in &self.idxs[&index] {
-            let col = self.cols[col_id];
+            let col = &self.cols[col_id];
             let mut c_info = ColumnInfo::new();
             c_info.set_tp(col.col_type);
             c_info.set_column_id(col.id);
@@ -84,6 +78,16 @@ impl Table {
         let mut range = KeyRange::new();
         range.set_start(table::encode_row_key(self.id, ::std::i64::MIN));
         range.set_end(table::encode_row_key(self.id, ::std::i64::MAX));
+        range
+    }
+
+    pub fn get_point_select_range(&self, handle_id: i64) -> KeyRange {
+        let start_key = table::encode_row_key(self.id, handle_id);
+        let mut end_key = start_key.clone();
+        coprocessor::util::convert_to_prefix_next(&mut end_key);
+        let mut range = KeyRange::new();
+        range.set_start(start_key);
+        range.set_end(end_key);
         range
     }
 
