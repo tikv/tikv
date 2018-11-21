@@ -48,9 +48,9 @@ impl State {
 
     #[inline]
     fn notify(&self) {
-        let task = self.recv_task.take(Ordering::AcqRel);
+        let task = self.recv_task.take(Ordering::Release);
         if let Some(t) = task {
-            self.old_pending.store(0, Ordering::AcqRel);
+            self.old_pending.store(0, Ordering::Release);
             t.notify();
         }
     }
@@ -288,20 +288,20 @@ mod tests {
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());
         thread::sleep(time::Duration::from_millis(10));
-        assert_eq!(msg_counter.load(Ordering::AcqRel), 0);
+        assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
         // Send with notify.
         let notifier = tx.get_notifier().unwrap();
         assert!(tx.get_notifier().is_none());
         notifier.notify();
         thread::sleep(time::Duration::from_millis(10));
-        assert_eq!(msg_counter.load(Ordering::AcqRel), 1);
+        assert_eq!(msg_counter.load(Ordering::Acquire), 1);
 
         // Auto notify with more sendings.
         for _ in 0..4 {
             assert!(tx.send(0).is_ok());
         }
         thread::sleep(time::Duration::from_millis(10));
-        assert_eq!(msg_counter.load(Ordering::AcqRel), 5);
+        assert_eq!(msg_counter.load(Ordering::Acquire), 5);
     }
 }
