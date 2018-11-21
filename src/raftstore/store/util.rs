@@ -1604,6 +1604,7 @@ mod tests {
         // These admin commands requires epoch.version.
         for ty in &[
             AdminCmdType::Split,
+            AdminCmdType::BatchSplit,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
@@ -1631,6 +1632,7 @@ mod tests {
         // These admin commands requires epoch.conf_version.
         for ty in &[
             AdminCmdType::Split,
+            AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
