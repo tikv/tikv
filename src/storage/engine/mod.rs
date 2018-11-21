@@ -14,7 +14,7 @@
 use std::boxed::FnBox;
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::time::Duration;
 use std::{error, result};
 
@@ -70,7 +70,7 @@ pub enum Modify {
     DeleteRange(CfName, Key, Key),
 }
 
-pub trait Engine: Send + Debug + Clone + Sized + 'static {
+pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
     type Iter: Iterator;
     type Snap: Snapshot<Iter = Self::Iter>;
 

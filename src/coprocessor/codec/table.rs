@@ -189,7 +189,7 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 
 // `decode_index_key` decodes datums from an index key.
 pub fn decode_index_key(
-    ctx: &mut EvalContext,
+    ctx: &EvalContext,
     mut encoded: &[u8],
     infos: &[ColumnInfo],
 ) -> Result<Vec<Datum>> {
@@ -209,7 +209,7 @@ pub fn decode_index_key(
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(ctx: &mut EvalContext, datum: Datum, field_type: &FieldTypeAccessor) -> Result<Datum> {
+fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &FieldTypeAccessor) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }
@@ -257,7 +257,7 @@ fn unflatten(ctx: &mut EvalContext, datum: Datum, field_type: &FieldTypeAccessor
 // `decode_col_value` decodes data to a Datum according to the column info.
 pub fn decode_col_value(
     data: &mut BytesSlice,
-    ctx: &mut EvalContext,
+    ctx: &EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
     let d = datum::decode_datum(data)?;
@@ -448,8 +448,8 @@ mod tests {
         ];
         let buf = datum::encode_key(&tests).unwrap();
         let encoded = encode_index_seek_key(1, 2, &buf);
-        let mut ctx = EvalContext::default();
-        assert_eq!(tests, decode_index_key(&mut ctx, &encoded, &types).unwrap());
+        let ctx = EvalContext::default();
+        assert_eq!(tests, decode_index_key(&ctx, &encoded, &types).unwrap());
     }
 
     fn new_col_info(tp: FieldTypeTp) -> ColumnInfo {
@@ -563,13 +563,13 @@ mod tests {
             Datum::Bytes(b"abc".to_vec()),
             Datum::Dec(10.into()),
         ];
-        let mut ctx = EvalContext::default();
+        let ctx = EvalContext::default();
         let mut col_encoded: HashMap<_, _> = col_ids
             .iter()
             .zip(&col_types)
             .zip(&col_values)
             .map(|((id, t), v)| {
-                let unflattened = super::unflatten(&mut ctx, v.clone(), t).unwrap();
+                let unflattened = super::unflatten(&ctx, v.clone(), t).unwrap();
                 let encoded = datum::encode_key(&[unflattened]).unwrap();
                 (*id, encoded)
             })
@@ -578,8 +578,8 @@ mod tests {
         let key = datum::encode_key(&col_values).unwrap();
         let bs = encode_index_seek_key(1, 1, &key);
         assert!(!bs.is_empty());
-        let mut ctx = EvalContext::default();
-        let r = decode_index_key(&mut ctx, &bs, &col_types).unwrap();
+        let ctx = EvalContext::default();
+        let r = decode_index_key(&ctx, &bs, &col_types).unwrap();
         assert_eq!(col_values, r);
 
         let mut res: (HashMap<_, _>, _) = cut_idx_key_as_owned(&bs, &col_ids);
@@ -603,7 +603,7 @@ mod tests {
 
         let bs = encode_index_seek_key(1, 1, &[]);
         assert!(!bs.is_empty());
-        assert!(decode_index_key(&mut ctx, &bs, &[]).unwrap().is_empty());
+        assert!(decode_index_key(&ctx, &bs, &[]).unwrap().is_empty());
         res = cut_idx_key_as_owned(&bs, &[]);
         assert!(res.0.is_empty());
         assert!(res.1.is_none());

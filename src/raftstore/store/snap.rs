@@ -574,11 +574,11 @@ impl Snap {
         Ok(())
     }
 
-    fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
+    fn get_display_path(dir_path: impl AsRef<Path>, prefix: &str) -> String {
         let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
         format!(
             "{}/{}_{}{}",
-            dir_path.display(),
+            dir_path.as_ref().display(),
             prefix,
             cf_names,
             SST_FILE_SUFFIX
@@ -1637,7 +1637,7 @@ pub mod tests {
         let dir = TempDir::new("test-display-path").unwrap();
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        let display_path = Snap::get_display_path(&dir.into_path(), &prefix);
+        let display_path = Snap::get_display_path(dir.path(), &prefix);
         assert_ne!(display_path, "");
     }
 
