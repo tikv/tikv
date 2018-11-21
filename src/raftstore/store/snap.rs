@@ -979,11 +979,11 @@ impl Snapshot for Snap {
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
                 let path = cf_file.clone_path.to_str().unwrap();
-                box_try!(
-                    options
-                        .db
-                        .ingest_external_file_cf(cf_handle, &ingest_opt, &[path])
-                );
+                box_try!(options.db.ingest_external_file_optimized(
+                    cf_handle,
+                    &ingest_opt,
+                    &[path]
+                ));
             }
         }
         Ok(())
