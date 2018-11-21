@@ -156,7 +156,7 @@ impl ReqContext {
             "test",
             kvrpcpb::Context::new(),
             &[],
-            Duration::from_secs(10),
+            Duration::from_secs(100),
             None,
             None,
             None,
