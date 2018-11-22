@@ -95,13 +95,13 @@ impl Collector for ThreadsCollector {
         let tids = get_thread_ids(self.pid).unwrap();
         for tid in tids {
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
-                let name = stat.command;
                 let state = state_to_str(&stat.state);
-                // sanitize thread name before push metrics.
-                let name = sanitize_thread_name(tid, &name);
 
                 // Threads CPU time.
                 let total = cpu_total(&stat);
+                let name = stat.command;
+                // sanitize thread name before push metrics.
+                let name = sanitize_thread_name(tid, &name);
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
