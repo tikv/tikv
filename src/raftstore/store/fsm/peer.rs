@@ -1663,6 +1663,8 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         // `alive_cache_idx` is only used to gc cache.
         let truncated_idx = self.peer.get_store().truncated_index();
         let last_idx = self.peer.get_store().last_index();
+        PEER_RAFT_LOG_NOT_GC.observe((last_idx - truncated_idx) as f64);
+
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
         for (peer_id, p) in self.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
@@ -1729,7 +1731,6 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         self.propose_raft_command(request, Callback::None);
 
         PEER_GC_RAFT_LOG_COUNTER.inc_by((compact_idx - first_idx) as i64);
-        PEER_RAFT_LOG_NOT_GC.observe((last_idx - compact_idx) as f64);
     }
 
     #[inline]
