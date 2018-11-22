@@ -547,8 +547,8 @@ fn bench_normal_index_scan_primary_key(c: &mut Criterion) {
             .index_key(index_id)
             .build();
         let table = TableBuilder::new()
-            .add_col(id.clone())
-            .add_col(foo.clone())
+            .add_col("id", id)
+            .add_col("foo", foo)
             .build();
 
         let mut store = Store::new();
@@ -556,8 +556,8 @@ fn bench_normal_index_scan_primary_key(c: &mut Criterion) {
             store.begin();
             store
                 .insert_into(&table)
-                .set(&id, Datum::I64(i))
-                .set(&foo, Datum::I64(0xDEADBEEF))
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
                 .execute();
             store.commit();
         }
@@ -565,11 +565,17 @@ fn bench_normal_index_scan_primary_key(c: &mut Criterion) {
         let mut meta = IndexScan::new();
         meta.set_table_id(table.id);
         meta.set_index_id(index_id);
-        meta.mut_columns().push(id.get_column_info());
+        meta.mut_columns().push(table["id"].as_column_info());
         meta.set_desc(false);
         meta.set_unique(false);
 
-        bench_index_scan_next(b, &meta, false, &[table.get_index_range(index_id)], &store);
+        bench_index_scan_next(
+            b,
+            &meta,
+            false,
+            &[table.get_index_range_all(index_id)],
+            &store,
+        );
     });
 }
 
@@ -590,8 +596,8 @@ fn bench_normal_index_scan_index(c: &mut Criterion) {
             .index_key(index_id)
             .build();
         let table = TableBuilder::new()
-            .add_col(id.clone())
-            .add_col(foo.clone())
+            .add_col("id", id)
+            .add_col("foo", foo)
             .build();
 
         let mut store = Store::new();
@@ -599,8 +605,8 @@ fn bench_normal_index_scan_index(c: &mut Criterion) {
             store.begin();
             store
                 .insert_into(&table)
-                .set(&id, Datum::I64(i))
-                .set(&foo, Datum::I64(0xDEADBEEF))
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
                 .execute();
             store.commit();
         }
@@ -608,11 +614,17 @@ fn bench_normal_index_scan_index(c: &mut Criterion) {
         let mut meta = IndexScan::new();
         meta.set_table_id(table.id);
         meta.set_index_id(index_id);
-        meta.mut_columns().push(foo.get_column_info());
+        meta.mut_columns().push(table["foo"].as_column_info());
         meta.set_desc(false);
         meta.set_unique(false);
 
-        bench_index_scan_next(b, &meta, false, &[table.get_index_range(index_id)], &store);
+        bench_index_scan_next(
+            b,
+            &meta,
+            false,
+            &[table.get_index_range_all(index_id)],
+            &store,
+        );
     });
 }
 
