@@ -39,7 +39,7 @@ impl State {
     }
 
     #[inline]
-    fn try_notiry_post_send(&self) {
+    fn try_notify_post_send(&self) {
         let old_pending = self.old_pending.fetch_add(1, Ordering::AcqRel);
         if old_pending >= self.notify_size - 1 {
             self.notify();
@@ -53,6 +53,16 @@ impl State {
             self.old_pending.store(0, Ordering::Release);
             t.notify();
         }
+    }
+
+    // When the `Receiver` holds the `State` is running on an `Executor`, call this to yield from
+    // current `poll` context and put the current task handle to `recv_task` so that the `Sender`
+    // respectively can notify it after send some messages into the channel.
+    #[inline]
+    fn yield_poll(&self) -> bool {
+        self.recv_task
+            .swap(task::current(), Ordering::AcqRel)
+            .is_some()
     }
 }
 
@@ -107,14 +117,14 @@ impl<T> Sender<T> {
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.send(t)?;
-        self.state.try_notiry_post_send();
+        self.state.try_notify_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         self.sender.try_send(t)?;
-        self.state.try_notiry_post_send();
+        self.state.try_notify_post_send();
         Ok(())
     }
 
@@ -142,12 +152,6 @@ impl<T> Receiver<T> {
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         self.receiver.recv_timeout(timeout)
-    }
-
-    #[inline]
-    fn yield_poll(&self) -> bool {
-        let recv_task = &self.state.recv_task;
-        recv_task.swap(task::current(), Ordering::AcqRel).is_some()
     }
 }
 
@@ -196,11 +200,10 @@ impl<T> Stream for Receiver<T> {
     fn poll(&mut self) -> Poll<Option<T>, ()> {
         match self.try_recv() {
             Ok(m) => Ok(Async::Ready(Some(m))),
-            Err(TryRecvError::Empty) => if self.yield_poll() {
+            Err(TryRecvError::Empty) => if self.state.yield_poll() {
                 Ok(Async::NotReady)
             } else {
-                // Note: If there is a message or all the senders are dropped after
-                // polling but before task is set, `t` should be None.
+                // For the case that all senders are dropped before the current task is saved.
                 self.poll()
             },
             Err(TryRecvError::Disconnected) => Ok(Async::Ready(None)),
@@ -248,7 +251,7 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
                     }
                 }
                 Err(TryRecvError::Disconnected) => break true,
-                Err(TryRecvError::Empty) => if self.rx.yield_poll() {
+                Err(TryRecvError::Empty) => if self.rx.state.yield_poll() {
                     break false;
                 },
             }
@@ -272,15 +275,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_batch_receiver() {
+    fn test_receiver() {
         let (tx, rx) = unbounded::<u64>(4);
-        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), |v, e| v.push(e));
 
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter1 = Arc::clone(&msg_counter);
         let pool = CpuPool::new(1);
-        pool.spawn(rx.for_each(move |v| {
-            msg_counter1.fetch_add(v.len(), Ordering::AcqRel);
+        pool.spawn(rx.for_each(move |_| {
+            msg_counter1.fetch_add(1, Ordering::AcqRel);
             Ok(())
         })).forget();
         thread::sleep(time::Duration::from_millis(10));
@@ -303,5 +305,41 @@ mod tests {
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 5);
+    }
+
+    #[test]
+    fn test_batch_receiver() {
+        let (tx, rx) = unbounded::<u64>(4);
+        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), |v, e| v.push(e));
+
+        let msg_counter = Arc::new(AtomicUsize::new(0));
+        let msg_counter1 = Arc::clone(&msg_counter);
+        let pool = CpuPool::new(1);
+        pool.spawn(rx.for_each(move |v| {
+            let len = v.len();
+            assert!(len <= 8);
+            msg_counter1.fetch_add(len, Ordering::AcqRel);
+            Ok(())
+        })).forget();
+        thread::sleep(time::Duration::from_millis(10));
+
+        // Send without notify, the receiver can't get batched messages.
+        assert!(tx.send(0).is_ok());
+        thread::sleep(time::Duration::from_millis(10));
+        assert_eq!(msg_counter.load(Ordering::Acquire), 0);
+
+        // Send with notify.
+        let notifier = tx.get_notifier().unwrap();
+        assert!(tx.get_notifier().is_none());
+        notifier.notify();
+        thread::sleep(time::Duration::from_millis(10));
+        assert_eq!(msg_counter.load(Ordering::Acquire), 1);
+
+        // Auto notify with more sendings.
+        for _ in 0..16 {
+            assert!(tx.send(0).is_ok());
+        }
+        thread::sleep(time::Duration::from_millis(10));
+        assert_eq!(msg_counter.load(Ordering::Acquire), 17);
     }
 }
