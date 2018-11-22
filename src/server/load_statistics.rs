@@ -80,8 +80,10 @@ impl ThreadLoadStatistics {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos] = 0f64;
         for tid in &self.tids {
-            let stat = Stat::collect(self.pid, *tid).unwrap();
-            self.cpu_usages[self.cur_pos] += stat.cpu_total();
+            // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
+            if let Ok(stat) = Stat::collect(self.pid, *tid) {
+                self.cpu_usages[self.cur_pos] += stat.cpu_total();
+            }
         }
         let current_instant = self.instants[self.cur_pos];
         let current_cpu_usage = self.cpu_usages[self.cur_pos];
