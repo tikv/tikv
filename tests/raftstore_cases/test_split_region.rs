@@ -17,6 +17,7 @@ use std::time::Duration;
 use std::{fs, thread};
 
 use kvproto::metapb;
+use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
@@ -798,4 +799,36 @@ fn test_node_split_update_region_right_derive() {
         "{:?}",
         resp
     );
+}
+
+#[test]
+fn test_split_with_stale_epoch() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Remove a peer to make conf version become 2.
+    pd_client.must_remove_peer(1, new_peer(2, 2));
+    let region = cluster.get_region(b"");
+
+    let mut admin_req = AdminRequest::new();
+    admin_req.set_cmd_type(AdminCmdType::BatchSplit);
+
+    let mut batch_split_req = BatchSplitRequest::new();
+    batch_split_req.mut_requests().push(SplitRequest::new());
+    batch_split_req.mut_requests()[0].set_split_key(b"s".to_vec());
+    batch_split_req.mut_requests()[0].set_new_region_id(1000);
+    batch_split_req.mut_requests()[0].set_new_peer_ids(vec![1001, 1002]);
+    batch_split_req.mut_requests()[0].set_right_derive(true);
+    admin_req.set_splits(batch_split_req);
+
+    let mut epoch = region.get_region_epoch().clone();
+    epoch.conf_ver -= 1;
+    let req = new_admin_request(1, &epoch, admin_req);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(resp.get_header().get_error().has_stale_epoch());
 }
