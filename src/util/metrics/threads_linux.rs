@@ -244,65 +244,25 @@ impl Stat {
     }
 }
 
-// I/O statistics for threads.
-struct Io {
-    // Attempt to count the number of bytes which this process really did cause
-    // to be fetched from the storage layer.  This is accurate for block-backed
-    // filesystems.
-    read_bytes: u64,
-    // Attempt to count the number of bytes which this process caused to be
-    // sent to the storage layer.
-    write_bytes: u64,
+/// I/O statistics for threads.
+pub struct Io {
+    procinfo_io: pid::Io,
 }
 
 impl Io {
-    // # cat /proc/3828/io
-    // rchar: 323934931
-    // wchar: 323929600
-    // syscr: 632687
-    // syscw: 632675
-    // read_bytes: 0
-    // write_bytes: 323932160
-    // cancelled_write_bytes: 0
-    const READ_BYTES_INDEX: usize = 4;
-    const WRITE_BYTES_INDEX: usize = 5;
-
-    fn collect(pid: pid_t, tid: pid_t) -> Result<Io> {
-        let mut io = String::new();
-        fs::File::open(format!("/proc/{}/task/{}/io", pid, tid))
-            .and_then(|mut f| f.read_to_string(&mut io))?;
-        get_thread_io_internal(&io)
+    pub fn collect(pid: pid_t, tid: pid_t) -> Result<Io> {
+        pid::io_task(pid, tid)?.map(|io| Io {
+            procinfo_io: io,
+        })
     }
-}
 
-// Extracted from `Io::collect`, for test purpose.
-fn get_thread_io_internal(io: &str) -> Result<Io> {
-    let read_bytes = io
-        .lines()
-        .nth(Io::READ_BYTES_INDEX)
-        .map_or_else(|| Err(to_io_err(io.to_owned())), Ok)?
-        .split(':')
-        .nth(1)
-        .map_or_else(|| Err(to_io_err(io.to_owned())), Ok)?
-        .trim()
-        .parse()
-        .map_err(|e| to_io_err(format!("{:?}: {}", e, io)))?;
+    pub fn read_bytes(&self) -> usize {
+        self.procinfo_io.read_bytes
+    }
 
-    let write_bytes = io
-        .lines()
-        .nth(Io::WRITE_BYTES_INDEX)
-        .map_or_else(|| Err(to_io_err(io.to_owned())), Ok)?
-        .split(':')
-        .nth(1)
-        .map_or_else(|| Err(to_io_err(io.to_owned())), Ok)?
-        .trim()
-        .parse()
-        .map_err(|e| to_io_err(format!("{:?}: {}", e, io)))?;
-
-    Ok(Io {
-        read_bytes,
-        write_bytes,
-    })
+    pub fn write_bytes(&self) -> usize {
+        self.procinfo_io.write_bytes
+    }
 }
 
 lazy_static! {
@@ -324,7 +284,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_thread_stat() {
+    fn test_thread_stat_io() {
         let name = "theadnametest66";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
@@ -345,6 +305,15 @@ mod tests {
             .find(|t| {
                 Stat::collect(pid, **t)
                     .map(|stat| stat.name() == name)
+                    .unwrap_or(false)
+            })
+            .unwrap();
+
+        tids.iter()
+            .find(|t| {
+                Io::collect(pid, **t)
+                    // since we're reading proc info, we must read > 0 data
+                    .map(|io| io.read_bytes() > 0)
                     .unwrap_or(false)
             })
             .unwrap();
@@ -374,24 +343,6 @@ mod tests {
         let (raw_name, _) = get_thread_name("(@#)").unwrap();
         assert_eq!(sanitize_thread_name(1, raw_name), "1");
         assert!(get_thread_name("invalid_stat").is_err());
-    }
-
-    #[test]
-    fn test_get_thread_io() {
-        let sample = "rchar: 323934931
-wchar: 323929600
-syscr: 632687
-syscw: 632675
-read_bytes: 7878789
-write_bytes: 323932170
-cancelled_write_bytes: 0";
-
-        let Io {
-            read_bytes,
-            write_bytes,
-        } = get_thread_io_internal(sample).unwrap();
-        assert_eq!(read_bytes as i64, 7878789);
-        assert_eq!(write_bytes as i64, 323932170);
     }
 
     #[test]
