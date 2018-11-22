@@ -16,9 +16,9 @@ extern crate kvproto;
 extern crate test_util;
 extern crate tikv;
 
-use std::fmt;
-use criterion::{Bencher, Criterion};
+use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
+use std::fmt;
 use test_util::generate_random_kvs;
 use tikv::storage::engine::{
     BTreeEngine, Engine, Modify, RocksEngine, Snapshot, TestEngineBuilder,
@@ -84,9 +84,7 @@ fn engine_snapshot_bench<E: Engine>(
     fill_engine_with(engine, engine_keys_count, value_length);
     let ctx = Context::new();
 
-    bencher.iter(|| {
-        engine.snapshot(&ctx).is_ok();
-    })
+    bencher.iter(|| engine.snapshot(&ctx).is_ok())
 }
 
 /// Measuring the performance of Snapshot::get(), skipping the Engine::snapshot();
@@ -99,13 +97,16 @@ fn engine_get_bench<E: Engine>(
 ) {
     fill_engine_with(engine, engine_keys_count, value_length);
     let ctx = Context::new();
-    let test_kvs = generate_random_kvs(iterations, DEFAULT_KEY_LENGTH, value_length);
+    let test_kvs: Vec<Key> = generate_random_kvs(iterations, DEFAULT_KEY_LENGTH, value_length)
+        .iter()
+        .map(|(key, _)| Key::from_raw(&key))
+        .collect();
 
     bencher.iter_with_setup(
         || engine.snapshot(&ctx).unwrap(),
         |snap| {
-            for (key, _) in &test_kvs {
-                snap.get(&Key::from_raw(key)).is_ok();
+            for key in &test_kvs {
+                black_box(snap.get(key).is_ok());
             }
         },
     );
@@ -118,13 +119,22 @@ fn engine_put_bench<E: Engine>(
     write_count: usize,
     value_length: usize,
 ) {
-    let test_kvs = generate_random_kvs(write_count, DEFAULT_KEY_LENGTH, value_length);
     let ctx = Context::new();
-    bencher.iter(|| {
-        for (key, value) in &test_kvs {
-            let _ = engine.put(&ctx, Key::from_raw(&key), value.clone());
-        }
-    });
+    bencher.iter_with_setup(
+        || {
+            let test_kvs: Vec<(Key, Vec<u8>)> =
+                generate_random_kvs(write_count, DEFAULT_KEY_LENGTH, value_length)
+                    .iter()
+                    .map(|(key, value)| (Key::from_raw(&key), value.clone()))
+                    .collect();
+            test_kvs
+        },
+        |test_kvs| {
+            for (key, value) in test_kvs {
+                black_box(engine.put(black_box(&ctx), key, value).is_ok());
+            }
+        },
+    );
 }
 
 #[derive(Debug)]
@@ -181,7 +191,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
 fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) {
     let value_lengths = vec![128, 1024];
     let engine_keys_counts = vec![0, 1000, 10_000];
-    let engine_put_keys_counts = vec![1000,10_000];
+    let engine_put_keys_counts = vec![1000];
 
     let mut get_configs = vec![];
     let mut put_configs = vec![];
@@ -221,10 +231,8 @@ fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) 
 }
 
 fn main() {
-    use std::time::Duration;
-    let mut criterion = Criterion::default().warm_up_time(Duration::new(0, 10));
-    bench_engines(&mut criterion, BTreeEngineFactory {});
+    let mut criterion = Criterion::default().sample_size(10);
     bench_engines(&mut criterion, RocksEngineFactory {});
-
+    bench_engines(&mut criterion, BTreeEngineFactory {});
     criterion.final_summary();
 }
