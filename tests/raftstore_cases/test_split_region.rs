@@ -830,6 +830,5 @@ fn test_split_with_stale_epoch() {
     let resp = cluster
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
-    let err_msg = resp.get_header().get_error().get_message();
-    assert_eq!(err_msg, "region is stale");
+    assert!(resp.get_header().get_error().has_stale_epoch());
 }
