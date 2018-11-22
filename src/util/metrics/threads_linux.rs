@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::fs;
-use std::io::{Error, ErrorKind, Read, Result};
+use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
 
 use libc::{self, pid_t};
@@ -119,11 +119,9 @@ impl Collector for ThreadsCollector {
                     .unwrap();
                 state.inc();
 
-                if let Ok(Io {
-                    read_bytes,
-                    write_bytes,
-                }) = Io::collect(self.pid, tid)
-                {
+                if let Ok(io) = Io::collect(self.pid, tid) {
+                    let read_bytes = io.read_bytes();
+                    let write_bytes = io.write_bytes();
                     // Threads IO.
                     let read_total = metrics
                         .io_totals
@@ -251,9 +249,7 @@ pub struct Io {
 
 impl Io {
     pub fn collect(pid: pid_t, tid: pid_t) -> Result<Io> {
-        pid::io_task(pid, tid)?.map(|io| Io {
-            procinfo_io: io,
-        })
+        pid::io_task(pid, tid).map(|io| Io { procinfo_io: io })
     }
 
     pub fn read_bytes(&self) -> usize {
@@ -320,6 +316,19 @@ mod tests {
 
         tx.send(()).unwrap();
         h.join().unwrap();
+    }
+
+    fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
+        let start = stat.find('(');
+        let end = stat.rfind(')');
+        if let (Some(start), Some(end)) = (start, end) {
+            return Ok((&stat[start + 1..end], end));
+        }
+
+        Err(to_io_err(format!(
+            "can not find thread name, stat: {}",
+            stat
+        )))
     }
 
     #[test]
