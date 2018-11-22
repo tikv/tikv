@@ -94,14 +94,14 @@ impl Collector for ThreadsCollector {
 
         let tids = get_thread_ids(self.pid).unwrap();
         for tid in tids {
-            if let Ok(stat) = Stat::collect(self.pid, tid) {
-                let name = stat.name();
-                let state = stat.state();
+            if let Ok(stat) = pid::stat_task(self.pid, tid) {
+                let name = stat.command;
+                let state = state_to_str(&stat.state);
                 // sanitize thread name before push metrics.
                 let name = sanitize_thread_name(tid, &name);
 
                 // Threads CPU time.
-                let total = stat.cpu_total();
+                let total = cpu_total(&stat);
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
@@ -119,9 +119,9 @@ impl Collector for ThreadsCollector {
                     .unwrap();
                 state.inc();
 
-                if let Ok(io) = Io::collect(self.pid, tid) {
-                    let read_bytes = io.read_bytes();
-                    let write_bytes = io.write_bytes();
+                if let Ok(io) = pid::io_task(self.pid, tid) {
+                    let read_bytes = io.read_bytes;
+                    let write_bytes = io.write_bytes;
                     // Threads IO.
                     let read_total = metrics
                         .io_totals
@@ -202,63 +202,28 @@ fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     name
 }
 
+pub fn state_to_str(state: &pid::State) -> &str {
+    match state {
+        pid::State::Running => "R",
+        pid::State::Sleeping => "S",
+        pid::State::Waiting => "D",
+        pid::State::Zombie => "Z",
+        pid::State::Stopped => "T",
+        pid::State::TraceStopped => "t",
+        pid::State::Paging => "W",
+        pid::State::Dead => "X",
+        pid::State::Wakekill => "K",
+        pid::State::Waking => "W",
+        pid::State::Parked => "P",
+    }
+}
+
+pub fn cpu_total(state: &pid::Stat) -> f64 {
+    (state.utime + state.stime) as f64 / *CLK_TCK
+}
+
 fn to_io_err(s: String) -> Error {
     Error::new(ErrorKind::Other, s)
-}
-
-pub struct Stat {
-    procinfo_stat: pid::Stat,
-}
-
-impl Stat {
-    pub fn collect(pid: pid_t, tid: pid_t) -> Result<Stat> {
-        pid::stat_task(pid, tid).map(|stat| Stat {
-            procinfo_stat: stat,
-        })
-    }
-
-    pub fn name(&self) -> &str {
-        &self.procinfo_stat.command
-    }
-
-    pub fn state(&self) -> &str {
-        match self.procinfo_stat.state {
-            pid::State::Running => "R",
-            pid::State::Sleeping => "S",
-            pid::State::Waiting => "D",
-            pid::State::Zombie => "Z",
-            pid::State::Stopped => "T",
-            pid::State::TraceStopped => "t",
-            pid::State::Paging => "W",
-            pid::State::Dead => "X",
-            pid::State::Wakekill => "K",
-            pid::State::Waking => "W",
-            pid::State::Parked => "P",
-        }
-    }
-
-    pub fn cpu_total(&self) -> f64 {
-        (self.procinfo_stat.utime + self.procinfo_stat.stime) as f64 / *CLK_TCK
-    }
-}
-
-/// I/O statistics for threads.
-pub struct Io {
-    procinfo_io: pid::Io,
-}
-
-impl Io {
-    pub fn collect(pid: pid_t, tid: pid_t) -> Result<Io> {
-        pid::io_task(pid, tid).map(|io| Io { procinfo_io: io })
-    }
-
-    pub fn read_bytes(&self) -> usize {
-        self.procinfo_io.read_bytes
-    }
-
-    pub fn write_bytes(&self) -> usize {
-        self.procinfo_io.write_bytes
-    }
 }
 
 lazy_static! {
@@ -299,17 +264,17 @@ mod tests {
 
         tids.iter()
             .find(|t| {
-                Stat::collect(pid, **t)
-                    .map(|stat| stat.name() == name)
+                pid::stat_task(pid, **t)
+                    .map(|stat| stat.command == name)
                     .unwrap_or(false)
             })
             .unwrap();
 
         tids.iter()
             .find(|t| {
-                Io::collect(pid, **t)
+                pid::io_task(pid, **t)
                     // since we're reading proc info, we must read > 0 data
-                    .map(|io| io.read_bytes() > 0)
+                    .map(|io| io.read_bytes > 0)
                     .unwrap_or(false)
             })
             .unwrap();
