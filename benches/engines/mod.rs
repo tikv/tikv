@@ -16,20 +16,50 @@ extern crate kvproto;
 extern crate test_util;
 extern crate tikv;
 
+use std::fmt;
 use criterion::{Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
-
 use test_util::generate_random_kvs;
-use tikv::storage::engine::{BTreeEngine, Engine, Modify, Snapshot, TestEngineBuilder};
+use tikv::storage::engine::{
+    BTreeEngine, Engine, Modify, RocksEngine, Snapshot, TestEngineBuilder,
+};
 use tikv::storage::{Key, CF_DEFAULT};
 
 const DEFAULT_KEY_LENGTH: usize = 64;
 const DEFAULT_ITERATIONS: usize = 1000;
 
-#[derive(Debug, Clone)]
-enum EngineType {
-    BTreeEngine,
-    RocksDB,
+trait EngineFactory<E: Engine>: Clone + fmt::Debug + 'static {
+    fn build(&self) -> E;
+}
+
+#[derive(Clone)]
+struct BTreeEngineFactory {}
+
+impl EngineFactory<BTreeEngine> for BTreeEngineFactory {
+    fn build(&self) -> BTreeEngine {
+        BTreeEngine::default()
+    }
+}
+
+impl fmt::Debug for BTreeEngineFactory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "BTreeEngine")
+    }
+}
+
+#[derive(Clone)]
+struct RocksEngineFactory {}
+
+impl EngineFactory<RocksEngine> for RocksEngineFactory {
+    fn build(&self) -> RocksEngine {
+        TestEngineBuilder::new().build().unwrap()
+    }
+}
+
+impl fmt::Debug for RocksEngineFactory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "RocksEngine")
+    }
 }
 
 fn fill_engine_with<E: Engine>(engine: &E, expect_engine_keys_count: usize, value_length: usize) {
@@ -59,7 +89,7 @@ fn engine_snapshot_bench<E: Engine>(
     })
 }
 
-/// Actually, it measures the performance of Snapshot::get(), skipping the Engine::snapshot();
+/// Measuring the performance of Snapshot::get(), skipping the Engine::snapshot();
 fn engine_get_bench<E: Engine>(
     bencher: &mut Bencher,
     engine: &E,
@@ -98,121 +128,86 @@ fn engine_put_bench<E: Engine>(
 }
 
 #[derive(Debug)]
-struct PutConfig {
-    engine_type: EngineType,
+struct PutConfig<F> {
+    factory: F,
     put_count: usize,
     value_length: usize,
 }
 
-fn bench_engine_put(bencher: &mut Bencher, config: &PutConfig) {
-    match config.engine_type {
-        EngineType::BTreeEngine => {
-            let engine = BTreeEngine::default();
-            engine_put_bench(bencher, &engine, config.put_count, config.value_length)
-        }
-        EngineType::RocksDB => {
-            let engine = TestEngineBuilder::new().build().unwrap();
-            engine_put_bench(bencher, &engine, config.put_count, config.value_length)
-        }
-    }
+fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &PutConfig<F>) {
+    let engine = config.factory.build();
+    engine_put_bench(bencher, &engine, config.put_count, config.value_length)
 }
 
 #[derive(Debug)]
-struct SnapshotConfig {
-    engine_type: EngineType,
+struct SnapshotConfig<F> {
+    factory: F,
     engine_keys_count: usize,
     value_length: usize,
 }
 
-fn bench_engine_snapshot(bencher: &mut Bencher, config: &SnapshotConfig) {
-    match config.engine_type {
-        EngineType::BTreeEngine => {
-            let engine = BTreeEngine::default();
-            engine_snapshot_bench(
-                bencher,
-                &engine,
-                config.engine_keys_count,
-                config.value_length,
-            )
-        }
-        EngineType::RocksDB => {
-            let engine = TestEngineBuilder::new().build().unwrap();
-            engine_snapshot_bench(
-                bencher,
-                &engine,
-                config.engine_keys_count,
-                config.value_length,
-            )
-        }
-    }
+fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
+    bencher: &mut Bencher,
+    config: &SnapshotConfig<F>,
+) {
+    let engine = config.factory.build();
+    engine_snapshot_bench(
+        bencher,
+        &engine,
+        config.engine_keys_count,
+        config.value_length,
+    )
 }
 
 #[derive(Debug)]
-struct GetConfig {
-    engine_type: EngineType,
+struct GetConfig<F> {
+    factory: F,
     iterations: usize,
     value_length: usize,
     engine_keys_count: usize,
 }
 
-fn bench_engine_get(bencher: &mut Bencher, config: &GetConfig) {
-    match config.engine_type {
-        EngineType::BTreeEngine => {
-            let engine = BTreeEngine::default();
-            engine_get_bench(
-                bencher,
-                &engine,
-                config.iterations,
-                config.engine_keys_count,
-                config.value_length,
-            )
-        }
-        EngineType::RocksDB => {
-            let engine = TestEngineBuilder::new().build().unwrap();
-            engine_get_bench(
-                bencher,
-                &engine,
-                config.iterations,
-                config.engine_keys_count,
-                config.value_length,
-            )
-        }
-    }
+fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &GetConfig<F>) {
+    let engine = config.factory.build();
+    engine_get_bench(
+        bencher,
+        &engine,
+        config.iterations,
+        config.engine_keys_count,
+        config.value_length,
+    )
 }
 
-fn bench_engines(c: &mut Criterion) {
-    let engine_types = vec![EngineType::BTreeEngine, EngineType::RocksDB];
+fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) {
     let value_lengths = vec![128, 1024];
     let engine_keys_counts = vec![0, 1000, 10_000];
-    let engine_put_keys_counts = vec![0, 1000];
+    let engine_put_keys_counts = vec![1000,10_000];
 
     let mut get_configs = vec![];
     let mut put_configs = vec![];
     let mut snapshot_configs = vec![];
 
-    for engine_type in engine_types {
-        for &value_length in &value_lengths {
-            for &engine_keys_count in &engine_keys_counts {
-                get_configs.push(GetConfig {
-                    engine_type: engine_type.clone(),
-                    iterations: DEFAULT_ITERATIONS,
-                    value_length,
-                    engine_keys_count,
-                });
-                snapshot_configs.push(SnapshotConfig {
-                    engine_type: engine_type.clone(),
-                    value_length,
-                    engine_keys_count,
-                });
-            }
+    for &value_length in &value_lengths {
+        for &engine_keys_count in &engine_keys_counts {
+            get_configs.push(GetConfig {
+                factory: factory.clone(),
+                iterations: DEFAULT_ITERATIONS,
+                value_length,
+                engine_keys_count,
+            });
+            snapshot_configs.push(SnapshotConfig {
+                factory: factory.clone(),
+                value_length,
+                engine_keys_count,
+            });
+        }
 
-            for &engine_put_keys_count in &engine_put_keys_counts {
-                put_configs.push(PutConfig {
-                    engine_type: engine_type.clone(),
-                    put_count: engine_put_keys_count,
-                    value_length,
-                });
-            }
+        for &engine_put_keys_count in &engine_put_keys_counts {
+            put_configs.push(PutConfig {
+                factory: factory.clone(),
+                put_count: engine_put_keys_count,
+                value_length,
+            });
         }
     }
 
@@ -226,7 +221,10 @@ fn bench_engines(c: &mut Criterion) {
 }
 
 fn main() {
-    let mut criterion = Criterion::default().sample_size(10);
-    bench_engines(&mut criterion);
+    use std::time::Duration;
+    let mut criterion = Criterion::default().warm_up_time(Duration::new(0, 10));
+    bench_engines(&mut criterion, BTreeEngineFactory {});
+    bench_engines(&mut criterion, RocksEngineFactory {});
+
     criterion.final_summary();
 }

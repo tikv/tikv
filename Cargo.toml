@@ -35,6 +35,7 @@ path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
 name = "engines"
+harness = false
 path = "benches/engines/mod.rs"
 
 [[bench]]
