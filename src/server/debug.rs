@@ -27,8 +27,8 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use rocksdb::{
-    CompactOptions, DBBottommostLevelCompaction, Kv, SeekKey, Writable, WriteBatch, WriteOptions,
-    DB,
+    CompactOptions, DBBottommostLevelCompaction, Kv, ReadOptions, SeekKey, Writable, WriteBatch,
+    WriteOptions, DB,
 };
 
 use raft::{self, RawNode};
@@ -41,6 +41,7 @@ use raftstore::store::{
 use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::Key;
+use storage::Iterator as EngineIterator;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::codec::bytes;
 use util::collections::HashSet;
@@ -272,6 +273,32 @@ impl Debugger {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
         MvccInfoIterator::new(&self.engines.kv, start, end, limit)
+    }
+
+    /// Scan raw keys for given range `[start, end)` in given cf.
+    pub fn raw_scan(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: usize,
+        cf: &str,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let db = &self.engines.kv;
+        let cf_handle = get_cf_handle(db, cf).unwrap();
+        let mut read_opt = ReadOptions::new();
+        read_opt.set_iterate_lower_bound(start);
+        read_opt.set_iterate_upper_bound(end);
+        let mut iter = db.iter_cf_opt(cf_handle, read_opt);
+        if !iter.seek_to_first() {
+            return Ok(vec![]);
+        }
+
+        let mut res = vec![(iter.key().to_vec(), iter.value().to_vec())];
+        while res.len() < limit && iter.next() {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+        }
+
+        Ok(res)
     }
 
     /// Compact the cf[start..end) in the db.
