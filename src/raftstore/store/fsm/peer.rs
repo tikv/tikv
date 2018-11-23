@@ -1820,6 +1820,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region = peer.region();
         let latest_epoch = region.get_region_epoch();
 
+        // This is a little difference for `check_region_epoch` in region split case.
+        // Here we just need to check `version` because `conf_ver` will be update
+        // to the latest value of the peer, and then send to PD.
         if latest_epoch.get_version() != epoch.get_version() {
             info!(
                 "{} epoch changed {:?} != {:?}, retry later",
