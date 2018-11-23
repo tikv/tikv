@@ -1937,6 +1937,8 @@ mod tests {
         let tests = vec![
             ("中文a测试bb", 1, "中文a测试bb"),
             ("中文a测试", -3, "试"),
+            ("\x61\x76\x5e\x38\x2f\x35", -1, "\x35"),
+            ("\x61\x76\x5e\x38\x2f\x35", 2, "\x76\x5e\x38\x2f\x35"),
             ("Quadratically", 5, "ratically"),
             ("Sakila", 1, "Sakila"),
             ("Sakila", -3, "ila"),
@@ -1955,7 +1957,7 @@ mod tests {
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
 
-        // multibyte & unsigned position test
+        // multibytes & unsigned position test
         let corner_case_tests = vec![
             ("中文a测试", Datum::I64(-1), vec![149]),
             ("Sakila", Datum::U64(u64::max_value()), b"".to_vec()),
@@ -1980,6 +1982,10 @@ mod tests {
             ("中文a测a试", 4, 3, "文"),
             ("中文a测a试", 4, 4, "文a"),
             ("中文a测a试", -3, 3, "试"),
+            ("\x61\x76\x5e\x38\x2f\x35", 2, 2, "\x76\x5e"),
+            ("\x61\x76\x5e\x38\x2f\x35", 4, 100, "\x38\x2f\x35"),
+            ("\x61\x76\x5e\x38\x2f\x35", -1, 2, "\x35"),
+            ("\x61\x76\x5e\x38\x2f\x35", -2, 2, "\x2f\x35"),
             ("", 1, 1, ""),
             ("", -1, 1, ""),
         ];
@@ -1991,7 +1997,7 @@ mod tests {
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
 
-        // multibyte & unsigned position test
+        // multibytes & unsigned position test
         let corner_case_tests = vec![
             (
                 "中文a测试",
