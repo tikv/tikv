@@ -101,6 +101,7 @@ base64 = "0.10"
 safemem = "0.3"
 cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
+flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }

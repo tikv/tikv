@@ -24,6 +24,8 @@ use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_REGEXP: i32 = 1139;
+pub const ZLIB_LENGTH_CORRUPTED: i32 = 1258;
+pub const ZLIB_DATA_CORRUPTED: i32 = 1259;
 pub const WARN_DATA_TRUNCATED: i32 = 1265;
 pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
@@ -142,6 +144,15 @@ impl Error {
     pub fn incorrect_datetime_value(val: &str) -> Error {
         let msg = format!("Incorrect datetime value: '{}'", val);
         Error::Eval(msg, ERR_TRUNCATE_WRONG_VALUE)
+    }
+
+    pub fn zlib_length_corrupted() -> Error {
+        let msg = "ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)";
+        Error::Eval(msg.into(), ZLIB_LENGTH_CORRUPTED)
+    }
+
+    pub fn zlib_data_corrupted() -> Error {
+        Error::Eval("ZLIB: Input data corrupted".into(), ZLIB_DATA_CORRUPTED)
     }
 }
 
