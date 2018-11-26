@@ -343,6 +343,7 @@ mod tests {
     use raftstore::store::{CacheQueryStats, Engines, PeerStorage};
     use raftstore::Result;
     use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
+    use util::rocksdb::compact_files_in_range;
     use util::{escape, rocksdb, worker};
 
     use super::*;
@@ -382,13 +383,58 @@ mod tests {
             (b"a3".to_vec(), b"v3".to_vec()),
             (b"a5".to_vec(), b"v5".to_vec()),
             (b"a7".to_vec(), b"v7".to_vec()),
+            (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
         for &(ref k, ref v) in &base_data {
-            engines.kv.put(&data_key(k), v).expect("");
+            engines.kv.put(&data_key(k), v).unwrap();
         }
         let store = new_peer_storage(engines, &r);
         (store, base_data)
+    }
+
+    fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
+        let mut r = Region::new();
+        r.mut_peers().push(Peer::new());
+        r.set_id(10);
+        r.set_start_key(b"a04".to_vec());
+        r.set_end_key(b"a15".to_vec());
+
+        let levels = vec![
+            (b"a01".to_vec(), 1),
+            (b"a02".to_vec(), 5),
+            (b"a03".to_vec(), 3),
+            (b"a04".to_vec(), 4),
+            (b"a05".to_vec(), 1),
+            (b"a06".to_vec(), 2),
+            (b"a07".to_vec(), 2),
+            (b"a08".to_vec(), 5),
+            (b"a09".to_vec(), 6),
+            (b"a10".to_vec(), 0),
+            (b"a11".to_vec(), 1),
+            (b"a12".to_vec(), 4),
+            (b"a13".to_vec(), 2),
+            (b"a14".to_vec(), 5),
+            (b"a15".to_vec(), 3),
+            (b"a16".to_vec(), 2),
+            (b"a17".to_vec(), 1),
+            (b"a18".to_vec(), 0),
+        ];
+
+        let mut data = vec![];
+        {
+            let db = &engines.kv;
+            for &(ref k, level) in &levels {
+                db.put(&data_key(k), k).unwrap();
+                db.flush(true).unwrap();
+                data.push((k.to_vec(), k.to_vec()));
+                compact_files_in_range(&db, Some(&data_key(k)), Some(&data_key(k)), Some(level))
+                    .unwrap();
+            }
+        }
+
+        let store = new_peer_storage(engines, &r);
+        (store, data)
     }
 
     #[test]
@@ -425,33 +471,26 @@ mod tests {
 
     #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
     #[test]
-    fn test_iterate() {
+    fn test_seek_and_seek_prev() {
         let path = TempDir::new("test-raftstore").unwrap();
         let engines = new_temp_engine(&path);
-        let (store, base_data) = load_default_dataset(engines.clone());
-
+        let (store, _) = load_default_dataset(engines.clone());
         let snap = RegionSnapshot::new(&store);
-        let mut data = vec![];
-        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
-            data.push((key.to_vec(), value.to_vec()));
-            Ok(true)
-        }).unwrap();
 
-        assert_eq!(data.len(), 2);
-        assert_eq!(data, &base_data[1..3]);
-
-        let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
-            (b"a1", false, None, None),
-            (b"a2", true, Some((b"a3", b"v3")), None),
-            (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
-            (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
-            (b"a6", true, None, Some((b"a5", b"v5"))),
-            (b"a7", true, None, Some((b"a5", b"v5"))),
-            (b"a8", false, None, None),
-        ];
-        let upper_bounds: Vec<Option<&[u8]>> = vec![None, Some(b"a7")];
-        for upper_bound in upper_bounds {
-            let iter_opt = IterOption::new(None, upper_bound.map(|v| v.to_vec()), true);
+        let check_seek_result = |snap: &RegionSnapshot,
+                                 lower_bound: Option<&[u8]>,
+                                 upper_bound: Option<&[u8]>,
+                                 seek_table: &Vec<(
+            &[u8],
+            bool,
+            Option<(&[u8], &[u8])>,
+            Option<(&[u8], &[u8])>,
+        )>| {
+            let iter_opt = IterOption::new(
+                lower_bound.map(|v| v.to_vec()),
+                upper_bound.map(|v| v.to_vec()),
+                true,
+            );
             let mut iter = snap.iter(iter_opt);
             iter.panic_when_exceed_bound(false);
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
@@ -476,7 +515,85 @@ mod tests {
                 let prev_res = iter.seek_for_prev(seek_key);
                 check_res(&iter, prev_res, prev_exp);
             }
-        }
+        };
+
+        let mut seek_table: Vec<(
+            &[u8],
+            bool,
+            Option<(&[u8], &[u8])>,
+            Option<(&[u8], &[u8])>,
+        )> = vec![
+            (b"a1", false, None, None),
+            (b"a2", true, Some((b"a3", b"v3")), None),
+            (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
+            (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
+            (b"a6", true, None, Some((b"a5", b"v5"))),
+            (b"a7", true, None, Some((b"a5", b"v5"))),
+            (b"a9", false, None, None),
+        ];
+        check_seek_result(&snap, None, None, &seek_table);
+        check_seek_result(&snap, None, Some(b"a9"), &seek_table);
+        check_seek_result(&snap, Some(b"a1"), None, &seek_table);
+        check_seek_result(&snap, Some(b""), Some(b""), &seek_table);
+        check_seek_result(&snap, Some(b"a1"), Some(b"a9"), &seek_table);
+        check_seek_result(&snap, Some(b"a2"), Some(b"a9"), &seek_table);
+        check_seek_result(&snap, Some(b"a2"), Some(b"a7"), &seek_table);
+        check_seek_result(&snap, Some(b"a1"), Some(b"a7"), &seek_table);
+
+        seek_table = vec![
+            (b"a1", false, None, None),
+            (b"a2", true, None, None),
+            (b"a3", true, None, None),
+            (b"a4", true, None, None),
+            (b"a6", true, None, None),
+            (b"a7", true, None, None),
+            (b"a9", false, None, None),
+        ];
+        check_seek_result(&snap, None, Some(b"a1"), &seek_table);
+        check_seek_result(&snap, Some(b"a8"), None, &seek_table);
+        check_seek_result(&snap, Some(b"a7"), Some(b"a2"), &seek_table);
+
+        let path = TempDir::new("test-raftstore").unwrap();
+        let engines = new_temp_engine(&path);
+        let (store, _) = load_multiple_levels_dataset(engines.clone());
+        let snap = RegionSnapshot::new(&store);
+
+        seek_table = vec![
+            (b"a01", false, None, None),
+            (b"a03", false, None, None),
+            (b"a05", true, Some((b"a05", b"a05")), Some((b"a05", b"a05"))),
+            (b"a10", true, Some((b"a10", b"a10")), Some((b"a10", b"a10"))),
+            (b"a14", true, Some((b"a14", b"a14")), Some((b"a14", b"a14"))),
+            (b"a15", true, None, Some((b"a14", b"a14"))),
+            (b"a18", false, None, None),
+            (b"a19", false, None, None),
+        ];
+        check_seek_result(&snap, None, None, &seek_table);
+        check_seek_result(&snap, None, Some(b"a20"), &seek_table);
+        check_seek_result(&snap, Some(b"a00"), None, &seek_table);
+        check_seek_result(&snap, Some(b""), Some(b""), &seek_table);
+        check_seek_result(&snap, Some(b"a00"), Some(b"a20"), &seek_table);
+        check_seek_result(&snap, Some(b"a01"), Some(b"a20"), &seek_table);
+        check_seek_result(&snap, Some(b"a01"), Some(b"a15"), &seek_table);
+        check_seek_result(&snap, Some(b"a00"), Some(b"a15"), &seek_table);
+    }
+
+    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
+    #[test]
+    fn test_iterate() {
+        let path = TempDir::new("test-raftstore").unwrap();
+        let engines = new_temp_engine(&path);
+        let (store, base_data) = load_default_dataset(engines.clone());
+
+        let snap = RegionSnapshot::new(&store);
+        let mut data = vec![];
+        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
+            data.push((key.to_vec(), value.to_vec()));
+            Ok(true)
+        }).unwrap();
+
+        assert_eq!(data.len(), 2);
+        assert_eq!(data, &base_data[1..3]);
 
         data.clear();
         snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
@@ -508,7 +625,7 @@ mod tests {
             Ok(true)
         }).unwrap();
 
-        assert_eq!(data.len(), 4);
+        assert_eq!(data.len(), 5);
         assert_eq!(data, base_data);
 
         let mut iter = snap.iter(IterOption::default());
