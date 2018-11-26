@@ -277,8 +277,13 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
                 // TODO: verify if it's really shutting down.
                 None => return,
             };
+            let peer = self.peer.peer.clone();
             let f = self.ctx.timer.delay(Instant::now() + dur).map(move |_| {
-                let _ = tx.force_send(PeerMsg::Tick(tick));
+                if tx.force_send(PeerMsg::Tick(tick)).is_err() {
+                    error!("{:?} schedule {:?} to peer fail", peer, tick);
+                } else {
+                    info!("{:?} schedule {:?} to peer success", peer, tick);
+                }
             });
             self.ctx.poller.spawn(f).forget()
         }

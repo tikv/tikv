@@ -211,7 +211,7 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
         {
             let exist_region = &meta.regions[&exist_region_id];
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
-                debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
+                info!("msg {:?} is overlapped with region {:?}", msg, exist_region);
                 if util::is_first_vote_msg(msg.get_message()) {
                     meta.pending_votes.push(msg.to_owned());
                 }
