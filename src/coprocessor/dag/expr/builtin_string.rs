@@ -576,7 +576,7 @@ impl ScalarFunc {
             s.len().checked_sub(pos).unwrap_or_else(|| s.len())
         };
 
-        let end = (start + len.min(s.len())).min(s.len());
+        let end = start.saturating_add(len).min(s.len());
         Ok(Some(Cow::Owned(s[start..end].to_vec())))
     }
 }
