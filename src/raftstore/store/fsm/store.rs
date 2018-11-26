@@ -604,7 +604,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         {
             let mut region = self.region_peers[id].region();
             while start < enc_start_key(region) {
-                // check from end to start, if covered, one's start key must is other's end key
+                // check from end to start, if covered, one's start key must be other's end key
                 if let Some(id) = self.region_ranges.get(&enc_start_key(region)) {
                     region = self.region_peers[id].region();
                 } else {
