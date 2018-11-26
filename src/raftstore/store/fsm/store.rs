@@ -1316,7 +1316,7 @@ mod tests {
             let check_range = |start: &[u8], end: &[u8]| {
                 is_range_covered(
                     &region_ranges,
-                    |id: u64| region_peers.get(&id).unwrap(),
+                    |id: u64| &region_peers[&id],
                     data_key(start),
                     data_end_key(end),
                 )
@@ -1351,7 +1351,7 @@ mod tests {
             let check_range = |start: &[u8], end: &[u8]| {
                 is_range_covered(
                     &region_ranges,
-                    |id: u64| region_peers.get(&id).unwrap(),
+                    |id: u64| &region_peers[&id],
                     data_key(start),
                     data_end_key(end),
                 )
