@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.1.0-rc.2"
+version = "3.0.0-alpha"
 keywords = ["KV", "distributed-systems", "raft"]
 publish = false
 
