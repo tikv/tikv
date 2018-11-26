@@ -32,7 +32,9 @@ use coprocessor::*;
 
 mod aggregate;
 mod aggregation;
+mod batch;
 mod index_scan;
+mod interface;
 mod limit;
 mod scanner;
 mod selection;
@@ -43,7 +45,9 @@ mod topn_heap;
 mod metrics;
 
 pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
+pub use self::batch::*;
 pub use self::index_scan::IndexScanExecutor;
+pub use self::interface::{BatchExecuteResult, ExecutorContext, ExecutorContextInner};
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
 pub use self::scanner::{ScanOn, Scanner};
@@ -266,6 +270,23 @@ pub trait Executor {
     /// It returns a `KeyRange` the executor has scaned.
     fn stop_scan(&mut self) -> Option<KeyRange> {
         None
+    }
+
+    /// Returns whether this executor supports batch execution.
+    ///
+    /// Executor must implement `next_batch` if this function returns `true`.
+    fn support_batch(&self) -> bool {
+        false
+    }
+
+    /// Returns next several rows.
+    ///
+    /// This function is simply the batch version of `next()`. The executor should return as more
+    /// rows as possible, but `expect_rows` rows at most.
+    fn next_batch(&mut self, _expect_rows: usize) -> BatchExecuteResult {
+        // Unreachable since this function shall never be called when corresponding executor does
+        // not support batch execution (i.e. `support_batch()` is not overwritten to return `true`).
+        unreachable!()
     }
 }
 

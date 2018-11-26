@@ -30,6 +30,8 @@ pub use coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 /// An array of datums in the same data type and is column oriented.
 ///
 /// Stores datums of multiple rows of one column.
+// TODO: Might be better to make `BatchColumn` over generic, so that enum kind can be checked
+// outside, which is more cache friendly.
 #[derive(Debug, PartialEq)]
 pub enum BatchColumn {
     Int(Vec<Option<Int>>),

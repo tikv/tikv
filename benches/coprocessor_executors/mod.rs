@@ -26,7 +26,7 @@ use tipb::executor::{IndexScan, TableScan};
 
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
-use tikv::coprocessor::dag::executor::Executor;
+use tikv::coprocessor::dag::executor::{Executor, ExecutorContext};
 use tikv::storage::RocksEngine;
 
 fn bench_table_scan_next(
@@ -93,7 +93,7 @@ fn bench_table_scan_primary_key(c: &mut Criterion) {
 
 /// next() for 1 time, 1 interested column, at the front of each row. Each row contains 100 columns.
 ///
-/// This kind of scanner is used in SQLs like SELECT COUNT(column)
+/// This kind of scanner is used in SQLs like `SELECT COUNT(column)`.
 fn bench_table_scan_datum_front(c: &mut Criterion) {
     c.bench_function("table_scan_datum_front", |b| {
         let mut cols = vec![];
@@ -245,6 +245,8 @@ fn bench_table_scan_datum_end(c: &mut Criterion) {
 
 /// next() for 1 time, 100 interested columns, each column in the row is interested
 /// (i.e. there is totally 100 columns in the row).
+///
+/// This kind of scanner is used in SQLs like `SELECT *`.
 fn bench_table_scan_datum_all(c: &mut Criterion) {
     c.bench_function("table_scan_datum_all", |b| {
         let mut cols = vec![];
@@ -455,8 +457,9 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
     });
 }
 
-/// 1 interested column, which is PK. One range is given, which contains 1000 rows. This case
-/// benches the performance when all records of this range are consumed.
+/// 1 interested column, which is PK. One range is given, which contains 1000 rows.
+///
+/// This case benches the performance when all records of this range are consumed.
 fn bench_table_scan_multi_rows(c: &mut Criterion) {
     use tikv::coprocessor::dag::executor::TableScanExecutor;
 
@@ -505,6 +508,185 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
                 for _ in 0..1000 {
                     black_box(executor.next().unwrap().unwrap());
                 }
+            },
+        );
+    });
+}
+
+/// 100 interested columns, each column in the row is interested. One range is given,
+/// which contains 1000 rows.
+///
+/// This case benches the performance when all records of this range are consumed for SQLs like
+/// `SELECT *`.
+fn bench_table_scan_datum_all_multi_rows(c: &mut Criterion) {
+    use tikv::coprocessor::dag::executor::TableScanExecutor;
+
+    c.bench_function("table_scan_datum_all_multi_rows", |b| {
+        let mut cols = vec![];
+        for _ in 0..100 {
+            let col = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            cols.push(col);
+        }
+        let mut table = TableBuilder::new();
+        for col in &cols {
+            table = table.add_col(col.clone());
+        }
+        let table = table.build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            {
+                let mut insert = store.insert_into(&table);
+                for (idx, col) in cols.iter().enumerate() {
+                    insert = insert.set(&col, Datum::I64((i ^ idx) as i64));
+                }
+                insert.execute();
+            }
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        for col in &cols {
+            meta.mut_columns().push(col.get_column_info());
+        }
+
+        b.iter_with_setup(
+            || {
+                let mut executor = TableScanExecutor::new(
+                    meta.clone(),
+                    vec![table.get_select_range()],
+                    store.to_fixture_store(),
+                    false,
+                ).unwrap();
+                // There is a step of building scanner in the first `next()` which cost time,
+                // so we next() before hand.
+                executor.next().unwrap().unwrap();
+                executor
+            },
+            |mut executor| {
+                let executor = black_box(&mut executor);
+                for _ in 0..1000 {
+                    black_box(executor.next().unwrap().unwrap());
+                }
+            },
+        );
+    });
+}
+
+/// 1 interested column, which is PK. One range is given, which contains 1000 rows.
+///
+/// This case benches the performance when all records of this range are consumed.
+fn bench_batch_table_scan_multi_rows(c: &mut Criterion) {
+    use tikv::coprocessor::dag::executor::BatchTableScanExecutor;
+
+    c.bench_function("batch_table_scan_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let table = TableBuilder::new()
+            .add_col(id.clone())
+            .add_col(foo.clone())
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&id, Datum::I64(i))
+                .set(&foo, Datum::I64(0xDEADBEEF))
+                .execute();
+            store.commit();
+        }
+
+        let context = {
+            let columns_info = vec![id.get_column_info()];
+            ExecutorContext::new(columns_info)
+        };
+
+        b.iter_with_setup(
+            || {
+                let mut executor = BatchTableScanExecutor::new(
+                    context.clone(),
+                    false,
+                    vec![table.get_select_range()],
+                    store.to_fixture_store(),
+                ).unwrap();
+                // There is a step of building scanner in the first `next()` which cost time,
+                // so we next() before hand.
+                executor.next_batch(1);
+                executor
+            },
+            |mut executor| {
+                let executor = black_box(&mut executor);
+                black_box(executor.next_batch(1000));
+            },
+        );
+    });
+}
+
+/// 100 interested columns, each column in the row is interested. One range is given,
+/// which contains 1000 rows.
+///
+/// This case benches the performance when all records of this range are consumed for SQLs like
+/// `SELECT *`.
+fn bench_batch_table_scan_datum_all_multi_rows(c: &mut Criterion) {
+    use tikv::coprocessor::dag::executor::BatchTableScanExecutor;
+
+    c.bench_function("batch_table_scan_datum_all_multi_rows", |b| {
+        let mut cols = vec![];
+        for _ in 0..100 {
+            let col = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            cols.push(col);
+        }
+        let mut table = TableBuilder::new();
+        for col in &cols {
+            table = table.add_col(col.clone());
+        }
+        let table = table.build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            {
+                let mut insert = store.insert_into(&table);
+                for (idx, col) in cols.iter().enumerate() {
+                    insert = insert.set(&col, Datum::I64((i ^ idx) as i64));
+                }
+                insert.execute();
+            }
+            store.commit();
+        }
+
+        let context = {
+            let mut columns_info = vec![];
+            for col in &cols {
+                columns_info.push(col.get_column_info());
+            }
+            ExecutorContext::new(columns_info)
+        };
+
+        b.iter_with_setup(
+            || {
+                let mut executor = BatchTableScanExecutor::new(
+                    context.clone(),
+                    false,
+                    vec![table.get_select_range()],
+                    store.to_fixture_store(),
+                ).unwrap();
+                // There is a step of building scanner in the first `next()` which cost time,
+                // so we next() before hand.
+                executor.next_batch(1);
+                executor
+            },
+            |mut executor| {
+                let executor = black_box(&mut executor);
+                black_box(executor.next_batch(1000));
             },
         );
     });
@@ -638,6 +820,9 @@ criterion_group!(
     bench_table_scan_point_range,
     bench_table_scan_multi_point_range,
     bench_table_scan_multi_rows,
+    bench_table_scan_datum_all_multi_rows,
+    bench_batch_table_scan_multi_rows,
+    bench_batch_table_scan_datum_all_multi_rows,
     bench_normal_index_scan_primary_key,
     bench_normal_index_scan_index,
 );
