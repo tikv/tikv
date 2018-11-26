@@ -266,11 +266,21 @@ fn test_node_check_merged_message() {
 }
 
 #[test]
-fn test_node_merge_slow_split() {
+fn test_node_merge_slow_split_right() {
+    test_node_merge_slow_split(true);
+}
+
+#[test]
+fn test_node_merge_slow_split_left() {
+    test_node_merge_slow_split(false);
+}
+
+fn test_node_merge_slow_split(is_right_derive: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
+    cluster.cfg.raft_store.right_derive_when_split = is_right_derive;
 
     cluster.run();
 
@@ -282,7 +292,13 @@ fn test_node_merge_slow_split() {
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k3").unwrap();
 
-    cluster.must_transfer_leader(right.get_id(), new_peer(1, 1));
+    let target_leader = right
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 1)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(right.get_id(), target_leader);
     let target_leader = left
         .get_peers()
         .iter()
