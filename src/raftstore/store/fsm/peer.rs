@@ -271,18 +271,23 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
     #[inline]
     fn schedule_tick(&self, dur: Duration, tick: PeerTick) {
         if dur != Duration::new(0, 0) {
+            let region_id = self.region_id();
             // TODO: what if mail box changes?
             let tx = match self.scheduler.router().peer_notifier(self.region_id()) {
                 Some(tx) => tx,
                 // TODO: verify if it's really shutting down.
-                None => return,
+                None => {
+                    error!("{} failed to get notifier for {:?}", self.peer.tag, tick);
+                    return;
+                }
             };
-            let peer = self.peer.peer.clone();
+            let id = self.peer_id();
             let f = self.ctx.timer.delay(Instant::now() + dur).map(move |_| {
                 if tx.force_send(PeerMsg::Tick(tick)).is_err() {
-                    error!("{:?} schedule {:?} to peer fail", peer, tick);
-                } else {
-                    info!("{:?} schedule {:?} to peer success", peer, tick);
+                    error!(
+                        "[region {}] {} failed to schedule tick {:?}",
+                        region_id, id, tick
+                    );
                 }
             });
             self.ctx.poller.spawn(f).forget()

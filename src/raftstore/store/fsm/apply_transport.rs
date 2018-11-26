@@ -255,10 +255,10 @@ impl Router {
 
     fn peer_notifier(&self, region_id: u64) -> Option<MailBox<Task>> {
         let caches = unsafe { &mut *self.caches.as_ptr() };
-        let mut disconnected = false;
+        let mut connected = true;
         if let Some(mail_box) = caches.get(&region_id) {
-            disconnected = mail_box.sender.is_alive();
-            if !disconnected {
+            connected = mail_box.sender.is_alive();
+            if connected {
                 return Some(mail_box.clone());
             }
         }
@@ -269,7 +269,7 @@ impl Router {
                 break 'fetch_box mailbox.clone();
             }
             drop(boxes);
-            if disconnected {
+            if !connected {
                 caches.remove(&region_id);
             }
             return None;
