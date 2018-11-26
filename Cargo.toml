@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.1.0-rc.2"
+version = "3.0.0-alpha"
 keywords = ["KV", "distributed-systems", "raft"]
 publish = false
 
@@ -26,13 +26,16 @@ name = "tikv-importer"
 [[bench]]
 name = "raftstore"
 harness = false
+path = "benches/raftstore/mod.rs"
 
 [[bench]]
 name = "coprocessor_executors"
 harness = false
+path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
-name = "benches"
+name = "misc"
+path = "benches/misc/mod.rs"
 
 [dependencies]
 log = { version = "0.3", features = ["release_max_level_debug"] }
