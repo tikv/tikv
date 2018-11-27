@@ -306,6 +306,7 @@ wal-dir = "/var"
 wal-ttl-seconds = 1
 wal-size-limit = "12KB"
 max-total-wal-size = "1GB"
+max-background-jobs = 12
 max-manifest-file-size = "12MB"
 create-if-missing = false
 max-open-files = 12345
