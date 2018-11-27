@@ -25,6 +25,7 @@ pub use storage::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
+pub const DEFAULT_HTTP_LISTENING_ADDR: &str = "127.0.0.1:0";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
@@ -62,6 +63,9 @@ pub struct Config {
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
     pub advertise_addr: String,
+
+    // HTTP server listening address.
+    pub http_addr: String,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
@@ -111,6 +115,7 @@ impl Default for Config {
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
+            http_addr: DEFAULT_HTTP_LISTENING_ADDR.to_owned(),
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
@@ -156,6 +161,12 @@ impl Config {
                 "invalid advertise-addr: {:?}",
                 self.advertise_addr
             ));
+        }
+        if !self.http_addr.is_empty() {
+            box_try!(config::check_addr(&self.http_addr));
+        }
+        if self.http_addr.starts_with("0.") {
+            return Err(box_err!("invalid advertise-addr: {:?}", self.http_addr));
         }
 
         let non_zero_entries = vec![
@@ -273,6 +284,10 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
+
+        invalid_cfg = Config::default();
+        invalid_cfg.http_addr = "0.0.0.0:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);

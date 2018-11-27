@@ -64,6 +64,9 @@
 ## If not set, `addr` will be used.
 # advertise-addr = ""
 
+## HTTP listening address.
+# http-addr = "127.0.0.1:0". If it is not specified, the system will use a random port.
+
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"
 
