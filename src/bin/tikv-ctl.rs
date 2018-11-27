@@ -1248,7 +1248,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target regions, separated by commas if multiple"),
+                        .help("the target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
@@ -1274,7 +1274,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target regions. separated with commas if multiple"),
+                        .help("the target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
