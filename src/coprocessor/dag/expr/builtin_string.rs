@@ -491,7 +491,7 @@ impl ScalarFunc {
                 .map(|(_, (i, _))| i)
                 .unwrap_or_else(|| s.len())
         } else {
-            let mut positions = VecDeque::with_capacity(len);
+            let mut positions = VecDeque::with_capacity(len.min(s.len()));
             positions.push_back(s.len());
             start = s
                 .char_indices()
@@ -1924,6 +1924,13 @@ mod tests {
                 Datum::U64(u64::max_value()),
                 "文a测a试",
             ),
+            (
+                "中文a测a试",
+                Datum::I64(-2),
+                Datum::U64(u64::max_value()),
+                "a试",
+            ),
+
         ];
         for (s, pos, len, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
