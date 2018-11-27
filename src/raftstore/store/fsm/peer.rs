@@ -163,7 +163,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn poll_apply(&mut self) {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
-                Ok(ApplyTaskRes::Applys(multi_res)) => for res in multi_res {
+                Ok(ApplyTaskRes::Applies(multi_res)) => for res in multi_res {
                     debug!(
                         "{} async apply finish: {:?}",
                         self.region_peers
