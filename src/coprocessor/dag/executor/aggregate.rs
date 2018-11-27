@@ -36,6 +36,11 @@ pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
         }),
         ExprType::Max => Ok(box Extremum::new(Ordering::Less)),
         ExprType::Min => Ok(box Extremum::new(Ordering::Greater)),
+        ExprType::VarPop => Ok(box Variance {
+            sum: 0.0,
+            variance: 0.0,
+            cnt: 0,
+        }),
         et => Err(box_err!("unsupport AggrExprType: {:?}", et)),
     }
 }
@@ -298,6 +303,41 @@ impl AggrFunc for Extremum {
     }
 }
 
+struct Variance {
+    sum: f64,
+    variance: f64,
+    cnt: u64,
+}
+
+impl AggrFunc for Variance {
+    fn update(&mut self, ctx: &mut EvalContext, args: &mut Vec<Datum>) -> Result<()> {
+        if args.len() != 1 {
+            return Err(box_err!(
+                "variance only support one column, but got {}",
+                args.len()
+            ));
+        }
+        if args[0] == Datum::Null {
+            return Ok(());
+        }
+        let f = args.pop().unwrap().into_f64(ctx)?;
+        if self.cnt != 0 {
+            let t = 1.0 / self.cnt as f64 * self.sum - f;
+            self.variance += self.cnt as f64 / (1.0 + self.cnt as f64) * t * t;
+        }
+        self.sum += f;
+        self.cnt += 1;
+        Ok(())
+    }
+
+    fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
+        collector.push(Datum::U64(self.cnt));
+        collector.push(Datum::F64(self.sum));
+        collector.push(Datum::F64(self.variance));
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use coprocessor::dag::expr::{EvalConfig, EvalContext};
@@ -422,5 +462,29 @@ mod tests {
             aggr.update(&mut ctx, &mut vec![v]).unwrap();
         }
         assert_eq!(aggr.c, 3);
+    }
+    
+    #[test]
+    fn test_variance() {
+        let mut var = Variance {
+            sum: 0.0,
+            variance: 0.0,
+            cnt: 0,
+        };
+        let cfg = EvalConfig::default_for_test();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        let data = vec![
+            Datum::U64(1),
+            Datum::I64(2),
+            Datum::F64(12.1),
+            Datum::Null,
+            Datum::Dec(Decimal::from_f64(1.234).unwrap()),
+        ];
+        for v in data {
+            var.update(&mut ctx, &mut vec![v]).unwrap();
+        }
+        assert_eq!(var.cnt, 4);
+        assert_eq!(var.sum, 16.334);
+        assert_eq!(var.variance, 86.232867);
     }
 }
