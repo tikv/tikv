@@ -1264,7 +1264,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("recover-mvcc")
-                .about("recover mvcc data of regions on one node by deleting corrupting keys")
+                .about("recover mvcc data of regions on one node by deleting corrupted keys")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
