@@ -2037,7 +2037,7 @@ pub struct ApplyRes {
 
 #[derive(Debug)]
 pub enum TaskRes {
-    Applys(Vec<ApplyRes>),
+    Applies(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
 }
 
@@ -2125,7 +2125,9 @@ impl Runner {
         }
 
         if !core.apply_res.is_empty() {
-            self.notifier.send(TaskRes::Applys(core.apply_res)).unwrap();
+            self.notifier
+                .send(TaskRes::Applies(core.apply_res))
+                .unwrap();
         }
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
@@ -2443,7 +2445,7 @@ mod tests {
             vec![new_entry(5, 4, None)],
         )]));
         let res = match rx.try_recv() {
-            Ok(TaskRes::Applys(res)) => res,
+            Ok(TaskRes::Applies(res)) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
         assert_eq!(res.len(), 1);
