@@ -13,6 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::sync::mpsc;
@@ -33,6 +34,9 @@ use util::{Either, HandyRwLock};
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 
+const MAX_RETRY_TIMES: u64 = 10;
+const RETRY_INTERVAL_MS: u64 = 300;
+
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
@@ -46,12 +50,21 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
-
-        Ok(RpcClient {
-            cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(env, security_mgr, client, members),
-        })
+        for _ in 0..MAX_RETRY_TIMES {
+            match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
+                Ok((client, members)) => {
+                    return Ok(RpcClient {
+                        cluster_id: members.get_header().get_cluster_id(),
+                        leader_client: LeaderClient::new(env, security_mgr, client, members),
+                    })
+                }
+                Err(e) => {
+                    error!("validate PD endpoints failed: {:?}", e);
+                    thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
+                }
+            }
+        }
+        Err(box_err!("endpoints are invalid"))
     }
 
     fn header(&self) -> pdpb::RequestHeader {
