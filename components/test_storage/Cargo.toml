@@ -9,4 +9,5 @@ test_raftstore = { path = "../test_raftstore" }
 futures = "0.1"
 
 [dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
+git = "https://github.com/MyonKeminta/kvproto.git"
+branch = "misono/raw-scan-end-key"
