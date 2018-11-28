@@ -21,12 +21,14 @@ extern crate tikv;
 
 mod kv_generator;
 mod logging;
+mod macros;
 mod security;
 
 use std::env;
 
 pub use kv_generator::*;
 pub use logging::*;
+pub use macros::*;
 pub use security::*;
 
 pub fn setup_for_ci() {

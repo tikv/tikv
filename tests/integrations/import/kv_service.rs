@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{stream, Future, Stream};
 use tempdir::TempDir;
@@ -35,11 +36,14 @@ fn new_kv_server() -> (ImportKVServer, ImportKvClient, TempDir) {
     let ch = {
         let env = Arc::new(Environment::new(1));
         let addr = server.bind_addrs().first().unwrap();
-        ChannelBuilder::new(env).connect(&format!("{}:{}", addr.0, addr.1))
+        ChannelBuilder::new(env)
+            .keepalive_timeout(Duration::from_secs(60))
+            .connect(&format!("{}:{}", addr.0, addr.1))
     };
     let client = ImportKvClient::new(ch);
 
-    // Return temp_dir as well, so that temp dir will be properly deleted when it is dropped.
+    // Return temp_dir as well, so that temp dir will be properly
+    // deleted when it is dropped.
     (server, client, temp_dir)
 }
 
@@ -68,19 +72,19 @@ fn test_kv_service() {
 
     // Write an engine before it is opened.
     // Only send the write head here to avoid other gRPC errors.
-    let resp = send_write_head(&client, &head).unwrap();
+    let resp = with_retries!(send_write_head(&client, &head)).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
     // Close an engine before it it opened.
-    let resp = client.close_engine(&close).unwrap();
+    let resp = with_retries!(client.close_engine(&close)).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
-    client.open_engine(&open).unwrap();
-    let resp = send_write(&client, &head, &batch).unwrap();
+    with_retries!(client.open_engine(&open)).unwrap();
+    let resp = with_retries!(send_write(&client, &head, &batch)).unwrap();
     assert!(!resp.has_error());
-    let resp = send_write(&client, &head, &batch).unwrap();
+    let resp = with_retries!(send_write(&client, &head, &batch)).unwrap();
     assert!(!resp.has_error());
-    let resp = client.close_engine(&close).unwrap();
+    let resp = with_retries!(client.close_engine(&close)).unwrap();
     assert!(!resp.has_error());
 
     server.shutdown();
