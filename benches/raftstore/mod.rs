@@ -109,7 +109,7 @@ where
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
-    let mut kvs = KvGenerator::new(100, 128).generate(DEFAULT_DATA_SIZE);;
+    let mut kvs = KvGenerator::new(100, 128).generate(DEFAULT_DATA_SIZE);
     prepare_cluster(&mut cluster, &kvs);
 
     let mut keys = kvs
