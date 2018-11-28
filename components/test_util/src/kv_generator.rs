@@ -88,7 +88,7 @@ fn generator_vec_from_seed(len: usize, seed: usize) -> Vec<u8> {
     let mut s = format!("{}", seed).into_bytes();
     if s.len() != len {
         if s.len() < len {
-            let mut zeros: Vec<u8> = repeat('0' as u8).take(len - s.len()).collect();
+            let mut zeros: Vec<u8> = repeat(b'0').take(len - s.len()).collect();
             zeros.append(&mut s);
             s = zeros;
         } else {
