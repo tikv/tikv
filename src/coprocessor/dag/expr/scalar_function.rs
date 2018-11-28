@@ -120,6 +120,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
@@ -499,7 +500,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Version
             | ScalarFuncSig::WeekDay
             | ScalarFuncSig::WeekOfYear
-            | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::WeekWithoutMode
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
@@ -740,6 +740,7 @@ dispatch_call! {
         DayOfMonth => day_of_month,
         DayOfWeek => day_of_week,
         DayOfYear => day_of_year,
+        WeekWithMode => week_with_mode,
         Year => year,
 
         LogicalAnd => logical_and,
@@ -1529,7 +1530,6 @@ mod tests {
             ScalarFuncSig::Version,
             ScalarFuncSig::WeekDay,
             ScalarFuncSig::WeekOfYear,
-            ScalarFuncSig::WeekWithMode,
             ScalarFuncSig::WeekWithoutMode,
             ScalarFuncSig::YearWeekWithMode,
             ScalarFuncSig::YearWeekWithoutMode,
