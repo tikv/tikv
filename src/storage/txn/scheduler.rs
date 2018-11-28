@@ -445,10 +445,6 @@ impl<E: Engine> Scheduler<E> {
 }
 
 impl<E: Engine> Runnable<Msg> for Scheduler<E> {
-    fn run(&mut self, _: Msg) {
-        panic!("Shouldn't call Scheduler::run directly");
-    }
-
     fn run_batch(&mut self, msgs: &mut Vec<Msg>) {
         for msg in msgs.drain(..) {
             match msg {
@@ -494,6 +490,7 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             latches.gen_lock(keys)
         }
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
+        Command::Pause { ref keys, .. } => latches.gen_lock(keys),
         _ => Lock::new(vec![]),
     }
 }

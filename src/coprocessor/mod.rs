@@ -13,7 +13,7 @@
 
 mod checksum;
 pub mod codec;
-mod dag;
+pub mod dag;
 mod endpoint;
 mod error;
 pub mod local_metrics;
@@ -21,17 +21,17 @@ mod metrics;
 mod readpool_context;
 mod statistics;
 mod tracker;
-mod util;
+pub mod util;
 
-pub use self::endpoint::err_resp;
+pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use self::readpool_context::Context as ReadPoolContext;
 
-use std::time::Duration;
+use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use util::time::Instant;
+use util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -54,7 +54,7 @@ trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn into_boxed(self) -> Box<RequestHandler>
+    fn into_boxed(self) -> Box<RequestHandler + Send>
     where
         Self: 'static + Sized,
     {
@@ -83,12 +83,6 @@ impl Deadline {
         }
     }
 
-    /// Reset deadline according to the newly specified duration.
-    // TODO: Remove it in read pool PR. Since we can construct a precise deadline.
-    pub fn reset(&mut self, after_duration: Duration) {
-        self.deadline = self.start_time + after_duration;
-    }
-
     /// Returns error if the deadline is exceeded.
     pub fn check_if_exceeded(&self) -> Result<()> {
         let now = Instant::now_coarse();
@@ -100,7 +94,13 @@ impl Deadline {
     }
 }
 
-#[derive(Debug)]
+/// Denotes for a function that builds a `RequestHandler`.
+/// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.
+type RequestHandlerBuilder<Snap> =
+    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler + Send>> + Send>;
+
+/// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
+#[derive(Debug, Clone)]
 pub struct ReqContext {
     /// The tag of the request
     pub tag: &'static str,
@@ -132,11 +132,12 @@ impl ReqContext {
         tag: &'static str,
         context: kvrpcpb::Context,
         ranges: &[coppb::KeyRange],
+        max_handle_duration: Duration,
         peer: Option<String>,
         is_desc_scan: Option<bool>,
         txn_start_ts: Option<u64>,
     ) -> Self {
-        let deadline = Deadline::from_now(tag, Duration::from_secs(0));
+        let deadline = Deadline::from_now(tag, max_handle_duration);
         Self {
             tag,
             context,
@@ -149,18 +150,16 @@ impl ReqContext {
         }
     }
 
-    // TODO: Remove it in read pool PR. Since we can construct a precise deadline.
-    pub fn set_max_handle_duration(&mut self, request_max_handle_duration: Duration) {
-        self.deadline.reset(request_max_handle_duration)
-    }
-
     #[cfg(test)]
     pub fn default_for_test() -> Self {
-        Self::new("test", kvrpcpb::Context::new(), &[], None, None, None)
+        Self::new(
+            "test",
+            kvrpcpb::Context::new(),
+            &[],
+            Duration::from_secs(10),
+            None,
+            None,
+            None,
+        )
     }
 }
-
-pub use self::dag::{ScanOn, Scanner};
-pub use self::endpoint::{
-    Host as EndPointHost, RequestTask, Task as EndPointTask, DEFAULT_REQUEST_MAX_HANDLE_SECS,
-};

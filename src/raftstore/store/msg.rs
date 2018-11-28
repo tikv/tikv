@@ -54,7 +54,6 @@ pub enum SeekRegionResult {
 
 pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
-pub type BatchReadCallback = Box<FnBox(Vec<Option<ReadResponse>>) + Send>;
 
 pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
 pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
@@ -64,7 +63,6 @@ pub type SeekRegionFilter = Box<Fn(&Peer) -> bool + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-///  - `BatchRead`: callbacks for a batch read request.
 pub enum Callback {
     /// No callback.
     None,
@@ -72,8 +70,6 @@ pub enum Callback {
     Read(ReadCallback),
     /// Write callback.
     Write(WriteCallback),
-    /// Batch read callbacks.
-    BatchRead(BatchReadCallback),
 }
 
 impl Callback {
@@ -91,7 +87,6 @@ impl Callback {
                 let resp = WriteResponse { response: resp };
                 write(resp);
             }
-            Callback::BatchRead(_) => unreachable!(),
         }
     }
 
@@ -99,13 +94,6 @@ impl Callback {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
-        }
-    }
-
-    pub fn invoke_batch_read(self, args: Vec<Option<ReadResponse>>) {
-        match self {
-            Callback::BatchRead(batch_read) => batch_read(args),
-            other => panic!("expect Callback::BatchRead(..), got {:?}", other),
         }
     }
 }
@@ -116,7 +104,6 @@ impl fmt::Debug for Callback {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
-            Callback::BatchRead(_) => write!(fmt, "Callback::BatchRead(..)"),
         }
     }
 }
@@ -135,6 +122,26 @@ pub enum Tick {
     CheckMerge,
     CheckPeerStaleState,
     CleanupImportSST,
+}
+
+impl Tick {
+    #[inline]
+    pub fn tag(self) -> &'static str {
+        match self {
+            Tick::Raft => "raft",
+            Tick::RaftLogGc => "raft_log_gc",
+            Tick::SplitRegionCheck => "split_region_check",
+            Tick::CompactCheck => "compact_check",
+            Tick::PdHeartbeat => "pd_heartbeat",
+            Tick::PdStoreHeartbeat => "pd_store_heartbeat",
+            Tick::SnapGc => "snap_gc",
+            Tick::CompactLockCf => "compact_lock_cf",
+            Tick::ConsistencyCheck => "consistency_check",
+            Tick::CheckMerge => "check_merge",
+            Tick::CheckPeerStaleState => "check_peer_stale_state",
+            Tick::CleanupImportSST => "cleanup_import_sst",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -160,12 +167,6 @@ pub enum Msg {
         send_time: Instant,
         request: RaftCmdRequest,
         callback: Callback,
-    },
-
-    BatchRaftSnapCmds {
-        send_time: Instant,
-        batch: Vec<RaftCmdRequest>,
-        on_finished: Callback,
     },
 
     SplitRegion {
@@ -235,7 +236,6 @@ impl fmt::Debug for Msg {
             Msg::Quit => write!(fmt, "Quit"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
-            Msg::BatchRaftSnapCmds { .. } => write!(fmt, "Batch Raft Commands"),
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
             Msg::ComputeHashResult {
                 region_id,
@@ -295,17 +295,6 @@ impl Msg {
             send_time: Instant::now(),
             request,
             callback,
-        }
-    }
-
-    pub fn new_batch_raft_snapshot_cmd(
-        batch: Vec<RaftCmdRequest>,
-        on_finished: BatchReadCallback,
-    ) -> Msg {
-        Msg::BatchRaftSnapCmds {
-            send_time: Instant::now(),
-            batch,
-            on_finished: Callback::BatchRead(on_finished),
         }
     }
 

@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(use_extern_macros)]
 #![feature(proc_macro_non_items)]
 
 extern crate chrono;
@@ -73,7 +72,7 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -115,6 +114,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
     }
 
+    if tikv_util::panic_mark_file_exists(&cfg.storage.data_dir) {
+        fatal!(
+            "panic_mark_file {:?} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&cfg.storage.data_dir)
+        );
+    }
+
     // Initialize raftstore channels.
     let mut event_loop = store::create_event_loop(&cfg.raft_store)
         .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
@@ -152,14 +158,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             let pd_sender = pd_sender.clone();
             move || storage::ReadPoolContext::new(pd_sender.clone())
         });
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
-        .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
-    storage
-        .mut_gc_worker()
-        .set_local_storage(Arc::clone(&kv_engine));
-    storage
-        .mut_gc_worker()
-        .set_raft_store_router(raft_router.clone());
+    let storage = create_raft_storage(
+        raft_router.clone(),
+        &cfg.storage,
+        storage_read_pool,
+        Some(Arc::clone(&kv_engine)),
+        Some(raft_router.clone()),
+    ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -196,11 +201,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         let pd_sender = pd_sender.clone();
         move || coprocessor::ReadPoolContext::new(pd_sender.clone())
     });
+    let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
         storage.clone(),
-        cop_read_pool,
+        cop,
         raft_router,
         resolver,
         snap_mgr.clone(),
@@ -227,12 +233,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         importer,
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
-
-    // Start storage.
-    info!("start storage");
-    if let Err(e) = storage.start(&cfg.storage) {
-        fatal!("failed to start storage, error: {:?}", e);
-    }
 
     let mut metrics_flusher = MetricsFlusher::new(
         engines.clone(),
@@ -267,7 +267,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 fn main() {
     let matches = App::new("TiKV")
         .long_version(util::tikv_version_info().as_ref())
-        .author("PingCAP Inc. <info@pingcap.com>")
+        .author("TiKV Org.")
         .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(
             Arg::with_name("config")
@@ -386,7 +386,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `init_log()` handles various conditions.
     let guard = init_log(&config);
-    panic_hook::set_exit_hook(false, Some(guard));
+    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     // Print version information.
     util::print_tikv_info();

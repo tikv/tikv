@@ -86,7 +86,7 @@ impl<T: RaftStoreRouter> Service<T> {
 }
 
 impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
-    fn get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
+    fn get(&mut self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
         let db = req.get_db();
@@ -108,7 +108,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn raft_log(&self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
+    fn raft_log(&mut self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
         const TAG: &str = "debug_raft_log";
 
         let region_id = req.get_region_id();
@@ -130,7 +130,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn region_info(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RegionInfoRequest,
         sink: UnarySink<RegionInfoResponse>,
@@ -163,7 +163,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn region_size(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: RegionSizeRequest,
         sink: UnarySink<RegionSizeResponse>,
@@ -199,7 +199,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn scan_mvcc(
-        &self,
+        &mut self,
         _: RpcContext,
         mut req: ScanMvccRequest,
         sink: ServerStreamingSink<ScanMvccResponse>,
@@ -226,7 +226,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
         self.pool.spawn(future).forget();
     }
 
-    fn compact(&self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+    fn compact(&mut self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
         let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
             debugger
@@ -244,7 +244,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn inject_fail_point(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: InjectFailPointRequest,
         sink: UnarySink<InjectFailPointResponse>,
@@ -267,7 +267,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn recover_fail_point(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: RecoverFailPointRequest,
         sink: UnarySink<RecoverFailPointResponse>,
@@ -287,7 +287,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn list_fail_points(
-        &self,
+        &mut self,
         ctx: RpcContext,
         _: ListFailPointsRequest,
         sink: UnarySink<ListFailPointsResponse>,
@@ -310,7 +310,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn get_metrics(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: GetMetricsRequest,
         sink: UnarySink<GetMetricsResponse>,
@@ -335,7 +335,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn check_region_consistency(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: RegionConsistencyCheckRequest,
         sink: UnarySink<RegionConsistencyCheckResponse>,
@@ -356,7 +356,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn modify_tikv_config(
-        &self,
+        &mut self,
         ctx: RpcContext,
         mut req: ModifyTikvConfigRequest,
         sink: UnarySink<ModifyTikvConfigResponse>,
@@ -378,7 +378,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
     }
 
     fn get_region_properties(
-        &self,
+        &mut self,
         ctx: RpcContext,
         req: GetRegionPropertiesRequest,
         sink: UnarySink<GetRegionPropertiesResponse>,

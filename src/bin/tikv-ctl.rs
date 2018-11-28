@@ -17,15 +17,31 @@ extern crate chrono;
 extern crate futures;
 extern crate grpcio;
 extern crate kvproto;
+extern crate libc;
+#[macro_use]
+extern crate log;
 extern crate protobuf;
 extern crate raft;
 extern crate rocksdb;
-extern crate rustc_serialize;
+#[macro_use]
 extern crate tikv;
 extern crate toml;
+#[macro_use(slog_o, slog_kv)]
+extern crate slog;
+extern crate hex;
+#[cfg(unix)]
+extern crate nix;
+#[cfg(unix)]
+extern crate signal;
+extern crate slog_async;
+extern crate slog_scope;
+extern crate slog_stdlog;
+extern crate slog_term;
 
-use rustc_serialize::hex::{FromHex, FromHexError, ToHex};
+mod util;
+
 use std::cmp::Ordering;
+use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -63,6 +79,7 @@ const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
+const RUN_LDB_CMD_KEY_WORD: &str = "ldb";
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
@@ -877,9 +894,11 @@ impl DebugExecutor for Debugger {
 
 fn main() {
     let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
+    let version_info = util::tikv_version_info();
 
     let mut app = App::new("TiKV Ctl")
-        .author("PingCAP")
+        .long_version(version_info.as_ref())
+        .author("TiKV Org.")
         .about("Distributed transactional key value database powered by Rust and Raft")
         .arg(
             Arg::with_name("db")
@@ -959,6 +978,10 @@ fn main() {
                 .long("pd")
                 .takes_value(true)
                 .help("pd address"),
+        )
+        .subcommand(
+            SubCommand::with_name(RUN_LDB_CMD_KEY_WORD)
+                .about("run ldb cmd of RocksDB")
         )
         .subcommand(
             SubCommand::with_name("raft")
@@ -1520,6 +1543,13 @@ fn main() {
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
         );
 
+    // tikv-ctl just encapsulates the related module in rust-rocksdb. So, we don't need to parse
+    // the cmd here. Run cmd `./path-to-tikv-ctl ldb` and the help information will be printed.
+    if let Some(ldb_args) = check_run_ldb_cmd() {
+        rocksdb::run_ldb_tool(&ldb_args);
+        return;
+    }
+
     let matches = app.clone().get_matches();
     if matches.args.is_empty() {
         let _ = app.print_help();
@@ -1532,7 +1562,7 @@ fn main() {
         println!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        println!("{}", &unescape(escaped).to_hex().to_uppercase());
+        println!("{}", hex::encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -1797,12 +1827,11 @@ fn get_module_type(module: &str) -> MODULE {
     }
 }
 
-fn from_hex(key: &str) -> Result<Vec<u8>, FromHexError> {
-    const HEX_PREFIX: &str = "0x";
-    if key.starts_with(HEX_PREFIX) {
-        return key[2..].from_hex();
+fn from_hex(key: &str) -> Result<Vec<u8>, hex::FromHexError> {
+    if key.starts_with("0x") || key.starts_with("0X") {
+        return hex::decode(&key[2..]);
     }
-    key.from_hex()
+    hex::decode(key)
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
@@ -1981,4 +2010,35 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
         ))
     }
     list
+}
+
+// check if the key word "ldb" exists as the first argv and format the cmd line
+// to meet the requirements of ldb_tool.
+fn check_run_ldb_cmd() -> Option<Vec<String>> {
+    let mut res = Vec::new();
+    for x in env::args_os() {
+        if let Some(s) = x.to_os_string().to_str() {
+            res.push(s.to_string());
+        } else {
+            return None;
+        }
+    }
+    if res.len() > 1 && res[1] == RUN_LDB_CMD_KEY_WORD {
+        res.remove(1);
+        return Some(res);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_hex;
+
+    #[test]
+    fn test_from_hex() {
+        let result = vec![0x74];
+        assert_eq!(from_hex("74").unwrap(), result);
+        assert_eq!(from_hex("0x74").unwrap(), result);
+        assert_eq!(from_hex("0X74").unwrap(), result);
+    }
 }

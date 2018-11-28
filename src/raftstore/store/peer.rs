@@ -36,7 +36,7 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::worker::{
     apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
@@ -418,13 +418,18 @@ impl Peer {
         Ok(peer)
     }
 
-    pub fn register_delegates(&self) {
+    /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
+    /// Also trigger `RegionChangeEvent::Create` here.
+    pub fn activate(&self) {
         self.apply_scheduler
             .schedule(ApplyTask::register(self))
             .unwrap();
         self.read_scheduler
             .schedule(ReadTask::register(self))
             .unwrap();
+
+        self.coprocessor_host
+            .on_region_changed(self.region(), RegionChangeEvent::Create);
     }
 
     #[inline]
@@ -545,6 +550,11 @@ impl Peer {
         // Always update read delegate's region to avoid stale region info after a follower
         // becomeing a leader.
         self.maybe_update_read_progress(progress);
+
+        if !self.pending_remove {
+            self.coprocessor_host
+                .on_region_changed(self.region(), RegionChangeEvent::Update);
+        }
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -998,7 +1008,7 @@ impl Peer {
         }
 
         if apply_snap_result.is_some() {
-            self.register_delegates();
+            self.activate();
         }
 
         apply_snap_result
@@ -1054,7 +1064,7 @@ impl Peer {
                         // We committed prepare merge, to prevent unsafe read index,
                         // we must record its index.
                         self.last_committed_prepare_merge_idx = entry.get_index();
-                        // After prepare_mrege is committed, the leader can not know
+                        // After prepare_merge is committed, the leader can not know
                         // when the target region merges majority of this region, also
                         // it can not know when the target region writes new values.
                         // To prevent unsafe local read, we suspect its leader lease.

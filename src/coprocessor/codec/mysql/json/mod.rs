@@ -96,7 +96,7 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

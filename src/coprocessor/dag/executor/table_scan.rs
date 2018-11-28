@@ -20,7 +20,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
 
-use storage::{Key, Snapshot, SnapshotStore};
+use storage::{Key, Store};
 use util::collections::HashSet;
 
 use coprocessor::codec::table;
@@ -28,9 +28,10 @@ use coprocessor::util;
 use coprocessor::*;
 
 use super::{Executor, ExecutorMetrics, Row};
+use super::{ScanOn, Scanner};
 
-pub struct TableScanExecutor<S: Snapshot> {
-    store: SnapshotStore<S>,
+pub struct TableScanExecutor<S: Store> {
+    store: S,
     desc: bool,
     col_ids: HashSet<i64>,
     columns: Arc<Vec<ColumnInfo>>,
@@ -46,11 +47,11 @@ pub struct TableScanExecutor<S: Snapshot> {
     first_collect: bool,
 }
 
-impl<S: Snapshot> TableScanExecutor<S> {
+impl<S: Store> TableScanExecutor<S> {
     pub fn new(
         mut meta: TableScan,
         mut key_ranges: Vec<KeyRange>,
-        store: SnapshotStore<S>,
+        store: S,
         collect: bool,
     ) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
@@ -121,7 +122,7 @@ impl<S: Snapshot> TableScanExecutor<S> {
     }
 }
 
-impl<S: Snapshot> Executor for TableScanExecutor<S> {
+impl<S: Store> Executor for TableScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
@@ -223,7 +224,7 @@ impl<S: Snapshot> Executor for TableScanExecutor<S> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
     use kvproto::kvrpcpb::IsolationLevel;
@@ -232,7 +233,7 @@ mod test {
 
     use storage::SnapshotStore;
 
-    use super::super::scanner::test::{
+    use super::super::scanner::tests::{
         get_point_range, get_range, prepare_table_data, Data, TestStore,
     };
     use super::*;

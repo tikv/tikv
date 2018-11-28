@@ -135,3 +135,15 @@ pub trait RoleObserver: Coprocessor {
     /// have changed.
     fn on_role_change(&self, _: &mut ObserverContext, _: StateRole) {}
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RegionChangeEvent {
+    Create,
+    Update,
+    Destroy,
+}
+
+pub trait RegionChangeObserver: Coprocessor {
+    /// Hook to call when a region changed on this TiKV
+    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent) {}
+}

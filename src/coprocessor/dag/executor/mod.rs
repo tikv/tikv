@@ -13,6 +13,8 @@
 
 use std::sync::Arc;
 
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
@@ -23,7 +25,6 @@ use util::codec::number;
 use util::collections::HashSet;
 
 use coprocessor::codec::datum::{self, Datum, DatumEncoder};
-use coprocessor::codec::mysql;
 use coprocessor::codec::table::{self, RowColsDict};
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
 use coprocessor::util;
@@ -169,7 +170,7 @@ impl OriginCols {
             let col_id = col.get_column_id();
             let value = match self.data.get(col_id) {
                 None if col.has_default_val() => col.get_default_val().to_vec(),
-                None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
                     return Err(box_err!("column {} of {} is missing", col_id, self.handle));
                 }
                 None => box_try!(datum::encode_value(&[Datum::Null])),
@@ -195,7 +196,7 @@ impl OriginCols {
                 None if col.has_default_val() => {
                     values.extend_from_slice(col.get_default_val());
                 }
-                None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
                     return Err(box_err!("column {} of {} is missing", col_id, self.handle));
                 }
                 None => {
@@ -212,7 +213,7 @@ impl OriginCols {
     // in expression.
     pub fn inflate_cols_with_offsets(
         &self,
-        ctx: &mut EvalContext,
+        ctx: &EvalContext,
         offsets: &[usize],
     ) -> Result<Vec<Datum>> {
         let mut res = vec![Datum::Null; self.cols.len()];
@@ -232,7 +233,7 @@ impl OriginCols {
                             col
                         ))
                     }
-                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                    None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
                         return Err(box_err!("column {} of {} is missing", col_id, self.handle));
                     }
                     None => Datum::Null,

@@ -39,6 +39,7 @@ macro_rules! invalid_type {
     });
 }
 
+pub mod batch;
 pub mod chunk;
 pub mod convert;
 pub mod datum;

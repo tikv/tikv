@@ -15,10 +15,13 @@ use std::borrow::Cow;
 use std::cmp::{max, min, Ordering};
 use std::{f64, i64};
 
-use super::{Error, EvalContext, Result, ScalarFunc};
 use chrono::TimeZone;
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
+
+use super::{Error, EvalContext, Result, ScalarFunc};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
 use coprocessor::codec::{datum, mysql, Datum};
 use coprocessor::dag::expr::Expression;
 
@@ -42,8 +45,14 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_int(ctx, row);
         do_compare(e, op, |l, r| {
-            let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
-            let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+            let lhs_unsigned = self.children[0]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED);
+            let rhs_unsigned = self.children[1]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED);
             Ok(cmp_i64_with_unsigned_flag(l, lhs_unsigned, r, rhs_unsigned))
         })
     }
@@ -190,6 +199,8 @@ impl ScalarFunc {
                 Err(_) => {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                         return Err(e);
+                    } else {
+                        return Ok(None);
                     }
                 }
             }
@@ -233,7 +244,7 @@ impl ScalarFunc {
                 mysql::time::MAX_TIMESTAMP,
                 mysql::time::MAX_TIME_NANOSECONDS,
             ),
-            mysql::types::DATETIME,
+            TimeType::DateTime,
             mysql::MAX_FSP,
         )?;
 
@@ -243,9 +254,7 @@ impl ScalarFunc {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
-                    _ => if res == None {
-                        res = Some(Cow::Owned(s.into_owned().into_bytes()));
-                    },
+                    _ => return Ok(None),
                 },
             }
         }
@@ -269,8 +278,14 @@ impl ScalarFunc {
             self,
             |v| v.eval_int(ctx, row),
             |l, r| {
-                let lhs_unsigned = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
-                let rhs_unsigned = mysql::has_unsigned_flag(self.children[1].get_tp().get_flag());
+                let lhs_unsigned = self.children[0]
+                    .field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED);
+                let rhs_unsigned = self.children[1]
+                    .field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED);
                 Ok(cmp_i64_with_unsigned_flag(
                     *l,
                     lhs_unsigned,
@@ -314,7 +329,10 @@ impl ScalarFunc {
             None => return Ok(Some(-1)),
             Some(v) => v,
         };
-        let tus = mysql::has_unsigned_flag(self.children[0].get_tp().get_flag());
+        let tus = self.children[0]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
 
         let mut left = 1;
         let mut right = self.children.len();
@@ -322,7 +340,10 @@ impl ScalarFunc {
             let mid = left + (right - left) / 2;
             let m = self.children[mid].eval_int(ctx, row)?.unwrap_or(target);
 
-            let mus = mysql::has_unsigned_flag(self.children[mid].get_tp().get_flag());
+            let mus = self.children[mid]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED);
 
             let cmp = match (tus, mus) {
                 (false, false) => target < m,
@@ -475,13 +496,13 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::super::EvalConfig;
     use super::*;
     use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{col_expr, datum_expr, str2dec};
+    use coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;
     use std::sync::Arc;
@@ -737,7 +758,7 @@ mod test {
         let t5 = b"2012-12-12 12:00:38.12003800000".to_owned().to_vec();
         let t6 = b"2012-12-31 12:00:39.120050".to_owned().to_vec();
         let t7 = b"2018-04-03.invalid".to_owned().to_vec();
-        let t8 = b"2012-12-31 12:00:40.invalid".to_owned().to_vec();
+        let _t8 = b"2012-12-31 12:00:40.invalid".to_owned().to_vec();
 
         let int_cases = vec![
             (vec![Datum::Null, Datum::Null], Datum::Null, Datum::Null),
@@ -875,22 +896,20 @@ mod test {
                     Datum::Bytes(t3.clone()),
                     Datum::Bytes(t4.clone()),
                 ],
-                Datum::Bytes(t3.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Null,
+                Datum::Null,
             ),
             (
                 vec![
                     Datum::Bytes(t1.clone()),
                     Datum::Bytes(t2.clone()),
                     Datum::Bytes(t3.clone()),
-                    Datum::Bytes(t4.clone()),
                     Datum::Bytes(t5.clone()),
                     Datum::Bytes(t6.clone()),
                     Datum::Bytes(t7.clone()),
-                    Datum::Bytes(t8.clone()),
                 ],
-                Datum::Bytes(t6.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Bytes(b"2018-04-03 00:00:00.000000".to_vec()),
+                Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
             ),
         ];
 
@@ -953,7 +972,8 @@ mod test {
         );
 
         {
-            let eval_config = EvalConfig::new()
+            let mut eval_config = EvalConfig::new();
+            eval_config
                 .set_in_insert_stmt(true)
                 .set_strict_sql_mode(true);
             let mut ctx = EvalContext::new(Arc::new(eval_config));

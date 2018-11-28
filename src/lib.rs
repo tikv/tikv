@@ -27,6 +27,7 @@
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
 #![recursion_limit = "200"]
+#![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
@@ -55,6 +56,7 @@ extern crate grpcio as grpc;
 extern crate hex;
 extern crate indexmap;
 extern crate kvproto;
+
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
@@ -63,6 +65,7 @@ extern crate log;
 extern crate mio;
 extern crate murmur3;
 extern crate num;
+extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
 extern crate prometheus_static_metric;
@@ -112,6 +115,12 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
+extern crate smallvec;
+
+extern crate base64;
+extern crate cop_datatype;
+extern crate panic_hook;
+extern crate safemem;
 
 #[macro_use]
 pub mod util;
