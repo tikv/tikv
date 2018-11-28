@@ -23,6 +23,14 @@ name = "tikv-ctl"
 [[bin]]
 name = "tikv-importer"
 
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+
+[[test]]
+name = "integrations"
+path = "tests/integrations/mod.rs"
+
 [[bench]]
 name = "raftstore"
 harness = false
