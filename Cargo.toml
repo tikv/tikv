@@ -93,7 +93,7 @@ base64 = "0.10"
 safemem = "0.3"
 cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
-procinfo = { git = "https://github.com/ice1000/procinfo-rs", rev = "6d97b3ebd78b7d7ce19c6bf83b4463e3a6620dd2" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "ac3841d271fe2e4e865afdce60bb6a166044f7c7" }
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }

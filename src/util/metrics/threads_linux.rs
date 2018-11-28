@@ -202,7 +202,7 @@ fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     name
 }
 
-pub fn state_to_str(state: &pid::State) -> &str {
+fn state_to_str(state: &pid::State) -> &str {
     match state {
         pid::State::Running => "R",
         pid::State::Sleeping => "S",
@@ -237,6 +237,7 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::sync;
     use std::thread;
 
@@ -252,6 +253,8 @@ mod tests {
         let h = thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
+                // Make `io::read_bytes` > 0
+                fs::read_to_string("Cargo.lock").unwrap();
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
             })
@@ -273,7 +276,6 @@ mod tests {
         tids.iter()
             .find(|t| {
                 pid::io_task(pid, **t)
-                    // since we're reading proc info, we must read > 0 data
                     .map(|io| io.read_bytes > 0)
                     .unwrap_or(false)
             })
