@@ -491,7 +491,7 @@ impl ScalarFunc {
                 .map(|(_, (i, _))| i)
                 .unwrap_or_else(|| s.len())
         } else {
-            let mut positions = VecDeque::with_capacity(len);
+            let mut positions = VecDeque::with_capacity(len.min(s.len()));
             positions.push_back(s.len());
             start = s
                 .char_indices()
@@ -578,6 +578,32 @@ impl ScalarFunc {
 
         let end = start.saturating_add(len).min(s.len());
         Ok(Some(Cow::Owned(s[start..end].to_vec())))
+    }
+
+    #[inline]
+    pub fn space<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let len = try_opt!(self.children[0].eval_int(ctx, row));
+        let unsigned = self.children[0]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
+        let len = if unsigned {
+            len as u64 as usize
+        } else if len <= 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        } else {
+            len as usize
+        };
+
+        if len > cop_datatype::MAX_BLOB_WIDTH as usize {
+            return Ok(None);
+        }
+
+        Ok(Some(Cow::Owned(vec![SPACE; len])))
     }
 }
 
@@ -699,7 +725,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
-    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use coprocessor::codec::mysql::charset::CHARSET_BIN;
     use tipb::expression::{Expr, ScalarFuncSig};
 
@@ -1924,6 +1950,12 @@ mod tests {
                 Datum::U64(u64::max_value()),
                 "文a测a试",
             ),
+            (
+                "中文a测a试",
+                Datum::I64(-2),
+                Datum::U64(u64::max_value()),
+                "a试",
+            ),
         ];
         for (s, pos, len, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
@@ -2022,6 +2054,27 @@ mod tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let got = eval_func(ScalarFuncSig::SubstringBinary3Args, &[s, pos, len]).unwrap();
             assert_eq!(got, Datum::Bytes(exp));
+        }
+    }
+
+    #[test]
+    fn test_space() {
+        let tests = vec![
+            (Datum::I64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::I64(3), Datum::Bytes(b"   ".to_vec())),
+            (Datum::I64(-1), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(u64::max_value()), Datum::Null),
+            (Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1), Datum::Null),
+            (
+                Datum::I64(i64::from(MAX_BLOB_WIDTH)),
+                Datum::Bytes(vec![super::SPACE; MAX_BLOB_WIDTH as usize]),
+            ),
+        ];
+
+        for (len, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Space, &[len]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 
