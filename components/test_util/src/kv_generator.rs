@@ -58,32 +58,32 @@ pub fn generate_deliberate_kvs(
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut ret = Vec::with_capacity(n);
     for i in 0..n {
-        let k = generator_vec_from_seed(key_len, i);
-        let v = generator_vec_from_seed(value_len, i);
+        let k = generate_vec_with_seed(key_len, i);
+        let v = generate_vec_with_seed(value_len, i);
         ret.push((k, v));
     }
     ret
 }
 
-/// generate vector.
+/// Generate vector, and will be moved after https://github.com/tikv/tikv/pull/3853
 /// # Examples
 ///
 /// Basic usage:
 ///
-/// ```
-///    let v1 = generator_vec_from_seed(3, 1);
+/// ```rust no_run
+///    let v1 = generate_vec_with_seed(3, 1);
 ///    assert_eq!("001".as_bytes().to_vec(), v1);
 ///
-///    let v005 = generator_vec_from_seed(3, 5);
+///    let v005 = generate_vec_with_seed(3, 5);
 ///    assert_eq!("005".as_bytes().to_vec(), v005);
 ///
-///    let v125 = generator_vec_from_seed(2, 125);
+///    let v125 = generate_vec_with_seed(2, 125);
 ///    assert_eq!("25".as_bytes().to_vec(), v125);
 ///
-///    let v = generator_vec_from_seed(0, 125);
+///    let v = generate_vec_with_seed(0, 125);
 ///    assert_eq!("".as_bytes().to_vec(), v);
 ///```
-fn generator_vec_from_seed(len: usize, seed: usize) -> Vec<u8> {
+fn generate_vec_with_seed(len: usize, seed: usize) -> Vec<u8> {
     use std::iter::repeat;
     let mut s = format!("{}", seed).into_bytes();
     if s.len() != len {
