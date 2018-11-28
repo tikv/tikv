@@ -25,6 +25,6 @@ target
 tmp
 /bin
 
-# Cargo-fuzz
-corpus
-artifacts
+# Honggfuzz
+hfuzz_target
+hfuzz_workspace

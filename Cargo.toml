@@ -138,6 +138,9 @@ signal = "0.6"
 [workspace]
 members = [
   "fuzz",
+  "fuzz/fuzzer-afl",
+  "fuzz/fuzzer-libfuzzer",
+  "fuzz/fuzzer-honggfuzz",
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",

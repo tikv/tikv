@@ -11,7 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate libfuzzer_sys;
-extern crate tikv;
+#![no_main]
 
-pub mod util;
+#[macro_use]
+extern crate libfuzzer_sys;
+extern crate fuzz_targets;
+
+fuzz_target!(|data: &[u8]| {
+    fuzz_targets::run_fuzz_targets(option_env!("TIKV_FUZZ_TARGETS").unwrap_or_default(), data);
+});
