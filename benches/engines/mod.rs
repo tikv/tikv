@@ -97,7 +97,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
         },
         |(test_kvs, ctx)| {
             for (key, value) in test_kvs {
-                black_box(engine.put(ctx, key, value).unwrap());
+                black_box(engine.put(ctx, key, value).is_ok());
             }
         },
     );
