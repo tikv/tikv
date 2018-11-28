@@ -21,10 +21,12 @@ use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
 
 struct State {
+    // If the receiver can't get any messages temporarily in `poll` context, it will put its
+    // current task here.
     recv_task: AtomicOption<Task>,
     notify_size: usize,
     // How many messages are sent without notify.
-    old_pending: AtomicUsize,
+    pending: AtomicUsize,
     notifier_registered: AtomicBool,
 }
 
@@ -33,14 +35,14 @@ impl State {
         State {
             recv_task: AtomicOption::new(),
             notify_size,
-            old_pending: AtomicUsize::new(0),
+            pending: AtomicUsize::new(0),
             notifier_registered: AtomicBool::new(false),
         }
     }
 
     #[inline]
     fn try_notify_post_send(&self) {
-        let old_pending = self.old_pending.fetch_add(1, Ordering::AcqRel);
+        let old_pending = self.pending.fetch_add(1, Ordering::AcqRel);
         if old_pending >= self.notify_size - 1 {
             self.notify();
         }
@@ -50,7 +52,7 @@ impl State {
     fn notify(&self) {
         let task = self.recv_task.take(Ordering::Release);
         if let Some(t) = task {
-            self.old_pending.store(0, Ordering::Release);
+            self.pending.store(0, Ordering::Release);
             t.notify();
         }
     }
@@ -158,7 +160,7 @@ impl<T> Receiver<T> {
 /// Create a unbounded channel with a given `notify_size`, which means if there are more pending
 /// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
 ///
-/// ### Panics
+/// # Panics
 /// if `notify_size` equals to 0.
 #[inline]
 pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
@@ -177,7 +179,7 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
 /// Create a bounded channel with a given `notify_size`, which means if there are more pending
 /// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
 ///
-/// ### Panics
+/// # Panics
 /// if `notify_size` equals to 0.
 #[inline]
 pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
