@@ -19,20 +19,21 @@ extern crate tikv;
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use std::fmt;
-use test_util::generate_random_kvs;
+use test_util::generate_deliberate_kvs;
 use tikv::storage::engine::{
     BTreeEngine, Engine, Modify, RocksEngine, Snapshot, TestEngineBuilder,
 };
-use tikv::storage::{Key, CF_DEFAULT};
+use tikv::storage::{Key, Value, CF_DEFAULT};
 
 const DEFAULT_KEY_LENGTH: usize = 64;
-const DEFAULT_ITERATIONS: usize = 1000;
+const DEFAULT_GET_KEYS_COUNT: usize = 1;
+const DEFAULT_PUT_KVS_COUNT: usize = 1;
 
-trait EngineFactory<E: Engine>: Clone + fmt::Debug + 'static {
+trait EngineFactory<E: Engine>: Clone + Copy + fmt::Debug + 'static {
     fn build(&self) -> E;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct BTreeEngineFactory {}
 
 impl EngineFactory<BTreeEngine> for BTreeEngineFactory {
@@ -47,7 +48,7 @@ impl fmt::Debug for BTreeEngineFactory {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct RocksEngineFactory {}
 
 impl EngineFactory<RocksEngine> for RocksEngineFactory {
@@ -63,78 +64,16 @@ impl fmt::Debug for RocksEngineFactory {
 }
 
 fn fill_engine_with<E: Engine>(engine: &E, expect_engine_keys_count: usize, value_length: usize) {
-    let mut modifies: Vec<Modify> = vec![];
     if expect_engine_keys_count > 0 {
-        let kvs = generate_random_kvs(expect_engine_keys_count, DEFAULT_KEY_LENGTH, value_length);
+        let mut modifies: Vec<Modify> = vec![];
+        let kvs =
+            generate_deliberate_kvs(expect_engine_keys_count, DEFAULT_KEY_LENGTH, value_length);
         for (key, value) in kvs {
             modifies.push(Modify::Put(CF_DEFAULT, Key::from_raw(&key), value))
         }
+        let ctx = Context::new();
+        let _ = engine.async_write(&ctx, modifies, Box::new(move |(_, _)| {}));
     }
-    let ctx = Context::new();
-    let _ = engine.async_write(&ctx, modifies, Box::new(move |(_, _)| {}));
-}
-
-/// Measuring the performance of Engine::snapshot()
-fn engine_snapshot_bench<E: Engine>(
-    bencher: &mut Bencher,
-    engine: &E,
-    engine_keys_count: usize,
-    value_length: usize,
-) {
-    fill_engine_with(engine, engine_keys_count, value_length);
-    let ctx = Context::new();
-
-    bencher.iter(|| engine.snapshot(&ctx).is_ok())
-}
-
-/// Measuring the performance of Snapshot::get(), skipping the Engine::snapshot();
-fn engine_get_bench<E: Engine>(
-    bencher: &mut Bencher,
-    engine: &E,
-    iterations: usize,
-    engine_keys_count: usize,
-    value_length: usize,
-) {
-    fill_engine_with(engine, engine_keys_count, value_length);
-    let ctx = Context::new();
-    let test_kvs: Vec<Key> = generate_random_kvs(iterations, DEFAULT_KEY_LENGTH, value_length)
-        .iter()
-        .map(|(key, _)| Key::from_raw(&key))
-        .collect();
-
-    bencher.iter_with_setup(
-        || engine.snapshot(&ctx).unwrap(),
-        |snap| {
-            for key in &test_kvs {
-                black_box(snap.get(key).is_ok());
-            }
-        },
-    );
-}
-
-/// Measure the performance of Engine::put()
-fn engine_put_bench<E: Engine>(
-    bencher: &mut Bencher,
-    engine: &E,
-    write_count: usize,
-    value_length: usize,
-) {
-    let ctx = Context::new();
-    bencher.iter_with_setup(
-        || {
-            let test_kvs: Vec<(Key, Vec<u8>)> =
-                generate_random_kvs(write_count, DEFAULT_KEY_LENGTH, value_length)
-                    .iter()
-                    .map(|(key, value)| (Key::from_raw(&key), value.clone()))
-                    .collect();
-            test_kvs
-        },
-        |test_kvs| {
-            for (key, value) in test_kvs {
-                black_box(engine.put(black_box(&ctx), key, value).is_ok());
-            }
-        },
-    );
 }
 
 #[derive(Debug)]
@@ -146,7 +85,22 @@ struct PutConfig<F> {
 
 fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &PutConfig<F>) {
     let engine = config.factory.build();
-    engine_put_bench(bencher, &engine, config.put_count, config.value_length)
+    let ctx = Context::new();
+    bencher.iter_with_setup(
+        || {
+            let test_kvs: Vec<(Key, Value)> =
+                generate_deliberate_kvs(config.put_count, DEFAULT_KEY_LENGTH, config.value_length)
+                    .iter()
+                    .map(|(key, value)| (Key::from_raw(&key), value.clone()))
+                    .collect();
+            (test_kvs, &ctx)
+        },
+        |(test_kvs, ctx)| {
+            for (key, value) in test_kvs {
+                black_box(engine.put(ctx, key, value).unwrap());
+            }
+        },
+    );
 }
 
 #[derive(Debug)]
@@ -161,61 +115,73 @@ fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
     config: &SnapshotConfig<F>,
 ) {
     let engine = config.factory.build();
-    engine_snapshot_bench(
-        bencher,
-        &engine,
-        config.engine_keys_count,
-        config.value_length,
-    )
+    let ctx = Context::new();
+    fill_engine_with(&engine, config.engine_keys_count, config.engine_keys_count);
+    bencher.iter(|| black_box(&engine).snapshot(black_box(&ctx)).unwrap());
 }
 
 #[derive(Debug)]
 struct GetConfig<F> {
     factory: F,
-    iterations: usize,
+    get_count: usize,
     value_length: usize,
     engine_keys_count: usize,
 }
 
 fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &GetConfig<F>) {
     let engine = config.factory.build();
-    engine_get_bench(
-        bencher,
-        &engine,
-        config.iterations,
-        config.engine_keys_count,
-        config.value_length,
-    )
+    let ctx = Context::new();
+    fill_engine_with(&engine, config.engine_keys_count, config.value_length);
+    let test_kvs: Vec<Key> =
+        generate_deliberate_kvs(config.get_count, DEFAULT_KEY_LENGTH, config.value_length)
+            .iter()
+            .map(|(key, _)| Key::from_raw(&key))
+            .collect();
+
+    bencher.iter_with_setup(
+        || {
+            let snap = engine.snapshot(&ctx).unwrap();
+            (snap, &test_kvs)
+        },
+        |(snap, test_kvs)| {
+            for key in test_kvs {
+                black_box(snap.get(key).unwrap());
+            }
+        },
+    );
 }
 
 fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) {
-    let value_lengths = vec![128, 1024];
-    let engine_keys_counts = vec![0, 1000, 10_000];
-    let engine_put_keys_counts = vec![1000];
+    let value_lengths = vec![64];
+    let engine_entries_counts = vec![0];
+    let engine_put_kv_counts = vec![DEFAULT_PUT_KVS_COUNT];
+    let engine_get_key_counts = vec![DEFAULT_GET_KEYS_COUNT];
 
     let mut get_configs = vec![];
     let mut put_configs = vec![];
     let mut snapshot_configs = vec![];
 
     for &value_length in &value_lengths {
-        for &engine_keys_count in &engine_keys_counts {
-            get_configs.push(GetConfig {
-                factory: factory.clone(),
-                iterations: DEFAULT_ITERATIONS,
-                value_length,
-                engine_keys_count,
-            });
+        for &engine_keys_count in &engine_entries_counts {
+            for &get_count in &engine_get_key_counts {
+                get_configs.push(GetConfig {
+                    factory,
+                    get_count,
+                    value_length,
+                    engine_keys_count,
+                });
+            }
             snapshot_configs.push(SnapshotConfig {
-                factory: factory.clone(),
+                factory,
                 value_length,
                 engine_keys_count,
             });
         }
 
-        for &engine_put_keys_count in &engine_put_keys_counts {
+        for &put_count in &engine_put_kv_counts {
             put_configs.push(PutConfig {
-                factory: factory.clone(),
-                put_count: engine_put_keys_count,
+                factory,
+                put_count,
                 value_length,
             });
         }
@@ -231,7 +197,7 @@ fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) 
 }
 
 fn main() {
-    let mut criterion = Criterion::default().sample_size(10);
+    let mut criterion = Criterion::default();
     bench_engines(&mut criterion, RocksEngineFactory {});
     bench_engines(&mut criterion, BTreeEngineFactory {});
     criterion.final_summary();

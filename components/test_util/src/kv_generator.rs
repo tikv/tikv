@@ -44,8 +44,57 @@ impl Iterator for KvGenerator {
     }
 }
 
-/// Generate n pair of kvs.
+/// Generate n random pair of kvs.
 pub fn generate_random_kvs(n: usize, key_len: usize, value_len: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let kv_generator = KvGenerator::new(key_len, value_len);
     kv_generator.take(n).collect()
+}
+
+/// Generate n deliberate pair of kvs.
+pub fn generate_deliberate_kvs(
+    n: usize,
+    key_len: usize,
+    value_len: usize,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut ret = Vec::with_capacity(n);
+    for i in 0..n {
+        let k = generator_vec_from_seed(key_len, i);
+        let v = generator_vec_from_seed(value_len, i);
+        ret.push((k, v));
+    }
+    ret
+}
+
+/// generate vector.
+/// # Examples
+///
+/// Basic usage:
+///
+/// ```
+///    let v1 = generator_vec_from_seed(3, 1);
+///    assert_eq!("001".as_bytes().to_vec(), v1);
+///
+///    let v005 = generator_vec_from_seed(3, 5);
+///    assert_eq!("005".as_bytes().to_vec(), v005);
+///
+///    let v125 = generator_vec_from_seed(2, 125);
+///    assert_eq!("25".as_bytes().to_vec(), v125);
+///
+///    let v = generator_vec_from_seed(0, 125);
+///    assert_eq!("".as_bytes().to_vec(), v);
+///```
+fn generator_vec_from_seed(len: usize, seed: usize) -> Vec<u8> {
+    use std::iter::repeat;
+    let mut s = format!("{}", seed).into_bytes();
+    if s.len() != len {
+        if s.len() < len {
+            let mut zeros: Vec<u8> = repeat('0' as u8).take(len - s.len()).collect();
+            zeros.append(&mut s);
+            s = zeros;
+        } else {
+            let ri = s.len() - len;
+            s = s.split_off(ri);
+        }
+    }
+    s
 }
