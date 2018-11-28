@@ -268,7 +268,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Exp
             | ScalarFuncSig::Trim1Arg
             | ScalarFuncSig::FromBase64
-            | ScalarFuncSig::ToBase64 => (1, 1),
+            | ScalarFuncSig::ToBase64
+            | ScalarFuncSig::Space => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -433,7 +434,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
-            | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::StringAnyValue
             | ScalarFuncSig::StringDurationTimeDiff
@@ -945,6 +945,7 @@ dispatch_call! {
         Substring3Args => substring_3_args,
         SubstringBinary2Args => substring_binary_2_args,
         SubstringBinary3Args => substring_binary_3_args,
+        Space => space,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1254,6 +1255,7 @@ mod tests {
                     ScalarFuncSig::Trim1Arg,
                     ScalarFuncSig::FromBase64,
                     ScalarFuncSig::ToBase64,
+                    ScalarFuncSig::Space,
                 ],
                 1,
                 1,
@@ -1462,7 +1464,6 @@ mod tests {
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
-            ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
             ScalarFuncSig::StringAnyValue,
             ScalarFuncSig::StringDurationTimeDiff,
