@@ -19,9 +19,7 @@ git = "https://github.com/pingcap/kvproto.git"
 branch = "super-batch-streaming"
 
 [dependencies.rocksdb]
-# git = "https://github.com/pingcap/rust-rocksdb.git"
-git = "https://github.com/hicqu/rust-rocksdb.git"
-branch = "ingestion-for-test"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
