@@ -12,19 +12,19 @@
 // limitations under the License.
 
 #[macro_export]
-macro_rules! with_retries {
+macro_rules! retry {
     ($expr:expr) => {
-        with_retries!($expr, 10)
+        retry!($expr, 10)
     };
     ($expr:expr, $count:expr) => {
-        with_retries!($expr, $count, 100)
+        retry!($expr, $count, 100)
     };
     ($expr:expr, $count:expr, $interval:expr) => {{
         use std::thread;
         let mut res = $expr;
         if !res.is_ok() {
-            thread::sleep(Duration::from_millis($interval));
             for _ in 0..$count {
+                thread::sleep(Duration::from_millis($interval));
                 res = $expr;
                 if res.is_ok() {
                     break;

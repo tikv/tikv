@@ -72,19 +72,19 @@ fn test_kv_service() {
 
     // Write an engine before it is opened.
     // Only send the write head here to avoid other gRPC errors.
-    let resp = with_retries!(send_write_head(&client, &head)).unwrap();
+    let resp = retry!(send_write_head(&client, &head)).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
     // Close an engine before it it opened.
-    let resp = with_retries!(client.close_engine(&close)).unwrap();
+    let resp = retry!(client.close_engine(&close)).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
-    with_retries!(client.open_engine(&open)).unwrap();
-    let resp = with_retries!(send_write(&client, &head, &batch)).unwrap();
+    retry!(client.open_engine(&open)).unwrap();
+    let resp = retry!(send_write(&client, &head, &batch)).unwrap();
     assert!(!resp.has_error());
-    let resp = with_retries!(send_write(&client, &head, &batch)).unwrap();
+    let resp = retry!(send_write(&client, &head, &batch)).unwrap();
     assert!(!resp.has_error());
-    let resp = with_retries!(client.close_engine(&close)).unwrap();
+    let resp = retry!(client.close_engine(&close)).unwrap();
     assert!(!resp.has_error());
 
     server.shutdown();
