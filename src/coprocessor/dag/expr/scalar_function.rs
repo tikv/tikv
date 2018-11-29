@@ -270,6 +270,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim1Arg
             | ScalarFuncSig::FromBase64
             | ScalarFuncSig::ToBase64
+            | ScalarFuncSig::WeekWithoutMode
             | ScalarFuncSig::Space => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -500,7 +501,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Version
             | ScalarFuncSig::WeekDay
             | ScalarFuncSig::WeekOfYear
-            | ScalarFuncSig::WeekWithoutMode
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
         };
@@ -741,6 +741,7 @@ dispatch_call! {
         DayOfWeek => day_of_week,
         DayOfYear => day_of_year,
         WeekWithMode => week_with_mode,
+        WeekWithoutMode => week_without_mode,
         Year => year,
 
         LogicalAnd => logical_and,
@@ -1530,7 +1531,6 @@ mod tests {
             ScalarFuncSig::Version,
             ScalarFuncSig::WeekDay,
             ScalarFuncSig::WeekOfYear,
-            ScalarFuncSig::WeekWithoutMode,
             ScalarFuncSig::YearWeekWithMode,
             ScalarFuncSig::YearWeekWithoutMode,
         ];

@@ -207,6 +207,16 @@ impl ScalarFunc {
         let week = t.get_time().week(WeekMode::from_bits_truncate(mode as u32));
         Ok(Some(i64::from(week)))
     }
+
+    #[inline]
+    pub fn week_without_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.is_zero() {
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
+        }
+        let week = t.get_time().week(WeekMode::from_bits_truncate(0u32));
+        Ok(Some(i64::from(week)))
+    }
 }
 
 #[cfg(test)]
@@ -679,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn test_week_mode() {
+    fn test_week_with_mode() {
         let cases = vec![
             ("2008-02-20 00:00:00", 1, 8i64),
             ("2008-12-31 00:00:00", 1, 53i64),
@@ -720,5 +730,21 @@ mod tests {
             Datum::Null,
             Datum::Null,
         );
+    }
+
+    #[test]
+    fn test_week_without_mode() {
+        let cases = vec![("2000-01-01", 0i64)];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::WeekWithoutMode,
+                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::WeekWithoutMode, Datum::Null);
     }
 }
