@@ -111,6 +111,8 @@ impl ScalarFunc {
         match e.read_to_end(&mut vec) {
             Ok(len) => {
                 let mut cap = 4 + len;
+                // according to MySQL doc: If the string ends with space,
+                // an extra . character is added to avoid problems with endspace trimming
                 if vec[len - 1] == 32 {
                     vec.push(b'.');
                     cap += 1;
@@ -143,6 +145,10 @@ impl ScalarFunc {
         let len = LittleEndian::read_u32(&input[0..4]) as usize;
         let mut decoder = ZlibDecoder::new(&input[4..]);
         let mut vec = Vec::with_capacity(len);
+        // if the length of uncompressed string is less than the length we read from the first
+        //     four bytes, return null and generate a length corrupted warning.
+        // if the length of uncompressed string is zero or uncompress fail, return null and generate
+        //     a data corrupted warning
         match decoder.read_to_end(&mut vec) {
             Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => Ok(Some(Cow::Owned(vec))),
             Ok(decoded_len) if len < decoded_len => {
