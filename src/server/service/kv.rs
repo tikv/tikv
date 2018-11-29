@@ -584,9 +584,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
 
         let end_key = if req.get_end_key().is_empty() {
-            Some(req.take_end_key())
-        } else {
             None
+        } else {
+            Some(req.take_end_key())
         };
 
         let future = self
