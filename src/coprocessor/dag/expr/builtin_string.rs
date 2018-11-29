@@ -491,7 +491,7 @@ impl ScalarFunc {
                 .map(|(_, (i, _))| i)
                 .unwrap_or_else(|| s.len())
         } else {
-            let mut positions = VecDeque::with_capacity(len);
+            let mut positions = VecDeque::with_capacity(len.min(s.len()));
             positions.push_back(s.len());
             start = s
                 .char_indices()
@@ -516,6 +516,94 @@ impl ScalarFunc {
         } else {
             return Ok(Some(Cow::Borrowed(b"")));
         }
+    }
+
+    #[inline]
+    pub fn substring_binary_2_args<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        self.substring_binary(ctx, row, false)
+    }
+
+    #[inline]
+    pub fn substring_binary_3_args<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        self.substring_binary(ctx, row, true)
+    }
+
+    #[inline]
+    fn substring_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+        with_len: bool,
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        let (len, len_positive) = if with_len {
+            let len = try_opt!(self.children[2].eval_int(ctx, row));
+            i64_to_usize(
+                len,
+                self.children[2]
+                    .field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED),
+            )
+        } else {
+            (s.len(), true)
+        };
+
+        if pos == 0 || len == 0 || !len_positive {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+
+        let (pos, positive_search) = i64_to_usize(
+            pos,
+            self.children[1]
+                .field_type()
+                .flag()
+                .contains(FieldTypeFlag::UNSIGNED),
+        );
+
+        let start = if positive_search {
+            (pos - 1).min(s.len())
+        } else {
+            s.len().checked_sub(pos).unwrap_or_else(|| s.len())
+        };
+
+        let end = start.saturating_add(len).min(s.len());
+        Ok(Some(Cow::Owned(s[start..end].to_vec())))
+    }
+
+    #[inline]
+    pub fn space<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let len = try_opt!(self.children[0].eval_int(ctx, row));
+        let unsigned = self.children[0]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
+        let len = if unsigned {
+            len as u64 as usize
+        } else if len <= 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        } else {
+            len as usize
+        };
+
+        if len > cop_datatype::MAX_BLOB_WIDTH as usize {
+            return Ok(None);
+        }
+
+        Ok(Some(Cow::Owned(vec![SPACE; len])))
     }
 }
 
@@ -637,7 +725,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
-    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use coprocessor::codec::mysql::charset::CHARSET_BIN;
     use tipb::expression::{Expr, ScalarFuncSig};
 
@@ -1862,6 +1950,12 @@ mod tests {
                 Datum::U64(u64::max_value()),
                 "文a测a试",
             ),
+            (
+                "中文a测a试",
+                Datum::I64(-2),
+                Datum::U64(u64::max_value()),
+                "a试",
+            ),
         ];
         for (s, pos, len, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
@@ -1869,4 +1963,119 @@ mod tests {
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
     }
+
+    #[test]
+    fn test_substring_binary_2_args() {
+        let tests = vec![
+            ("中文a测试bb", 1, "中文a测试bb"),
+            ("中文a测试", -3, "试"),
+            ("\x61\x76\x5e\x38\x2f\x35", -1, "\x35"),
+            ("\x61\x76\x5e\x38\x2f\x35", 2, "\x76\x5e\x38\x2f\x35"),
+            ("Quadratically", 5, "ratically"),
+            ("Sakila", 1, "Sakila"),
+            ("Sakila", -3, "ila"),
+            ("Sakila", 0, ""),
+            ("Sakila", 100, ""),
+            ("Sakila", -100, ""),
+            ("Sakila", i64::max_value(), ""),
+            ("Sakila", i64::min_value(), ""),
+            ("", 1, ""),
+            ("", -1, ""),
+        ];
+        for (s, pos, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pos = Datum::I64(pos);
+            let got = eval_func(ScalarFuncSig::SubstringBinary2Args, &[s, pos]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
+        }
+
+        // multibytes & unsigned position test
+        let corner_case_tests = vec![
+            ("中文a测试", Datum::I64(-1), vec![149]),
+            ("Sakila", Datum::U64(u64::max_value()), b"".to_vec()),
+        ];
+        for (s, pos, exp) in corner_case_tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::SubstringBinary2Args, &[s, pos]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp));
+        }
+    }
+
+    #[test]
+    fn test_substring_binary_3_args() {
+        let tests = vec![
+            ("Quadratically", 5, 6, "ratica"),
+            ("Sakila", -5, 3, "aki"),
+            ("Sakila", 2, 0, ""),
+            ("Sakila", 2, -1, ""),
+            ("Sakila", 2, 100, "akila"),
+            ("Sakila", 100, 5, ""),
+            ("Sakila", -100, 5, ""),
+            ("中文a测a试", 4, 3, "文"),
+            ("中文a测a试", 4, 4, "文a"),
+            ("中文a测a试", -3, 3, "试"),
+            ("\x61\x76\x5e\x38\x2f\x35", 2, 2, "\x76\x5e"),
+            ("\x61\x76\x5e\x38\x2f\x35", 4, 100, "\x38\x2f\x35"),
+            ("\x61\x76\x5e\x38\x2f\x35", -1, 2, "\x35"),
+            ("\x61\x76\x5e\x38\x2f\x35", -2, 2, "\x2f\x35"),
+            ("", 1, 1, ""),
+            ("", -1, 1, ""),
+        ];
+        for (s, pos, len, exp) in tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pos = Datum::I64(pos);
+            let len = Datum::I64(len);
+            let got = eval_func(ScalarFuncSig::SubstringBinary3Args, &[s, pos, len]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
+        }
+
+        // multibytes & unsigned position test
+        let corner_case_tests = vec![
+            (
+                "中文a测试",
+                Datum::I64(-2),
+                Datum::I64(2),
+                vec![175, 149],
+            ),
+            (
+                "Sakila",
+                Datum::U64(u64::max_value()),
+                Datum::I64(2),
+                b"".to_vec(),
+            ),
+            (
+                "Sakila",
+                Datum::I64(2),
+                Datum::U64(u64::max_value()),
+                b"akila".to_vec(),
+            ),
+        ];
+        for (s, pos, len, exp) in corner_case_tests {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::SubstringBinary3Args, &[s, pos, len]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp));
+        }
+    }
+
+    #[test]
+    fn test_space() {
+        let tests = vec![
+            (Datum::I64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::I64(3), Datum::Bytes(b"   ".to_vec())),
+            (Datum::I64(-1), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(u64::max_value()), Datum::Null),
+            (Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1), Datum::Null),
+            (
+                Datum::I64(i64::from(MAX_BLOB_WIDTH)),
+                Datum::Bytes(vec![super::SPACE; MAX_BLOB_WIDTH as usize]),
+            ),
+        ];
+
+        for (len, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Space, &[len]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
 }

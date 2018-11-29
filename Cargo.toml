@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.1.0-rc.2"
+version = "3.0.0-alpha"
 keywords = ["KV", "distributed-systems", "raft"]
 publish = false
 
@@ -22,6 +22,14 @@ name = "tikv-ctl"
 
 [[bin]]
 name = "tikv-importer"
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+
+[[test]]
+name = "integrations"
+path = "tests/integrations/mod.rs"
 
 [[bench]]
 name = "raftstore"

@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod extension;
+pub mod extension;
 mod tz;
-mod weekmode;
+pub mod weekmode;
 
 use std::cmp::{min, Ordering};
 use std::convert::{TryFrom, TryInto};
@@ -33,7 +33,7 @@ use util::codec::number::{self, NumberEncoder};
 use util::codec::BytesSlice;
 
 pub use self::extension::*;
-use self::weekmode::WeekMode;
+pub use self::weekmode::WeekMode;
 
 pub use self::tz::Tz;
 
