@@ -15,6 +15,8 @@ use super::{EvalContext, Result, ScalarFunc};
 use chrono::offset::TimeZone;
 use chrono::Datelike;
 use coprocessor::codec::error::Error;
+use coprocessor::codec::mysql::time::extension::DateTimeExtension;
+use coprocessor::codec::mysql::time::weekmode::WeekMode;
 use coprocessor::codec::mysql::{Time, TimeType};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
@@ -193,6 +195,17 @@ impl ScalarFunc {
                 .unwrap(),
         );
         Ok(Some(Cow::Owned(res)))
+    }
+
+    #[inline]
+    pub fn week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.is_zero() {
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
+        }
+        let mode = try_opt!(self.children[1].eval_int(ctx, row));
+        let week = t.get_time().week(WeekMode::from_bits_truncate(mode as u32));
+        Ok(Some(i64::from(week)))
     }
 }
 
@@ -662,6 +675,33 @@ mod tests {
             &mut ctx,
             ScalarFuncSig::Year,
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+        );
+    }
+
+    #[test]
+    fn test_week_mode() {
+        let cases = vec![
+            ("2000-01-01", 0, 0i64),
+            ("2008-02-20", 0, 7i64),
+            ("2008-02-20 00:00:00", 1, 8i64),
+            ("2008-12-31 00:00:00", 1, 53i64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::WeekWithMode,
+                Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()),
+                Datum::I64(arg2),
+                Datum::I64(exp),
+            );
+        }
+        // test NULL case
+        test_err_case_two_arg(
+            &mut ctx,
+            ScalarFuncSig::WeekWithMode,
+            Datum::Null,
+            Datum::Null,
         );
     }
 }
