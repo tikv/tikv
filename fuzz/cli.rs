@@ -43,7 +43,6 @@ lazy_static! {
         let meta = cargo_metadata::metadata(None).unwrap();
         PathBuf::from(meta.workspace_root)
     };
-
     static ref FUZZ_ROOT: PathBuf = WORKSPACE_ROOT.join("fuzz");
 }
 
@@ -57,7 +56,7 @@ enum Cli {
         /// Filter fuzz test to run. Empty means no filter.
         #[structopt(default_value = "")]
         filter: String,
-    }
+    },
 }
 
 arg_enum! {
@@ -71,7 +70,7 @@ arg_enum! {
 
 impl Fuzzer {
     /// Get Cargo package name of corresponding fuzzers.
-    fn package_name(&self) -> &'static str {
+    fn package_name(self) -> &'static str {
         match self {
             Fuzzer::Afl => "fuzzer-afl",
             Fuzzer::Honggfuzz => "fuzzer-honggfuzz",
@@ -80,7 +79,7 @@ impl Fuzzer {
     }
 
     /// Get Cargo directory of corresponding fuzzers.
-    fn directory(&self) -> PathBuf {
+    fn directory(self) -> PathBuf {
         FUZZ_ROOT.join(self.package_name())
     }
 }
@@ -105,7 +104,7 @@ fn run(fuzzer: Fuzzer, filter: &str) -> Result<(), Error> {
 }
 
 /// Run one target fuzz test using AFL
-fn run_afl(_filter: &str) -> Result<(), Error>  {
+fn run_afl(_filter: &str) -> Result<(), Error> {
     // AFL requires initial inputs, so leave it to future.
     // General process:
     // 1. cargo afl build (in fuzzer-afl directory)
@@ -118,11 +117,7 @@ fn run_honggfuzz(filter: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Honggfuzz;
 
     let fuzzer_bin = Command::new("cargo")
-        .args(&[
-            "hfuzz",
-            "run",
-            fuzzer.package_name()
-        ])
+        .args(&["hfuzz", "run", fuzzer.package_name()])
         .env("TIKV_FUZZ_TARGETS", filter)
         .current_dir(fuzzer.directory())
         .spawn()
@@ -131,14 +126,18 @@ fn run_honggfuzz(filter: &str) -> Result<(), Error> {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        Err(format_err!("{} exited with code {:?}", fuzzer, fuzzer_bin.code()))?;
+        Err(format_err!(
+            "{} exited with code {:?}",
+            fuzzer,
+            fuzzer_bin.code()
+        ))?;
     }
 
     Ok(())
 }
 
 /// Run one target fuzz test using Libfuzzer
-fn run_libfuzzer(filter: &str) -> Result<(), Error>  {
+fn run_libfuzzer(filter: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Libfuzzer;
 
     #[cfg(target_os = "macos")]
@@ -183,7 +182,11 @@ fn run_libfuzzer(filter: &str) -> Result<(), Error>  {
         .context(format!("Failed to wait {}", fuzzer))?;
 
     if !fuzzer_bin.success() {
-        Err(format_err!("{} exited with code {:?}", fuzzer, fuzzer_bin.code()))?;
+        Err(format_err!(
+            "{} exited with code {:?}",
+            fuzzer,
+            fuzzer_bin.code()
+        ))?;
     }
 
     Ok(())

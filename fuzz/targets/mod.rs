@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate failure;
 extern crate byteorder;
+extern crate failure;
 extern crate tikv;
 
 #[macro_use]
 mod framework;
 mod util;
 
-use std::io::Cursor;
-use failure::Error;
 use self::util::ReadLiteralExt;
+use failure::Error;
+use std::io::Cursor;
 
 fn fuzz_codec_bytes_encode_bytes(data: &[u8]) -> Result<(), Error> {
     let _ = tikv::util::codec::bytes::encode_bytes(data);

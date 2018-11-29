@@ -18,7 +18,10 @@ extern crate fuzz_targets;
 fn main() {
     loop {
         fuzz!(|data: &[u8]| {
-            fuzz_targets::run_fuzz_targets(option_env!("TIKV_FUZZ_TARGETS").unwrap_or_default(), data);
+            fuzz_targets::run_fuzz_targets(
+                option_env!("TIKV_FUZZ_TARGETS").unwrap_or_default(),
+                data,
+            );
         });
     }
 }
