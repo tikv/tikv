@@ -191,6 +191,7 @@ fn test_serde_custom_tikv_config() {
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
+            optimize_filters_for_hits: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
@@ -229,6 +230,7 @@ fn test_serde_custom_tikv_config() {
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
@@ -267,6 +269,7 @@ fn test_serde_custom_tikv_config() {
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
@@ -305,6 +308,7 @@ fn test_serde_custom_tikv_config() {
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
+            optimize_filters_for_hits: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
@@ -343,6 +347,7 @@ fn test_serde_custom_tikv_config() {
         wal_ttl_seconds: 1,
         wal_size_limit: ReadableSize::kb(12),
         max_total_wal_size: ReadableSize::gb(1),
+        max_background_jobs: 12,
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
@@ -367,6 +372,7 @@ fn test_serde_custom_tikv_config() {
             cache_index_and_filter_blocks: false,
             pin_l0_filter_and_index_blocks: false,
             use_bloom_filter: false,
+            optimize_filters_for_hits: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 123,
             block_based_bloom_filter: true,
@@ -433,7 +439,7 @@ fn test_serde_custom_tikv_config() {
         max_open_engines: 2,
     };
 
-    let custom = read_file_in_project_dir("tests/config/test-custom.toml");
+    let custom = read_file_in_project_dir("tests/integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();
     assert_eq!(value, load);
     let dump = toml::to_string_pretty(&load).unwrap();
@@ -445,7 +451,7 @@ fn test_serde_default_config() {
     let cfg: TiKvConfig = toml::from_str("").unwrap();
     assert_eq!(cfg, TiKvConfig::default());
 
-    let content = read_file_in_project_dir("tests/config/test-default.toml");
+    let content = read_file_in_project_dir("tests/integrations/config/test-default.toml");
     let cfg: TiKvConfig = toml::from_str(&content).unwrap();
     assert_eq!(cfg, TiKvConfig::default());
 }
