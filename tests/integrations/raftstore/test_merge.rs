@@ -323,8 +323,8 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
             .msg_type(MessageType::MsgAppend),
     ));
     cluster.must_split(&right, b"k3");
-    
-    // left region and right region on store 3 fall behind 
+
+    // left region and right region on store 3 fall behind
     // so after split, the new generated region is not on store 3 now
     let right1 = pd_client.get_region(b"k2").unwrap();
     let right2 = pd_client.get_region(b"k3").unwrap();
