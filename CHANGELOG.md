@@ -30,7 +30,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
     - Upgrade RocksDB to v5.15 to fix the possible issue of snapshot file corruption
     - Improve `IngestExternalFile` to avoid the issue that flush could block write
 
-+ Tikv-ctl
++ tikv-ctl
     - [Add the `ldb` command to diagnose RocksDB related issues](https://github.com/tikv/tikv/blob/master/docs/tools/tikv-control.md#ldb-command)
     - The `compact` command supports specifying whether to compact data in the bottommost level 
 
