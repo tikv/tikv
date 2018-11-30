@@ -120,6 +120,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateFormatSig
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
@@ -268,7 +269,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Exp
             | ScalarFuncSig::Trim1Arg
             | ScalarFuncSig::FromBase64
-            | ScalarFuncSig::ToBase64 => (1, 1),
+            | ScalarFuncSig::ToBase64
+            | ScalarFuncSig::Space => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -433,7 +435,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
-            | ScalarFuncSig::Space
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::StringAnyValue
             | ScalarFuncSig::StringDurationTimeDiff
@@ -499,7 +500,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Version
             | ScalarFuncSig::WeekDay
             | ScalarFuncSig::WeekOfYear
-            | ScalarFuncSig::WeekWithMode
             | ScalarFuncSig::WeekWithoutMode
             | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
@@ -740,6 +740,7 @@ dispatch_call! {
         DayOfMonth => day_of_month,
         DayOfWeek => day_of_week,
         DayOfYear => day_of_year,
+        WeekWithMode => week_with_mode,
         Year => year,
 
         LogicalAnd => logical_and,
@@ -945,6 +946,7 @@ dispatch_call! {
         Substring3Args => substring_3_args,
         SubstringBinary2Args => substring_binary_2_args,
         SubstringBinary3Args => substring_binary_3_args,
+        Space => space,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1254,6 +1256,7 @@ mod tests {
                     ScalarFuncSig::Trim1Arg,
                     ScalarFuncSig::FromBase64,
                     ScalarFuncSig::ToBase64,
+                    ScalarFuncSig::Space,
                 ],
                 1,
                 1,
@@ -1462,7 +1465,6 @@ mod tests {
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
-            ScalarFuncSig::Space,
             ScalarFuncSig::Strcmp,
             ScalarFuncSig::StringAnyValue,
             ScalarFuncSig::StringDurationTimeDiff,
@@ -1528,7 +1530,6 @@ mod tests {
             ScalarFuncSig::Version,
             ScalarFuncSig::WeekDay,
             ScalarFuncSig::WeekOfYear,
-            ScalarFuncSig::WeekWithMode,
             ScalarFuncSig::WeekWithoutMode,
             ScalarFuncSig::YearWeekWithMode,
             ScalarFuncSig::YearWeekWithoutMode,
