@@ -1228,10 +1228,10 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
         if start < enc_start_key(region) {
             return false;
         }
-        if end <= enc_end_key(region) {
+        start = enc_end_key(region);
+        if start >= end {
             return true;
         }
-        start = enc_end_key(region);
     }
     false
 }
