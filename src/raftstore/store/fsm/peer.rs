@@ -877,15 +877,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
             p.set_region(cp.region);
-            if p.is_leader() {
-                // Notify pd immediately.
-                info!(
-                    "{} notify pd with change peer region {:?}",
-                    p.tag,
-                    p.region()
-                );
-                p.heartbeat_pd(&self.pd_worker);
-            }
 
             let peer_id = cp.peer.get_id();
             match change_type {
@@ -900,9 +891,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let id = peer.get_id();
                     p.peer_heartbeats.insert(id, now);
                     if p.is_leader() {
-                        if !p.peers_start_pending_time.iter().any(|&(pid, _)| pid == id) {
-                            p.peers_start_pending_time.push((id, now));
-                        }
+                        p.peers_start_pending_time.push((id, now));
                     }
                     p.insert_peer_cache(peer);
                 }
@@ -914,6 +903,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
                     p.remove_peer_from_cache(peer_id);
                 }
+            }
+
+            if p.is_leader() {
+                // Notify pd immediately.
+                info!(
+                    "{} notify pd with change peer region {:?}",
+                    p.tag,
+                    p.region()
+                );
+                p.heartbeat_pd(&self.pd_worker);
             }
             my_peer_id = p.peer_id();
         } else {
