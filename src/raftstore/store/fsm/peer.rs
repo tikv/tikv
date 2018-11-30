@@ -905,6 +905,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
 
+            // In pattern matching above, if the peer is the leader,
+            // it will push the change peer into `peers_start_pending_time`
+            // without checking if it is duplicated. We move `heartbeat_pd` here
+            // to utilize `collect_pending_peers` in `heartbeat_pd` to avoid
+            // adding the redundant peer.
             if p.is_leader() {
                 // Notify pd immediately.
                 info!(
