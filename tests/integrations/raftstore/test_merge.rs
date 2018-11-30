@@ -323,13 +323,21 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
             .msg_type(MessageType::MsgAppend),
     ));
     cluster.must_split(&right, b"k3");
-
+    
+    // left region and right region on store 3 fall behind 
+    // so after split, the new generated region is not on store 3 now
     let right1 = pd_client.get_region(b"k2").unwrap();
     let right2 = pd_client.get_region(b"k3").unwrap();
     assert_ne!(right1.get_id(), right2.get_id());
     pd_client.must_merge(left.get_id(), right1.get_id());
+    // after merge, the left region still exists on store 3
+
     cluster.must_put(b"k0", b"v0");
     cluster.clear_send_filters();
+    // once store 3 is not isolated anymore
+    // the message from other peer of new generated region may update `pending_cross_snap` epoch,
+    // and left region will get a message with merge target then check `pengding_cross_snap` and may destory itself.
+    // But now, the right1 region has catched up logs and to merge already destroyed left region, then panic.
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 }
 
