@@ -897,9 +897,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                     // Add this peer to cache and heartbeats.
                     let now = Instant::now();
-                    p.peer_heartbeats.insert(peer.get_id(), now);
+                    let id = peer.get_id();
+                    p.peer_heartbeats.insert(id, now);
                     if p.is_leader() {
-                        p.peers_start_pending_time.push((peer.get_id(), now));
+                        if !p.peers_start_pending_time.iter().any(|&(pid, _)| pid == id) {
+                            p.peers_start_pending_time.push((id, now));
+                        }
                     }
                     p.insert_peer_cache(peer);
                 }
