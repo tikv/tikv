@@ -1219,26 +1219,21 @@ fn calc_region_declined_bytes(
 fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
     region_ranges: &BTreeMap<Key, u64>,
     get_region: F,
-    start: Vec<u8>,
+    mut start: Vec<u8>,
     end: Vec<u8>,
 ) -> bool {
-    if let Some((_, &id)) = region_ranges
-        .range((Included(end), Unbounded::<Key>))
-        .next()
-    {
+    for (_, &id) in region_ranges.range((Excluded(start.clone()), Unbounded::<Key>)) {
         let mut region = get_region(id);
-        while start < enc_start_key(region) {
-            // check from end to start, if covered, one's start key must be other's end key
-            if let Some(&id) = region_ranges.get(&enc_start_key(region)) {
-                region = get_region(id);
-            } else {
-                return false;
-            }
+        // find a missing range
+        if start < enc_start_key(region) {
+            return false;
         }
-        true
-    } else {
-        false
+        if end <= enc_end_key(region) {
+            return true;
+        }
+        start = enc_end_key(region);
     }
+    false
 }
 
 #[cfg(test)]
