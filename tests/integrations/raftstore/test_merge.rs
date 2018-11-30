@@ -335,9 +335,9 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
     cluster.must_put(b"k0", b"v0");
     cluster.clear_send_filters();
     // once store 3 is not isolated anymore
-    // the message from other peer of new generated region may update `pending_cross_snap` epoch,
+    // the message from other peer of new generated region may update `pending_cross_snap` epoch unproperly,
     // and left region will get a message with merge target then check `pengding_cross_snap` and may destory itself.
-    // But now, the right1 region has catched up logs and to merge already destroyed left region, then panic.
+    // And now, the right1 region has catched up logs and to merge already destroyed left region which causes a panic.
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 }
 
