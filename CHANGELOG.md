@@ -26,7 +26,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
     - Enable the `PreVote` feature by default to reduce the impact of network isolation on services
 
 + Storage Engine
-    - Fix the `CompactFiles`bug in RocksDB and reduce the impact on importing data using Lightning
+    - Fix the `CompactFiles` bug in RocksDB and reduce the impact on importing data using Lightning
     - Upgrade RocksDB to v5.15 to fix the possible issue of snapshot file corruption
     - Improve `IngestExternalFile` to avoid the issue that flush could block write
 
