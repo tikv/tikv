@@ -463,7 +463,7 @@ mod tests {
         }
         assert_eq!(aggr.c, 3);
     }
-    
+
     #[test]
     fn test_variance() {
         let mut var = Variance {
