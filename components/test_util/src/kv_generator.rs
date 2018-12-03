@@ -11,14 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{self, Rng, ThreadRng};
+use rand::prelude::*;
+use rand::IsaacRng;
 
 /// A random generator of kv.
-/// Every iter should be taken in µs. See also `benches::bench_kv_iter`.
+///
+/// Every iteration should be taken in µs.
+#[derive(Clone, Debug)]
 pub struct KvGenerator {
     key_len: usize,
     value_len: usize,
-    rng: ThreadRng,
+    rng: IsaacRng,
 }
 
 impl KvGenerator {
@@ -26,8 +29,23 @@ impl KvGenerator {
         KvGenerator {
             key_len,
             value_len,
-            rng: rand::thread_rng(),
+            rng: FromEntropy::from_entropy(),
         }
+    }
+
+    pub fn with_seed(key_len: usize, value_len: usize, seed: u64) -> KvGenerator {
+        KvGenerator {
+            key_len,
+            value_len,
+            rng: IsaacRng::new_from_u64(seed),
+        }
+    }
+
+    /// Generate n pair of KVs.
+    ///
+    /// This function consumes current generator.
+    pub fn generate(self, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.take(n).collect()
     }
 }
 
@@ -44,57 +62,13 @@ impl Iterator for KvGenerator {
     }
 }
 
-/// Generate n random pair of kvs.
-pub fn generate_random_kvs(n: usize, key_len: usize, value_len: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let kv_generator = KvGenerator::new(key_len, value_len);
-    kv_generator.take(n).collect()
-}
-
-/// Generate n deliberate pair of kvs.
-pub fn generate_deliberate_kvs(
-    n: usize,
-    key_len: usize,
-    value_len: usize,
-) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut ret = Vec::with_capacity(n);
-    for i in 0..n {
-        let k = generate_vec_with_seed(key_len, i);
-        let v = generate_vec_with_seed(value_len, i);
-        ret.push((k, v));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test::Bencher;
+    #[bench]
+    fn bench_kv_generator(b: &mut Bencher) {
+        let mut g = KvGenerator::new(100, 1000);
+        b.iter(|| g.next());
     }
-    ret
-}
-
-/// Generate vector, and will be moved after https://github.com/tikv/tikv/pull/3853
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```rust no_run
-///    let v1 = generate_vec_with_seed(3, 1);
-///    assert_eq!("001".as_bytes().to_vec(), v1);
-///
-///    let v005 = generate_vec_with_seed(3, 5);
-///    assert_eq!("005".as_bytes().to_vec(), v005);
-///
-///    let v125 = generate_vec_with_seed(2, 125);
-///    assert_eq!("25".as_bytes().to_vec(), v125);
-///
-///    let v = generate_vec_with_seed(0, 125);
-///    assert_eq!("".as_bytes().to_vec(), v);
-///```
-fn generate_vec_with_seed(len: usize, seed: usize) -> Vec<u8> {
-    use std::iter::repeat;
-    let mut s = format!("{}", seed).into_bytes();
-    if s.len() != len {
-        if s.len() < len {
-            let mut zeros: Vec<u8> = repeat(b'0').take(len - s.len()).collect();
-            zeros.append(&mut s);
-            s = zeros;
-        } else {
-            let ri = s.len() - len;
-            s = s.split_off(ri);
-        }
-    }
-    s
 }
