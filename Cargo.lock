@@ -148,8 +148,8 @@ dependencies = [
 
 [[package]]
 name = "bzip2-sys"
-version = "0.1.6"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#54aef43502f91de8fa3e205c1ec276054444cc34"
+version = "0.1.7"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#34265a5534d973ad3b35b973b444585e9c61ef5b"
 dependencies = [
  "cc 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.43 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -718,9 +718,9 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#6e57a11c8d466f50b31303849e9aab9f68bcf6e5"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#05aaf93fdceff092768b1e9d50bc13c519d70d76"
 dependencies = [
- "bzip2-sys 0.1.6 (git+https://github.com/alexcrichton/bzip2-rs.git)",
+ "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "cmake 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.43 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1222,7 +1222,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#6e57a11c8d466f50b31303849e9aab9f68bcf6e5"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#05aaf93fdceff092768b1e9d50bc13c519d70d76"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.43 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1908,7 +1908,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.6+zstd.1.3.7"
-source = "git+https://github.com/gyscos/zstd-rs.git#0c52196877267848acb1472344af84ece3b93a64"
+source = "git+https://github.com/gyscos/zstd-rs.git#15c10cc9f5cfca48a6f32aeabd25470e0aff4d79"
 dependencies = [
  "blob 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cc 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1936,7 +1936,7 @@ dependencies = [
 "checksum byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)" = "94f88df23a25417badc922ab0f5716cc1330e87f71ddd9203b3a3ccd9cedf75d"
 "checksum bytes 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c129aff112dcc562970abb69e2508b40850dd24c274761bb50fb8a0067ba6c27"
 "checksum bytes 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "46112a0060ae15e3a3f9a445428a53e082b91215b744fa27a1948842f4a64b96"
-"checksum bzip2-sys 0.1.6 (git+https://github.com/alexcrichton/bzip2-rs.git)" = "<none>"
+"checksum bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)" = "<none>"
 "checksum cast 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 "checksum cc 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)" = "f159dfd43363c4d08055a07703eb7a3406b0dac4d0584d96965a3262db3c9d16"
 "checksum cfg-if 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = "405216fd8fe65f718daa7102ea808a946b6ce40c742998fbfd3463645552de18"
