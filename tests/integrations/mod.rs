@@ -37,6 +37,7 @@ extern crate tikv;
 extern crate test_coprocessor;
 extern crate test_raftstore;
 extern crate test_storage;
+#[macro_use]
 extern crate test_util;
 
 mod config;
