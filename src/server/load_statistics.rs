@@ -76,6 +76,12 @@ impl ThreadLoadStatistics {
         }
     }
 
+    /// For every threads with the name prefix given in `ThreadLoadStatistics::new`,
+    /// gather cpu usage from `/proc/<pid>/task/<tid>` and store it in `thread_load`
+    /// passed in `ThreadLoadStatistics::new`.
+    ///
+    /// Some old usages and instants (at most `slots`) will be kept internal to make
+    /// the usage curve more smooth.
     pub fn record(&mut self, instant: Instant) {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos] = 0f64;
