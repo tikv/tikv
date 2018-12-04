@@ -250,7 +250,7 @@ impl ScalarFunc {
             | ScalarFuncSig::RTrim
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::BitLength
-            | ScalarFuncSig::RouldReal
+            | ScalarFuncSig::RoundReal
             | ScalarFuncSig::RoundDec
             | ScalarFuncSig::RoundInt
             | ScalarFuncSig::BitNegSig
@@ -502,7 +502,23 @@ impl ScalarFunc {
             | ScalarFuncSig::ValuesTime
             | ScalarFuncSig::Version
             | ScalarFuncSig::YearWeekWithMode
-            | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
+            | ScalarFuncSig::YearWeekWithoutMode
+            | ScalarFuncSig::JsonArrayAppendSig
+            | ScalarFuncSig::JsonArrayInsertSig
+            | ScalarFuncSig::JsonMergePatchSig
+            | ScalarFuncSig::JsonMergePreserveSig
+            | ScalarFuncSig::JsonContainsPathSig
+            | ScalarFuncSig::JsonPrettySig
+            | ScalarFuncSig::JsonQuoteSig
+            | ScalarFuncSig::JsonSearchSig
+            | ScalarFuncSig::JsonStorageSizeSig
+            | ScalarFuncSig::JsonDepthSig
+            | ScalarFuncSig::JsonKeysSig
+            | ScalarFuncSig::JsonLengthSig
+            | ScalarFuncSig::JsonValidJsonSig
+            | ScalarFuncSig::JsonContainsSig
+            | ScalarFuncSig::JsonKeys2ArgsSig
+            | ScalarFuncSig::JsonValidStringSig => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
             return Err(box_err!(
@@ -827,7 +843,7 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
-        RouldReal => round_real,
+        RoundReal => round_real,
         RoundWithFracReal => round_with_frac_real,
         PI => pi,
         Rand => rand,
@@ -1218,7 +1234,7 @@ mod tests {
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
-                    ScalarFuncSig::RouldReal,
+                    ScalarFuncSig::RoundReal,
                     ScalarFuncSig::RoundDec,
                     ScalarFuncSig::RoundInt,
                     ScalarFuncSig::Rand,
