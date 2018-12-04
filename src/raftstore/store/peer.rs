@@ -215,6 +215,30 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
+#[derive(Default)]
+pub struct RecentAddedPeersQueue {
+    pub queue: VecDeque<(u64, Instant)>,
+}
+
+const GC_RECENT_ADDED_TIMES: f64 = 10.0;
+
+impl RecentAddedPeersQueue {
+    pub fn push(&mut self, pair: (u64, Instant)) {
+        if self.queue.iter().any(|&(pid, _)| pid == pair.0) {
+            return;
+        }
+        self.queue.push_back(pair);
+        for i in 0..self.queue.len() {
+            if duration_to_sec(self.queue[i].1.elapsed()) > GC_RECENT_ADDED_TIMES {
+                self.queue.pop_front();
+            }
+        }
+    }
+
+    pub fn get(&self, id: u64) -> Option<&(u64, Instant)> {
+        self.queue.iter().find(|&(pid, _)| *pid == id)
+    }
+}
 pub struct Peer {
     engines: Engines,
     cfg: Rc<Config>,
@@ -231,6 +255,7 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
+    pub recent_added_peers: RecentAddedPeersQueue,
 
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
@@ -379,6 +404,7 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
+            recent_added_peers: Default::default(),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -1494,6 +1520,13 @@ impl Peer {
             if progress.state == ProgressState::Snapshot {
                 return false;
             }
+        }
+        if self.recent_added_peers.get(peer_id).is_some() {
+            debug!(
+                "{} reject transfer leader to {:?} due to the peer was added recently",
+                self.tag, peer
+            );
+            return false;
         }
 
         let last_index = self.get_store().last_index();
