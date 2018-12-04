@@ -121,6 +121,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::WeekWithMode
+            | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
@@ -191,6 +192,7 @@ impl ScalarFunc {
             | ScalarFuncSig::WeekDay
             | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::Year
+            | ScalarFuncSig::YearWeekWithoutMode
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
             | ScalarFuncSig::UnaryMinusReal
@@ -501,8 +503,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ValuesString
             | ScalarFuncSig::ValuesTime
             | ScalarFuncSig::Version
-            | ScalarFuncSig::YearWeekWithMode
-            | ScalarFuncSig::YearWeekWithoutMode
             | ScalarFuncSig::JsonArrayAppendSig
             | ScalarFuncSig::JsonArrayInsertSig
             | ScalarFuncSig::JsonMergePatchSig
@@ -761,6 +761,8 @@ dispatch_call! {
         WeekDay => week_day,
         WeekOfYear => week_of_year,
         Year => year,
+        YearWeekWithMode => year_week_with_mode,
+        YearWeekWithoutMode => year_week_without_mode,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1119,6 +1121,8 @@ mod tests {
                     ScalarFuncSig::BitOrSig,
                     ScalarFuncSig::BitXorSig,
                     ScalarFuncSig::DateFormatSig,
+                    ScalarFuncSig::WeekWithMode,
+                    ScalarFuncSig::YearWeekWithMode,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
@@ -1200,9 +1204,11 @@ mod tests {
                     ScalarFuncSig::DayOfMonth,
                     ScalarFuncSig::DayOfWeek,
                     ScalarFuncSig::DayOfYear,
+                    ScalarFuncSig::WeekWithoutMode,
                     ScalarFuncSig::WeekDay,
                     ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
+                    ScalarFuncSig::YearWeekWithoutMode,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
                     ScalarFuncSig::UnaryMinusReal,
@@ -1549,8 +1555,6 @@ mod tests {
             ScalarFuncSig::ValuesString,
             ScalarFuncSig::ValuesTime,
             ScalarFuncSig::Version,
-            ScalarFuncSig::YearWeekWithMode,
-            ScalarFuncSig::YearWeekWithoutMode,
         ];
 
         for sig in cases {
