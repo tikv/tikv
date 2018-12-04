@@ -14,7 +14,6 @@
 use std::borrow::Cow;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use coprocessor::codec::Datum;
 use crypto::{
     digest::Digest,
@@ -102,26 +101,24 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
+        use byteorder::{ByteOrder, LittleEndian};
         let input = try_opt!(self.children[0].eval_string(ctx, row));
+
+        // according to MySQL doc: Empty strings are stored as empty strings.
         if input.is_empty() {
             return Ok(Some(Cow::Borrowed(b"")));
         }
         let mut e = ZlibEncoder::new(input.as_ref(), Compression::default());
-        let mut vec = Vec::with_capacity(1024);
+        let mut vec = Vec::with_capacity(input.len());
+        vec.resize(4, 0);
+        LittleEndian::write_u32(&mut vec, input.len() as u32);
         match e.read_to_end(&mut vec) {
-            Ok(len) => {
-                let mut cap = 4 + len;
-                // according to MySQL doc: If the string ends with space,
-                // an extra . character is added to avoid problems with endspace trimming
-                if vec[len - 1] == 32 {
+            Ok(_) => {
+                // according to MySQL doc: append "." if ends with space
+                if vec[vec.len() - 1] == 32 {
                     vec.push(b'.');
-                    cap += 1;
                 }
-
-                let mut wtr = Vec::with_capacity(cap);
-                wtr.write_u32::<LittleEndian>(input.len() as u32).unwrap();
-                wtr.extend_from_slice(&vec);
-                Ok(Some(Cow::Owned(wtr)))
+                Ok(Some(Cow::Owned(vec)))
             }
             _ => Ok(None),
         }
@@ -133,6 +130,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
+        use byteorder::{ByteOrder, LittleEndian};
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         if input.is_empty() {
             return Ok(Some(Cow::Borrowed(b"")));
@@ -164,6 +162,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn uncompressed_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        use byteorder::{ByteOrder, LittleEndian};
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         if input.is_empty() {
             return Ok(Some(0));
