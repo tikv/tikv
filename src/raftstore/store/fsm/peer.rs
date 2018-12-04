@@ -605,8 +605,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             info!("region overlapped {:?}, {:?}", exist_region, snap_region);
             let peer = self.region_peers.get(&region_id).unwrap();
             // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
-            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge, 
-            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update 
+            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
+            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
             // `pending_cross_snap` here if peer is applying snapshot.
             if !(peer.is_applying_snapshot() || peer.has_pending_snapshot()) {
                 self.pending_cross_snap

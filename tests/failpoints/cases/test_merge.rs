@@ -357,12 +357,11 @@ fn test_node_merge_multiple_snapshots() {
     // Cause filter is added again, no need to block raftstore anymore
     fail::cfg("on_raft_ready", "off").unwrap();
 
-
     // Wait some time to let already merged peer on store 1 or store 2 to notify
     // the peer of left region on store 3 is stale, and then the peer will check
     // `pending_cross_snap`
     thread::sleep(Duration::from_millis(200));
-    
+
     cluster.must_put(b"k9", b"v9");
     // let follower can reach the new log, then commit merge
     cluster.clear_send_filters();
