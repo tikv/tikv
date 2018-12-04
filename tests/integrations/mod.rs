@@ -37,14 +37,15 @@ extern crate tikv;
 extern crate test_coprocessor;
 extern crate test_raftstore;
 extern crate test_storage;
+#[macro_use]
 extern crate test_util;
 
 mod config;
 mod coprocessor;
 mod import;
 mod pd;
-mod raftstore_cases;
-mod storage_cases;
+mod raftstore;
+mod storage;
 
 // The prefix "_" here is to guarantee running this case first.
 #[test]

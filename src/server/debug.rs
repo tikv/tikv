@@ -1139,7 +1139,9 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     let old_conf_ver = region_state.get_region().get_region_epoch().get_conf_ver();
     let new_conf_ver = region.get_region_epoch().get_conf_ver();
     if new_conf_ver <= old_conf_ver {
-        return Err(box_err!("invalid conf_ver"));
+        return Err(box_err!(
+            "invalid conf_ver: please make sure you have removed the peer by PD"
+        ));
     }
 
     // If the store is not in peers, or it's still in but its peer_id
