@@ -342,13 +342,6 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_auto_adjust_replica() {
-    let count = 7;
-    let mut cluster = new_node_cluster(0, count);
-    test_auto_adjust_replica(&mut cluster);
-}
-
-#[test]
 fn test_server_auto_adjust_replica() {
     let count = 7;
     let mut cluster = new_server_cluster(0, count);
@@ -428,17 +421,78 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_after_remove_itself() {
-    let count = 3;
-    let mut cluster = new_node_cluster(0, count);
-    test_after_remove_itself(&mut cluster);
-}
-
-#[test]
 fn test_server_after_remove_itself() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
     test_after_remove_itself(&mut cluster);
+}
+
+#[test]
+fn test_server_readd_node() {
+    // let _guard = ::test_util::init_log();
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+
+    let engine1 = cluster.get_engine(1);
+    let engine2 = cluster.get_engine(2);
+    let engine3 = cluster.get_engine(3);
+
+    must_get_equal(&engine1, b"k1", b"v1");
+    must_get_equal(&engine2, b"k1", b"v1");
+    must_get_equal(&engine3, b"k1", b"v1");
+
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    pd_client.must_add_peer(r1, new_peer(3, 4));
+
+    must_get_equal(&engine3, b"k1", b"v1");
+
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&engine1, b"k2", b"v2");
+    must_get_equal(&engine2, b"k2", b"v2");
+    must_get_equal(&engine3, b"k2", b"v2");
+
+    cluster.stop_node(1);
+    cluster.stop_node(2);
+
+    let peer = new_peer(3, 0);
+    let find_leader = new_status_request(r1, peer, new_region_leader_cmd());
+    let resp = cluster
+        .call_command(find_leader.clone(), Duration::from_secs(3))
+        .unwrap();
+    assert!(resp.get_status_response().has_region_leader(), "{:?}", resp);
+
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32
+        * 4;
+    info!("sleeping {:?}", election_timeout);
+    thread::sleep(election_timeout);
+    let resp = cluster
+        .call_command(find_leader, Duration::from_secs(3))
+        .unwrap();
+    assert!(
+        !resp.get_status_response().has_region_leader(),
+        "{:?}",
+        resp
+    );
+
+    cluster.run_node(1);
+    cluster.run_node(2);
+
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&engine1, b"k3", b"v3");
+    must_get_equal(&engine2, b"k3", b"v3");
+    must_get_equal(&engine3, b"k3", b"v3");
 }
 
 fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {

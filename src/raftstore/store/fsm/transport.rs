@@ -521,10 +521,12 @@ impl Router {
     }
 
     pub fn broadcast_shutdown(&self) {
+        info!("broadcasting shutdown.");
         self.store_box.close();
         unsafe { &mut *self.caches.as_ptr() }.clear();
         let mut mailboxes = self.mailboxes.lock().unwrap();
-        for (_, mailbox) in mailboxes.drain() {
+        for (region_id, mailbox) in mailboxes.drain() {
+            debug!("[region {}] shutdown mailbox", region_id);
             mailbox.close();
         }
         for _ in 0..100 {
@@ -533,6 +535,7 @@ impl Router {
     }
 
     pub fn stop(&self, region_id: u64) {
+        info!("[region {}] shutdown mailbox", region_id);
         let mut mailboxes = self.mailboxes.lock().unwrap();
         if let Some(mb) = mailboxes.remove(&region_id) {
             mb.close();
@@ -541,10 +544,10 @@ impl Router {
 
     pub fn peer_notifier(&self, region_id: u64) -> Option<PeerNotifier> {
         let caches = unsafe { &mut *self.caches.as_ptr() };
-        let mut disconnected = false;
+        let mut connected = false;
         if let Some(mail_box) = caches.get(&region_id) {
-            disconnected = mail_box.sender.is_alive();
-            if !disconnected {
+            connected = mail_box.sender.is_alive();
+            if connected {
                 return Some(PeerNotifier {
                     mail_box: mail_box.clone(),
                     scheduler: self.scheduler.clone(),
@@ -558,7 +561,7 @@ impl Router {
                 break 'fetch_box mailbox.clone();
             }
             drop(boxes);
-            if disconnected {
+            if !connected {
                 caches.remove(&region_id);
             }
             return None;
@@ -1021,7 +1024,6 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     pending_proposals,
                     &previous_metrics,
                 );
-                previous_metrics = self.ctx.raft_metrics.clone();
             }
             if self.ctx.need_flush_trans {
                 self.ctx.need_flush_trans = false;
@@ -1046,6 +1048,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                 .process_ready
                 .observe(duration_to_sec(self.timer.elapsed()) as f64);
             self.ctx.raft_metrics.flush();
+            previous_metrics = self.ctx.raft_metrics.clone();
             if batches.fsm_holders.is_empty() {
                 batch_size = cmp::min(batch_size + 1, self.cfg.max_batch_size);
                 batch_size_observer.flush();
