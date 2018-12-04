@@ -966,19 +966,19 @@ mod tests {
                 str2dec("-123.456"),
                 str2dec("-123.000"),
             ),
-            (ScalarFuncSig::RouldReal, Datum::F64(3.45), Datum::F64(3f64)),
+            (ScalarFuncSig::RoundReal, Datum::F64(3.45), Datum::F64(3f64)),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(-3.45),
                 Datum::F64(-3f64),
             ),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(f64::MAX),
                 Datum::F64(f64::MAX),
             ),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MIN),
             ),
