@@ -26,7 +26,7 @@ use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
 use tikv::raftstore::{Error, Result};
 use tikv::server::transport::*;
 use tikv::server::StoreAddrResolver;
-use tikv::util::collections::{HashMap, HashSet};
+use tikv::util::collections::HashSet;
 use tikv::util::{transport, Either, HandyRwLock};
 
 pub trait Channel<M>: Send + Clone {
@@ -458,7 +458,9 @@ impl Filter<RaftMessage> for SnapshotFilter {
 pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
-    pending_msg: Mutex<HashMap<u64, StoreMsg>>,
+    exists: Mutex<HashSet<u64>>,
+    // make it in order
+    pending_msg: Mutex<Vec<StoreMsg>>,
     pending_count_sender: Mutex<Sender<usize>>,
 }
 
@@ -467,7 +469,8 @@ impl CollectSnapshotFilter {
         CollectSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
-            pending_msg: Mutex::new(HashMap::default()),
+            pending_msg: Mutex::new(Vec::new()),
+            exists: Mutex::new(HashSet::default()),
             pending_count_sender: Mutex::new(sender),
         }
     }
@@ -481,27 +484,27 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
         for m in msgs.drain(..) {
-            let (is_pending, from_peer_id) = match m {
+            let is_pending = match m {
                 StoreMsg::RaftMessage(ref msg) => {
                     if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
                         let from_peer_id = msg.get_from_peer().get_id();
-                        if pending_msg.contains_key(&from_peer_id) {
+                        if self.exists.lock().unwrap().contains(&from_peer_id) {
                             // Drop this snapshot message directly since it's from a seen peer
                             continue;
                         } else {
                             // Pile the snapshot from unseen peer
-                            (true, from_peer_id)
+                            true
                         }
                     } else {
-                        (false, 0)
+                        false
                     }
                 }
-                _ => (false, 0),
+                _ => false,
             };
             if is_pending {
                 self.dropped
                     .compare_and_swap(false, true, Ordering::Relaxed);
-                pending_msg.insert(from_peer_id, m);
+                pending_msg.push(m);
                 let sender = self.pending_count_sender.lock().unwrap();
                 sender.send(pending_msg.len()).unwrap();
             } else {
@@ -512,7 +515,7 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
         if pending_msg.len() > 1 {
             self.dropped
                 .compare_and_swap(true, false, Ordering::Relaxed);
-            msgs.extend(pending_msg.drain().map(|(_, v)| v));
+            msgs.extend(pending_msg.drain(..));
             self.stale.compare_and_swap(false, true, Ordering::Relaxed);
         }
         msgs.extend(to_send);
