@@ -294,72 +294,81 @@ impl<'a, T: Transport, C: PdClient> Store<'a, T, C> {
                 "{} compact worker is busy, check space redundancy next time",
                 self.core.tag
             );
+            self.schedule_compact_check_tick();
+            return;
         } else if rocksdb::auto_compactions_is_disabled(&self.ctx.engines.kv) {
             debug!(
                 "{} skip compact check when disabled auto compactions.",
                 self.core.tag
             );
-        } else {
-            // Start from last checked key.
-            let mut ranges_need_check = Vec::with_capacity(
-                self.core.cfg.as_ref().unwrap().region_compact_check_step as usize + 1,
+            self.schedule_compact_check_tick();
+            return;
+        }
+
+        // Start from last checked key.
+        let mut ranges_need_check = Vec::with_capacity(
+            self.core.cfg.as_ref().unwrap().region_compact_check_step as usize + 1,
+        );
+        ranges_need_check.push(self.core.last_compact_checked_key.clone());
+
+        let largest_key = {
+            let meta = self.ctx.store_meta.lock().unwrap();
+            if meta.region_ranges.is_empty() {
+                debug!("there is no range need to check");
+                self.schedule_compact_check_tick();
+                return;
+            }
+            // Collect continuous ranges.
+            let left_ranges = meta.region_ranges.range((
+                Excluded(self.core.last_compact_checked_key.clone()),
+                Unbounded::<Key>,
+            ));
+            ranges_need_check.extend(
+                left_ranges
+                    .take(self.core.cfg.as_ref().unwrap().region_compact_check_step as usize)
+                    .map(|(k, _)| k.to_owned()),
             );
-            ranges_need_check.push(self.core.last_compact_checked_key.clone());
 
-            let largest_key = {
-                let meta = self.ctx.store_meta.lock().unwrap();
-                // Collect continuous ranges.
-                let left_ranges = meta.region_ranges.range((
-                    Excluded(self.core.last_compact_checked_key.clone()),
-                    Unbounded::<Key>,
-                ));
-                ranges_need_check.extend(
-                    left_ranges
-                        .take(self.core.cfg.as_ref().unwrap().region_compact_check_step as usize)
-                        .map(|(k, _)| k.to_owned()),
-                );
-
-                // Update last_compact_checked_key.
-                meta.region_ranges.keys().last().unwrap().to_vec()
-            };
-            let last_key = ranges_need_check.last().unwrap().clone();
-            if last_key == largest_key {
-                // Range [largest key, DATA_MAX_KEY) also need to check.
-                if last_key != keys::DATA_MAX_KEY.to_vec() {
-                    ranges_need_check.push(keys::DATA_MAX_KEY.to_vec());
-                }
-                // Next task will start from the very beginning.
-                self.core.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
-            } else {
-                self.core.last_compact_checked_key = last_key;
+            // Update last_compact_checked_key.
+            meta.region_ranges.keys().last().unwrap().to_vec()
+        };
+        let last_key = ranges_need_check.last().unwrap().clone();
+        if last_key == largest_key {
+            // Range [largest key, DATA_MAX_KEY) also need to check.
+            if last_key != keys::DATA_MAX_KEY.to_vec() {
+                ranges_need_check.push(keys::DATA_MAX_KEY.to_vec());
             }
+            // Next task will start from the very beginning.
+            self.core.last_compact_checked_key = keys::DATA_MIN_KEY.to_vec();
+        } else {
+            self.core.last_compact_checked_key = last_key;
+        }
 
-            // Schedule the task.
-            let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
-            if let Err(e) = self
-                .ctx
-                .compact_scheduler
-                .schedule(CompactTask::CheckAndCompact {
-                    cf_names,
-                    ranges: ranges_need_check,
-                    tombstones_num_threshold: self
-                        .core
-                        .cfg
-                        .as_ref()
-                        .unwrap()
-                        .region_compact_min_tombstones,
-                    tombstones_percent_threshold: self
-                        .core
-                        .cfg
-                        .as_ref()
-                        .unwrap()
-                        .region_compact_tombstones_percent,
-                }) {
-                error!(
-                    "{} failed to schedule space check task: {}",
-                    self.core.tag, e
-                );
-            }
+        // Schedule the task.
+        let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
+        if let Err(e) = self
+            .ctx
+            .compact_scheduler
+            .schedule(CompactTask::CheckAndCompact {
+                cf_names,
+                ranges: ranges_need_check,
+                tombstones_num_threshold: self
+                    .core
+                    .cfg
+                    .as_ref()
+                    .unwrap()
+                    .region_compact_min_tombstones,
+                tombstones_percent_threshold: self
+                    .core
+                    .cfg
+                    .as_ref()
+                    .unwrap()
+                    .region_compact_tombstones_percent,
+            }) {
+            error!(
+                "{} failed to schedule space check task: {}",
+                self.core.tag, e
+            );
         }
 
         self.schedule_compact_check_tick();
