@@ -7,7 +7,7 @@ publish = false
 tikv = { path = "../../" }
 protobuf = "~2.0"
 tempdir = "0.3"
-raft = "0.3"
+raft = "0.4"
 futures = "0.1"
 tokio-timer = "0.2"
 grpcio = { version = "0.4", features = [ "secure" ] }

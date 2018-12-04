@@ -82,7 +82,7 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[cfg_attr(not(test), macro_use(slog_o, slog_kv))]
+#[cfg_attr(not(test), macro_use(slog_o))]
 #[cfg_attr(
     test,
     macro_use(

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "2.1.0-rc.2"
+version = "3.0.0-alpha"
 keywords = ["KV", "distributed-systems", "raft"]
 publish = false
 
@@ -23,16 +23,27 @@ name = "tikv-ctl"
 [[bin]]
 name = "tikv-importer"
 
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+
+[[test]]
+name = "integrations"
+path = "tests/integrations/mod.rs"
+
 [[bench]]
 name = "raftstore"
 harness = false
+path = "benches/raftstore/mod.rs"
 
 [[bench]]
 name = "coprocessor_executors"
 harness = false
+path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
-name = "benches"
+name = "misc"
+path = "benches/misc/mod.rs"
 
 [dependencies]
 log = { version = "0.3", features = ["release_max_level_debug"] }
@@ -75,7 +86,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-raft = "0.3"
+raft = "0.4"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
 fxhash = "0.2"
@@ -90,9 +101,6 @@ safemem = "0.3"
 cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
 
-[replace]
-"raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
-
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
@@ -101,12 +109,12 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.grpcio]
 git = "https://github.com/hicqu/grpc-rs.git"
-branch = "v0.4"
+branch = "v0.4-grpc-1.6"
 features = ["secure"]
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "super-batch-streaming"
+branch = "super-batch-streaming-old-grpc"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

@@ -17,6 +17,7 @@ use std::time::Duration;
 use std::{fs, thread};
 
 use kvproto::metapb;
+use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
@@ -290,6 +291,9 @@ fn test_delay_split_region() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 500;
     cluster.cfg.raft_store.merge_max_log_gap = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
+    // To stable the test, we use a large hearbeat timeout 200ms(100ms * 2).
+    // And to elect leader quickly, set election timeout to 1s(100ms * 10).
+    configure_for_lease_read(&mut cluster, Some(100), Some(10));
 
     // We use three nodes for this test.
     cluster.run();
@@ -327,12 +331,12 @@ fn test_delay_split_region() {
     // Split should be bcast eagerly, otherwise following must_put will fail
     // as no leader is available.
     cluster.must_split(&region, k2);
-    cluster.must_put(b"k0", b"v0");
+    cluster.must_put(b"k6", b"v6");
 
     sleep_ms(100);
     // After split, skip bcast is enabled again, so all followers should not
     // commit the log.
-    check_cluster(&mut cluster, b"k0", b"v0", false);
+    check_cluster(&mut cluster, b"k6", b"v6", false);
 }
 
 fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -795,4 +799,36 @@ fn test_node_split_update_region_right_derive() {
         "{:?}",
         resp
     );
+}
+
+#[test]
+fn test_split_with_stale_epoch() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Remove a peer to make conf version become 2.
+    pd_client.must_remove_peer(1, new_peer(2, 2));
+    let region = cluster.get_region(b"");
+
+    let mut admin_req = AdminRequest::new();
+    admin_req.set_cmd_type(AdminCmdType::BatchSplit);
+
+    let mut batch_split_req = BatchSplitRequest::new();
+    batch_split_req.mut_requests().push(SplitRequest::new());
+    batch_split_req.mut_requests()[0].set_split_key(b"s".to_vec());
+    batch_split_req.mut_requests()[0].set_new_region_id(1000);
+    batch_split_req.mut_requests()[0].set_new_peer_ids(vec![1001, 1002]);
+    batch_split_req.mut_requests()[0].set_right_derive(true);
+    admin_req.set_splits(batch_split_req);
+
+    let mut epoch = region.get_region_epoch().clone();
+    epoch.conf_ver -= 1;
+    let req = new_admin_request(1, &epoch, admin_req);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(resp.get_header().get_error().has_stale_epoch());
 }
