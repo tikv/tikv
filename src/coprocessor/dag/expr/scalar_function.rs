@@ -121,6 +121,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::WeekWithMode
+            | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
@@ -273,6 +274,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FromBase64
             | ScalarFuncSig::ToBase64
             | ScalarFuncSig::WeekWithoutMode
+            | ScalarFuncSig::YearWeekWithoutMode
             | ScalarFuncSig::Space => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -501,8 +503,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ValuesString
             | ScalarFuncSig::ValuesTime
             | ScalarFuncSig::Version
-            | ScalarFuncSig::YearWeekWithMode
-            | ScalarFuncSig::YearWeekWithoutMode
             | ScalarFuncSig::JsonArrayAppendSig
             | ScalarFuncSig::JsonArrayInsertSig
             | ScalarFuncSig::JsonMergePatchSig
@@ -758,6 +758,8 @@ dispatch_call! {
         DayOfYear => day_of_year,
         WeekWithMode => week_with_mode,
         WeekWithoutMode => week_without_mode,
+        YearWeekWithMode => year_week_with_mode,
+        YearWeekWithoutMode => year_week_without_mode,
         WeekDay => week_day,
         WeekOfYear => week_of_year,
         Year => year,
@@ -1549,8 +1551,6 @@ mod tests {
             ScalarFuncSig::ValuesString,
             ScalarFuncSig::ValuesTime,
             ScalarFuncSig::Version,
-            ScalarFuncSig::YearWeekWithMode,
-            ScalarFuncSig::YearWeekWithoutMode,
         ];
 
         for sig in cases {
