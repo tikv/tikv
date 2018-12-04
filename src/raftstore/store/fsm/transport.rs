@@ -1024,7 +1024,6 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                     pending_proposals,
                     &previous_metrics,
                 );
-                previous_metrics = self.ctx.raft_metrics.clone();
             }
             if self.ctx.need_flush_trans {
                 self.ctx.need_flush_trans = false;
@@ -1049,6 +1048,7 @@ impl<T: Transport + 'static, C: PdClient + 'static> Poller<T, C> {
                 .process_ready
                 .observe(duration_to_sec(self.timer.elapsed()) as f64);
             self.ctx.raft_metrics.flush();
+            previous_metrics = self.ctx.raft_metrics.clone();
             if batches.fsm_holders.is_empty() {
                 batch_size = cmp::min(batch_size + 1, self.cfg.max_batch_size);
                 batch_size_observer.flush();
