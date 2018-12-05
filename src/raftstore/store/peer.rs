@@ -249,14 +249,15 @@ impl RecentAddedPeersQueue {
     pub fn contains(&mut self, id: u64) -> bool {
         if let Some(ref mut queue) = self.queue {
             let duration = self.reject_duration_as_secs;
-            if let Some(pos) = queue.iter().position(|&(pid, start_time)| {
-                pid == id && duration_to_sec(start_time.elapsed()) > duration as f64
-            }) {
-                queue.drain(..=pos);
-                return false;
+            if let Some(pos) = queue.iter().position(|&(pid, _)| pid == id) {
+                if duration_to_sec(queue[pos].1.elapsed()) > duration as f64 {
+                    queue.drain(..=pos);
+                    return false;
+                }
+                return true;
             };
         }
-        true
+        false
     }
 }
 
@@ -1531,7 +1532,7 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn is_transfer_leader_allowed(&mut self, peer: &metapb::Peer) -> bool {
+    fn ready_to_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
@@ -1788,7 +1789,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transferred = if self.is_transfer_leader_allowed(peer) {
+        let transferred = if self.ready_to_transfer_leader(peer) {
             self.transfer_leader(peer);
             true
         } else {
