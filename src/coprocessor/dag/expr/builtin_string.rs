@@ -605,6 +605,18 @@ impl ScalarFunc {
 
         Ok(Some(Cow::Owned(vec![SPACE; len])))
     }
+
+    #[inline]
+    pub fn strcmp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        use std::cmp::Ordering::*;
+        let left = try_opt!(self.children[0].eval_string(ctx, row));
+        let right = try_opt!(self.children[1].eval_string(ctx, row));
+        match left.cmp(&right) {
+            Less => Ok(Some(-1)),
+            Equal => Ok(Some(0)),
+            Greater => Ok(Some(1)),
+        }
+    }
 }
 
 // Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
@@ -2074,6 +2086,61 @@ mod tests {
 
         for (len, exp) in tests {
             let got = eval_func(ScalarFuncSig::Space, &[len]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_strcmp() {
+        let tests = vec![
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(0),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"1".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"1".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"45".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes("你好".as_bytes().to_vec()),
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(0),
+            ),
+            (Datum::Null, Datum::Bytes(b"123".to_vec()), Datum::Null),
+            (Datum::Bytes(b"123".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
+        ];
+
+        for (left, right, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Strcmp, &[left, right]).unwrap();
             assert_eq!(got, exp);
         }
     }
