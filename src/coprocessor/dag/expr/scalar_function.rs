@@ -274,7 +274,10 @@ impl ScalarFunc {
             | ScalarFuncSig::FromBase64
             | ScalarFuncSig::ToBase64
             | ScalarFuncSig::WeekWithoutMode
-            | ScalarFuncSig::Space => (1, 1),
+            | ScalarFuncSig::Space
+            | ScalarFuncSig::Compress
+            | ScalarFuncSig::Uncompress
+            | ScalarFuncSig::UncompressedLength => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -360,7 +363,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
-            | ScalarFuncSig::Compress
             | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::ConnectionID
             | ScalarFuncSig::Convert
@@ -481,8 +483,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeToSec
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
-            | ScalarFuncSig::Uncompress
-            | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -824,6 +824,7 @@ dispatch_call! {
         IsIPv6 => is_ipv6,
         InetAton => inet_aton,
 
+        UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
     }
     REAL_CALLS {
@@ -957,6 +958,8 @@ dispatch_call! {
         Elt => elt,
         FromBase64 => from_base64,
         ToBase64 => to_base64,
+        Compress => compress,
+        Uncompress => uncompress,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1281,6 +1284,9 @@ mod tests {
                     ScalarFuncSig::FromBase64,
                     ScalarFuncSig::ToBase64,
                     ScalarFuncSig::Space,
+                    ScalarFuncSig::Compress,
+                    ScalarFuncSig::Uncompress,
+                    ScalarFuncSig::UncompressedLength,
                 ],
                 1,
                 1,
@@ -1410,7 +1416,6 @@ mod tests {
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,
-            ScalarFuncSig::Compress,
             ScalarFuncSig::ConcatWS,
             ScalarFuncSig::ConnectionID,
             ScalarFuncSig::Convert,
@@ -1531,8 +1536,6 @@ mod tests {
             ScalarFuncSig::TimeToSec,
             ScalarFuncSig::ToDays,
             ScalarFuncSig::ToSeconds,
-            ScalarFuncSig::Uncompress,
-            ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
