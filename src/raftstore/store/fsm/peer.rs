@@ -37,6 +37,7 @@ use pd::{PdClient, PdTask};
 use raftstore::{Error, Result};
 use storage::CF_RAFT;
 use util::escape;
+use util::set_panic_mark;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{FutureWorker, Stopped};
 
@@ -2075,6 +2076,7 @@ fn verify_and_store_hash(
             return false;
         }
         if state.hash != expected_hash {
+            set_panic_mark();
             panic!(
                 "[region {}] hash at {} not correct, want \"{}\", got \"{}\"!!!",
                 region_id,
@@ -2107,8 +2109,8 @@ fn verify_and_store_hash(
     }
 
     info!(
-        "[region {}] save hash of {} for consistency check later.",
-        region_id, expected_index
+        "[region {}] save hash {:?} of {} for consistency check later.",
+        region_id, expected_hash, expected_index
     );
     state.index = expected_index;
     state.hash = expected_hash;

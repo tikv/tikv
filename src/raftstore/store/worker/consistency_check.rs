@@ -77,10 +77,12 @@ impl<C: MsgSender> Runner<C> {
         cf_names.sort();
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
+        let mut count = 0;
         for cf in cf_names {
             let res = snap.scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 digest.write(k);
                 digest.write(v);
+                count += 1;
                 Ok(true)
             });
             if let Err(e) = res {
@@ -91,6 +93,10 @@ impl<C: MsgSender> Runner<C> {
                 return;
             }
         }
+        info!(
+            "[region {}] scan {} key-values when computing hash",
+            region_id, count
+        );
         let region_state_key = keys::region_state_key(region_id);
         digest.write(&region_state_key);
         match snap.get_value_cf(CF_RAFT, &region_state_key) {
@@ -101,7 +107,13 @@ impl<C: MsgSender> Runner<C> {
                 error!("[region {}] failed to get region state: {:?}", region_id, e);
                 return;
             }
-            Ok(Some(v)) => digest.write(&v),
+            Ok(Some(v)) => {
+                digest.write(&v);
+                info!(
+                    "[region {}] state is {:?} when computing hash",
+                    region_id, v
+                );
+            }
             Ok(None) => digest.write(b""),
         }
         let sum = digest.sum32();
