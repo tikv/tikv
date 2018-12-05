@@ -145,7 +145,7 @@ impl ScalarFunc {
         let len = LittleEndian::read_u32(&input[0..4]) as usize;
         let mut decoder = ZlibDecoder::new(&input[4..]);
         let mut vec = Vec::with_capacity(len);
-        // if the length of uncompressed string is less than the length we read from the first
+        // if the length of uncompressed string is greater than the length we read from the first
         //     four bytes, return null and generate a length corrupted warning.
         // if the length of uncompressed string is zero or uncompress fail, return null and generate
         //     a data corrupted warning
