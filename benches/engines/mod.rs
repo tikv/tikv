@@ -19,7 +19,7 @@ extern crate tikv;
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use std::fmt;
-use test_util::generate_deliberate_kvs;
+use test_util::KvGenerator;
 use tikv::storage::engine::{
     BTreeEngine, Engine, Modify, RocksEngine, Snapshot, TestEngineBuilder,
 };
@@ -28,6 +28,7 @@ use tikv::storage::{Key, Value, CF_DEFAULT};
 const DEFAULT_KEY_LENGTH: usize = 64;
 const DEFAULT_GET_KEYS_COUNT: usize = 1;
 const DEFAULT_PUT_KVS_COUNT: usize = 1;
+const DEFAULT_KV_GENERATOR_SEED: u64 = 0;
 
 trait EngineFactory<E: Engine>: Clone + Copy + fmt::Debug + 'static {
     fn build(&self) -> E;
@@ -67,7 +68,8 @@ fn fill_engine_with<E: Engine>(engine: &E, expect_engine_keys_count: usize, valu
     if expect_engine_keys_count > 0 {
         let mut modifies: Vec<Modify> = vec![];
         let kvs =
-            generate_deliberate_kvs(expect_engine_keys_count, DEFAULT_KEY_LENGTH, value_length);
+            KvGenerator::with_seed(DEFAULT_KEY_LENGTH, value_length, DEFAULT_KV_GENERATOR_SEED)
+                .generate(expect_engine_keys_count);
         for (key, value) in kvs {
             modifies.push(Modify::Put(CF_DEFAULT, Key::from_raw(&key), value))
         }
@@ -88,11 +90,14 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
     let ctx = Context::new();
     bencher.iter_with_setup(
         || {
-            let test_kvs: Vec<(Key, Value)> =
-                generate_deliberate_kvs(config.put_count, DEFAULT_KEY_LENGTH, config.value_length)
-                    .iter()
-                    .map(|(key, value)| (Key::from_raw(&key), value.clone()))
-                    .collect();
+            let test_kvs: Vec<(Key, Value)> = KvGenerator::with_seed(
+                DEFAULT_KEY_LENGTH,
+                config.value_length,
+                DEFAULT_KV_GENERATOR_SEED,
+            ).generate(config.put_count)
+                .iter()
+                .map(|(key, value)| (Key::from_raw(&key), value.clone()))
+                .collect();
             (test_kvs, &ctx)
         },
         |(test_kvs, ctx)| {
@@ -132,11 +137,14 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
     let engine = config.factory.build();
     let ctx = Context::new();
     fill_engine_with(&engine, config.engine_keys_count, config.value_length);
-    let test_kvs: Vec<Key> =
-        generate_deliberate_kvs(config.get_count, DEFAULT_KEY_LENGTH, config.value_length)
-            .iter()
-            .map(|(key, _)| Key::from_raw(&key))
-            .collect();
+    let test_kvs: Vec<Key> = KvGenerator::with_seed(
+        DEFAULT_KEY_LENGTH,
+        config.value_length,
+        DEFAULT_KV_GENERATOR_SEED,
+    ).generate(config.get_count)
+        .iter()
+        .map(|(key, _)| Key::from_raw(&key))
+        .collect();
 
     bencher.iter_with_setup(
         || {
