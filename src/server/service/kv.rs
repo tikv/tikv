@@ -568,12 +568,19 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     fn raw_scan(&self, ctx: RpcContext, mut req: RawScanRequest, sink: UnarySink<RawScanResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
 
+        let end_key = if req.get_end_key().is_empty() {
+            None
+        } else {
+            Some(req.take_end_key())
+        };
+
         let future = self
             .storage
             .async_raw_scan(
                 req.take_context(),
                 req.take_cf(),
                 req.take_start_key(),
+                end_key,
                 req.get_limit() as usize,
                 req.get_key_only(),
                 req.get_reverse(),
