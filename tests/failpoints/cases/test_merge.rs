@@ -12,18 +12,21 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::thread;
 use std::time::*;
 
 use fail;
 use futures::Future;
 
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
 use tikv::storage::CF_RAFT;
+use tikv::util::config::*;
 
 /// Test if merge is rollback as expected.
 #[test]
@@ -256,4 +259,111 @@ fn test_node_merge_recover_snapshot() {
     must_get_equal(&cluster.get_engine(3), b"k40", b"v4");
     cluster.must_transfer_leader(1, new_peer(3, 3));
     cluster.must_put(b"k40", b"v5");
+}
+
+#[test]
+fn test_node_merge_multiple_snapshots() {
+    use std::sync::mpsc;
+    use tikv::util::HandyRwLock;
+
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    // make it gc quickly to trigger snapshot easily
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 10;
+    cluster.cfg.raft_store.merge_max_log_gap = 9;
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    let target_leader = right
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 1)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(right.get_id(), target_leader);
+    let target_leader = left
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 2)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(left.get_id(), target_leader);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+
+    // So cluster becomes:
+    //  left region: 1         2(leader) I 3
+    // right region: 1(leader) 2         I 3
+    // I means isolation.(here just means 3 can not receive append log)
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(right.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+
+    // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
+    let (tx, _rx) = mpsc::channel();
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box CollectSnapshotFilter::new(tx));
+    // Write some data to trigger a snapshot of right region.
+    for i in 200..210 {
+        let key = format!("k{}", i);
+        let value = format!("v{}", i);
+        cluster.must_put(key.as_bytes(), value.as_bytes());
+    }
+    // Wait for snapshot to generate and send
+    thread::sleep(Duration::from_millis(100));
+
+    // Merge left and right region, due to isolation, the regions on store 3 are not merged yet.
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_millis(200));
+
+    // Let peer of right region on store 3 to make append response to trigger a new snapshot
+    // one is snapshot before merge, the other is snapshot after merge.
+    // Then the old and new snapshot messages are received and handled in one tick,
+    // so `pending_cross_snap` may updated improperly and make merge source peer destory itself.
+    // Here blocks raftstore for a while to make it not to apply snapshot and receive new log now.
+    fail::cfg("on_raft_ready", "sleep(100)").unwrap();
+    cluster.clear_send_filters();
+    thread::sleep(Duration::from_millis(150));
+    // Filter message again to make sure peer on store 3 can not catch up PrepraeMerge log
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(right.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    // Cause filter is added again, no need to block raftstore anymore
+    fail::cfg("on_raft_ready", "off").unwrap();
+
+    // Wait some time to let already merged peer on store 1 or store 2 to notify
+    // the peer of left region on store 3 is stale, and then the peer will check
+    // `pending_cross_snap`
+    thread::sleep(Duration::from_millis(200));
+
+    cluster.must_put(b"k9", b"v9");
+    // let follower can reach the new log, then commit merge
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(3), b"k9", b"v9");
 }
