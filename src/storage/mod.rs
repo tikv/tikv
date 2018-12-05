@@ -11,26 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::gc_worker::GCWorker;
-use self::metrics::*;
-use self::mvcc::Lock;
-use self::txn::CMD_BATCH_SIZE;
-use futures::{future, Future};
-use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
-use raftstore::store::engine::IterOption;
-use server::readpool::{self, ReadPool};
-use std::boxed::FnBox;
-use std::cmp;
-use std::error;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
-use std::sync::{Arc, Mutex};
-use std::u64;
-use util;
-use util::collections::HashMap;
-use util::worker::{self, Builder, ScheduleError, Worker};
-
 pub mod config;
 pub mod engine;
 pub mod gc_worker;
@@ -40,6 +20,32 @@ mod readpool_context;
 pub mod txn;
 pub mod types;
 
+use std::boxed::FnBox;
+use std::cmp;
+use std::error;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::sync::{atomic, Arc, Mutex};
+use std::u64;
+
+use futures::{future, Future};
+use kvproto::errorpb;
+use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
+
+use rocksdb::DB;
+
+use raftstore::store::engine::IterOption;
+use server::readpool::{self, ReadPool};
+use server::ServerRaftStoreRouter;
+use util;
+use util::collections::HashMap;
+use util::worker::{self, Builder, ScheduleError, Worker};
+
+use self::gc_worker::GCWorker;
+use self::metrics::*;
+use self::mvcc::Lock;
+use self::txn::CMD_BATCH_SIZE;
+
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
@@ -47,7 +53,6 @@ pub use self::engine::{
     Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
 };
 pub use self::readpool_context::Context as ReadPoolContext;
-#[cfg(test)]
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -140,8 +145,10 @@ pub enum Command {
         start_key: Key,
         end_key: Key,
     },
+    // only for test, keep the latches of keys for a while
     Pause {
         ctx: Context,
+        keys: Vec<Key>,
         duration: u64,
     },
     MvccByKey {
@@ -222,9 +229,17 @@ impl Display for Command {
                 "kv::command::delete range [{:?}, {:?}) | {:?}",
                 start_key, end_key, ctx
             ),
-            Command::Pause { ref ctx, duration } => {
-                write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
-            }
+            Command::Pause {
+                ref ctx,
+                ref keys,
+                duration,
+            } => write!(
+                f,
+                "kv::command::pause keys:({}) {} ms | {:?}",
+                keys.len(),
+                duration,
+                ctx
+            ),
             Command::MvccByKey { ref ctx, ref key } => {
                 write!(f, "kv::command::mvccbykey {:?} | {:?}", key, ctx)
             }
@@ -253,7 +268,6 @@ impl Command {
             // must guarantee that there is no other read or write on these keys, so
             // we can treat DeleteRange as readonly Command.
             Command::DeleteRange { .. } |
-            Command::Pause { .. } |
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
@@ -362,6 +376,11 @@ impl Command {
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
             }
+            Command::Pause { ref keys, .. } => {
+                for key in keys {
+                    bytes += key.as_encoded().len();
+                }
+            }
             _ => {}
         }
         bytes
@@ -392,76 +411,155 @@ impl Options {
     }
 }
 
-/// A builder to build a temporary `Storage<RocksEngine>`.
+/// A builder to build a temporary `Storage<E>`.
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder {
-    config: Option<Config>,
-    engine: Option<RocksEngine>,
+pub struct TestStorageBuilder<E: Engine> {
+    engine: E,
+    config: Config,
+    local_storage: Option<Arc<DB>>,
+    raft_store_router: Option<ServerRaftStoreRouter>,
 }
 
-impl TestStorageBuilder {
+impl TestStorageBuilder<RocksEngine> {
+    /// Build `Storage<RocksEngine>`.
     pub fn new() -> Self {
         Self {
-            config: None,
-            engine: None,
+            engine: TestEngineBuilder::new().build().unwrap(),
+            config: Config::default(),
+            local_storage: None,
+            raft_store_router: None,
+        }
+    }
+}
+
+impl<E: Engine> TestStorageBuilder<E> {
+    pub fn from_engine(engine: E) -> Self {
+        Self {
+            engine,
+            config: Config::default(),
+            local_storage: None,
+            raft_store_router: None,
         }
     }
 
     /// Customize the config of the `Storage`.
     ///
     /// By default, `Config::default()` will be used.
-    pub fn config(mut self, config: &Config) -> Self {
-        self.config = Some(config.clone());
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = config;
         self
     }
 
-    /// Customize the engine of the `Storage`.
+    /// Set local storage for GCWorker.
     ///
-    /// By default, an engine created from `TestEngineBuilder` will be used.
-    pub fn engine(mut self, engine: RocksEngine) -> Self {
-        self.engine = Some(engine);
+    /// By default, `None` will be used.
+    pub fn local_storage(mut self, local_storage: Arc<DB>) -> Self {
+        self.local_storage = Some(local_storage);
         self
     }
 
-    /// Build a `Storage<RocksEngine>`.
-    pub fn build_and_start(self) -> Result<Storage<RocksEngine>> {
+    /// Set raft store router for GCWorker.
+    ///
+    /// By default, `None` will be used.
+    pub fn raft_store_router(mut self, raft_store_router: ServerRaftStoreRouter) -> Self {
+        self.raft_store_router = Some(raft_store_router);
+        self
+    }
+
+    /// Build a `Storage<E>`.
+    pub fn build(self) -> Result<Storage<E>> {
         use util::worker::FutureWorker;
 
-        let config = match self.config {
-            None => Config::default(),
-            Some(cfg) => cfg,
-        };
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
             ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
                 || ReadPoolContext::new(pd_worker.scheduler())
             })
         };
-        let engine = match self.engine {
-            None => TestEngineBuilder::new().build()?,
-            Some(e) => e,
-        };
-        let mut storage = Storage::from_engine(engine, &config, read_pool)?;
-        storage.start(&config)?;
-        Ok(storage)
+        Storage::from_engine(
+            self.engine,
+            &self.config,
+            read_pool,
+            self.local_storage,
+            self.raft_store_router,
+        )
     }
 }
 
-#[derive(Clone)]
 pub struct Storage<E: Engine> {
+    // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    // to schedule the execution of storage commands
+    /// To schedule the execution of storage commands
     worker: Arc<Mutex<Worker<Msg>>>,
     worker_scheduler: worker::Scheduler<Msg>,
 
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker<E>,
 
-    // Storage configurations.
+    /// How many strong references. Thread pool and workers will be stopped
+    /// once there are no more references.
+    refs: Arc<atomic::AtomicUsize>,
+
+    // Fields below are storage configurations.
     max_key_size: usize,
+}
+
+impl<E: Engine> Clone for Storage<E> {
+    #[inline]
+    fn clone(&self) -> Self {
+        let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
+
+        debug!(
+            "Storage ({} engine) referenced (reference count before operation: {})",
+            self.engine, refs
+        );
+
+        Self {
+            engine: self.engine.clone(),
+            worker: self.worker.clone(),
+            worker_scheduler: self.worker_scheduler.clone(),
+            read_pool: self.read_pool.clone(),
+            gc_worker: self.gc_worker.clone(),
+            refs: self.refs.clone(),
+            max_key_size: self.max_key_size,
+        }
+    }
+}
+
+impl<E: Engine> Drop for Storage<E> {
+    #[inline]
+    fn drop(&mut self) {
+        let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
+
+        debug!(
+            "Storage ({} engine) de-referenced (reference count before operation: {})",
+            self.engine, refs
+        );
+
+        if refs != 1 {
+            return;
+        }
+
+        let mut worker = self.worker.lock().unwrap();
+        if let Err(e) = worker.schedule(Msg::Quit) {
+            error!("Failed to ask scheduler to quit: {:?}", e);
+        }
+
+        let h = worker.stop().unwrap();
+        if let Err(e) = h.join() {
+            error!("Failed to join sched_handle: {:?}", e);
+        }
+
+        let r = self.gc_worker.stop();
+        if let Err(e) = r {
+            error!("Failed to stop gc_worker: {:?}", e);
+        }
+
+        info!("Storage ({} engine) stopped.", self.engine);
+    }
 }
 
 impl<E: Engine> Storage<E> {
@@ -469,9 +567,9 @@ impl<E: Engine> Storage<E> {
         engine: E,
         config: &Config,
         read_pool: ReadPool<ReadPoolContext>,
+        local_storage: Option<Arc<DB>>,
+        raft_store_router: Option<ServerRaftStoreRouter>,
     ) -> Result<Self> {
-        info!("storage {:?} started.", engine);
-
         let worker = Arc::new(Mutex::new(
             Builder::new("storage-scheduler")
                 .batch_size(CMD_BATCH_SIZE)
@@ -479,54 +577,34 @@ impl<E: Engine> Storage<E> {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
-        let gc_worker = GCWorker::new(engine.clone(), config.gc_ratio_threshold);
+        let runner = Scheduler::new(
+            engine.clone(),
+            worker_scheduler.clone(),
+            config.scheduler_concurrency,
+            config.scheduler_worker_pool_size,
+            config.scheduler_pending_write_threshold.0 as usize,
+        );
+        let mut gc_worker = GCWorker::new(
+            engine.clone(),
+            local_storage,
+            raft_store_router,
+            config.gc_ratio_threshold,
+        );
+
+        worker.lock().unwrap().start(runner)?;
+        gc_worker.start()?;
+
+        info!("Storage ({} engine) started.", engine);
+
         Ok(Storage {
             engine,
             worker,
             worker_scheduler,
             read_pool,
             gc_worker,
+            refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
         })
-    }
-
-    pub fn mut_gc_worker(&mut self) -> &mut GCWorker<E> {
-        &mut self.gc_worker
-    }
-
-    pub fn start(&mut self, config: &Config) -> Result<()> {
-        let sched_concurrency = config.scheduler_concurrency;
-        let sched_worker_pool_size = config.scheduler_worker_pool_size;
-        let sched_pending_write_threshold = config.scheduler_pending_write_threshold.0 as usize;
-        let mut worker = self.worker.lock().unwrap();
-        let scheduler = Scheduler::new(
-            self.engine.clone(),
-            worker.scheduler(),
-            sched_concurrency,
-            sched_worker_pool_size,
-            sched_pending_write_threshold,
-        );
-        worker.start(scheduler)?;
-        self.gc_worker.start()?;
-        Ok(())
-    }
-
-    pub fn stop(&mut self) -> Result<()> {
-        let mut worker = self.worker.lock().unwrap();
-        if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("send quit cmd to scheduler failed, error:{:?}", e);
-            return Err(box_err!("failed to ask sched to quit: {:?}", e));
-        }
-
-        let h = worker.stop().unwrap();
-        if let Err(e) = h.join() {
-            return Err(box_err!("failed to join sched_handle, err:{:?}", e));
-        }
-
-        self.gc_worker.stop()?;
-
-        info!("storage {:?} closed.", self.engine);
-        Ok(())
     }
 
     pub fn get_engine(&self) -> E {
@@ -735,8 +813,18 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
-        let cmd = Command::Pause { ctx, duration };
+    pub fn async_pause(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        duration: u64,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cmd = Command::Pause {
+            ctx,
+            keys,
+            duration,
+        };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
@@ -1193,6 +1281,38 @@ impl<E: Engine> Storage<E> {
         }
         Ok(pairs)
     }
+    fn reverse_raw_scan(
+        snapshot: &E::Snap,
+        cf: &str,
+        start_key: &Key,
+        end_key: Option<Key>,
+        limit: usize,
+        statistics: &mut Statistics,
+        key_only: bool,
+    ) -> Result<Vec<Result<KvPair>>> {
+        let mut option = IterOption::default();
+        if let Some(end) = end_key {
+            option.set_lower_bound(end.into_encoded());
+        }
+        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
+        let statistics = statistics.mut_cf_statistics(cf);
+        if !cursor.reverse_seek(start_key, statistics)? {
+            return Ok(vec![]);
+        }
+        let mut pairs = vec![];
+        while cursor.valid() && pairs.len() < limit {
+            pairs.push(Ok((
+                cursor.key(statistics).to_owned(),
+                if key_only {
+                    vec![]
+                } else {
+                    cursor.value(statistics).to_owned()
+                },
+            )));
+            cursor.prev(statistics);
+        }
+        Ok(pairs)
+    }
 
     pub fn async_raw_scan(
         &self,
@@ -1201,6 +1321,7 @@ impl<E: Engine> Storage<E> {
         key: Vec<u8>,
         limit: usize,
         key_only: bool,
+        reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
         let engine = self.get_engine();
@@ -1219,15 +1340,27 @@ impl<E: Engine> Storage<E> {
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
-                    let result = Self::raw_scan(
-                        &snapshot,
-                        &cf,
-                        &Key::from_encoded(key),
-                        None,
-                        limit,
-                        &mut statistics,
-                        key_only,
-                    ).map_err(Error::from);
+                    let result = if reverse {
+                        Self::reverse_raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            None,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        ).map_err(Error::from)
+                    } else {
+                        Self::raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            None,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        ).map_err(Error::from)
+                    };
 
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
                     thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
@@ -1258,7 +1391,11 @@ impl<E: Engine> Storage<E> {
         Err(Error::InvalidCf(cf.to_owned()))
     }
 
-    fn check_key_ranges(ranges: &[KeyRange]) -> bool {
+    /// Check if key range is valid
+    ///
+    /// - if reverse, endKey is less than startKey. endKey is lowerBound.
+    /// - if not reverse, endKey is greater than startKey. endKey is upperBound.
+    fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
         let ranges_len = ranges.len();
         for i in 0..ranges_len {
             let start_key = ranges[i].get_start_key();
@@ -1266,7 +1403,9 @@ impl<E: Engine> Storage<E> {
             if end_key.is_empty() && i + 1 != ranges_len {
                 end_key = ranges[i + 1].get_start_key();
             }
-            if !end_key.is_empty() && start_key >= end_key {
+            if !end_key.is_empty()
+                && (!reverse && start_key >= end_key || reverse && start_key <= end_key)
+            {
                 return false;
             }
         }
@@ -1280,6 +1419,7 @@ impl<E: Engine> Storage<E> {
         mut ranges: Vec<KeyRange>,
         each_limit: usize,
         key_only: bool,
+        reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_scan";
         let engine = self.get_engine();
@@ -1298,7 +1438,7 @@ impl<E: Engine> Storage<E> {
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
                     let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges) {
+                    if !Self::check_key_ranges(&ranges, reverse) {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
                     let mut result = Vec::new();
@@ -1315,15 +1455,27 @@ impl<E: Engine> Storage<E> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = Self::raw_scan(
-                            &snapshot,
-                            &cf,
-                            &start_key,
-                            end_key,
-                            each_limit,
-                            &mut statistics,
-                            key_only,
-                        )?;
+                        let pairs = if reverse {
+                            Self::reverse_raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            )?
+                        } else {
+                            Self::raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            )?
+                        };
                         result.extend(pairs.into_iter());
                     }
 
@@ -1556,7 +1708,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -1604,18 +1756,13 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 101)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let mut storage = TestStorageBuilder::new()
-            .engine(engine)
-            .build_and_start()
-            .unwrap();
+        let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1672,13 +1819,11 @@ mod tests {
                 )
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_scan() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1899,13 +2044,11 @@ mod tests {
                 )
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_batch_get() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -1965,13 +2108,11 @@ mod tests {
                 )
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_txn() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2041,18 +2182,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let mut storage = TestStorageBuilder::new()
-            .config(&config)
-            .build_and_start()
-            .unwrap();
+        let storage = TestStorageBuilder::new().config(config).build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -2060,12 +2196,10 @@ mod tests {
                 .wait(),
         );
         storage
-            .async_prewrite(
+            .async_pause(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                b"x".to_vec(),
-                100,
-                Options::default(),
+                vec![Key::from_raw(b"x")],
+                1000,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2092,13 +2226,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_cleanup() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -2125,13 +2257,11 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"x"), 105)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_get_put() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -2170,18 +2300,13 @@ mod tests {
             b"100".to_vec(),
             storage.async_get(ctx, Key::from_raw(b"x"), 101).wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_high_priority_no_block() {
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let mut storage = TestStorageBuilder::new()
-            .config(&config)
-            .build_and_start()
-            .unwrap();
+        let storage = TestStorageBuilder::new().config(config).build().unwrap();
         let (tx, rx) = channel();
         expect_none(
             storage
@@ -2211,7 +2336,12 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .async_pause(Context::new(), 1000, expect_ok_callback(tx.clone(), 3))
+            .async_pause(
+                Context::new(),
+                vec![],
+                1000,
+                expect_ok_callback(tx.clone(), 3),
+            )
             .unwrap();
         let mut ctx = Context::new();
         ctx.set_priority(CommandPri::High);
@@ -2221,13 +2351,11 @@ mod tests {
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_delete_range() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         // Write x and y.
         storage
@@ -2319,13 +2447,11 @@ mod tests {
                 .async_get(Context::new(), Key::from_raw(b"z"), 101)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_delete_range() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = [
@@ -2435,13 +2561,11 @@ mod tests {
         }
 
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_put() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2472,13 +2596,11 @@ mod tests {
                     .wait(),
             );
         }
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_get() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2512,13 +2634,11 @@ mod tests {
                 .async_raw_batch_get(Context::new(), "".to_string(), keys)
                 .wait(),
         );
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_batch_delete() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2613,13 +2733,11 @@ mod tests {
                     .wait(),
             );
         }
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_raw_scan() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2664,38 +2782,235 @@ mod tests {
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, true)
+                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, true, false)
                 .wait(),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, true)
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"c2".to_vec(),
+                    20,
+                    true,
+                    false,
+                )
                 .wait(),
         );
-        let mut results: Vec<Option<KvPair>> =
-            test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
+        let mut results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .collect();
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, false)
+                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, false, false)
                 .wait(),
         );
         results = results.split_off(10);
         expect_multi_values(
             results,
             storage
-                .async_raw_scan(Context::new(), "".to_string(), b"c2".to_vec(), 20, false)
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"c2".to_vec(),
+                    20,
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .rev()
+            .collect();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"z".to_vec(),
+                    20,
+                    false,
+                    true,
+                )
                 .wait(),
         );
 
-        storage.stop().unwrap();
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .map(|(k, v)| Some((k, v)))
+            .rev()
+            .take(5)
+            .collect();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"z".to_vec(),
+                    5,
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+
+        // End key tests. Confirm that lower/upper bound works correctly.
+        let ctx = Context::new();
+        let results = vec![
+            (b"c1".to_vec(), b"cc11".to_vec()),
+            (b"c2".to_vec(), b"cc22".to_vec()),
+            (b"c3".to_vec(), b"cc33".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"d1".to_vec(), b"dd11".to_vec()),
+            (b"d2".to_vec(), b"dd22".to_vec()),
+        ].into_iter()
+            .map(|(k, v)| Some((k, v)));
+        expect_multi_values(
+            results.clone().collect(),
+            <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
+                .and_then(move |snapshot| {
+                    <Storage<RocksEngine>>::raw_scan(
+                        &snapshot,
+                        &"".to_string(),
+                        &Key::from_encoded(b"c1".to_vec()),
+                        Some(Key::from_encoded(b"d3".to_vec())),
+                        20,
+                        &mut Statistics::default(),
+                        false,
+                    )
+                })
+                .wait(),
+        );
+        expect_multi_values(
+            results.rev().collect(),
+            <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
+                .and_then(move |snapshot| {
+                    <Storage<RocksEngine>>::reverse_raw_scan(
+                        &snapshot,
+                        &"".to_string(),
+                        &Key::from_encoded(b"d3".to_vec()),
+                        Some(Key::from_encoded(b"c1".to_vec())),
+                        20,
+                        &mut Statistics::default(),
+                        false,
+                    )
+                })
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_check_key_ranges() {
+        fn make_ranges(ranges: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<KeyRange> {
+            ranges
+                .into_iter()
+                .map(|(s, e)| {
+                    let mut range = KeyRange::new();
+                    range.set_start_key(s);
+                    if !e.is_empty() {
+                        range.set_end_key(e);
+                    }
+                    range
+                })
+                .collect()
+        }
+
+        let ranges = make_ranges(vec![
+            (b"a".to_vec(), b"a3".to_vec()),
+            (b"b".to_vec(), b"b3".to_vec()),
+            (b"c".to_vec(), b"c3".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a".to_vec(), vec![]),
+            (b"b".to_vec(), vec![]),
+            (b"c".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            false
+        );
+
+        // if end_key is omitted, the next start_key is used instead. so, false is returned.
+        let ranges = make_ranges(vec![
+            (b"c".to_vec(), vec![]),
+            (b"b".to_vec(), vec![]),
+            (b"a".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, false),
+            false
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"c3".to_vec(), vec![]),
+            (b"b3".to_vec(), vec![]),
+            (b"a3".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            true
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a".to_vec(), b"a3".to_vec()),
+            (b"b".to_vec(), b"b3".to_vec()),
+            (b"c".to_vec(), b"c3".to_vec()),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            false
+        );
+
+        let ranges = make_ranges(vec![
+            (b"a3".to_vec(), vec![]),
+            (b"b3".to_vec(), vec![]),
+            (b"c3".to_vec(), vec![]),
+        ]);
+        assert_eq!(
+            <Storage<RocksEngine>>::check_key_ranges(&ranges, true),
+            false
+        );
     }
 
     #[test]
     fn test_raw_batch_scan() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         let test_data = vec![
@@ -2768,7 +3083,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false)
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    5,
+                    false,
+                    false,
+                )
                 .wait(),
         );
 
@@ -2790,7 +3112,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, true)
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    5,
+                    true,
+                    false,
+                )
                 .wait(),
         );
 
@@ -2808,7 +3137,14 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 3, false)
+                .async_raw_batch_scan(
+                    Context::new(),
+                    "".to_string(),
+                    ranges.clone(),
+                    3,
+                    false,
+                    false,
+                )
                 .wait(),
         );
 
@@ -2826,25 +3162,25 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 3, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 3, true, false)
                 .wait(),
         );
 
         let results = vec![
-            Some((b"a".to_vec(), b"aa".to_vec())),
-            Some((b"a1".to_vec(), b"aa11".to_vec())),
             Some((b"a2".to_vec(), b"aa22".to_vec())),
-            Some((b"b".to_vec(), b"bb".to_vec())),
-            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
+            Some((b"a".to_vec(), b"aa".to_vec())),
             Some((b"b2".to_vec(), b"bb22".to_vec())),
-            Some((b"c".to_vec(), b"cc".to_vec())),
-            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
             Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
         ];
         let ranges: Vec<KeyRange> = vec![
-            (b"a".to_vec(), b"a3".to_vec()),
-            (b"b".to_vec(), b"b3".to_vec()),
-            (b"c".to_vec(), b"c3".to_vec()),
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
         ].into_iter()
             .map(|(s, e)| {
                 let mut range = KeyRange::new();
@@ -2856,34 +3192,67 @@ mod tests {
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges.clone(), 5, false)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, false, true)
                 .wait(),
         );
 
         let results = vec![
-            Some((b"a".to_vec(), vec![])),
-            Some((b"a1".to_vec(), vec![])),
-            Some((b"a2".to_vec(), vec![])),
-            Some((b"b".to_vec(), vec![])),
-            Some((b"b1".to_vec(), vec![])),
-            Some((b"b2".to_vec(), vec![])),
-            Some((b"c".to_vec(), vec![])),
-            Some((b"c1".to_vec(), vec![])),
-            Some((b"c2".to_vec(), vec![])),
+            Some((b"c2".to_vec(), b"cc22".to_vec())),
+            Some((b"c1".to_vec(), b"cc11".to_vec())),
+            Some((b"b2".to_vec(), b"bb22".to_vec())),
+            Some((b"b1".to_vec(), b"bb11".to_vec())),
+            Some((b"a2".to_vec(), b"aa22".to_vec())),
+            Some((b"a1".to_vec(), b"aa11".to_vec())),
         ];
+        let ranges: Vec<KeyRange> = vec![b"c3".to_vec(), b"b3".to_vec(), b"a3".to_vec()]
+            .into_iter()
+            .map(|s| {
+                let mut range = KeyRange::new();
+                range.set_start_key(s);
+                range
+            })
+            .collect();
         expect_multi_values(
             results,
             storage
-                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true)
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 2, false, true)
                 .wait(),
         );
 
-        storage.stop().unwrap();
+        let results = vec![
+            Some((b"a2".to_vec(), vec![])),
+            Some((b"a1".to_vec(), vec![])),
+            Some((b"a".to_vec(), vec![])),
+            Some((b"b2".to_vec(), vec![])),
+            Some((b"b1".to_vec(), vec![])),
+            Some((b"b".to_vec(), vec![])),
+            Some((b"c2".to_vec(), vec![])),
+            Some((b"c1".to_vec(), vec![])),
+            Some((b"c".to_vec(), vec![])),
+        ];
+        let ranges: Vec<KeyRange> = vec![
+            (b"a3".to_vec(), b"a".to_vec()),
+            (b"b3".to_vec(), b"b".to_vec()),
+            (b"c3".to_vec(), b"c".to_vec()),
+        ].into_iter()
+            .map(|(s, e)| {
+                let mut range = KeyRange::new();
+                range.set_start_key(s);
+                range.set_end_key(e);
+                range
+            })
+            .collect();
+        expect_multi_values(
+            results,
+            storage
+                .async_raw_batch_scan(Context::new(), "".to_string(), ranges, 5, true, true)
+                .wait(),
+        );
     }
 
     #[test]
     fn test_scan_lock() {
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
             .async_prewrite(
@@ -3086,15 +3455,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-
-        storage.stop().unwrap();
     }
 
     #[test]
     fn test_resolve_lock() {
         use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let mut storage = TestStorageBuilder::new().build_and_start().unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
         // These locks (transaction ts=99) are not going to be resolved.
@@ -3215,7 +3582,5 @@ mod tests {
                 ts += 10;
             }
         }
-
-        storage.stop().unwrap();
     }
 }

@@ -41,6 +41,7 @@ extern crate slog_term;
 mod util;
 
 use std::cmp::Ordering;
+use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -78,6 +79,7 @@ const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
+const RUN_LDB_CMD_KEY_WORD: &str = "ldb";
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     eprintln!("{}: {}", prefix, e);
@@ -978,6 +980,10 @@ fn main() {
                 .help("pd address"),
         )
         .subcommand(
+            SubCommand::with_name(RUN_LDB_CMD_KEY_WORD)
+                .about("run ldb cmd of RocksDB")
+        )
+        .subcommand(
             SubCommand::with_name("raft")
                 .about("print raft log entry")
                 .subcommand(
@@ -1148,7 +1154,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("diff")
-                .about("diff two region keys")
+                .about("calculate difference of region keys from different dbs")
                 .arg(
                     Arg::with_name("region")
                         .required(true)
@@ -1232,7 +1238,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("tombstone")
-                .about("set a region on the node to tombstone by manual")
+                .about("set some regions on the node to tombstone by manual")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
@@ -1242,7 +1248,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target region"),
+                        .help("the target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
@@ -1258,7 +1264,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("recover-mvcc")
-                .about("recover mvcc data of regions on one node")
+                .about("recover mvcc data of regions on one node by deleting corrupted keys")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
@@ -1268,7 +1274,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target region"),
+                        .help("the target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
@@ -1374,7 +1380,7 @@ fn main() {
         .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
-                .about("modify tikv config, eg. ./tikv-ctl -h ip:port -m kvdb -n default.disable_auto_compactions -v true")
+                .about("modify tikv config, eg. ./tikv-ctl -h ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
                 .arg(
                     Arg::with_name("module")
                         .required(true)
@@ -1508,7 +1514,7 @@ fn main() {
                             .takes_value(true)
                             .help(
                                 "Inject fail point and actions pairs.\
-                                E.g. tikv-fail inject fail::a=off fail::b=panic",
+                                E.g. tikv-ctl fail inject a=off b=panic",
                             ),
                     )
                     .arg(
@@ -1525,7 +1531,7 @@ fn main() {
                             Arg::with_name("args")
                                 .multiple(true)
                                 .takes_value(true)
-                                .help("Recover fail points. Eg. tikv-fail recover fail::a fail::b"),
+                                .help("Recover fail points. Eg. tikv-ctl fail recover a b"),
                         )
                         .arg(
                             Arg::with_name("file")
@@ -1537,7 +1543,22 @@ fn main() {
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
         );
 
+    // tikv-ctl just encapsulates the related module in rust-rocksdb. So, we don't need to parse
+    // the cmd here. Run cmd `./path-to-tikv-ctl ldb` and the help information will be printed.
+    if let Some(ldb_args) = check_run_ldb_cmd() {
+        rocksdb::run_ldb_tool(&ldb_args);
+        return;
+    }
+
     let matches = app.clone().get_matches();
+
+    // Deal with subcommand dump-snap-meta. This subcommand doesn't require other args, so process
+    // it before checking args.
+    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
+        let path = matches.value_of("file").unwrap();
+        return dump_snap_meta_file(path);
+    }
+
     if matches.args.is_empty() {
         let _ = app.print_help();
         println!();
@@ -1563,12 +1584,6 @@ fn main() {
     }
 
     let mgr = new_security_mgr(&matches);
-
-    // Deal with subcommand dump-snap-meta.
-    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
-        let path = matches.value_of("file").unwrap();
-        return dump_snap_meta_file(path);
-    }
 
     // Deal with all subcommands needs PD.
     if let Some(pd) = matches.value_of("pd") {
@@ -1997,6 +2012,24 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
         ))
     }
     list
+}
+
+// check if the key word "ldb" exists as the first argv and format the cmd line
+// to meet the requirements of ldb_tool.
+fn check_run_ldb_cmd() -> Option<Vec<String>> {
+    let mut res = Vec::new();
+    for x in env::args_os() {
+        if let Some(s) = x.to_os_string().to_str() {
+            res.push(s.to_string());
+        } else {
+            return None;
+        }
+    }
+    if res.len() > 1 && res[1] == RUN_LDB_CMD_KEY_WORD {
+        res.remove(1);
+        return Some(res);
+    }
+    None
 }
 
 #[cfg(test)]

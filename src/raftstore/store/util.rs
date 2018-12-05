@@ -159,7 +159,7 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
 
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
 // reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
-const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
+pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 pub fn delete_all_in_range(
     db: &DB,
@@ -256,9 +256,10 @@ pub fn check_region_epoch(
             | AdminCmdType::InvalidAdmin
             | AdminCmdType::ComputeHash
             | AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split | AdminCmdType::BatchSplit => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
-            AdminCmdType::PrepareMerge
+            AdminCmdType::Split
+            | AdminCmdType::BatchSplit
+            | AdminCmdType::PrepareMerge
             | AdminCmdType::CommitMerge
             | AdminCmdType::RollbackMerge
             | AdminCmdType::TransferLeader => {
@@ -1603,6 +1604,7 @@ mod tests {
         // These admin commands requires epoch.version.
         for ty in &[
             AdminCmdType::Split,
+            AdminCmdType::BatchSplit,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
@@ -1629,6 +1631,8 @@ mod tests {
 
         // These admin commands requires epoch.conf_version.
         for ty in &[
+            AdminCmdType::Split,
+            AdminCmdType::BatchSplit,
             AdminCmdType::ChangePeer,
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
