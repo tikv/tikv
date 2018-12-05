@@ -464,7 +464,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
 
-        // When receiving message having merge target, it indicates that the source peer 
+        // When receiving message having merge target, it indicates that the source peer
         // on this store is stale, the peers on other stores are already merged. The epoch
         // in merge target is the state of target peer at the time when source peer is merged.
         // So here we need to check the target peer on this store to decide whether the source
@@ -485,7 +485,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
-            // The target peer's version is unchanged, so source peer is able to merge into target 
+            // The target peer's version is unchanged, so source peer is able to merge into target
             // peer once it has catched up the PreperMerge log. Wait till it has catched up logs.
             return Ok(false);
         }
