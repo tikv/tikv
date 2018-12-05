@@ -233,11 +233,11 @@ impl RecentAddedPeersQueue {
         if let Some(ref mut queue) = self.queue {
             queue.push_back(pair);
             for i in 0..queue.len() {
-                if duration_to_sec(queue[i].1.elapsed()) >  self.reject_duration_as_secs as f64 {
-                    continue
+                if duration_to_sec(queue[i].1.elapsed()) > self.reject_duration_as_secs as f64 {
+                    continue;
                 }
                 queue.drain(..i);
-                return
+                return;
             }
         } else {
             let mut queue = VecDeque::new();
@@ -249,12 +249,11 @@ impl RecentAddedPeersQueue {
     pub fn contains(&mut self, id: u64) -> bool {
         if let Some(ref mut queue) = self.queue {
             let duration = self.reject_duration_as_secs;
-            if let Some(pos)  = queue.iter().position(|&(pid, start_time)| {
-                pid == id
-                    && duration_to_sec(start_time.elapsed()) > duration as f64
-            }){
+            if let Some(pos) = queue.iter().position(|&(pid, start_time)| {
+                pid == id && duration_to_sec(start_time.elapsed()) > duration as f64
+            }) {
                 queue.drain(..=pos);
-                return false
+                return false;
             };
         }
         true

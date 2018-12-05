@@ -894,7 +894,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         p.peers_start_pending_time.push((id, now));
                     }
                     // Add peer or proto the learner
-                    if !peer.get_is_learner(){
+                    if !peer.get_is_learner() {
                         p.recent_added_peers.push((id, now));
                     }
                     p.insert_peer_cache(peer);
