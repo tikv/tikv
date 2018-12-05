@@ -464,6 +464,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
 
+        // When receiving message having merge target, it indicates that the source peer 
+        // on this store is stale, the peers on other stores are already merged. The epoch
+        // in merge target is the state of target peer at the time when source peer is merged.
+        // So here we need to check the target peer on this store to decide whether the source
+        // to destory or wait to catch up logs.
         if let Some(epoch) = self.pending_cross_snap.get(&target_region_id).or_else(|| {
             self.region_peers
                 .get(&target_region_id)
@@ -475,11 +480,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 target_region_id,
                 epoch
             );
-            // So the target peer has moved on, we should let it go.
+            // The target peer will move on, namely, it will apply a snapshot generated after merge,
+            // so destroy source peer.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
-            // Wait till it catching up logs.
+            // The target peer's version is unchanged, so source peer is able to merge into target 
+            // peer once it has catched up the PreperMerge log. Wait till it has catched up logs.
             return Ok(false);
         }
 
