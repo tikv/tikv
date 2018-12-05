@@ -125,7 +125,8 @@ impl ScalarFunc {
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2Args
-            | ScalarFuncSig::SubstringBinary2Args => (2, 2),
+            | ScalarFuncSig::SubstringBinary2Args
+            | ScalarFuncSig::Strcmp => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -438,7 +439,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
-            | ScalarFuncSig::Strcmp
             | ScalarFuncSig::StringAnyValue
             | ScalarFuncSig::StringDurationTimeDiff
             | ScalarFuncSig::StringStringTimeDiff
@@ -823,6 +823,8 @@ dispatch_call! {
         IsIPv4 => is_ipv4,
         IsIPv6 => is_ipv6,
         InetAton => inet_aton,
+
+        Strcmp => strcmp,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1133,6 +1135,7 @@ mod tests {
                     ScalarFuncSig::Trim2Args,
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
+                    ScalarFuncSig::Strcmp,
                 ],
                 2,
                 2,
@@ -1486,7 +1489,6 @@ mod tests {
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
-            ScalarFuncSig::Strcmp,
             ScalarFuncSig::StringAnyValue,
             ScalarFuncSig::StringDurationTimeDiff,
             ScalarFuncSig::StringStringTimeDiff,
