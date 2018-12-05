@@ -132,7 +132,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     }
 
     if let Some(http_addr) = matches.value_of("http-addr") {
-        config.server.http_addr = http_addr.to_owned();
+        config.http.addr = http_addr.to_owned();
     }
 
     if let Some(data_dir) = matches.value_of("data-dir") {

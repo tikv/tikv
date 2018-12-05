@@ -56,6 +56,18 @@
 # max-tasks-per-worker-low = 2000
 # stack-size = "10MB"
 
+[http]
+## If HTTP service is enabled. If the value is true, the Prometheus can pull the metrics directly 
+## from it through the HTTP address. The reason we need it is Prometheus only support HTTP, 
+## but TiKV only supports gRPC and the C gRPC can't support dispatching different protocols.
+# enabled = true
+
+## HTTP listening address.
+# addr = "127.0.0.1:9520". If it is not specified, the system will use it as the default port.
+
+## Set the maximum number of worker threads for the HTTP service.
+# thread_pool_size = 1
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"
@@ -63,9 +75,6 @@
 ## Advertise listening address for client communication.
 ## If not set, `addr` will be used.
 # advertise-addr = ""
-
-## HTTP listening address.
-# http-addr = "127.0.0.1:0". If it is not specified, the system will use a random port.
 
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"

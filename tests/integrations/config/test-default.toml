@@ -2,6 +2,8 @@
 
 [readpool.storage]
 
+[http]
+
 [server]
 
 [storage]

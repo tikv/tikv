@@ -19,10 +19,14 @@ max-tasks-per-worker-normal = 1000
 max-tasks-per-worker-low = 3000
 stack-size = "12MB"
 
+[http]
+enabled = true
+addr = "example.com:443"
+thread-pool-size = 1
+
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
-http-addr = "example.com:443"
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234

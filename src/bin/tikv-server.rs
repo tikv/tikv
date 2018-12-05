@@ -26,7 +26,6 @@ extern crate log;
 extern crate slog;
 #[cfg(unix)]
 extern crate nix;
-extern crate prometheus;
 extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
@@ -37,9 +36,7 @@ extern crate slog_stdlog;
 extern crate slog_term;
 #[macro_use]
 extern crate tikv;
-extern crate futures;
 extern crate hyper;
-extern crate tokio_threadpool;
 extern crate toml;
 
 #[cfg(unix)]
@@ -49,10 +46,8 @@ use util::setup::*;
 use util::signal_handler;
 
 use std::fs::File;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::process;
-use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -60,11 +55,6 @@ use std::usize;
 
 use clap::{App, Arg};
 use fs2::FileExt;
-use futures::{future, Future};
-use hyper::service::service_fn;
-use hyper::{Body, Method, Request, Response, Server as HttpServer, StatusCode};
-use prometheus::{Encoder, TextEncoder};
-use tokio_threadpool::Builder as ThreadPoolBuilder;
 
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
@@ -77,6 +67,7 @@ use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::util::http_server::HttpServer;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
@@ -254,59 +245,28 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         error!("failed to start metrics flusher, error: {:?}", e);
     }
 
-    let cfg_http_addr = server_cfg.http_addr.clone();
+    let http_cfg = cfg.http.clone();
+
     // Run server.
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
 
-    let thread_pool = ThreadPoolBuilder::new()
-        .pool_size(1)
-        .name_prefix("tikv-http-server-")
-        .after_start(|| {
-            info!("http server started");
-        })
-        .before_stop(|| {
-            info!("stopping http server");
-        })
-        .build();
-    let http_addr = SocketAddr::from_str(&cfg_http_addr).unwrap();
-    // Create an http service.
-    let service =
-        |req: Request<Body>| -> Box<Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-            let mut response = Response::new(Body::empty());
-
-            match (req.method(), req.uri().path()) {
-                (&Method::GET, "/metrics") => {
-                    let encoder = TextEncoder::new();
-                    let metric_familys = prometheus::gather();
-                    let mut buffer = vec![];
-                    if let Err(e) = encoder.encode(&metric_familys, &mut buffer) {
-                        fatal!("failed to get metrics: {:?}", e)
-                    } else {
-                        *response.body_mut() = Body::from(buffer);
-                    }
-                }
-                _ => {
-                    *response.status_mut() = StatusCode::NOT_FOUND;
-                }
-            };
-
-            Box::new(future::ok(response))
-        };
-
-    // Bind and serve.
-    let http_server = HttpServer::bind(&http_addr).serve(move || service_fn(service));
-    let (tx, rx) = futures::sync::oneshot::channel::<()>();
-    let graceful = http_server
-        .with_graceful_shutdown(rx)
-        .map_err(|e| fatal!("failed to stop http server: {:?}", e));
-    thread_pool.spawn(graceful);
+    let mut http_enabled = http_cfg.enabled;
+    let mut http_server = HttpServer::new(http_cfg.thread_pool_size);
+    if http_enabled {
+        if let Err(e) = http_server.start(http_cfg.addr) {
+            error!("failed to bind addr, error: {:?}", e);
+            http_enabled = false;
+        }
+    }
 
     signal_handler::handle_signal(Some(engines));
 
-    let _ = tx.send(());
-    thread_pool.shutdown_now().wait().unwrap();
+    if http_enabled {
+        http_server.stop()
+    }
+
     // Stop.
     server
         .stop()
@@ -354,7 +314,7 @@ fn main() {
                 .long("http-addr")
                 .takes_value(true)
                 .value_name("IP:PORT")
-                .help("Sets http listening address"),
+                .help("Sets HTTP listening address"),
         )
         .arg(
             Arg::with_name("log-level")
