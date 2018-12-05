@@ -498,7 +498,7 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_reject_transfer_leader_duration = ReadableDuration::secs(1);
+    cluster.cfg.raft_store.raft_reject_transfer_leader_duration = ReadableDuration::secs(3);
 }
 
 pub fn configure_for_lease_read<T: Simulator>(

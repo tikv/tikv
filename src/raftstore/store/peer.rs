@@ -215,38 +215,49 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
+#[derive(Default)]
 pub struct RecentAddedPeersQueue {
     pub reject_duration_as_secs: u64,
-    pub queue: VecDeque<(u64, Instant)>,
+    pub queue: Option<VecDeque<(u64, Instant)>>,
 }
 
 impl RecentAddedPeersQueue {
     pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeersQueue {
         RecentAddedPeersQueue {
             reject_duration_as_secs,
-            queue: Default::default(),
+            queue: None,
         }
     }
 
     pub fn push(&mut self, pair: (u64, Instant)) {
-        if self.queue.iter().any(|&(pid, _)| pid == pair.0) {
-            return;
-        }
-        self.queue.push_back(pair);
-        for i in 0..self.queue.len() {
-            if duration_to_sec(self.queue[i].1.elapsed()) > self.reject_duration_as_secs as f64 {
-                self.queue.pop_front();
-            } else {
-                break;
+        if let Some(ref mut queue) = self.queue {
+            queue.push_back(pair);
+            for i in 0..queue.len() {
+                if duration_to_sec(queue[i].1.elapsed()) >  self.reject_duration_as_secs as f64 {
+                    continue
+                }
+                queue.drain(..i);
+                return
             }
+        } else {
+            let mut queue = VecDeque::new();
+            queue.push_back(pair);
+            self.queue = Some(queue);
         }
     }
 
-    pub fn get(&self, id: u64) -> Option<&(u64, Instant)> {
-        self.queue.iter().find(|&(pid, start_time)| {
-            *pid == id
-                && duration_to_sec(start_time.elapsed()) <= self.reject_duration_as_secs as f64
-        })
+    pub fn contains(&mut self, id: u64) -> bool {
+        if let Some(ref mut queue) = self.queue {
+            let duration = self.reject_duration_as_secs;
+            if let Some(pos)  = queue.iter().position(|&(pid, start_time)| {
+                pid == id
+                    && duration_to_sec(start_time.elapsed()) > duration as f64
+            }){
+                queue.drain(..=pos);
+                return false
+            };
+        }
+        true
     }
 }
 
@@ -1521,7 +1532,7 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn is_transfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
+    fn is_transfer_leader_allowed(&mut self, peer: &metapb::Peer) -> bool {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
@@ -1534,7 +1545,7 @@ impl Peer {
                 return false;
             }
         }
-        if self.recent_added_peers.get(peer_id).is_some() {
+        if self.recent_added_peers.contains(peer_id) {
             debug!(
                 "{} reject transfer leader to {:?} due to the peer was added recently",
                 self.tag, peer
