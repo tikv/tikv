@@ -118,13 +118,7 @@ impl<T> Sender<T> {
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         if self.state.is_half_closed() {
-            channel::select! {
-                send(self.sender, t) -> res => match res {
-                    Ok(()) => Ok(()),
-                    Err(SendError(t)) => Err(TrySendError::Disconnected(t)),
-                },
-                default => Err(TrySendError::Full(t)),
-            }
+            self.sender.try_send(t)
         } else {
             Err(TrySendError::Disconnected(t))
         }
