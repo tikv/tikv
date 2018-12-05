@@ -11,16 +11,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[macro_export]
-macro_rules! register_fuzz {
-    ($( $target:path ),+ $(,)*) => {
-        #[inline]
-        pub fn run_fuzz_targets(name_match: &'static str, data: &[u8]) {
-            $(
-                if stringify!($target).find(name_match).is_some() {
-                    let _ = $target(data);
-                }
-            )+
-        }
-    };
-}
+//! Make cargo happy.
+//! Fuzzer binaries will be generated dynamically via `fuzz/cli.rs`.

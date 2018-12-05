@@ -11,17 +11,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[macro_use]
-extern crate honggfuzz;
-extern crate fuzz_targets;
-
-fn main() {
-    loop {
-        fuzz!(|data: &[u8]| {
-            fuzz_targets::run_fuzz_targets(
-                option_env!("TIKV_FUZZ_TARGETS").unwrap_or_default(),
-                data,
-            );
-        });
-    }
-}
+//! Make cargo happy.
+//! Fuzzer binaries will be generated dynamically via `fuzz/cli.rs`.

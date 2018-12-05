@@ -2,7 +2,6 @@
 name = "fuzzer-honggfuzz"
 version = "0.0.1"
 publish = false
-build = "../fuzzer_build.rs"
 
 [dependencies]
 fuzz-targets = {path = "../targets"}

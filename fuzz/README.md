@@ -18,23 +18,18 @@ Planned to support:
 
 See [honggfuzz-rs documentation](https://github.com/rust-fuzz/honggfuzz-rs).
 
-## Run fuzz
+## Usage
 
-You can run all test cases or some test cases by using the CLI utility in this directory:
+### List Available Fuzz Targets
 
 ```bash
 # In TiKV directory
-cargo run --package fuzz -- run [FUZZER] [FILTER]
+cargo run --package fuzz -- list-targets
 ```
 
-**Example**: Run tests whose name contains "decimal" using Honggfuzz:
+### Fuzz Specific Target with a Fuzzer
 
 ```bash
-cargo run --package fuzz -- run honggfuzz decimal
-```
-
-**Example**: Run all tests using libfuzzer:
-
-```bash
-cargo run --package fuzz -- run libfuzzer
+# In TiKV directory
+cargo run --package fuzz -- run [FUZZER] [TARGET]
 ```

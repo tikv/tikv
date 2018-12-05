@@ -11,12 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! __FUZZ_GENERATE_COMMENT__
+
+#![no_main]
+
 #[macro_use]
-extern crate afl;
+extern crate libfuzzer_sys;
 extern crate fuzz_targets;
 
-fn main() {
-    fuzz!(|data: &[u8]| {
-        fuzz_targets::run_fuzz_targets(option_env!("TIKV_FUZZ_TARGETS").unwrap_or_default(), data);
-    });
-}
+use fuzz_targets::__FUZZ_CLI_TARGET__ as fuzz_target;
+
+fuzz_target!(|data: &[u8]| {
+    let _ = fuzz_target(data);
+});

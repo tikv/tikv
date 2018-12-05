@@ -11,19 +11,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![cfg_attr(not(test), no_main)]
-
-#[cfg(not(test))]
-#[macro_use]
-extern crate libfuzzer_sys;
-extern crate fuzz_targets;
-
-#[cfg(not(test))]
-fuzz_target!(|data: &[u8]| {
-    fuzz_targets::run_fuzz_targets(option_env!("TIKV_FUZZ_TARGETS").unwrap_or_default(), data);
-});
-
-#[cfg(test)]
-fn main() {
-    // Make `cargo test` happy.
-}
+//! Make cargo happy.
+//! Fuzzer binaries will be generated dynamically via `fuzz/cli.rs`.
