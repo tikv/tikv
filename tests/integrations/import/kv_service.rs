@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{stream, Future, Stream};
 use tempdir::TempDir;
@@ -24,7 +25,7 @@ use kvproto::import_kvpb_grpc::*;
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
 
-fn new_kv_server() -> (ImportKVServer, ImportKvClient) {
+fn new_kv_server() -> (ImportKVServer, ImportKvClient, TempDir) {
     let temp_dir = TempDir::new("test_import_kv_server").unwrap();
 
     let mut cfg = TiKvConfig::default();
@@ -35,16 +36,20 @@ fn new_kv_server() -> (ImportKVServer, ImportKvClient) {
     let ch = {
         let env = Arc::new(Environment::new(1));
         let addr = server.bind_addrs().first().unwrap();
-        ChannelBuilder::new(env).connect(&format!("{}:{}", addr.0, addr.1))
+        ChannelBuilder::new(env)
+            .keepalive_timeout(Duration::from_secs(60))
+            .connect(&format!("{}:{}", addr.0, addr.1))
     };
     let client = ImportKvClient::new(ch);
 
-    (server, client)
+    // Return temp_dir as well, so that temp dir will be properly
+    // deleted when it is dropped.
+    (server, client, temp_dir)
 }
 
 #[test]
 fn test_kv_service() {
-    let (mut server, client) = new_kv_server();
+    let (mut server, client, _) = new_kv_server();
     server.start();
 
     let uuid = Uuid::new_v4().as_bytes().to_vec();
@@ -67,19 +72,19 @@ fn test_kv_service() {
 
     // Write an engine before it is opened.
     // Only send the write head here to avoid other gRPC errors.
-    let resp = send_write_head(&client, &head).unwrap();
+    let resp = retry!(send_write_head(&client, &head)).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
     // Close an engine before it it opened.
-    let resp = client.close_engine(&close).unwrap();
+    let resp = retry!(client.close_engine(&close)).unwrap();
     assert!(resp.get_error().has_engine_not_found());
 
-    client.open_engine(&open).unwrap();
-    let resp = send_write(&client, &head, &batch).unwrap();
+    retry!(client.open_engine(&open)).unwrap();
+    let resp = retry!(send_write(&client, &head, &batch)).unwrap();
     assert!(!resp.has_error());
-    let resp = send_write(&client, &head, &batch).unwrap();
+    let resp = retry!(send_write(&client, &head, &batch)).unwrap();
     assert!(!resp.has_error());
-    let resp = client.close_engine(&close).unwrap();
+    let resp = retry!(client.close_engine(&close)).unwrap();
     assert!(!resp.has_error());
 
     server.shutdown();
