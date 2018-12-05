@@ -275,6 +275,7 @@ fn test_node_merge_slow_split_left() {
     test_node_merge_slow_split(false);
 }
 
+// Test if a merge handled properly when there is a unfinishing slow split before merge.
 fn test_node_merge_slow_split(is_right_derive: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);

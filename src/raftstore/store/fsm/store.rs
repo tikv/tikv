@@ -1222,16 +1222,16 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
     mut start: Vec<u8>,
     end: Vec<u8>,
 ) -> bool {
-    for (_, &id) in region_ranges.range((Excluded(start.clone()), Unbounded::<Key>)) {
+    for (end_key, &id) in region_ranges.range((Excluded(start.clone()), Unbounded::<Key>)) {
         let mut region = get_region(id);
         // find a missing range
         if start < enc_start_key(region) {
             return false;
         }
-        start = enc_end_key(region);
-        if start >= end {
+        if *end_key >= end {
             return true;
         }
+        start = end_key.clone();
     }
     false
 }
