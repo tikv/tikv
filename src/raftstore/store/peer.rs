@@ -236,6 +236,8 @@ impl RecentAddedPeersQueue {
         for i in 0..self.queue.len() {
             if duration_to_sec(self.queue[i].1.elapsed()) > self.reject_duration_as_secs as f64 {
                 self.queue.pop_front();
+            } else {
+                break;
             }
         }
     }
