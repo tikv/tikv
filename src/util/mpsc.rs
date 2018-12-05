@@ -41,22 +41,22 @@ impl State {
     }
 
     #[inline]
-    fn is_half_closed(&self) -> bool {
+    fn is_sender_connected(&self) -> bool {
         self.connected.load(Ordering::Acquire)
     }
 }
 
-/// A sender that can be half closed.
+/// A sender that can be closed.
 ///
-/// Half closed means that sender can no longer send out any messages after closing.
+/// Closed means that sender can no longer send out any messages after closing.
 /// However, receiver may still block at receiving.
 ///
-/// Note that for a channel, there should be no such concept as half closed.
+/// Note that a receiver should reports error in such case.
 /// However, to fully implement a close mechanism, like waking up waiting
 /// receivers, requires a cost of performance. And the mechanism is unnecessary
 /// for current usage.
 ///
-/// TODO: Remove half closed when crossbeam-rs/crossbeam#236 is resolved.
+/// TODO: use builtin close when crossbeam-rs/crossbeam#236 is resolved.
 pub struct Sender<T> {
     sender: channel::Sender<T>,
     state: Arc<State>,
@@ -78,7 +78,7 @@ impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         let res = self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
         if res == 1 {
-            self.half_close();
+            self.close_sender();
         }
     }
 }
@@ -107,7 +107,7 @@ impl<T> Sender<T> {
     /// Blocks the current thread until a message is sent or the channel is disconnected.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        if self.state.is_half_closed() {
+        if self.state.is_sender_connected() {
             self.sender.send(t)
         } else {
             Err(SendError(t))
@@ -117,7 +117,7 @@ impl<T> Sender<T> {
     /// Attempts to send a message into the channel without blocking.
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        if self.state.is_half_closed() {
+        if self.state.is_sender_connected() {
             self.sender.try_send(t)
         } else {
             Err(TrySendError::Disconnected(t))
@@ -126,14 +126,14 @@ impl<T> Sender<T> {
 
     /// Stop the sender from sending any further messages.
     #[inline]
-    pub fn half_close(&self) {
+    pub fn close_sender(&self) {
         self.state.connected.store(false, Ordering::Release);
     }
 
-    /// Check if the sender is half closed.
+    /// Check if the sender is still connected.
     #[inline]
-    pub fn is_half_closed(&self) -> bool {
-        self.state.is_half_closed()
+    pub fn is_sender_connected(&self) -> bool {
+        self.state.is_sender_connected()
     }
 }
 
@@ -260,14 +260,14 @@ impl<T> LooseBoundedSender<T> {
 
     /// Stop the sender from sending any further messages.
     #[inline]
-    pub fn half_close(&self) {
-        self.sender.half_close();
+    pub fn close_sender(&self) {
+        self.sender.close_sender();
     }
 
-    /// Check if the sender is half closed.
+    /// Check if the sender is still connected.
     #[inline]
-    pub fn is_half_closed(&self) -> bool {
-        self.sender.state.is_half_closed()
+    pub fn is_sender_connected(&self) -> bool {
+        self.sender.state.is_sender_connected()
     }
 }
 
@@ -326,7 +326,7 @@ mod tests {
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
         assert_eq!(tx.try_send(2), Err(TrySendError::Disconnected(2)));
-        assert!(!tx.is_half_closed());
+        assert!(!tx.is_sender_connected());
 
         let (tx, rx) = super::bounded::<u64>(10);
         tx.send(2).unwrap();
@@ -343,7 +343,7 @@ mod tests {
 
         let (tx, rx) = super::bounded::<u64>(10);
         assert!(tx.is_empty());
-        assert!(tx.is_half_closed());
+        assert!(tx.is_sender_connected());
         assert_eq!(tx.len(), 0);
         assert!(rx.is_empty());
         assert_eq!(rx.len(), 0);
@@ -351,10 +351,10 @@ mod tests {
         tx.send(3).unwrap();
         assert_eq!(tx.len(), 2);
         assert_eq!(rx.len(), 2);
-        tx.half_close();
+        tx.close_sender();
         assert_eq!(tx.send(3), Err(SendError(3)));
         assert_eq!(tx.try_send(3), Err(TrySendError::Disconnected(3)));
-        assert!(!tx.is_half_closed());
+        assert!(!tx.is_sender_connected());
         assert_eq!(rx.try_recv(), Ok(2));
         assert_eq!(rx.recv(), Ok(3));
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
@@ -398,7 +398,7 @@ mod tests {
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
         assert_eq!(tx.try_send(2), Err(TrySendError::Disconnected(2)));
-        assert!(!tx.is_half_closed());
+        assert!(!tx.is_sender_connected());
 
         let (tx, rx) = super::unbounded::<u64>();
         drop(tx);
@@ -421,7 +421,7 @@ mod tests {
 
         let (tx, rx) = super::unbounded::<u64>();
         assert!(tx.is_empty());
-        assert!(tx.is_half_closed());
+        assert!(tx.is_sender_connected());
         assert_eq!(tx.len(), 0);
         assert!(rx.is_empty());
         assert_eq!(rx.len(), 0);
@@ -429,10 +429,10 @@ mod tests {
         tx.send(3).unwrap();
         assert_eq!(tx.len(), 2);
         assert_eq!(rx.len(), 2);
-        tx.half_close();
+        tx.close_sender();
         assert_eq!(tx.send(3), Err(SendError(3)));
         assert_eq!(tx.try_send(3), Err(TrySendError::Disconnected(3)));
-        assert!(!tx.is_half_closed());
+        assert!(!tx.is_sender_connected());
         assert_eq!(rx.try_recv(), Ok(2));
         assert_eq!(rx.recv(), Ok(3));
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
