@@ -274,6 +274,8 @@ fn test_node_lease_unsafe_during_leader_transfers() {
 fn test_node_callback_when_destroyed() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
+    // Increase the election tick to make this test case running reliably.
+    configure_for_lease_read(&mut cluster, None, Some(50));
     cluster.run();
     cluster.must_put(b"k1", b"v1");
     let leader = cluster.leader_of_region(1).unwrap();
@@ -295,12 +297,22 @@ fn test_node_callback_when_destroyed() {
     // it always timeout, no need to wait.
     let _ = cluster.call_command_on_leader(req, Duration::from_millis(500));
 
+    // To make sure `get` is handled before destroy leader, we must issue
+    // `get` then unblock append responses.
+    let leader_node_id = leader.get_store_id();
     let get = new_get_cmd(b"k1");
-    let req = new_request(1, epoch, vec![get], true);
-    block.store(false, Ordering::SeqCst);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
+    let mut req = new_request(1, epoch, vec![get], true);
+    req.mut_header().set_peer(leader);
+    let (cb, rx) = make_cb(&req);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(leader_node_id, req, cb)
         .unwrap();
+    // Unblock append responses after we issue the req.
+    block.store(false, Ordering::SeqCst);
+    let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+
     assert!(
         !filter.ctx.rl().is_empty(),
         "read index should be performed"

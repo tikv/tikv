@@ -92,7 +92,7 @@ bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.4", features = [ "secure" ] }
-raft = "0.3"
+raft = "0.4"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
 fxhash = "0.2"
@@ -106,9 +106,6 @@ base64 = "0.10"
 safemem = "0.3"
 cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
-
-[replace]
-"raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
