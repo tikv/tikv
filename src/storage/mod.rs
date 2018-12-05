@@ -1319,6 +1319,7 @@ impl<E: Engine> Storage<E> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
+        end_key: Option<Vec<u8>>,
         limit: usize,
         key_only: bool,
         reverse: bool,
@@ -1339,13 +1340,15 @@ impl<E: Engine> Storage<E> {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
+                    let end_key = end_key.map(Key::from_encoded);
+
                     let mut statistics = Statistics::default();
                     let result = if reverse {
                         Self::reverse_raw_scan(
                             &snapshot,
                             &cf,
                             &Key::from_encoded(key),
-                            None,
+                            end_key,
                             limit,
                             &mut statistics,
                             key_only,
@@ -1355,7 +1358,7 @@ impl<E: Engine> Storage<E> {
                             &snapshot,
                             &cf,
                             &Key::from_encoded(key),
-                            None,
+                            end_key,
                             limit,
                             &mut statistics,
                             key_only,
@@ -2782,7 +2785,15 @@ mod tests {
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, true, false)
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    vec![],
+                    None,
+                    20,
+                    true,
+                    false,
+                )
                 .wait(),
         );
         results = results.split_off(10);
@@ -2793,6 +2804,7 @@ mod tests {
                     Context::new(),
                     "".to_string(),
                     b"c2".to_vec(),
+                    None,
                     20,
                     true,
                     false,
@@ -2807,7 +2819,15 @@ mod tests {
         expect_multi_values(
             results.clone(),
             storage
-                .async_raw_scan(Context::new(), "".to_string(), vec![], 20, false, false)
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    vec![],
+                    None,
+                    20,
+                    false,
+                    false,
+                )
                 .wait(),
         );
         results = results.split_off(10);
@@ -2818,6 +2838,7 @@ mod tests {
                     Context::new(),
                     "".to_string(),
                     b"c2".to_vec(),
+                    None,
                     20,
                     false,
                     false,
@@ -2837,13 +2858,13 @@ mod tests {
                     Context::new(),
                     "".to_string(),
                     b"z".to_vec(),
+                    None,
                     20,
                     false,
                     true,
                 )
                 .wait(),
         );
-
         let results: Vec<Option<KvPair>> = test_data
             .clone()
             .into_iter()
@@ -2858,7 +2879,97 @@ mod tests {
                     Context::new(),
                     "".to_string(),
                     b"z".to_vec(),
+                    None,
                     5,
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+
+        // Scan with end_key
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .take(4)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results.clone(),
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"b2".to_vec(),
+                    Some(b"c2".to_vec()),
+                    20,
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .take(1)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results.clone(),
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"b2".to_vec(),
+                    Some(b"b2\x00".to_vec()),
+                    20,
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+
+        // Reverse scan with end_key
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .rev()
+            .skip(10)
+            .take(4)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results.clone(),
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"c2".to_vec(),
+                    Some(b"b2".to_vec()),
+                    20,
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+        let results: Vec<Option<KvPair>> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .take(1)
+            .map(|(k, v)| Some((k, v)))
+            .collect();
+        expect_multi_values(
+            results.clone(),
+            storage
+                .async_raw_scan(
+                    Context::new(),
+                    "".to_string(),
+                    b"b2\x00".to_vec(),
+                    Some(b"b2".to_vec()),
+                    20,
                     false,
                     true,
                 )
