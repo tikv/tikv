@@ -893,7 +893,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     if p.is_leader() {
                         p.peers_start_pending_time.push((id, now));
                     }
-                    // Add peer or promoto the learner
+                    // Add peer or promote the learner
                     if !peer.get_is_learner() {
                         p.recent_added_peers.push((id, now));
                     }

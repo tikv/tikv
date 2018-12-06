@@ -218,7 +218,11 @@ pub struct PeerStat {
 #[derive(Default)]
 pub struct RecentAddedPeersQueue {
     pub reject_duration_as_secs: u64,
-    pub queue: Option<VecDeque<(u64, Instant)>>,
+    // queue.0 record the all IDs of the recently added peers.
+    // |peer_id | peer_id | ... | peer_id | peer_id |
+    // |   u8   |   u8    |  u8 |   u8    |   u8    |
+    // queue.1 record the last added time.
+    pub queue: Option<(u64, Instant)>,
 }
 
 impl RecentAddedPeersQueue {
@@ -229,33 +233,41 @@ impl RecentAddedPeersQueue {
         }
     }
 
-    pub fn push(&mut self, pair: (u64, Instant)) {
+    pub fn push(&mut self, (id, now): (u64, Instant)) {
         if let Some(ref mut queue) = self.queue {
-            queue.push_back(pair);
-            for i in 0..queue.len() {
-                if duration_to_sec(queue[i].1.elapsed()) > self.reject_duration_as_secs as f64 {
-                    continue;
-                }
-                queue.drain(..i);
+            if duration_to_sec(queue.1.elapsed()) <= self.reject_duration_as_secs as f64 {
+                queue.0 = (queue.0 << 8) | (id & 0xFF);
+                queue.1 = now;
                 return;
             }
+            queue.0 = id & 0xFF;
+            queue.1 = now;
         } else {
-            let mut queue = VecDeque::new();
-            queue.push_back(pair);
-            self.queue = Some(queue);
+            self.queue = Some((id & 0xFF, now));
         }
     }
 
     pub fn contains(&mut self, id: u64) -> bool {
+        let mut need_clean = false;
         if let Some(ref mut queue) = self.queue {
-            let duration = self.reject_duration_as_secs;
-            if let Some(pos) = queue.iter().position(|&(pid, _)| pid == id) {
-                if duration_to_sec(queue[pos].1.elapsed()) > duration as f64 {
-                    queue.drain(..=pos);
-                    return false;
+            if duration_to_sec(queue.1.elapsed()) > self.reject_duration_as_secs as f64 {
+                need_clean = true
+            } else {
+                let mut ids = queue.0;
+                loop {
+                    let nid = ids & 0xFF;
+                    if nid == 0 {
+                        break;
+                    }
+                    if nid == id & 0xFF {
+                        return true;
+                    }
+                    ids >>= 8;
                 }
-                return true;
-            };
+            }
+        }
+        if need_clean {
+            self.queue = None
         }
         false
     }
