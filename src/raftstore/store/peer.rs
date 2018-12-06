@@ -229,15 +229,13 @@ impl RecentAddedPeer {
         }
     }
 
-    pub fn push(&mut self, (id, now): (u64, Instant)) {
+    pub fn update(&mut self, (id, now): (u64, Instant)) {
         self.last_added = Some((id, now));
     }
 
     pub fn contains(&mut self, id: u64) -> bool {
-        if let Some(ref mut last) = self.last_added {
-            if id == last.0
-                && duration_to_sec(last.1.elapsed()) < self.reject_duration_as_secs as f64
-            {
+        if let Some((pid, last)) = self.last_added {
+            if id == pid && duration_to_sec(last.elapsed()) < self.reject_duration_as_secs as f64 {
                 return true;
             }
         }
