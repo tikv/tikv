@@ -11,15 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
-use coprocessor::codec::{mysql, Datum};
+use std::borrow::Cow;
+use std::{f64, i64};
+
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
 use rand::{Rng, SeedableRng, XorShiftRng};
-use std::borrow::Cow;
-use std::{f64, i64, u64};
 use time;
+
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
+
+use super::{Error, EvalContext, Result, ScalarFunc};
+use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
+use coprocessor::codec::Datum;
 
 impl ScalarFunc {
     #[inline]
@@ -380,14 +385,22 @@ impl ScalarFunc {
     pub fn truncate_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let x = try_opt!(self.children[0].eval_int(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+        let d = if self.children[1]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             0
         } else {
             d
         };
         if d >= 0 {
             Ok(Some(x))
-        } else if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag()) {
+        } else if self.children[0]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             if d < -19 {
                 return Ok(Some(0));
             }
@@ -407,7 +420,11 @@ impl ScalarFunc {
     pub fn truncate_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+        let d = if self.children[1]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             (d as u64).min(i32::max_value() as u64) as i32
         } else if d >= 0 {
             d.min(i64::from(i32::max_value())) as i32
@@ -434,7 +451,11 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<Decimal>>> {
         let x = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if mysql::has_unsigned_flag(self.children[1].get_tp().get_flag()) {
+        let d = if self.children[1]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED)
+        {
             (d as u64).min(127) as i8
         } else if d >= 0 {
             d.min(127) as i8
@@ -574,12 +595,14 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::mysql::types;
-    use coprocessor::codec::{convert, mysql, Datum};
-    use coprocessor::dag::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::{f64, i64, u64};
+
+    use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
     use tipb::expression::ScalarFuncSig;
+
+    use coprocessor::codec::Datum;
+    use coprocessor::dag::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
 
     #[test]
     fn test_abs() {
@@ -603,7 +626,9 @@ mod tests {
         for (sig, arg, exp) in tests {
             let got = eval_func_with(sig, &[arg], |op, _| {
                 if sig == ScalarFuncSig::AbsUInt {
-                    op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+                    op.mut_field_type()
+                        .as_mut_accessor()
+                        .set_flag(FieldTypeFlag::UNSIGNED);
                 }
             }).unwrap();
             assert_eq!(got, exp);
@@ -670,12 +695,20 @@ mod tests {
         // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
-                if mysql::has_unsigned_flag(args[0].get_field_type().get_flag()) {
-                    op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+                if args[0]
+                    .get_field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    op.mut_field_type()
+                        .as_mut_accessor()
+                        .set_flag(FieldTypeFlag::UNSIGNED);
                 }
                 if sig == ScalarFuncSig::CeilIntToDec || sig == ScalarFuncSig::CeilDecToDec {
-                    op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
-                    op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
+                    op.mut_field_type()
+                        .as_mut_accessor()
+                        .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
+                        .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
             }).unwrap();
             assert_eq!(got, exp);
@@ -735,12 +768,20 @@ mod tests {
         // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
-                if mysql::has_unsigned_flag(args[0].get_field_type().get_flag()) {
-                    op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+                if args[0]
+                    .get_field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    op.mut_field_type()
+                        .as_mut_accessor()
+                        .set_flag(FieldTypeFlag::UNSIGNED);
                 }
                 if sig == ScalarFuncSig::FloorIntToDec || sig == ScalarFuncSig::FloorDecToDec {
-                    op.mut_tp().set_flen(convert::UNSPECIFIED_LENGTH);
-                    op.mut_tp().set_decimal(convert::UNSPECIFIED_LENGTH);
+                    op.mut_field_type()
+                        .as_mut_accessor()
+                        .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
+                        .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
             }).unwrap();
             assert_eq!(got, exp);
@@ -925,19 +966,19 @@ mod tests {
                 str2dec("-123.456"),
                 str2dec("-123.000"),
             ),
-            (ScalarFuncSig::RouldReal, Datum::F64(3.45), Datum::F64(3f64)),
+            (ScalarFuncSig::RoundReal, Datum::F64(3.45), Datum::F64(3f64)),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(-3.45),
                 Datum::F64(-3f64),
             ),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(f64::MAX),
                 Datum::F64(f64::MAX),
             ),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MIN),
             ),
@@ -1324,8 +1365,14 @@ mod tests {
         ];
         for (x, d, exp) in tests {
             let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
-                if mysql::has_unsigned_flag(args[0].get_field_type().get_flag()) {
-                    op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+                if args[0]
+                    .get_field_type()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    op.mut_field_type()
+                        .as_mut_accessor()
+                        .set_flag(FieldTypeFlag::UNSIGNED);
                 }
             }).unwrap();
             assert_eq!(got, exp);
