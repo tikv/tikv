@@ -1756,6 +1756,9 @@ fn main() {
                 .unwrap()
                 .parse::<usize>()
                 .unwrap();
+            if threads == 0 {
+                panic!("Number of threads can't be 0");
+            }
             println!(
                 "Recover all, threads: {}, read_only: {}",
                 threads, read_only
