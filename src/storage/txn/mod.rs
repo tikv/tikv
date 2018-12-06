@@ -21,7 +21,8 @@ use std::io::Error as IoError;
 
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
-pub use self::store::{SnapshotStore, StoreScanner};
+pub use self::store::{FixtureStore, FixtureStoreScanner};
+pub use self::store::{Scanner, SnapshotStore, Store, StoreScanner};
 
 quick_error! {
     #[derive(Debug)]

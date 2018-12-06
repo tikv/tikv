@@ -1457,7 +1457,7 @@ impl Storage for PeerStorage {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use kvproto::raft_serverpb::RaftSnapshotData;
     use protobuf;
     use raft::eraftpb::HardState;
@@ -2086,6 +2086,7 @@ mod test {
         };
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
+        worker.stop().unwrap().join().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let mut s2 = new_storage(sched.clone(), &td2);

@@ -267,7 +267,7 @@ impl CoprocessorHost {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use protobuf::RepeatedField;
     use raftstore::coprocessor::*;
     use std::sync::atomic::*;

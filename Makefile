@@ -49,13 +49,19 @@ clippy: pre-clippy
 		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
 		-A implicit_hasher -A large_enum_variant -A new_without_default \
 		-A new_without_default_derive -A neg_cmp_op_on_partial_ord \
-		-A too_many_arguments -A excessive_precision
+		-A too_many_arguments -A excessive_precision -A collapsible_if \
+		-A blacklisted_name
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
 	cargo build --features "${ENABLE_FEATURES}"
+
+ctl:
+	@cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	@mkdir -p ${BIN_PATH}
+	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
 run:
 	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
@@ -85,7 +91,7 @@ test:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	cargo test --features "${ENABLE_FEATURES}" --all --exclude tikv_fuzz ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --features "${ENABLE_FEATURES}" --bench benches ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \

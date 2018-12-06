@@ -110,7 +110,7 @@ impl AggExecutor {
     fn next(&mut self) -> Result<Option<Vec<Datum>>> {
         if let Some(row) = self.src.next()? {
             let row = row.take_origin();
-            row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)
+            row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)
                 .map(Some)
         } else {
             Ok(None)
@@ -395,9 +395,10 @@ impl StreamAggExecutor {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::i64;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
@@ -406,17 +407,16 @@ mod test {
 
     use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::decimal::Decimal;
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
 
-    use super::super::index_scan::test::IndexTestWrapper;
+    use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;
-    use super::super::scanner::test::{get_range, new_col_info, Data, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, Data, TestStore};
     use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::test::gen_table_data;
+    use super::super::topn::tests::gen_table_data;
     use super::*;
 
     #[inline]
@@ -500,8 +500,8 @@ mod test {
         let tid = 1;
         let idx_id = 1;
         let col_infos = vec![
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -666,11 +666,11 @@ mod test {
         // prepare data and store
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
-            new_col_info(4, types::FLOAT),
-            new_col_info(5, types::DOUBLE),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
+            new_col_info(4, FieldTypeTp::Float),
+            new_col_info(5, FieldTypeTp::Double),
         ];
         let raw_data = vec![
             vec![

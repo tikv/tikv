@@ -1178,6 +1178,11 @@ lazy_static! {
         "Number of corrupt keys during compaction",
         &["db", "cf"]
     ).unwrap();
+    pub static ref STORE_ENGINE_COMPACTION_REASON_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_engine_compaction_reason",
+        "Number of compaction reason",
+        &["db", "cf", "reason"]
+    ).unwrap();
     pub static ref STORE_ENGINE_LOCATE_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_locate",
         "Number of calls to seek/next/prev",
@@ -1228,6 +1233,12 @@ lazy_static! {
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
         &["db", "cf", "level"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_stall_conditions_changed",
+        "Stall conditions changed of each column family",
+        &["db", "cf", "type"]
     ).unwrap();
 }
 

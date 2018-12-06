@@ -28,7 +28,7 @@ pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
     store: SnapshotStore<S>,
     ranges: IntoIter<KeyRange>,
-    scanner: Option<Scanner<S>>,
+    scanner: Option<Scanner<SnapshotStore<S>>>,
     metrics: ExecutorMetrics,
 }
 
@@ -79,7 +79,7 @@ impl<S: Snapshot> ChecksumContext<S> {
         }
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<S>> {
+    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<SnapshotStore<S>>> {
         let scan_on = match self.req.get_scan_on() {
             ChecksumScanOn::Table => ScanOn::Table,
             ChecksumScanOn::Index => ScanOn::Index,

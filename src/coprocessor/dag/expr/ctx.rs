@@ -349,7 +349,7 @@ impl EvalContext {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::super::Error;
     use super::*;
     use std::sync::Arc;

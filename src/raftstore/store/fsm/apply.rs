@@ -936,13 +936,15 @@ impl ApplyDelegate {
         request: &AdminRequest,
     ) -> Result<(RaftCmdResponse, EntryResult)> {
         let cmd_type = request.get_cmd_type();
-        info!(
-            "{} execute admin command {:?} at [term: {}, index: {}]",
-            self.tag,
-            request,
-            ctx.exec_ctx.as_ref().unwrap().term,
-            ctx.exec_ctx.as_ref().unwrap().index
-        );
+        if cmd_type != AdminCmdType::CompactLog {
+            info!(
+                "{} execute admin command {:?} at [term: {}, index: {}]",
+                self.tag,
+                request,
+                ctx.exec_ctx.as_ref().unwrap().term,
+                ctx.exec_ctx.as_ref().unwrap().index
+            );
+        }
 
         let (mut response, exec_result) = match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
@@ -1189,9 +1191,9 @@ impl ApplyDelegate {
             }
             if req.get_new_peer_ids().len() != derived.get_peers().len() {
                 return Err(box_err!(
-                    "invalid new peer id count, need {}, but got {}",
-                    derived.get_peers().len(),
-                    req.get_new_peer_ids().len()
+                    "invalid new peer id count, need {:?}, but got {:?}",
+                    derived.get_peers(),
+                    req.get_new_peer_ids()
                 ));
             }
             keys.push_back(split_key.to_vec());

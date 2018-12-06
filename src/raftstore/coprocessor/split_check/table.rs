@@ -224,7 +224,7 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::io::Write;
     use std::sync::mpsc;
     use std::sync::Arc;

@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use protobuf::{Message, RepeatedField};
-use std::collections::hash_map::Entry;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
@@ -37,6 +36,7 @@ use rocksdb::DB;
 use pd::{PdClient, PdTask};
 use raftstore::{Error, Result};
 use storage::CF_RAFT;
+use util::collections::HashMapEntry;
 use util::escape;
 use util::mpsc::Receiver;
 use util::time::duration_to_sec;
@@ -875,15 +875,6 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(cp.region, &mut self.peer);
         }
-        if self.peer.is_leader() {
-            // Notify pd immediately.
-            info!(
-                "{} notify pd with change peer region {:?}",
-                self.peer.tag,
-                self.peer.region()
-            );
-            self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
-        }
 
         let peer_id = cp.peer.get_id();
         match change_type {
@@ -913,6 +904,21 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
                 }
                 self.peer.remove_peer_from_cache(peer_id);
             }
+        }
+
+        // In pattern matching above, if the peer is the leader,
+        // it will push the change peer into `peers_start_pending_time`
+        // without checking if it is duplicated. We move `heartbeat_pd` here
+        // to utilize `collect_pending_peers` in `heartbeat_pd` to avoid
+        // adding the redundant peer.
+        if self.peer.is_leader() {
+            // Notify pd immediately.
+            info!(
+                "{} notify pd with change peer region {:?}",
+                self.peer.tag,
+                self.peer.region(),
+            );
+            self.peer.heartbeat_pd(&self.ctx.pd_scheduler);
         }
         my_peer_id = self.peer.peer_id();
 
@@ -1241,10 +1247,10 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         let lock_key = (source.get_id(), source.get_region_epoch().get_version());
         match meta.merge_locks.entry(lock_key) {
             // So premerge is executed.
-            Entry::Occupied(e) => {
+            HashMapEntry::Occupied(e) => {
                 e.remove();
             }
-            Entry::Vacant(v) => {
+            HashMapEntry::Vacant(v) => {
                 let (tx, mut rx) = self.scheduler.router().one_shot(region.get_id());
                 v.insert(Some(tx));
                 return Some(rx);
@@ -1846,6 +1852,9 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
         let region = self.peer.region();
         let latest_epoch = region.get_region_epoch();
 
+        // This is a little difference for `check_region_epoch` in region split case.
+        // Here we just need to check `version` because `conf_ver` will be update
+        // to the latest value of the peer, and then send to PD.
         if latest_epoch.get_version() != epoch.get_version() {
             return Err(Error::StaleEpoch(
                 format!(

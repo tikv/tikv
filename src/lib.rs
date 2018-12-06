@@ -30,6 +30,7 @@
 #![feature(label_break_value)]
 #![feature(cell_update)]
 #![recursion_limit = "200"]
+#![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
@@ -53,8 +54,8 @@ extern crate fs2;
 #[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
-extern crate fxhash;
 extern crate grpcio as grpc;
+extern crate hashbrown;
 extern crate hex;
 extern crate indexmap;
 extern crate kvproto;
@@ -66,6 +67,7 @@ extern crate libc;
 extern crate log;
 extern crate murmur3;
 extern crate num;
+extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
 extern crate prometheus_static_metric;
@@ -76,7 +78,6 @@ extern crate raft;
 extern crate rand;
 extern crate regex;
 extern crate rocksdb;
-extern crate rustc_serialize;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
@@ -116,8 +117,13 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
+extern crate smallvec;
 
+extern crate base64;
+extern crate cop_datatype;
+extern crate flate2;
 extern crate panic_hook;
+extern crate safemem;
 
 #[macro_use]
 pub mod util;

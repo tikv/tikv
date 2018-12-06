@@ -1,41 +1,52 @@
-# TiKV config template
-#  Human-readable big numbers:
-#   File size(based on byte): KB, MB, GB, TB, PB
-#    e.g.: 1_048_576 = "1MB"
-#   Time(based on ms): ms, s, m, h
-#    e.g.: 78_000 = "1.3m"
+## TiKV config template
+##  Human-readable big numbers:
+##   File size(based on byte): KB, MB, GB, TB, PB
+##    e.g.: 1_048_576 = "1MB"
+##   Time(based on ms): ms, s, m, h
+##    e.g.: 78_000 = "1.3m"
 
-# log level: trace, debug, info, warning, error, critical.
-# Note that `debug` and `trace` are only available in development builds.
+## Log levels: trace, debug, info, warning, error, critical.
+## Note that `debug` and `trace` are only available in development builds.
 # log-level = "info"
 
-# file to store log, write to stderr if it's empty.
+## File to store logs.
+## If it is not set, logs will be appended to stderr.
 # log-file = ""
 
-# timespan between rotating the log files.
-# Once this timespan passes the existing log file will have a timestamp appended to its name,
-# and a new file will be created.
+## Timespan between rotating the log files.
+## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
+## timestamp appended to its name and a new file will be created.
 # log-rotation-timespan = "24h"
 
 [readpool.storage]
-# size of thread pool for high-priority operations
+## Size of the thread pool for high-priority operations.
 # high-concurrency = 4
-# size of thread pool for normal-priority operations
+
+## Size of the thread pool for normal-priority operations.
 # normal-concurrency = 4
-# size of thread pool for low-priority operations
+
+## Size of the thread pool for low-priority operations.
 # low-concurrency = 4
-# max running high-priority operations of each worker, reject if exceed
+
+## Max running high-priority operations of each worker, reject if exceeded.
 # max-tasks-per-worker-high = 2000
-# max running normal-priority operations of each worker, reject if exceed
+
+## Max running normal-priority operations of each worker, reject if exceeded.
 # max-tasks-per-worker-normal = 2000
-# max running low-priority operations of each worker, reject if exceed
+
+## Max running low-priority operations of each worker, reject if exceeded.
 # max-tasks-per-worker-low = 2000
-# size of stack size for each thread pool
+
+## Size of the stack for each thread in the thread pool.
 # stack-size = "10MB"
 
 [readpool.coprocessor]
-# Notice: if CPU_NUM > 8, default thread pool size for coprocessors
-# will be set to CPU_NUM * 0.8.
+## Most read requests from TiDB are sent to the coprocessor of TiKV. high/normal/low-concurrency is
+## used to set the number of threads of the coprocessor.
+## If there are many read requests, you can increase these config values (but keep it within the
+## number of system CPU cores). For example, for a 32-core machine deployed with TiKV, you can even
+## set these config to 30 in heavy read scenarios.
+## If CPU_NUM > 8, the default thread pool size for coprocessors is set to CPU_NUM * 0.8.
 
 # high-concurrency = 8
 # normal-concurrency = 8
@@ -46,391 +57,483 @@
 # stack-size = "10MB"
 
 [server]
-# set listening address.
+## Listening address.
 # addr = "127.0.0.1:20160"
-# set advertise listening address for client communication, if not set, use addr instead.
+
+## Advertise listening address for client communication.
+## If not set, `addr` will be used.
 # advertise-addr = ""
 
-# compression type for grpc channel, available values are none, deflate and gzip.
+## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"
-# size of thread pool for grpc server.
+
+## Size of the thread pool for the gRPC server.
 # grpc-concurrency = 4
-# The number of max concurrent streams/requests on a client connection.
+
+## The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
-# The number of connections with each tikv server to send raft messages.
+
+## The number of connections with each TiKV server to send Raft messages.
 # grpc-raft-conn-num = 10
-# Amount to read ahead on individual grpc streams.
+
+## Amount to read ahead on individual gRPC streams.
 # grpc-stream-initial-window-size = "2MB"
-# Time to wait before sending out a ping to check if server is still alive.
-# This is only for communications between tikv instances.
+
+## Time to wait before sending out a ping to check if server is still alive.
+## This is only for communications between TiKV instances.
 # grpc-keepalive-time = "10s"
-# Time to wait before closing the connection without receiving keepalive ping
-# ack.
+
+## Time to wait before closing the connection without receiving KeepAlive ping Ack.
 # grpc-keepalive-timeout = "3s"
 
-# How many snapshots can be sent concurrently.
+## How many snapshots can be sent concurrently.
 # concurrent-send-snap-limit = 32
-# How many snapshots can be recv concurrently.
+
+## How many snapshots can be received concurrently.
 # concurrent-recv-snap-limit = 32
 
-# max recursion level allowed when decoding dag expression
+## Max allowed recursion level when decoding Coprocessor DAG expression.
 # end-point-recursion-limit = 1000
 
-# max time to handle coprocessor request before timeout
+## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
-# the max bytes that snapshot can be written to disk in one second,
-# should be set based on your disk performance
+## Max bytes that snapshot can be written to disk in one second.
+## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
 
-# set attributes about this server, e.g. { zone = "us-west-1", disk = "ssd" }.
+## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
 [storage]
-# set the path to rocksdb directory.
+## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
 
-# notify capacity of scheduler's channel
+## Internal notify capacity of Scheduler's channel.
 # scheduler-notify-capacity = 10240
 
-# the number of slots in scheduler latches, concurrency control for write.
+## The number of slots in Scheduler latches, which controls write concurrency.
+## In most cases you can use the default value. When importing data, you can set it to a larger
+## value.
 # scheduler-concurrency = 2048000
 
-# scheduler's worker pool size, should increase it in heavy write cases,
-# also should less than total cpu cores.
+## Scheduler's worker pool size, i.e. the number of write threads.
+## It should be less than total CPU cores. When there are frequent write operations, set it to a
+## higher value. More specifically, you can run `top -H -p tikv-pid` to check whether the threads
+## named `sched-worker-pool` are busy.
 # scheduler-worker-pool-size = 4
 
-# When the pending write bytes exceeds this threshold,
-# the "scheduler too busy" error is displayed.
+## When the pending write bytes exceeds this threshold, the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
 
 [pd]
-# pd endpoints
+## PD endpoints.
 # endpoints = []
 
 [metric]
-# the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
+## Prometheus client push interval.
+## Setting the value to 0s stops Prometheus client from pushing.
 # interval = "15s"
-# the Prometheus pushgateway address. Leaving it empty stops Prometheus client from pushing.
+
+## Prometheus PushGateway address.
+## Leaving it empty stops Prometheus client from pushing.
 # address = ""
-# the Prometheus client push job name. Note: A node id will automatically append, e.g., "tikv_1".
+
+## Prometheus client push job name.
+## Note: A node id will automatically append, e.g., "tikv_1".
 # job = "tikv"
 
 [raftstore]
-# true (default value) for high reliability, this can prevent data loss when power failure.
+## Whether to force to flush logs.
+## Set to `true` (default) for best reliability, which prevents data loss when there is a power
+## failure. Set to `false` for higher performance (ensure that you run multiple TiKV nodes!).
 # sync-log = true
 
-# minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+## Whether to enable Raft prevote.
+## Prevote minimizes disruption when a partitioned node rejoins the cluster by using a two phase
+## election.
 # prevote = true
 
-# set the path to raftdb directory, default value is data-dir/raft
+## The path to RaftDB directory.
+## If not set, it will be `{data-dir}/raft`.
+## If there are multiple disks on the machine, storing the data of Raft RocksDB on differen disks
+## can improve TiKV performance.
 # raftdb-path = ""
 
-# set store capacity, if no set, use disk capacity.
+## Store capacity, i.e. max data size allowed.
+## If it is not set, disk capacity is used.
 # capacity = 0
 
-# notify capacity, 40960 is suitable for about 7000 regions.
+## Internal notify capacity.
+## 40960 is suitable for about 7000 Regions. It is recommended to use the default value.
 # notify-capacity = 40960
 
-# maximum number of messages can be processed in one tick.
+## Maximum number of internal messages to process in a tick.
 # messages-per-tick = 4096
 
-# Region heartbeat tick interval for reporting to pd.
+## Region heartbeat tick interval for reporting to PD.
 # pd-heartbeat-tick-interval = "60s"
-# Store heartbeat tick interval for reporting to pd.
+
+## Store heartbeat tick interval for reporting to PD.
 # pd-store-heartbeat-tick-interval = "10s"
 
-# When region size changes exceeds region-split-check-diff, we should check
-# whether the region should be split or not.
+## The threshold of triggering Region split check.
+## When Region size change exceeds this config, TiKV will check whether the Region should be split
+## or not. To reduce the cost of scanning data in the checking process, you can set the value to
+## 32MB during checking and set it back to the default value in normal operations.
 # region-split-check-diff = "6MB"
 
-# Interval to check region whether need to be split or not.
+## The interval of triggering Region split check.
 # split-region-check-tick-interval = "10s"
 
-# When raft entry exceed the max size, reject to propose the entry.
+## When the number of Raft entries exceeds the max size, TiKV rejects to propose the entry.
 # raft-entry-max-size = "8MB"
 
-# Interval to gc unnecessary raft log.
+## Interval to GC unnecessary Raft log.
 # raft-log-gc-tick-interval = "10s"
-# A threshold to gc stale raft log, must >= 1.
+
+## Threshold to GC stale Raft log, must be >= 1.
 # raft-log-gc-threshold = 50
-# When entry count exceed this value, gc will be forced trigger.
+
+## When the entry count exceeds this value, GC will be forced to trigger.
 # raft-log-gc-count-limit = 72000
-# When the approximate size of raft log entries exceed this value, gc will be forced trigger.
-# It's recommanded to set it to 3/4 of region-split-size.
+
+## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
+## It's recommanded to set it to 3/4 of `region-split-size`.
 # raft-log-gc-size-limit = "72MB"
 
-# When a peer hasn't been active for max-peer-down-duration,
-# we will consider this peer to be down and report it to pd.
+## How long the peer will be considered down and reported to PD when it hasn't been active for this
+## time.
 # max-peer-down-duration = "5m"
 
-# Interval to check whether start manual compaction for a region,
+## Interval to check whether to start manual compaction for a Region.
 # region-compact-check-interval = "5m"
 
-# Number of regions for each time to check.
+## Number of Regions for each time to check.
 # region-compact-check-step = 100
 
-# The minimum number of delete tombstones to trigger manual compaction.
+## The minimum number of delete tombstones to trigger manual compaction.
 # region-compact-min-tombstones = 10000
 
-# The minimum percentage of delete tombstones to trigger manual compaction.
-# Should between 1 and 100. Manual compaction only triggered when the number
-# of delete tombstones exceeds region-compact-min-tombstones and the percentage
-# of delete tombstones exceeds region-compact-tombstones-percent.
+## The minimum percentage of delete tombstones to trigger manual compaction.
+## It should be set between 1 and 100. Manual compaction is only triggered when the number of
+## delete tombstones exceeds `region-compact-min-tombstones` and the percentage of delete tombstones
+## exceeds `region-compact-tombstones-percent`.
 # region-compact-tombstones-percent = 30
 
-# Interval to check whether should start a manual compaction for lock column family,
-# if written bytes reach lock-cf-compact-threshold for lock column family, will fire
-# a manual compaction for lock column family.
+## Interval to check whether to start a manual compaction for Lock Column Family.
+## If written bytes reach `lock-cf-compact-bytes-threshold` for Lock Column Family, TiKV will
+## trigger a manual compaction for Lock Column Family.
 # lock-cf-compact-interval = "10m"
-
 # lock-cf-compact-bytes-threshold = "256MB"
 
-# Interval (s) to check region whether the data are consistent.
+## Interval (s) to check Region whether the data are consistent.
 # consistency-check-interval = 0
 
-# Use delete range to drop a large number of continuous keys.
-# use-delete-range = false
-
-# delay time before deleting a stale peer
+## Delay time before deleting a stale peer.
 # clean-stale-peer-delay = "10m"
 
-# Interval to cleanup import sst files.
+## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
 
 [coprocessor]
-# When it is true, it will try to split a region with table prefix if
-# that region crosses tables. It is recommended to turn off this option
-# if there will be a large number of tables created.
+## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
+## crosses tables.
+## It is recommended to turn off this option if there will be a large number of tables created.
 # split-region-on-table = true
-# When the region's size exceeds region-max-size, we will split the region
-# into two which the left region's size will be region-split-size or a little
-# bit smaller.
+
+## One split check produces several split keys in batch. This config limits the number of produced
+## split keys in one batch.
+# batch-split-limit = 10
+
+## When Region [a,e) size exceeds `region_max_size`, it will be split into several Regions [a,b),
+## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `region_split_size` (or a
+## little larger).
 # region-max-size = "144MB"
 # region-split-size = "96MB"
-# When the region's keys exceeds region-max-keys, we will split the region
-# into two which the left region's keys will be region-split-keys or a little
-# bit smaller.
+
+## When the number of keys in Region [a,e) exceeds the `region_max_keys`, it will be split into
+## several Regions [a,b), [b,c), [c,d), [d,e) and the number of keys in [a,b), [b,c), [c,d) will be
+## `region_split_keys`.
 # region-max-keys = 1440000
 # region-split-keys = 960000
 
 [rocksdb]
-# Maximum number of concurrent background jobs (compactions and flushes)
+## Maximum number of threads of RocksDB background jobs.
+## The background tasks include compaction and flush. For detailed information why RocksDB needs to
+## do compaction, see RocksDB-related materials. When write traffic (like the importing data size)
+## is big, it is recommended to enable more threads. But set the number of the enabled threads
+## smaller than that of CPU cores. For example, when importing data, for a machine with a 32-core
+## CPU, set the value to 28.
 # max-background-jobs = 8
 
-# This value represents the maximum number of threads that will concurrently perform a
-# compaction job by breaking it into multiple, smaller ones that are run simultaneously.
-# Default: 1 (i.e. no subcompactions)
+## Represents the maximum number of threads that will concurrently perform a sub-compaction job by
+## breaking it into multiple, smaller ones running simultaneously.
 # max-sub-compactions = 1
 
-# Number of open files that can be used by the DB.  You may need to
-# increase this if your database has a large working set. Value -1 means
-# files opened are always kept open. You can estimate number of files based
-# on target_file_size_base and target_file_size_multiplier for level-based
-# compaction.
-# If max-open-files = -1, RocksDB will prefetch index and filter blocks into
-# block cache at startup, so if your database has a large working set, it will
-# take several minutes to open the db.
+## Number of open files that can be used by the DB.
+## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
+## blocks into block cache at startup. So if your database has a large working set, it will take
+## several minutes to open the DB. You may need to increase this if your database has a large
+## working set. You can estimate the number of files based on `target-file-size-base` and
+## `target_file_size_multiplier` for level-based compaction.
 # max-open-files = 40960
 
-# Max size of rocksdb's MANIFEST file.
-# For detailed explanation please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
+## Max size of RocksDB's MANIFEST file.
+## For detailed explanation, please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
 # max-manifest-file-size = "20MB"
 
-# If true, the database will be created if it is missing.
+## If the value is `true`, the database will be created if it is missing.
 # create-if-missing = true
 
-# rocksdb wal recovery mode
-# 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
-# 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
-# 2 : PointInTimeRecovery, Recover to point-in-time consistency;
-# 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
+## RocksDB Write-Ahead Logs (WAL) recovery mode.
+## 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
+## 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
+## 2 : PointInTimeRecovery, Recover to point-in-time consistency;
+## 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 # wal-recovery-mode = 2
 
-# rocksdb write-ahead logs dir path
-# This specifies the absolute dir path for write-ahead logs (WAL).
-# If it is empty, the log files will be in the same dir as data.
-# When you set the path to rocksdb directory in memory like in /dev/shm, you may want to set
-# wal-dir to a directory on a persistent storage.
-# See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database
+## RocksDB WAL directory.
+## This config specifies the absolute directory path for WAL.
+## If it is not set, the log files will be in the same directory as data. When you set the path to
+## RocksDB directory in memory like in `/dev/shm`, you may want to set`wal-dir` to a directory on a
+## persistent storage. See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database .
+## If there are two disks on the machine, storing RocksDB data and WAL logs on different disks can
+## improve performance.
 # wal-dir = "/tmp/tikv/store"
 
-# The following two fields affect how archived write-ahead logs will be deleted.
-# 1. If both set to 0, logs will be deleted asap and will not get into the archive.
-# 2. If wal-ttl-seconds is 0 and wal-size-limit is not 0,
-#    WAL files will be checked every 10 min and if total size is greater
-#    then wal-size-limit, they will be deleted starting with the
-#    earliest until size_limit is met. All empty files will be deleted.
-# 3. If wal-ttl-seconds is not 0 and wal-size-limit is 0, then
-#    WAL files will be checked every wal-ttl-seconds / 2 and those that
-#    are older than wal-ttl-seconds will be deleted.
-# 4. If both are not 0, WAL files will be checked every 10 min and both
-#    checks will be performed with ttl being first.
-# When you set the path to rocksdb directory in memory like in /dev/shm, you may want to set
-# wal-ttl-seconds to a value greater than 0 (like 86400) and backup your db on a regular basis.
-# See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database
+## The following two fields affect how archived WAL will be deleted.
+## 1. If both values are set to 0, logs will be deleted ASAP and will not get into the archive.
+## 2. If `wal-ttl-seconds` is 0 and `wal-size-limit` is not 0, WAL files will be checked every 10
+##    min and if total size is greater than `wal-size-limit`, they will be deleted starting with the
+##    earliest until `wal-size-limit` is met. All empty files will be deleted.
+## 3. If `wal-ttl-seconds` is not 0 and `wal-size-limit` is 0, then WAL files will be checked every
+##    `wal-ttl-seconds / 2` and those that are older than `wal-ttl-seconds` will be deleted.
+## 4. If both are not 0, WAL files will be checked every 10 min and both checks will be performed
+##    with ttl being first.
+## When you set the path to RocksDB directory in memory like in `/dev/shm`, you may want to set
+## `wal-ttl-seconds` to a value greater than 0 (like 86400) and backup your DB on a regular basis.
+## See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database .
 # wal-ttl-seconds = 0
 # wal-size-limit = 0
 
-# rocksdb max total wal size
+## Max RocksDB WAL size in total
 # max-total-wal-size = "4GB"
 
-# Rocksdb Statistics provides cumulative stats over time.
-# Turn statistics on will introduce about 5%-10% overhead for RocksDB,
-# but it is worthy to know the internal status of RocksDB.
+## RocksDB Statistics provides cumulative stats over time.
+## Turning statistics on will introduce about 5%-10% overhead for RocksDB, but it can help you to
+## know the internal status of RocksDB.
 # enable-statistics = true
 
-# Dump statistics periodically in information logs.
-# Same as rocksdb's default value (10 min).
+## Dump statistics periodically in information logs.
+## Same as RocksDB's default value (10 min).
 # stats-dump-period = "10m"
 
-# Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
-# If you want to use rocksdb on multi disks or spinning disks, you should set value at
-# least 2MB;
+## Refer to: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ
+## If you want to use RocksDB on multi disks or spinning disks, you should set value at least 2MB.
 # compaction-readahead-size = 0
 
-# This is the maximum buffer size that is used by WritableFileWrite
+## Max buffer size that is used by WritableFileWrite.
 # writable-file-max-buffer-size = "1MB"
 
-# Use O_DIRECT for both reads and writes in background flush and compactions
+## Use O_DIRECT for both reads and writes in background flush and compactions.
 # use-direct-io-for-flush-and-compaction = false
 
-# Limit the disk IO of compaction and flush. Compaction and flush can cause
-# terrible spikes if they exceed a certain threshold. Consider setting this to
-# 50% ~ 80% of the disk throughput for a more stable result. However, in heavy
-# write workload, limiting compaction and flush speed can cause write stalls too.
+## Limit the disk IO of compaction and flush.
+## Compaction and flush can cause terrible spikes if they exceed a certain threshold. Consider
+## setting this to 50% ~ 80% of the disk throughput for a more stable result. However, in heavy
+## write workload, limiting compaction and flush speed can cause write stalls too.
 # rate-bytes-per-sec = 0
 
-# Enable or disable the pipelined write
+## Enable or disable the pipelined write.
 # enable-pipelined-write = true
 
-# Allows OS to incrementally sync files to disk while they are being
-# written, asynchronously, in the background.
+## Allows OS to incrementally sync files to disk while they are being written, asynchronously,
+## in the background.
 # bytes-per-sync = "1MB"
 
-# Allows OS to incrementally sync WAL to disk while it is being written.
+## Allows OS to incrementally sync WAL to disk while it is being written.
 # wal-bytes-per-sync = "512KB"
 
-# Specify the maximal size of the Rocksdb info log file. If the log file
-# is larger than `max_log_file_size`, a new info log file will be created.
-# If max_log_file_size == 0, all logs will be written to one log file.
+## Specify the maximal size of the RocksDB info log file.
+## If the log file is larger than this config, a new info log file will be created.
+## If it is set to 0, all logs will be written to one log file.
 # info-log-max-size = "1GB"
 
-# Time for the Rocksdb info log file to roll (in seconds).
-# If specified with non-zero value, log file will be rolled
-# if it has been active longer than `log_file_time_to_roll`.
-# 0 means disabled.
+## Time for the RocksDB info log file to roll (in seconds).
+## If the log file has been active longer than this config, it will be rolled.
+## If it is set to 0, rolling will be disabled.
 # info-log-roll-time = "0"
 
-# Maximal Rocksdb info log files to be kept.
+## Maximal RocksDB info log files to be kept.
 # info-log-keep-log-file-num = 10
 
-# This specifies the Rocksdb info LOG dir.
-# If it is empty, the log files will be in the same dir as data.
-# If it is non empty, the log files will be in the specified dir,
-# and the db data dir's absolute path will be used as the log file
-# name's prefix.
+## Specifies the RocksDB info log directory.
+## If it is empty, the log files will be in the same directory as data.
+## If it is not empty, the log files will be in the specified directory, and the DB data directory's
+## absolute path will be used as the log file name's prefix.
 # info-log-dir = ""
 
-# Column Family default used to store actual data of the database.
+## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
-# compression method (if any) is used to compress a block.
-#   no:     kNoCompression
-#   snappy: kSnappyCompression
-#   zlib:   kZlibCompression
-#   bzip2:  kBZip2Compression
-#   lz4:    kLZ4Compression
-#   lz4hc:  kLZ4HCCompression
-#   zstd:   kZSTD
+## Compression method (if any) is used to compress a block.
+##   no:     kNoCompression
+##   snappy: kSnappyCompression
+##   zlib:   kZlibCompression
+##   bzip2:  kBZip2Compression
+##   lz4:    kLZ4Compression
+##   lz4hc:  kLZ4HCCompression
+##   zstd:   kZSTD
+## `lz4` is a compression algorithm with moderate speed and compression ratio. The compression
+## ratio of `zlib` is high. It is friendly to the storage space, but its compression speed is
+## slow. This compression occupies many CPU resources.
 
-# per level compression
+## Per level compression.
+## This config should be chosen carefully according to CPU and I/O resources. For example, if you
+## use the compression mode of "no:no:lz4:lz4:lz4:zstd:zstd" and find much I/O pressure of the
+## system (run the `iostat` command to find %util lasts 100%, or run the `top` command to find many
+## iowaits) when writing (importing) a lot of data while the CPU resources are adequate, you can
+## compress level-0 and level-1 and exchange CPU resources for I/O resources. If you use the
+## compression mode of "no:no:lz4:lz4:lz4:zstd:zstd" and you find the I/O pressure of the system is
+## not big when writing a lot of data, but CPU resources are inadequate. Then run the `top` command
+## and choose the `-H` option. If you find a lot of bg threads (namely the compression thread of
+## RocksDB) are running, you can exchange I/O resources for CPU resources and change the compression
+## mode to "no:no:no:lz4:lz4:zstd:zstd". In a word, it aims at making full use of the existing
+## resources of the system and improving TiKV performance in terms of the current resources.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 
-# Approximate size of user data packed per block.  Note that the
-# block size specified here corresponds to uncompressed data.
+## The data block size. RocksDB compresses data based on the unit of block.
+## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
+## the block size specified here corresponds to uncompressed data.
 # block-size = "64KB"
 
-# If you're doing point lookups you definitely want to turn bloom filters on, We use
-# bloom filters to avoid unnecessary disk reads. Default bits_per_key is 10, which
-# yields ~1% false positive rate. Larger bits_per_key values will reduce false positive
-# rate, but increase memory usage and space amplification.
+## If you're doing point lookups you definitely want to turn bloom filters on. We use bloom filters
+## to avoid unnecessary disk reads. Default bits_per_key is 10, which yields ~1% false positive
+## rate. Larger `bloom-filter-bits-per-key` values will reduce false positive rate, but increase
+## memory usage and space amplification.
 # bloom-filter-bits-per-key = 10
 
-# false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
+## `false` means one SST file one bloom filter, `true` means every block has a corresponding bloom
+## filter.
 # block-based-bloom-filter = false
 
 # level0-file-num-compaction-trigger = 4
 
-# Soft limit on number of level-0 files. We start slowing down writes at this point.
+## Soft limit on number of level-0 files.
+## When the number of SST files of level-0 reaches the limit of `level0-slowdown-writes-trigger`,
+## RocksDB tries to slow down the write operation, because too many SST files of level-0 can cause
+## higher read pressure of RocksDB.
 # level0-slowdown-writes-trigger = 20
 
-# Maximum number of level-0 files.  We stop writes at this point.
+## Maximum number of level-0 files.
+## When the number of SST files of level-0 reaches the limit of `level0-stop-writes-trigger`,
+## RocksDB stalls the new write operation.
 # level0-stop-writes-trigger = 36
 
-# Amount of data to build up in memory (backed by an unsorted log
-# on disk) before converting to a sorted on-disk file.
+## Amount of data to build up in memory (backed by an unsorted log on disk) before converting to a
+## sorted on-disk file. It is the RocksDB MemTable size.
 # write-buffer-size = "128MB"
 
-# The maximum number of write buffers that are built up in memory.
+## The maximum number of the MemTables. The data written into RocksDB is first recorded in the WAL
+## log, and then inserted into MemTables. When the MemTable reaches the size limit of
+## `write-buffer-size`, it turns into read only and generates a new MemTable receiving new write
+## operations. The flush threads of RocksDB will flush the read only MemTable to the disks to become
+## an SST file of level0. `max-background-flushes` controls the maximum number of flush threads.
+## When the flush threads are busy, resulting in the number of the MemTables waiting to be flushed
+## to the disks reaching the limit of `max-write-buffer-number`, RocksDB stalls the new operation.
+## "Stall" is a flow control mechanism of RocksDB. When importing data, you can set the
+## `max-write-buffer-number` value higher, like 10.
 # max-write-buffer-number = 5
 
-# The minimum number of write buffers that will be merged together
-# before writing to storage.
+## The minimum number of write buffers that will be merged together before writing to storage.
 # min-write-buffer-number-to-merge = 1
 
-# Control maximum total data size for base level (level 1).
+## Control maximum total data size for base level (level 1).
+## When the level-1 data size reaches the limit value of `max-bytes-for-level-base`, the SST files
+## of level-1 and their overlap SST files of level-2 will be compacted. The golden rule: the first
+## reference principle of setting `max-bytes-for-level-base` is guaranteeing that the
+## `max-bytes-for-level-base` value is roughly equal to the data volume of level-0. Thus
+## unnecessary compaction is reduced. For example, if the compression mode is
+## "no:no:lz4:lz4:lz4:lz4:lz4", the `max-bytes-for-level-base` value can be `write-buffer-size * 4`,
+## because there is no compression of level-0 and level-1 and the trigger condition of compaction
+## for level-0 is that the number of the SST files reaches 4 (the default value). When both level-0
+## and level-1 adopt compaction, it is necessary to analyze RocksDB logs to know the size of an SST
+## file compressed from a MemTable. For example, if the file size is 32MB, the proposed value of
+## `max-bytes-for-level-base` is 32MB * 4 = 128MB.
 # max-bytes-for-level-base = "512MB"
 
-# Target file size for compaction.
+## Target file size for compaction.
+## The SST file size of level-0 is influenced by the compaction algorithm of `write-buffer-size`
+## and level0. `target-file-size-base` is used to control the size of a single SST file of level1 to
+## level6.
 # target-file-size-base = "8MB"
 
-# Max bytes for compaction.max_compaction_bytes
+## Max bytes for `compaction.max_compaction_bytes`.
 # max-compaction-bytes = "2GB"
 
-# There are four different algorithms to pick files to compact.
-# 0 : ByCompensatedSize
-# 1 : OldestLargestSeqFirst
-# 2 : OldestSmallestSeqFirst
-# 3 : MinOverlappingRatio
+## There are four different compaction priorities.
+## 0 : ByCompensatedSize
+## 1 : OldestLargestSeqFirst
+## 2 : OldestSmallestSeqFirst
+## 3 : MinOverlappingRatio
 # compaction-pri = 3
 
-# block-cache used to cache uncompressed blocks, big block-cache can speed up read.
-# in normal cases should tune to 30%-50% system's total memory.
+## Block cache used to cache uncompressed blocks.
+## Big block-cache can speed up read. Normally it should be tuned to 30%-50% system's total memory.
+## When the config is not set, TiKV sets the value to 40% of the system memory size.
+## To deploy multiple TiKV nodes on one physical machine, configure this parameter explicitly.
+## Otherwise, the OOM problem might occur in TiKV.
 # block-cache-size = "1GB"
 
-# Indicating if we'd put index/filter blocks to the block cache.
-# If not specified, each "table reader" object will pre-load index/filter block
-# during table initialization.
+## Indicating if we'd put index/filter blocks to the block cache.
+## If not specified, each "table reader" object will pre-load index/filter block during table
+## initialization.
 # cache-index-and-filter-blocks = true
 
-# Pin level0 filter and index blocks in cache.
+## Pin level-0 filter and index blocks in cache.
 # pin-l0-filter-and-index-blocks = true
 
-# Enable read amplication statistics.
-# value  =>  memory usage (percentage of loaded blocks memory)
-# 1      =>  12.50 %
-# 2      =>  06.25 %
-# 4      =>  03.12 %
-# 8      =>  01.56 %
-# 16     =>  00.78 %
+## Enable read amplification statistics.
+## value  =>  memory usage (percentage of loaded blocks memory)
+## 1      =>  12.50 %
+## 2      =>  06.25 %
+## 4      =>  03.12 %
+## 8      =>  01.56 %
+## 16     =>  00.78 %
 # read-amp-bytes-per-bit = 0
 
-# Pick target size of each level dynamically.
+## Pick target size of each level dynamically.
 # dynamic-level-bytes = true
 
-# Options for Column Family write
-# Column Family write used to store commit informations in MVCC model
+## Optimizes bloom filters. If true, RocksDB won't create bloom filters for the max level of
+## the LSM to reduce metadata that should fit in RAM.
+## This value is setted to true for `default` cf by default because its kv data could be determined
+## whether really exists by upper logic instead of bloom filters. But we suggest to set it to false
+## while using `Raw` mode.
+# optimize-filters-for-hits = true
+
+## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
+## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 # block-size = "64KB"
+
+## Recommend to set it the same as `rocksdb.defaultcf.write-buffer-size`.
 # write-buffer-size = "128MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
+
+## Recommend to set it the same as `rocksdb.defaultcf.max-bytes-for-level-base`.
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "8MB"
 
-# in normal cases should tune to 10%-30% system's total memory.
+## In normal cases, this config should be tuned to 10%-30% of the system's total memory.
+## When this config is not set, TiKV sets it to 15% of the system memory size.
+## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
+## The related data of the version information (MVCC) and the index-related data are recorded in
+## Write CF. In scenarios that include many single table indexes, set this parameter value higher.
 # block-cache-size = "256MB"
+
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
@@ -439,6 +542,7 @@
 # compaction-pri = 3
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = false
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -457,8 +561,10 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = false
 
 [raftdb]
+# max-background-jobs = 2
 # max-sub-compactions = 1
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
@@ -479,18 +585,26 @@
 # info-log-roll-time = "0"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
+# optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
+## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 # block-size = "64KB"
+
+## Recommend to set it the same as `rocksdb.defaultcf.write-buffer-size`.
 # write-buffer-size = "128MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
+
+## Recommend to set it the same as `rocksdb.defaultcf.max-bytes-for-level-base`.
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "8MB"
 
-# should tune to 256MB~2GB.
+## Generally, you can set it from 256MB to 2GB. In most cases, you can use the default value. But
+## if the system resources are adequate, you can set it higher.
 # block-cache-size = "256MB"
+
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
@@ -499,15 +613,17 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = true
 
 [security]
-# set the path for certificates. Empty string means disabling secure connectoins.
+## The path for TLS certificates. Empty string means disabling secure connections.
 # ca-path = ""
 # cert-path = ""
 # key-path = ""
 
 [import]
-# number of threads to handle RPC requests.
+## Number of threads to handle RPC requests.
 # num-threads = 8
-# stream channel window size, stream will be blocked on channel full.
+
+## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128

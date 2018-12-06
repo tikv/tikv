@@ -14,32 +14,25 @@
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::server::readpool::{self, ReadPool};
-use tikv::storage::config::Config;
 use tikv::storage::engine::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
-use tikv::util::worker::FutureWorker;
 use tikv::util::HandyRwLock;
 
 use super::*;
 
 #[derive(Clone)]
 pub struct AssertionStorage<E: Engine> {
-    pub store: SyncStorage<E>,
+    pub store: SyncTestStorage<E>,
     pub ctx: Context,
 }
 
 impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
         AssertionStorage {
             ctx: Context::new(),
-            store: SyncStorage::new(&Config::default(), read_pool),
+            store: SyncTestStorageBuilder::new().build().unwrap(),
         }
     }
 }
@@ -66,11 +59,7 @@ impl AssertionStorage<SimulateEngine> {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
-        let pd_worker = FutureWorker::new("test-future–worker");
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || storage::ReadPoolContext::new(pd_worker.scheduler())
-        });
-        self.store = SyncStorage::from_engine(engine, &Config::default(), read_pool);
+        self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     }
 
     pub fn delete_ok_for_cluster(
@@ -320,7 +309,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, limit, false, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -340,7 +329,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .reverse_scan(self.ctx.clone(), key_address, limit, false, ts)
+            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -360,7 +349,7 @@ impl<E: Engine> AssertionStorage<E> {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, limit, true, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, true, ts)
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -433,12 +422,13 @@ impl<E: Engine> AssertionStorage<E> {
         match err {
             storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
                 start_ts,
-                conflict_ts,
+                conflict_start_ts,
                 ref key,
                 ref primary,
+                ..
             })) => {
                 assert_eq!(cur_start_ts, start_ts);
-                assert_eq!(confl_ts, conflict_ts);
+                assert_eq!(confl_ts, conflict_start_ts);
                 assert_eq!(key.to_owned(), confl_key.to_owned());
                 assert_eq!(primary.to_owned(), cur_primary.to_owned());
             }
@@ -578,7 +568,7 @@ impl<E: Engine> AssertionStorage<E> {
     ) {
         let result: Vec<KvPair> = self
             .store
-            .raw_scan(self.ctx.clone(), cf, start_key, limit)
+            .raw_scan(self.ctx.clone(), cf, start_key, None, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())

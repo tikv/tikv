@@ -573,11 +573,11 @@ impl Snap {
         Ok(())
     }
 
-    fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
+    fn get_display_path(dir_path: impl AsRef<Path>, prefix: &str) -> String {
         let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
         format!(
             "{}/{}_{}{}",
-            dir_path.display(),
+            dir_path.as_ref().display(),
             prefix,
             cf_names,
             SST_FILE_SUFFIX
@@ -978,11 +978,11 @@ impl Snapshot for Snap {
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
                 let path = cf_file.clone_path.to_str().unwrap();
-                box_try!(
-                    options
-                        .db
-                        .ingest_external_file_cf(cf_handle, &ingest_opt, &[path])
-                );
+                box_try!(options.db.ingest_external_file_optimized(
+                    cf_handle,
+                    &ingest_opt,
+                    &[path]
+                ));
             }
         }
         Ok(())
@@ -1446,8 +1446,9 @@ impl SnapManagerBuilder {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use protobuf::Message;
+    use std::cmp;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1633,7 +1634,7 @@ pub mod test {
         let dir = TempDir::new("test-display-path").unwrap();
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        let display_path = Snap::get_display_path(&dir.into_path(), &prefix);
+        let display_path = Snap::get_display_path(dir.path(), &prefix);
         assert_ne!(display_path, "");
     }
 
@@ -2344,9 +2345,10 @@ pub mod test {
         let kv = get_test_db_for_regions(&kv_path, None, &regions).unwrap();
 
         let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
+        let max_total_size = 10240;
         let (router, _) = Router::new_for_test(1);
         let snap_mgr = SnapManagerBuilder::default()
-            .max_total_size(10240)
+            .max_total_size(max_total_size)
             .build(snapfiles_path.path().to_str().unwrap(), router);
         let snapshot = DbSnapshot::new(kv);
 
@@ -2394,13 +2396,15 @@ pub mod test {
                 Box::new(snap_mgr.clone()),
             ).unwrap();
 
-            if i < 5 {
-                // sizeof(snapshot) == 1918 bytes. The first 1918 is for region 100.
-                // That snapshot won't be deleted because it's not for generating.
-                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * (i + 2));
-            } else {
-                assert_eq!(snap_mgr.get_total_snap_size() as usize, 1918 * 6);
-            }
+            // TODO: this size may change in different RocksDB version.
+            let snap_size = 1342;
+            let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
+            // The first snap_size is for region 100.
+            // That snapshot won't be deleted because it's not for generating.
+            assert_eq!(
+                snap_mgr.get_total_snap_size(),
+                snap_size * cmp::min(max_snap_count, (i + 2) as u64)
+            );
         }
     }
 }

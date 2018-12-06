@@ -134,7 +134,7 @@ impl Runnable<Task> for Runner {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
