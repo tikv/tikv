@@ -182,7 +182,7 @@ impl RegionCollection {
                 return false;
             }
             // Another region is older. Remove it.
-            info!(
+            debug!(
                 "region_collection: remove region {} because its end_key is the same with newer \
                  region {}",
                 another_region_id, region_id
@@ -283,7 +283,7 @@ impl RegionCollection {
         // receive an `Update` message, the region may have been deleted for some reason. So we
         // handle it according to whether the region exists in the collection.
         if self.regions.contains_key(&region.get_id()) {
-            info!("region_collection: trying to create region {} but it already exists, try to update it", region.get_id());
+            debug!("region_collection: trying to create region {} but it already exists, try to update it", region.get_id());
             self.update_region(region);
         } else {
             self.create_region(region);
@@ -334,7 +334,7 @@ impl RegionCollection {
     fn handle_role_change(&mut self, region: Region, new_role: StateRole) {
         let region_id = region.get_id();
         if self.regions.get(&region_id).is_none() {
-            warn!("region_collection: role change on region {} but the region doesn't exist. create it.", region_id);
+            info!("region_collection: role change on region {} but the region doesn't exist. create it.", region_id);
             self.create_region(region);
         }
 
