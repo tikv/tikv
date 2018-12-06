@@ -51,8 +51,8 @@ extern crate fs2;
 #[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
-extern crate fxhash;
 extern crate grpcio as grpc;
+extern crate hashbrown;
 extern crate hex;
 extern crate indexmap;
 extern crate kvproto;
@@ -120,6 +120,7 @@ extern crate smallvec;
 
 extern crate base64;
 extern crate cop_datatype;
+extern crate flate2;
 extern crate panic_hook;
 extern crate safemem;
 
