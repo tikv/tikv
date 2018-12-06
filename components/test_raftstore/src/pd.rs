@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,7 +29,7 @@ use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
-use tikv::util::collections::{HashMap, HashSet};
+use tikv::util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv::util::timer::GLOBAL_TIMER_HANDLE;
 use tikv::util::{escape, Either, HandyRwLock};
 
@@ -679,7 +678,7 @@ impl TestPdClient {
     fn schedule_operator(&self, region_id: u64, op: Operator) {
         let mut cluster = self.cluster.wl();
         match cluster.operators.entry(region_id) {
-            Entry::Occupied(mut e) => {
+            HashMapEntry::Occupied(mut e) => {
                 debug!(
                     "[region {}] schedule operator {:?} and remove {:?}",
                     region_id,
@@ -688,7 +687,7 @@ impl TestPdClient {
                 );
                 e.insert(op);
             }
-            Entry::Vacant(e) => {
+            HashMapEntry::Vacant(e) => {
                 debug!("[region {}] schedule operator {:?}", region_id, op);
                 e.insert(op);
             }
