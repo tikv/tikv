@@ -126,7 +126,8 @@ impl ScalarFunc {
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2Args
-            | ScalarFuncSig::SubstringBinary2Args => (2, 2),
+            | ScalarFuncSig::SubstringBinary2Args
+            | ScalarFuncSig::Strcmp => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -275,7 +276,10 @@ impl ScalarFunc {
             | ScalarFuncSig::ToBase64
             | ScalarFuncSig::WeekWithoutMode
             | ScalarFuncSig::YearWeekWithoutMode
-            | ScalarFuncSig::Space => (1, 1),
+            | ScalarFuncSig::Space
+            | ScalarFuncSig::Compress
+            | ScalarFuncSig::Uncompress
+            | ScalarFuncSig::UncompressedLength => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -361,7 +365,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
-            | ScalarFuncSig::Compress
             | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::ConnectionID
             | ScalarFuncSig::Convert
@@ -440,7 +443,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
-            | ScalarFuncSig::Strcmp
             | ScalarFuncSig::StringAnyValue
             | ScalarFuncSig::StringDurationTimeDiff
             | ScalarFuncSig::StringStringTimeDiff
@@ -483,8 +485,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeToSec
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
-            | ScalarFuncSig::Uncompress
-            | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -825,6 +825,9 @@ dispatch_call! {
         IsIPv4 => is_ipv4,
         IsIPv6 => is_ipv6,
         InetAton => inet_aton,
+
+        UncompressedLength => uncompressed_length,
+        Strcmp => strcmp,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -957,6 +960,8 @@ dispatch_call! {
         Elt => elt,
         FromBase64 => from_base64,
         ToBase64 => to_base64,
+        Compress => compress,
+        Uncompress => uncompress,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1135,6 +1140,7 @@ mod tests {
                     ScalarFuncSig::Trim2Args,
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
+                    ScalarFuncSig::Strcmp,
                 ],
                 2,
                 2,
@@ -1280,6 +1286,9 @@ mod tests {
                     ScalarFuncSig::FromBase64,
                     ScalarFuncSig::ToBase64,
                     ScalarFuncSig::Space,
+                    ScalarFuncSig::Compress,
+                    ScalarFuncSig::Uncompress,
+                    ScalarFuncSig::UncompressedLength,
                 ],
                 1,
                 1,
@@ -1409,7 +1418,6 @@ mod tests {
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,
-            ScalarFuncSig::Compress,
             ScalarFuncSig::ConcatWS,
             ScalarFuncSig::ConnectionID,
             ScalarFuncSig::Convert,
@@ -1488,7 +1496,6 @@ mod tests {
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
-            ScalarFuncSig::Strcmp,
             ScalarFuncSig::StringAnyValue,
             ScalarFuncSig::StringDurationTimeDiff,
             ScalarFuncSig::StringStringTimeDiff,
@@ -1531,8 +1538,6 @@ mod tests {
             ScalarFuncSig::TimeToSec,
             ScalarFuncSig::ToDays,
             ScalarFuncSig::ToSeconds,
-            ScalarFuncSig::Uncompress,
-            ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
