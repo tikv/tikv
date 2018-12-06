@@ -50,7 +50,7 @@ use util::config::ReadableSize;
 use util::escape;
 use util::properties::MvccProperties;
 use util::rocksdb::get_cf_handle;
-use util::rocksdb::properties::SizeProperties;
+use util::rocksdb::properties::RangeProperties;
 use util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -1319,10 +1319,10 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
     let mut keys = Vec::new();
     let mut found_keys_count = 0;
     for (_, v) in &*collection {
-        let props = SizeProperties::decode(v.user_collected_properties())?;
+        let props = RangeProperties::decode(v.user_collected_properties())?;
         keys.extend(
             props
-                .index_handles
+                .offsets
                 .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
                 .filter(|_| {
                     found_keys_count += 1;
