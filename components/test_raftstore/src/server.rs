@@ -169,7 +169,8 @@ impl Simulator for ServerCluster {
         });
         let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;
-        for _ in 0..100 {
+        // try to bind port until 2 MSL (2 * 120 sec)
+        for _ in 0..240 {
             server = Some(Server::new(
                 &server_cfg,
                 &security_mgr,
@@ -186,7 +187,7 @@ impl Simulator for ServerCluster {
                 Some(Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port)))) => {
                     // Servers may meet the error, when we restart them.
                     debug!("fail to create a server: bind fail {:?}", (addr, port));
-                    thread::sleep(Duration::from_millis(100));
+                    thread::sleep(Duration::from_millis(1000));
                     continue;
                 }
                 Some(Err(ref e)) => panic!("fail to create a server: {:?}", e),
