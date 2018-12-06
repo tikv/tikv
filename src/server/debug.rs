@@ -1891,4 +1891,67 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_debug_raw_scan() {
+        let keys: &[&[u8]] = &[
+            b"a",
+            b"a1",
+            b"a2",
+            b"a2\x00",
+            b"a2\x00\x00",
+            b"b",
+            b"b1",
+            b"b2",
+            b"b2\x00",
+            b"b2\x00\x00",
+            b"c",
+            b"c1",
+            b"c2",
+            b"c2\x00",
+            b"c2\x00\x00",
+        ];
+
+        let debugger = new_debugger();
+
+        let wb = WriteBatch::new();
+        for key in keys {
+            let data_key = keys::data_key(key);
+            let value = key.to_vec();
+            wb.put(&data_key, &value).unwrap();
+        }
+        debugger.engines.kv.write(wb).unwrap();
+
+        let check = |result: Result<_>, expected: &[&[u8]]| {
+            assert_eq!(
+                result.unwrap(),
+                expected
+                    .iter()
+                    .map(|k| (keys::data_key(k), k.to_vec()))
+                    .collect::<Vec<_>>()
+            );
+        };
+
+        check(debugger.raw_scan(b"z", &[b'z' + 1], 100, CF_DEFAULT), keys);
+        check(debugger.raw_scan(b"za", b"zz", 100, CF_DEFAULT), keys);
+        check(debugger.raw_scan(b"za1", b"za1", 100, CF_DEFAULT), &[]);
+        check(
+            debugger.raw_scan(b"za1", b"za2\x00\x00", 100, CF_DEFAULT),
+            &keys[1..4],
+        );
+        check(
+            debugger.raw_scan(b"za2\x00", b"za2\x00\x00", 100, CF_DEFAULT),
+            &keys[3..4],
+        );
+        check(
+            debugger.raw_scan(b"zb\x00", b"zb2\x00\x00", 100, CF_DEFAULT),
+            &keys[6..9],
+        );
+        check(debugger.raw_scan(b"za1", b"zz", 1, CF_DEFAULT), &keys[1..2]);
+        check(debugger.raw_scan(b"za1", b"zz", 3, CF_DEFAULT), &keys[1..4]);
+        check(
+            debugger.raw_scan(b"za1", b"zb2\x00\x00", 8, CF_DEFAULT),
+            &keys[1..9],
+        );
+    }
 }
