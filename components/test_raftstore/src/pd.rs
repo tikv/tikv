@@ -716,7 +716,7 @@ impl TestPdClient {
 
     pub fn must_have_peer(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 1..500 {
-            sleep_ms(10);
+            sleep_ms(50);
             let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
