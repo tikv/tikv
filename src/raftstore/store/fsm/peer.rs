@@ -893,10 +893,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     if p.is_leader() {
                         p.peers_start_pending_time.push((id, now));
                     }
-                    // Add peer or promote the learner
-                    if !peer.get_is_learner() {
-                        p.recent_added_peer.update((id, now));
-                    }
+                    p.recent_added_peer.update(id, now);
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {

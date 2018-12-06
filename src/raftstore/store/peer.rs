@@ -215,31 +215,32 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
-#[derive(Default)]
 pub struct RecentAddedPeer {
     pub reject_duration_as_secs: u64,
-    pub last_added: Option<(u64, Instant)>,
+    pub id: u64,
+    pub added_time: Instant,
 }
 
 impl RecentAddedPeer {
     pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeer {
         RecentAddedPeer {
             reject_duration_as_secs,
-            last_added: None,
+            id: Default::default(),
+            added_time: Instant::now(),
         }
     }
 
-    pub fn update(&mut self, (id, now): (u64, Instant)) {
-        self.last_added = Some((id, now));
+    pub fn update(&mut self, id: u64, now: Instant) {
+        self.id = id;
+        self.added_time = now;
     }
 
     pub fn contains(&mut self, id: u64) -> bool {
-        if let Some((pid, last)) = self.last_added {
-            if id == pid && duration_to_sec(last.elapsed()) < self.reject_duration_as_secs as f64 {
-                return true;
-            }
+        if self.id == id
+            && duration_to_sec(self.added_time.elapsed()) < self.reject_duration_as_secs as f64
+        {
+            return true;
         }
-        self.last_added = None;
         false
     }
 }
