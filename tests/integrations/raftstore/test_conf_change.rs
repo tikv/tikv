@@ -595,14 +595,13 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     // Test adding nodes.
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     pd_client.must_add_peer(region_id, new_peer(3, 3));
-    cluster.transfer_leader(region_id, new_peer(2, 2));
-    assert_ne!(cluster.leader_of_region(region_id).unwrap().get_id(), 2);
     cluster.transfer_leader(region_id, new_peer(3, 3));
+    thread::sleep(Duration::from_secs(1));
     assert_ne!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
 
     // Test transfer leader after a safe duration.
-    thread::sleep(Duration::from_secs(3));
-    cluster.must_transfer_leader(region_id, new_peer(2, 2));
+    thread::sleep(Duration::from_secs(2));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
 }
 
 fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {

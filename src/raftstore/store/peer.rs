@@ -216,59 +216,32 @@ pub struct PeerStat {
 }
 
 #[derive(Default)]
-pub struct RecentAddedPeersQueue {
+pub struct RecentAddedPeer {
     pub reject_duration_as_secs: u64,
-    // queue.0 record the all IDs of the recently added peers.
-    // |peer_id | peer_id | ... | peer_id | peer_id |
-    // |   u8   |   u8    |  u8 |   u8    |   u8    |
-    // queue.1 record the last added time.
-    pub queue: Option<(u64, Instant)>,
+    pub last_added: Option<(u64, Instant)>,
 }
 
-impl RecentAddedPeersQueue {
-    pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeersQueue {
-        RecentAddedPeersQueue {
+impl RecentAddedPeer {
+    pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeer {
+        RecentAddedPeer {
             reject_duration_as_secs,
-            queue: None,
+            last_added: None,
         }
     }
 
     pub fn push(&mut self, (id, now): (u64, Instant)) {
-        if let Some(ref mut queue) = self.queue {
-            if duration_to_sec(queue.1.elapsed()) <= self.reject_duration_as_secs as f64 {
-                queue.0 = (queue.0 << 8) | (id & 0xFF);
-                queue.1 = now;
-                return;
-            }
-            queue.0 = id & 0xFF;
-            queue.1 = now;
-        } else {
-            self.queue = Some((id & 0xFF, now));
-        }
+        self.last_added = Some((id, now));
     }
 
     pub fn contains(&mut self, id: u64) -> bool {
-        let mut need_clean = false;
-        if let Some(ref mut queue) = self.queue {
-            if duration_to_sec(queue.1.elapsed()) > self.reject_duration_as_secs as f64 {
-                need_clean = true
-            } else {
-                let mut ids = queue.0;
-                loop {
-                    let nid = ids & 0xFF;
-                    if nid == 0 {
-                        break;
-                    }
-                    if nid == id & 0xFF {
-                        return true;
-                    }
-                    ids >>= 8;
-                }
+        if let Some(ref mut last) = self.last_added {
+            if id == last.0
+                && duration_to_sec(last.1.elapsed()) < self.reject_duration_as_secs as f64
+            {
+                return true;
             }
         }
-        if need_clean {
-            self.queue = None
-        }
+        self.last_added = None;
         false
     }
 }
@@ -289,7 +262,7 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
-    pub recent_added_peers: RecentAddedPeersQueue,
+    pub recent_added_peer: RecentAddedPeer,
 
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
@@ -438,7 +411,7 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            recent_added_peers: RecentAddedPeersQueue::new(
+            recent_added_peer: RecentAddedPeer::new(
                 cfg.raft_reject_transfer_leader_duration.as_secs(),
             ),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
@@ -1557,7 +1530,7 @@ impl Peer {
                 return false;
             }
         }
-        if self.recent_added_peers.contains(peer_id) {
+        if self.recent_added_peer.contains(peer_id) {
             debug!(
                 "{} reject transfer leader to {:?} due to the peer was added recently",
                 self.tag, peer

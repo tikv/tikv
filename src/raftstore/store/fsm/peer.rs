@@ -895,7 +895,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
                     // Add peer or promote the learner
                     if !peer.get_is_learner() {
-                        p.recent_added_peers.push((id, now));
+                        p.recent_added_peer.push((id, now));
                     }
                     p.insert_peer_cache(peer);
                 }
