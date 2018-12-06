@@ -2140,7 +2140,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !peer.is_leader() {
                 continue;
             }
+            // If a unsafe destroy range command is happened recently on this peer, it maybe has a inconsistent state with other peers.
+            // For example, the peers of one region is on store 1, 2, 3 respectively, and now the peer on store 3 is moved to store 4.
+            // At the same time, unsafe destroy range command is executed, but conf change is not applied on store 4 yet. So this makes
+            // the peers on store 1 and 2 clear the range successfully, but on store 4 the range is not cleared. To solve that, unsafe destroy
+            // range will send again after 24h. So here we don't do consistency check for region that has executed unsafe destroy range in last 24h.
             if peer.consistency_state.last_check_time < candidate_check_time {
+                if let Some(last_destroy) = peer.last_destroy_range_time {
+                    if last_destroy.elapsed() <= Duration::from_secs(3600 * 24) {
+                        peer.consistency_state.last_check_time =
+                            last_destroy + Duration::from_secs(3600 * 24);
+                        continue;
+                    }
+                }
                 candidate_id = region_id;
                 candidate_check_time = peer.consistency_state.last_check_time;
             }
@@ -2183,7 +2195,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         expected_index: u64,
         expected_hash: Vec<u8>,
     ) {
-        let state = match self.region_peers.get_mut(&region_id) {
+        let (state, last_destroy) = match self.region_peers.get_mut(&region_id) {
             None => {
                 warn!(
                     "[region {}] receive stale hash at index {}",
@@ -2191,14 +2203,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
                 return;
             }
-            Some(p) => &mut p.consistency_state,
+            Some(p) => (&mut p.consistency_state, &p.last_destroy_range_time),
         };
+
+        if last_destroy.is_some()
+            && last_destroy.as_ref().unwrap().elapsed() <= Duration::from_secs(3600 * 24)
+        {
+            warn!(
+                "[region {}] execute unsafe destroy range in last 24h, skip",
+                region_id
+            );
+            return;
+        }
 
         verify_and_store_hash(region_id, state, expected_index, expected_hash);
     }
 
     pub fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
-        let (state, peer) = match self.region_peers.get_mut(&region_id) {
+        let (state, last_destroy, peer) = match self.region_peers.get_mut(&region_id) {
             None => {
                 warn!(
                     "[region {}] receive stale hash at index {}",
@@ -2206,9 +2228,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 );
                 return;
             }
-            Some(p) => (&mut p.consistency_state, &p.peer),
+            Some(p) => (
+                &mut p.consistency_state,
+                &p.last_destroy_range_time,
+                &p.peer,
+            ),
         };
 
+        if last_destroy.is_some()
+            && last_destroy.as_ref().unwrap().elapsed() <= Duration::from_secs(3600 * 24)
+        {
+            warn!(
+                "[region {}] execute unsafe destroy range in last 24h, skip",
+                region_id
+            );
+            return;
+        }
+
+        // due to hash computed asynchorously, on follower, on_hash_computer() may executed after on_ready_verify_hash()
         if !verify_and_store_hash(region_id, state, index, hash) {
             return;
         }
@@ -2217,6 +2254,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             new_verify_hash_request(region_id, peer.clone(), state),
             Callback::None,
         );
+
+        // only leader's proposal will finally take effect
         if let Err(e) = self.sendch.send(msg) {
             error!(
                 "[region {}] failed to schedule verify command for index {}: {:?}",

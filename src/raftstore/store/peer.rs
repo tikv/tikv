@@ -218,19 +218,27 @@ pub struct PeerStat {
 pub struct Peer {
     engines: Engines,
     cfg: Rc<Config>,
-    peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
-    pub peer: metapb::Peer,
+
+    // region id of the peer
     region_id: u64,
+    // meta of the peer
+    pub peer: metapb::Peer,
+    // the raft state machine of the peer
     pub raft_group: RawNode<PeerStorage>,
+    // peer cache
+    peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
+
     proposals: ProposalQueue,
     apply_proposals: Vec<Proposal>,
     pending_reads: ReadIndexQueue,
+
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
-
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
+    /// Record the last instant when unsafe destroy range executed on this peer.
+    pub last_destroy_range_time: Option<Instant>,
 
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
@@ -379,6 +387,7 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
+            last_destroy_range_time: None,
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,

@@ -1004,6 +1004,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         {
             let peer = self.region_peers.get_mut(region_id).unwrap();
 
+            if self.cfg.consistency_check_interval.as_millis() != 0 {
+                peer.last_destroy_range_time = Some(Instant::now())
+            }
             peer.approximate_size = None;
             peer.approximate_keys = None;
         }
