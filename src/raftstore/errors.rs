@@ -169,10 +169,10 @@ impl Into<errorpb::Error> for Error {
             Error::StoreNotMatch(to_store_id, my_store_id) => {
                 errorpb
                     .mut_store_not_match()
-                    .set_expect_store_id(to_store_id);
+                    .set_request_store_id(to_store_id);
                 errorpb
                     .mut_store_not_match()
-                    .set_requested_store_id(my_store_id);
+                    .set_actual_store_id(my_store_id);
             }
             Error::KeyNotInRegion(key, region) => {
                 errorpb.mut_key_not_in_region().set_key(key);
