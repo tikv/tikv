@@ -22,7 +22,6 @@ use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, Server
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
-use tokio::executor::thread_pool;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::timer::Interval;
 
@@ -78,12 +77,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         import_service: Option<ImportSSTService<T>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let mut pool_builder = thread_pool::Builder::new();
-        pool_builder.pool_size(cfg.as_ref().stats_concurrency);
-        pool_builder.name_prefix(STATS_THREAD_PREFIX);
         let stats_runtime = Arc::new(
             RuntimeBuilder::new()
-                .threadpool_builder(pool_builder)
+                .core_threads(cfg.as_ref().stats_concurrency)
+                .name_prefix(STATS_THREAD_PREFIX)
                 .build()
                 .unwrap(),
         );

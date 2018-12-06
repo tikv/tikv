@@ -1,45 +1,25 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+// Copyright 2018 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
 use libc::{getpid, pid_t};
 
+use server::load_statistics::ThreadLoad;
 use util::metrics::{get_thread_ids, Stat};
 
-pub struct ThreadLoad {
-    term: AtomicUsize,
-    load: AtomicUsize,
-    threshold: usize,
-}
-
-impl ThreadLoad {
-    pub fn with_threshold(threshold: usize) -> Self {
-        ThreadLoad {
-            term: AtomicUsize::new(0),
-            load: AtomicUsize::new(0),
-            threshold,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn in_heavy_load(&self) -> bool {
-        self.load.load(Ordering::Acquire) > self.threshold
-    }
-
-    /// Incease when every time updating `load`.
-    #[allow(dead_code)]
-    pub fn term(&self) -> usize {
-        self.term.load(Ordering::Acquire)
-    }
-
-    /// For example, 200 means the threads eat 200% CPU.
-    #[allow(dead_code)]
-    pub fn load(&self) -> usize {
-        self.load.load(Ordering::Acquire)
-    }
-}
-
-#[cfg(target_os = "linux")]
 pub struct ThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,
@@ -50,7 +30,6 @@ pub struct ThreadLoadStatistics {
     thread_load: Arc<ThreadLoad>,
 }
 
-#[cfg(target_os = "linux")]
 impl ThreadLoadStatistics {
     pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
         let pid: pid_t = unsafe { getpid() };
@@ -108,16 +87,6 @@ impl ThreadLoadStatistics {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-pub struct ThreadLoadStatistics {}
-#[cfg(not(target_os = "linux"))]
-impl ThreadLoadStatistics {
-    pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
-        ThreadLoadStatistics {}
-    }
-    pub fn record(&mut self, instant: Instant) {}
-}
-
 #[inline]
 fn calc_cpu_load(millis: usize, start_usage: f64, end_usage: f64) -> usize {
     let cpu_usage = (end_usage - start_usage) * 1000f64 * 100f64;
@@ -126,32 +95,17 @@ fn calc_cpu_load(millis: usize, start_usage: f64, end_usage: f64) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use libc::{syscall, SYS_gettid};
+    use std::thread;
 
     use super::*;
 
-    impl ThreadLoadStatistics {
-        fn for_test(slots: usize, thread_load: Arc<ThreadLoad>) -> Self {
-            let pid: pid_t = unsafe { getpid() };
-            let tid: pid_t = unsafe { syscall(SYS_gettid) as pid_t };
-            let stat = Stat::collect(pid, tid).unwrap();
-
-            ThreadLoadStatistics {
-                pid,
-                tids: vec![tid],
-                slots,
-                cur_pos: 0,
-                cpu_usages: vec![stat.cpu_total(); slots],
-                instants: vec![Instant::now(); slots],
-                thread_load,
-            }
-        }
-    }
-
     #[test]
     fn test_thread_load_statistic() {
+        // OS thread name is truncated to 16 bytes, including the last '\0'.
+        let thread_name = thread::current().name().unwrap()[0..15].to_owned();
+
         let load = Arc::new(ThreadLoad::with_threshold(80));
-        let mut stats = ThreadLoadStatistics::for_test(2, Arc::clone(&load));
+        let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));
         let start = Instant::now();
         loop {
             if (Instant::now() - start).as_millis() > 100 {
