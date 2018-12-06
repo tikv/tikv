@@ -103,7 +103,7 @@ fn test_serde_custom_tikv_config() {
         },
     };
     value.http = HttpConfig {
-        enabled: true,
+        enabled: false,
         addr: "example.com:443".to_owned(),
         thread_pool_size: 1,
     };

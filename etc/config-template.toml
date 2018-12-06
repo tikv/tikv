@@ -58,12 +58,11 @@
 
 [http]
 ## If HTTP service is enabled. If the value is true, the Prometheus can pull the metrics directly 
-## from it through the HTTP address. The reason we need it is Prometheus only support HTTP, 
-## but TiKV only supports gRPC and the C gRPC can't support dispatching different protocols.
-# enabled = true
+## through the HTTP address. Otherwise, the Prometheus will get the metrics through the PushGateway.
+# enabled = false
 
 ## HTTP listening address.
-# addr = "127.0.0.1:9520". If it is not specified, the system will use it as the default port.
+# addr = "127.0.0.1:9520"
 
 ## Set the maximum number of worker threads for the HTTP service.
 # thread_pool_size = 1

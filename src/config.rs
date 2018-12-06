@@ -725,7 +725,7 @@ impl HttpConfig {
 impl Default for HttpConfig {
     fn default() -> HttpConfig {
         HttpConfig {
-            enabled: true,
+            enabled: false,
             addr: DEFAULT_HTTP_LISTENING_ADDR.to_owned(),
             thread_pool_size: 1,
         }
