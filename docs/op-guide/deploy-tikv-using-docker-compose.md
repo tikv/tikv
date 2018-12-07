@@ -36,7 +36,7 @@ git clone https://github.com/pingcap/tidb-docker-compose.git
 
 ## Prepare cluster
 
-Here we will run a simple cluster with only 1 PD and 1 TiKV. The base docker compose config is:
+In this example, let's run a simple cluster with only 1 PD server and 1 TiKV server. See the following for the basic docker compose configuration file:
 
 ```yaml
 version: '2.1'
@@ -84,7 +84,7 @@ All the following example docker compose config file will contain this base conf
 
 ## Example
 
-### [YCSB](https://github.com/pingcap/go-ycsb)
+### Run [YCSB](https://github.com/pingcap/go-ycsb) to connect to the TiKV cluster:
 
 1. Create a `ycsb-docker-compose.yml` file, add the above base config to this file, and then append the following section:
 
@@ -122,7 +122,7 @@ All the following example docker compose config file will contain this base conf
     field0="0"
     ```
 
-### [Titan](https://github.com/meitu/titan)
+### Use [Titan](https://github.com/meitu/titan) to connect to the TiKV cluster via the Redis protocal:
 
 1. Create a `titan-docker-compose.yml` file, add the above base config to this file, and then append the following section:
 
