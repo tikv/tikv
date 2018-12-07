@@ -15,7 +15,7 @@ use std::sync::mpsc::channel;
 use std::{thread, usize};
 use test::Bencher;
 
-use crossbeam_channel;
+use crossbeam::channel;
 use futures::{Future, Stream};
 use mio::{EventLoop, Handler, Sender};
 use tikv::util::mpsc;
@@ -124,7 +124,7 @@ fn bench_util_channel(b: &mut Bencher) {
 
 #[bench]
 fn bench_util_loose(b: &mut Bencher) {
-    let (mut tx, rx) = mpsc::loose_bounded(480000);
+    let (tx, rx) = mpsc::loose_bounded(480000);
 
     let t = thread::spawn(move || {
         let mut n2: usize = 0;
@@ -151,7 +151,7 @@ fn bench_util_loose(b: &mut Bencher) {
 
 #[bench]
 fn bench_crossbeam_channel(b: &mut Bencher) {
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let (tx, rx) = channel::unbounded();
 
     let t = thread::spawn(move || {
         let mut n2: usize = 0;
@@ -167,7 +167,7 @@ fn bench_crossbeam_channel(b: &mut Bencher) {
     let mut n1 = 0;
     b.iter(|| {
         n1 += 1;
-        tx.send(1)
+        tx.send(1).unwrap();
     });
 
     tx.send(0).unwrap();
@@ -215,7 +215,7 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
 
 #[bench]
 fn bench_receiver_stream(b: &mut Bencher) {
-    let (tx, rx) = mpsc::bounded::<i32>(128);
+    let (tx, rx) = mpsc::batch::bounded::<i32>(128, 1);
     for _ in 0..1 {
         let tx1 = tx.clone();
         thread::spawn(move || {

@@ -10,20 +10,21 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossbeam::sync::AtomicOption;
-use crossbeam_channel;
-pub use crossbeam_channel::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
+use crossbeam::channel::{
+    self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
+};
 use futures::task::{self, Task};
 use futures::{Async, Poll, Stream};
 
 struct State {
     // If the receiver can't get any messages temporarily in `poll` context, it will put its
     // current task here.
-    recv_task: AtomicOption<Task>,
+    recv_task: AtomicPtr<Task>,
     notify_size: usize,
     // How many messages are sent without notify.
     pending: AtomicUsize,
@@ -33,7 +34,7 @@ struct State {
 impl State {
     fn new(notify_size: usize) -> State {
         State {
-            recv_task: AtomicOption::new(),
+            recv_task: AtomicPtr::new(null_mut()),
             notify_size,
             pending: AtomicUsize::new(0),
             notifier_registered: AtomicBool::new(false),
@@ -50,9 +51,10 @@ impl State {
 
     #[inline]
     fn notify(&self) {
-        let task = self.recv_task.take(Ordering::Release);
-        if let Some(t) = task {
+        let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
+        if t.is_null() {
             self.pending.store(0, Ordering::Release);
+            let t = unsafe { Box::from_raw(t) };
             t.notify();
         }
     }
@@ -62,9 +64,8 @@ impl State {
     // respectively can notify it after send some messages into the channel.
     #[inline]
     fn yield_poll(&self) -> bool {
-        self.recv_task
-            .swap(task::current(), Ordering::AcqRel)
-            .is_some()
+        let t = Box::into_raw(box task::current());
+        !self.recv_task.swap(t, Ordering::AcqRel).is_null()
     }
 }
 
@@ -89,7 +90,7 @@ impl Drop for Notifier {
 }
 
 pub struct Sender<T> {
-    sender: crossbeam_channel::Sender<T>,
+    sender: channel::Sender<T>,
     state: Arc<State>,
 }
 
@@ -111,7 +112,7 @@ impl<T> Drop for Sender<T> {
 }
 
 pub struct Receiver<T> {
-    receiver: crossbeam_channel::Receiver<T>,
+    receiver: channel::Receiver<T>,
     state: Arc<State>,
 }
 
@@ -166,7 +167,7 @@ impl<T> Receiver<T> {
 pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     assert!(notify_size > 0);
     let state = Arc::new(State::new(notify_size));
-    let (sender, receiver) = crossbeam_channel::unbounded();
+    let (sender, receiver) = channel::unbounded();
     (
         Sender {
             sender,
@@ -185,7 +186,7 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
 pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
     assert!(notify_size > 0);
     let state = Arc::new(State::new(notify_size));
-    let (sender, receiver) = crossbeam_channel::bounded(cap);
+    let (sender, receiver) = channel::bounded(cap);
     (
         Sender {
             sender,

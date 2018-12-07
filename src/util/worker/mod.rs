@@ -28,6 +28,7 @@ Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 mod future;
 mod metrics;
 
+use crossbeam::channel::{RecvTimeoutError, TryRecvError, TrySendError};
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -38,7 +39,7 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use util::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
+use util::mpsc::{self, Receiver, Sender};
 use util::time::{Instant, SlowTimer};
 use util::timer::Timer;
 

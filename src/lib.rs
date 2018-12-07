@@ -41,7 +41,6 @@ extern crate chrono;
 extern crate chrono_tz;
 extern crate crc;
 extern crate crossbeam;
-extern crate crossbeam_channel;
 extern crate crypto;
 #[macro_use]
 extern crate fail;
