@@ -585,6 +585,35 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(region_id, new_peer(2, 2));
 }
 
+fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    let cfg = cluster.cfg.clone();
+
+    // Test adding nodes.
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.transfer_leader(region_id, new_peer(3, 3));
+    cluster.reset_leader_of_region(region_id);
+    assert_ne!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
+
+    // Test transfer leader after a safe duration.
+    thread::sleep(cfg.raft_store.raft_reject_transfer_leader_duration.into());
+    cluster.transfer_leader(region_id, new_peer(3, 3));
+    // Retry for more stability
+    for _ in 0..20 {
+        cluster.reset_leader_of_region(region_id);
+        if cluster.leader_of_region(region_id) != Some(new_peer(3, 3)) {
+            continue;
+        }
+        break;
+    }
+    assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
+}
+
 fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -683,6 +712,14 @@ fn test_server_safe_conf_change() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_conf_change_safe(&mut cluster);
+}
+
+#[test]
+fn test_server_transfer_leader_safe() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    configure_for_transfer_leader(&mut cluster);
+    test_transfer_leader_safe(&mut cluster);
 }
 
 #[test]
