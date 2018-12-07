@@ -31,6 +31,8 @@ pub struct ThreadLoadStatistics {
 }
 
 impl ThreadLoadStatistics {
+    /// Create a thread load statistics for all threads with `prefix`. `ThreadLoad` is stored into
+    /// `thread_load`. At most `slots` old records will be kept, to make the curve more smooth.
     pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
         let pid: pid_t = unsafe { getpid() };
         let mut tids = vec![];
