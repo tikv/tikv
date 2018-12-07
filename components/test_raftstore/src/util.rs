@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -28,7 +28,6 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
-use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
@@ -36,7 +35,6 @@ use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
 use tikv::util::config::*;
 use tikv::util::escape;
 use tikv::util::rocksdb::{self, CompactionListener};
-use tikv::util::transport::SendCh;
 
 use super::*;
 
@@ -444,7 +442,7 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    tx: SendCh<StoreMsg>,
+    router: Router,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
@@ -454,8 +452,13 @@ pub fn create_test_engine(
         None => {
             path = Some(TempDir::new("test_cluster").unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
+            let router = Mutex::new(router);
             let cmpacted_handler = box move |event| {
-                tx.send(StoreMsg::CompactedEvent(event)).unwrap();
+                router
+                    .lock()
+                    .unwrap()
+                    .send_store_message(StoreMsg::CompactedEvent(event))
+                    .unwrap();
             };
             kv_db_opt.add_event_listener(CompactionListener::new(
                 cmpacted_handler,

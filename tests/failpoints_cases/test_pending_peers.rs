@@ -22,6 +22,7 @@ use tikv::util::config::*;
 
 #[test]
 fn test_pending_peers() {
+    // let _a = ::test_util::init_log();
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);

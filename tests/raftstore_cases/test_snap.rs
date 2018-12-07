@@ -21,7 +21,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::{Message, MessageType};
 
 use test_raftstore::*;
-use tikv::raftstore::store::Msg;
 use tikv::raftstore::Result;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
@@ -99,6 +98,7 @@ fn test_server_huge_snapshot() {
 
 #[test]
 fn test_server_snap_gc() {
+    // ::test_util::init_log();
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
@@ -302,7 +302,7 @@ struct StaleSnapInner {
     sent: Mutex<Sender<()>>,
 }
 
-impl Filter<RaftMessage> for StaleSnap {
+impl Filter for StaleSnap {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
@@ -372,7 +372,7 @@ fn test_node_stale_snap() {
 /// Pause Snap and wait till first append message arrives.
 pub struct SnapshotAppendFilter {
     stale: AtomicBool,
-    pending_msg: Mutex<Vec<Msg>>,
+    pending_msg: Mutex<Vec<RaftMessage>>,
     notifier: Mutex<Sender<()>>,
 }
 
@@ -386,30 +386,27 @@ impl SnapshotAppendFilter {
     }
 }
 
-impl Filter<Msg> for SnapshotAppendFilter {
-    fn before(&self, msgs: &mut Vec<Msg>) -> Result<()> {
+impl Filter for SnapshotAppendFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
             return Ok(());
         }
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
         let mut stale = false;
-        for m in msgs.drain(..) {
-            let mut should_collect = false;
-            if let Msg::RaftMessage(ref msg) = m {
-                should_collect =
-                    !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
-                stale = !pending_msg.is_empty()
-                    && msg.get_message().get_msg_type() == MessageType::MsgAppend;
-            }
+        for msg in msgs.drain(..) {
+            let should_collect =
+                !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+            stale = !pending_msg.is_empty()
+                && msg.get_message().get_msg_type() == MessageType::MsgAppend;
             if should_collect {
-                pending_msg.push(m);
+                pending_msg.push(msg);
                 self.notifier.lock().unwrap().send(()).unwrap();
             } else {
                 if stale {
                     to_send.extend(pending_msg.drain(..));
                 }
-                to_send.push(m);
+                to_send.push(msg);
             }
         }
         self.stale.store(stale, Ordering::SeqCst);

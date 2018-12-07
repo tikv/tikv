@@ -224,7 +224,7 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use std::io::Write;
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -235,13 +235,12 @@ mod tests {
     use tempdir::TempDir;
 
     use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{PeerMsg, Router, SplitCheckRunner, SplitCheckTask};
     use storage::types::Key;
     use storage::ALL_CFS;
     use util::codec::number::NumberEncoder;
     use util::config::ReadableSize;
     use util::rocksdb::new_engine;
-    use util::transport::RetryableSendCh;
     use util::worker::Runnable;
 
     use super::*;
@@ -319,10 +318,8 @@ mod tests {
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
 
-        let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split-table");
-        let (stx, _rx) = mpsc::sync_channel::<Msg>(100);
-        let sch = RetryableSendCh::new(stx, "test-split-size");
+        let (tx, rx) = Router::new_for_test(1);
+        let (stx, _rx) = Router::new_for_test(2);
 
         let mut cfg = Config::default();
         // Enable table split.
@@ -335,9 +332,9 @@ mod tests {
         cfg.region_max_keys = 2000000000;
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
-        let coprocessor = CoprocessorHost::new(cfg, sch);
+        let coprocessor = CoprocessorHost::new(cfg, stx);
         let mut runnable =
-            SplitCheckRunner::new(Arc::clone(&engine), ch.clone(), Arc::new(coprocessor));
+            SplitCheckRunner::new(Arc::clone(&engine), tx.clone(), Arc::new(coprocessor));
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {
@@ -349,7 +346,7 @@ mod tests {
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
-                        Ok(Msg::SplitRegion { split_keys, .. }) => {
+                        Ok(PeerMsg::SplitRegion { split_keys, .. }) => {
                             assert_eq!(split_keys, vec![key.into_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),

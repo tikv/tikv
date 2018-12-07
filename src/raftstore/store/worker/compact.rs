@@ -96,11 +96,15 @@ quick_error! {
 
 pub struct Runner {
     engine: Arc<DB>,
+    sub_compactions: u32,
 }
 
 impl Runner {
-    pub fn new(engine: Arc<DB>) -> Runner {
-        Runner { engine }
+    pub fn new(engine: Arc<DB>, sub_compactions: u32) -> Runner {
+        Runner {
+            engine,
+            sub_compactions,
+        }
     }
 
     pub fn compact_range_cf(
@@ -122,7 +126,7 @@ impl Runner {
             start,
             end,
             false,
-            1, /* threads */
+            self.sub_compactions,
         );
         compact_range_timer.observe_duration();
         info!(
@@ -247,7 +251,7 @@ fn collect_ranges_need_compact(
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use std::thread::sleep;
     use std::time::Duration;
 

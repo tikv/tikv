@@ -18,12 +18,11 @@ use crc::crc32::{self, Digest, Hasher32};
 
 use kvproto::metapb::Region;
 use raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use raftstore::store::{keys, Msg};
+use raftstore::store::{keys, PeerMsg, Router};
 use storage::CF_RAFT;
 use util::worker::Runnable;
 
 use super::metrics::*;
-use super::MsgSender;
 use raftstore::store::metrics::*;
 
 /// Consistency checking task.
@@ -55,12 +54,12 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C: MsgSender> {
-    ch: C,
+pub struct Runner {
+    ch: Router,
 }
 
-impl<C: MsgSender> Runner<C> {
-    pub fn new(ch: C) -> Runner<C> {
+impl Runner {
+    pub fn new(ch: Router) -> Runner {
         Runner { ch }
     }
 
@@ -109,12 +108,11 @@ impl<C: MsgSender> Runner<C> {
 
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
-        let msg = Msg::ComputeHashResult {
-            region_id,
+        let msg = PeerMsg::ComputeHashResult {
             index,
             hash: checksum,
         };
-        if let Err(e) = self.ch.try_send(msg) {
+        if let Err(e) = self.ch.send_peer_message(region_id, msg) {
             warn!(
                 "[region {}] failed to send hash compute result, err {:?}",
                 region_id, e
@@ -123,7 +121,7 @@ impl<C: MsgSender> Runner<C> {
     }
 }
 
-impl<C: MsgSender> Runnable<Task> for Runner<C> {
+impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
             Task::ComputeHash {
@@ -136,15 +134,15 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
     use raftstore::store::engine::Snapshot;
-    use raftstore::store::{keys, Msg};
+    use raftstore::store::{keys, PeerMsg, Router};
     use rocksdb::Writable;
-    use std::sync::{mpsc, Arc};
+    use std::sync::Arc;
     use std::time::Duration;
     use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
@@ -158,9 +156,10 @@ mod tests {
         let db = Arc::new(db);
 
         let mut region = Region::new();
+        region.set_id(1);
         region.mut_peers().push(Peer::new());
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = Router::new_for_test(1);
         let mut runner = Runner::new(tx);
         let mut digest = Digest::new(crc32::IEEE);
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
@@ -186,12 +185,7 @@ mod tests {
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         match res {
-            Msg::ComputeHashResult {
-                region_id,
-                index,
-                hash,
-            } => {
-                assert_eq!(region_id, region.get_id());
+            PeerMsg::ComputeHashResult { index, hash } => {
                 assert_eq!(index, 10);
                 assert_eq!(hash, checksum_bytes);
             }

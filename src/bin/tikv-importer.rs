@@ -39,7 +39,6 @@ extern crate slog_term;
 extern crate tikv;
 extern crate toml;
 
-#[cfg(unix)]
 #[macro_use]
 mod util;
 use util::setup::*;

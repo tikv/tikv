@@ -166,7 +166,7 @@ impl AdminObserver for SplitObserver {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use byteorder::{BigEndian, WriteBytesExt};
     use coprocessor::codec::{datum, table, Datum};

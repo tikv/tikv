@@ -36,16 +36,13 @@ pub use self::bootstrap::{
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::fsm::{
-    create_event_loop, new_compaction_listener, DestroyPeerJob, Store, StoreChannel, StoreInfo,
-    StoreStat,
+    create_router, new_compaction_listener, DestroyPeerJob, Peer, Router, Store, StoreInfo,
 };
 pub use self::msg::{
-    Callback, Msg, ReadCallback, ReadResponse, SeekRegionCallback, SeekRegionFilter,
-    SeekRegionResult, SignificantMsg, Tick, WriteCallback, WriteResponse,
+    Callback, PeerMsg, PeerTick, ReadCallback, ReadResponse, SeekRegionCallback, SeekRegionFilter,
+    SeekRegionResult, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
-pub use self::peer::{
-    Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
-};
+pub use self::peer::{PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy};
 pub use self::peer_storage::{
     clear_meta, do_snapshot, init_apply_state, init_raft_state, write_initial_apply_state,
     write_initial_raft_state, write_peer_state, CacheQueryStats, PeerStorage, SnapState,

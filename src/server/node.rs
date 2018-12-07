@@ -12,31 +12,28 @@
 // limitations under the License.
 
 use std::process;
-use std::sync::mpsc::Receiver;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use mio::EventLoop;
-
 use super::transport::RaftStoreRouter;
 use super::Result;
+use crossbeam_channel::Receiver;
 use import::SSTImporter;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
+use raftstore::store::fsm::transport::{BatchSystem, FsmTypes};
 use raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Msg, Peekable, ReadTask, SignificantMsg,
-    SnapManager, Store, StoreChannel, Transport,
+    self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, Router, SnapManager, Transport,
 };
 use rocksdb::DB;
 use server::readpool::ReadPool;
 use server::Config as ServerConfig;
 use server::ServerRaftStoreRouter;
 use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::transport::SendCh;
 use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -79,29 +76,27 @@ fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result
 
 // Node is a wrapper for raft store.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<T: 'static, C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
-    store_handle: Option<thread::JoinHandle<()>>,
-    ch: SendCh<Msg>,
+    store_handle: Option<BatchSystem<T, C>>,
+    router: Router,
 
     pd_client: Arc<C>,
 }
 
-impl<C> Node<C>
+impl<T, C> Node<T, C>
 where
+    T: Transport,
     C: PdClient,
 {
-    pub fn new<T>(
-        event_loop: &mut EventLoop<Store<T, C>>,
+    pub fn new(
+        router: Router,
         cfg: &ServerConfig,
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
-    ) -> Node<C>
-    where
-        T: Transport + 'static,
-    {
+    ) -> Node<T, C> {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -120,33 +115,28 @@ where
         }
         store.set_labels(RepeatedField::from_vec(labels));
 
-        let ch = SendCh::new(event_loop.channel(), "raftstore");
         Node {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg: store_cfg.clone(),
             store_handle: None,
             pd_client,
-            ch,
+            router,
         }
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
-    pub fn start<T>(
+    pub fn start(
         &mut self,
-        event_loop: EventLoop<Store<T, C>>,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
+        receiver: Receiver<Box<FsmTypes>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-    ) -> Result<()>
-    where
-        T: Transport + 'static,
-    {
+    ) -> Result<()> {
         let bootstrapped = self.check_cluster_bootstrapped()?;
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
@@ -174,14 +164,13 @@ where
         // inform pd.
         self.pd_client.put_store(self.store.clone())?;
         self.start_store(
-            event_loop,
             store_id,
             engines,
             trans,
             snap_mgr,
-            significant_msg_receiver,
             pd_worker,
             local_read_worker,
+            receiver,
             coprocessor_host,
             importer,
         )?;
@@ -192,8 +181,8 @@ where
         self.store.get_id()
     }
 
-    pub fn get_sendch(&self) -> SendCh<Msg> {
-        self.ch.clone()
+    pub fn router(&self) -> Router {
+        self.router.clone()
     }
 
     // check store, return store id for the engine.
@@ -323,22 +312,18 @@ where
     }
 
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
-    fn start_store<T>(
+    fn start_store(
         &mut self,
-        mut event_loop: EventLoop<Store<T, C>>,
         store_id: u64,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
+        receiver: Receiver<Box<FsmTypes>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-    ) -> Result<()>
-    where
-        T: Transport + 'static,
-    {
+    ) -> Result<()> {
         info!("start raft store {} thread", store_id);
 
         if self.store_handle.is_some() {
@@ -348,55 +333,39 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
-        let sender = event_loop.channel();
 
-        let (tx, rx) = mpsc::channel();
-        let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
-        let h = builder.spawn(move || {
-            let ch = StoreChannel {
-                sender,
-                significant_msg_receiver,
-            };
-            let mut store = match Store::new(
-                ch,
-                store,
-                cfg,
-                engines,
-                trans,
-                pd_client,
-                snap_mgr,
-                pd_worker,
-                local_read_worker,
-                coprocessor_host,
-                importer,
-            ) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
-            tx.send(0).unwrap();
-            if let Err(e) = store.run(&mut event_loop) {
-                error!("store {} run err {:?}", store_id, e);
-            };
-        })?;
-        // wait for store to be initialized
-        rx.recv().unwrap();
+        let mut system = match BatchSystem::new(
+            store,
+            cfg,
+            engines,
+            trans,
+            pd_client,
+            pd_worker,
+            local_read_worker,
+            snap_mgr,
+            importer,
+            self.router.clone(),
+            coprocessor_host,
+        ) {
+            Ok(system) => system,
+            Err(e) => panic!("construct system {} err {:?}", store_id, e),
+        };
+        if let Err(e) = system.spawn(receiver) {
+            panic!("store {} run err {:?}", store_id, e);
+        };
 
-        self.store_handle = Some(h);
+        self.store_handle = Some(system);
         Ok(())
     }
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
         info!("stop raft store {} thread", store_id);
-        let h = match self.store_handle.take() {
+        let mut f = match self.store_handle.take() {
             None => return Ok(()),
-            Some(h) => h,
+            Some(f) => f,
         };
 
-        box_try!(self.ch.send(Msg::Quit));
-        if let Err(e) = h.join() {
-            return Err(box_err!("join store {} thread err {:?}", store_id, e));
-        }
-
+        f.shutdown();
         Ok(())
     }
 

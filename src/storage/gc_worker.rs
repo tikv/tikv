@@ -23,11 +23,10 @@ use kvproto::metapb;
 use pd::PdClient;
 use raft::StateRole;
 use raftstore::store::keys;
-use raftstore::store::msg::Msg as RaftStoreMsg;
 use raftstore::store::util::{delete_all_in_range_cf, find_peer};
 use raftstore::store::SeekRegionResult;
 use rocksdb::rocksdb::DB;
-use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use server::transport::ServerRaftStoreRouter;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
@@ -374,18 +373,10 @@ impl<E: Engine> GCRunner<E> {
         let cleanup_all_time_cost = cleanup_all_start_time.elapsed();
 
         if let Some(router) = self.raft_store_router.as_ref() {
-            router
-                .send(RaftStoreMsg::ClearRegionSizeInRange {
-                    start_key: start_key.as_encoded().to_vec(),
-                    end_key: end_key.as_encoded().to_vec(),
-                })
-                .unwrap_or_else(|e| {
-                    // Warn and ignore it.
-                    warn!(
-                        "unsafe destroy range: failed sending ClearRegionSizeInRange: {:?}",
-                        e
-                    );
-                });
+            router.update_size(
+                start_key.as_encoded().to_vec(),
+                end_key.as_encoded().to_vec(),
+            );
         } else {
             warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
         }

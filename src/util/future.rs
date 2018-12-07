@@ -12,8 +12,10 @@
 // limitations under the License.
 
 use futures::sync::oneshot;
+use futures::task::AtomicTask;
 use futures::{Async, Future, IntoFuture, Poll};
 use std::boxed;
+use std::sync::{Arc, Weak};
 use util::Either;
 
 /// Generated a paired future and callback so that when callback is being called, its result
@@ -88,5 +90,85 @@ where
             };
             self.f2 = Either::Right(res);
         }
+    }
+}
+
+#[derive(Default)]
+struct Latch {
+    task: AtomicTask,
+}
+
+impl Drop for Latch {
+    fn drop(&mut self) {
+        self.task.notify()
+    }
+}
+
+#[derive(Clone)]
+pub struct CountDownLatch {
+    latch: Arc<Latch>,
+}
+
+pub struct CountDownFuture {
+    latch: Weak<Latch>,
+}
+
+pub fn count_down_latch() -> (CountDownLatch, CountDownFuture) {
+    let latch = Arc::new(Latch::default());
+    let f = CountDownFuture {
+        latch: Arc::downgrade(&latch),
+    };
+    (CountDownLatch { latch }, f)
+}
+
+impl Future for CountDownFuture {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        match self.latch.upgrade() {
+            None => Ok(Async::Ready(())),
+            Some(l) => {
+                l.task.register();
+                Ok(Async::NotReady)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::*;
+
+    #[test]
+    fn test_count_down_latch() {
+        let mut timer = Instant::now();
+        let (_, f) = count_down_latch();
+        f.wait().unwrap();
+        assert!(timer.elapsed() < Duration::from_millis(100));
+
+        timer = Instant::now();
+        let (l, f) = count_down_latch();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            drop(l);
+        });
+        f.wait().unwrap();
+        assert!(timer.elapsed() >= Duration::from_millis(100));
+
+        timer = Instant::now();
+        let (l, f) = count_down_latch();
+        for i in 1..3 {
+            let l = l.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(i * 100));
+                drop(l);
+            });
+        }
+        drop(l);
+        f.wait().unwrap();
+        assert!(timer.elapsed() >= Duration::from_millis(200));
     }
 }

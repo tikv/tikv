@@ -25,9 +25,15 @@ use util::codec;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use util::{escape, transport};
+use util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
+
+#[derive(Debug)]
+pub enum Reason {
+    Full,
+    Filtered,
+}
 
 quick_error!{
     #[derive(Debug)]
@@ -128,11 +134,9 @@ quick_error!{
             description(err.description())
             display("Coprocessor {}", err)
         }
-        Transport(err: transport::Error) {
-            from()
-            cause(err)
-            description(err.description())
-            display("Transport {}", err)
+        Transport(reason: Reason) {
+            description("Message discarded by channel")
+            display("Transport {:?}", reason)
         }
         Snapshot(err: SnapError) {
             from()
@@ -187,7 +191,7 @@ impl Into<errorpb::Error> for Error {
             Error::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::new());
             }
-            Error::Transport(transport::Error::Discard(_)) => {
+            Error::Transport(Reason::Full) => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::new();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);

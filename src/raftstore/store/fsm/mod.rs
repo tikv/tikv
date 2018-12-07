@@ -15,97 +15,161 @@
 //! and store is also a special state machine that handles all requests across
 //! stores. They are mixed for now, will be separated in the future.
 
-mod peer;
-mod store;
+pub mod apply;
+pub mod apply_transport;
+pub mod peer;
+pub mod store;
+pub mod transport;
 
-pub use self::peer::DestroyPeerJob;
-pub use self::store::{
-    create_event_loop, new_compaction_listener, StoreChannel, StoreInfo, StoreStat,
+pub use self::apply::{
+    Apply, ApplyMetrics, ApplyRes, Proposal, RegionProposal, Registration, Task as ApplyTask,
+    TaskRes as ApplyTaskRes,
 };
+pub use self::apply_transport::Router as ApplyRouter;
+pub use self::peer::{DestroyPeerJob, Peer};
+pub use self::store::{new_compaction_listener, Store, StoreInfo};
+pub use self::transport::{create_router, OneshotNotifier, Router};
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::sync::mpsc::Receiver as StdReceiver;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::u64;
-use time::Timespec;
 
-use kvproto::metapb;
+use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
 
-use pd::PdTask;
 use raftstore::coprocessor::CoprocessorHost;
-use util::collections::{HashMap, HashSet};
-use util::transport::SendCh;
-use util::worker::{FutureWorker, Worker};
+use util::collections::HashMap;
+use util::worker::Scheduler;
 use util::RingQueue;
 
 use super::config::Config;
-use super::local_metrics::RaftMetrics;
-use super::peer::Peer;
-use super::peer_storage::CacheQueryStats;
-use super::worker::{
-    ApplyTask, ApplyTaskRes, CleanupSSTTask, CompactTask, ConsistencyCheckTask, RaftlogGcTask,
-    ReadTask, RegionTask, SplitCheckTask,
-};
-use super::{Engines, Msg, SignificantMsg, SnapManager};
-use import::SSTImporter;
+use super::worker::{ReadTask, RegionTask};
+use super::Engines;
 
 type Key = Vec<u8>;
 
-pub struct Store<T, C: 'static> {
-    cfg: Rc<Config>,
-    engines: Engines,
-    store: metapb::Store,
-    sendch: SendCh<Msg>,
-
-    significant_msg_receiver: StdReceiver<SignificantMsg>,
-
-    // region_id -> peers
-    region_peers: HashMap<u64, Peer>,
-    merging_regions: Option<Vec<metapb::Region>>,
-    pending_raft_groups: HashSet<u64>,
+pub struct StoreMeta {
     // region end key -> region id
-    region_ranges: BTreeMap<Key, u64>,
-    // the regions with pending snapshots between two mio ticks.
-    pending_snapshot_regions: Vec<metapb::Region>,
+    pub region_ranges: BTreeMap<Vec<u8>, u64>,
+    // region_id -> region
+    pub regions: HashMap<u64, Region>,
     // A marker used to indicate if the peer of a region is going to apply a snapshot
     // with different range.
     // It assumes that when a peer is going to accept snapshot, it can never
     // captch up by normal log replication.
-    pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
-    split_check_worker: Worker<SplitCheckTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask>,
-    region_worker: Worker<RegionTask>,
-    compact_worker: Worker<CompactTask>,
-    pd_worker: FutureWorker<PdTask>,
-    consistency_check_worker: Worker<ConsistencyCheckTask>,
-    cleanup_sst_worker: Worker<CleanupSSTTask>,
-    pub apply_worker: Worker<ApplyTask>,
-    local_reader: Worker<ReadTask>,
-    apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
+    pub pending_cross_snap: HashMap<u64, RegionEpoch>,
+    pub pending_votes: RingQueue<RaftMessage>,
+    // the regions with pending snapshots.
+    pub pending_snapshot_regions: Vec<Region>,
+    // (region_id, version) -> BiLock.
+    pub merge_locks: HashMap<(u64, u64), Option<OneshotNotifier>>,
+}
 
-    last_compact_checked_key: Key,
+impl StoreMeta {
+    pub fn new(vote_capacity: usize) -> StoreMeta {
+        StoreMeta {
+            region_ranges: BTreeMap::default(),
+            regions: HashMap::default(),
+            pending_cross_snap: HashMap::default(),
+            pending_votes: RingQueue::with_capacity(vote_capacity),
+            pending_snapshot_regions: Vec::default(),
+            merge_locks: HashMap::default(),
+        }
+    }
 
-    trans: T,
-    pd_client: Arc<C>,
+    #[inline]
+    pub fn set_region(&mut self, region: Region, peer: &mut super::peer::Peer) {
+        let prev = self.regions.insert(region.get_id(), region.clone());
+        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
+            // TODO: may not be a good idea to panic when holding a lock.
+            panic!("{} region corrupted", peer.tag);
+        }
+        peer.set_region(region);
+    }
+}
 
-    pub coprocessor_host: Arc<CoprocessorHost>,
+pub trait ConfigProvider {
+    fn store_id(&self) -> u64;
+    fn snap_scheduler(&self) -> Scheduler<RegionTask>;
+    fn engines(&self) -> &Engines;
+    fn apply_scheduler(&self) -> ApplyRouter;
+    fn read_scheduler(&self) -> Scheduler<ReadTask>;
+    fn coprocessor_host(&self) -> Arc<CoprocessorHost>;
+    fn config(&self) -> Arc<Config>;
+}
 
-    pub importer: Arc<SSTImporter>,
+#[derive(Default)]
+pub struct StoreStat {
+    pub lock_cf_bytes_written: AtomicU64,
 
-    snap_mgr: SnapManager,
+    pub engine_total_bytes_written: AtomicU64,
+    pub engine_total_keys_written: AtomicU64,
 
-    raft_metrics: RaftMetrics,
-    pub entry_cache_metries: Rc<RefCell<CacheQueryStats>>,
+    pub is_busy: AtomicBool,
+}
 
-    tag: String,
+#[derive(Clone, Default)]
+pub struct GlobalStoreStat {
+    pub stat: Arc<StoreStat>,
+}
 
-    start_time: Timespec,
-    is_busy: bool,
+pub struct LocalStoreStat {
+    pub lock_cf_bytes_written: u64,
+    pub engine_total_bytes_written: u64,
+    pub engine_total_keys_written: u64,
+    pub is_busy: bool,
 
-    pending_votes: RingQueue<RaftMessage>,
+    global: GlobalStoreStat,
+}
 
-    store_stat: StoreStat,
+impl GlobalStoreStat {
+    #[inline]
+    fn local(&self) -> LocalStoreStat {
+        LocalStoreStat {
+            lock_cf_bytes_written: 0,
+            engine_total_bytes_written: 0,
+            engine_total_keys_written: 0,
+            is_busy: false,
+
+            global: self.clone(),
+        }
+    }
+}
+
+impl Clone for LocalStoreStat {
+    #[inline]
+    fn clone(&self) -> LocalStoreStat {
+        self.global.local()
+    }
+}
+
+impl LocalStoreStat {
+    pub fn flush(&mut self) {
+        if self.lock_cf_bytes_written != 0 {
+            self.global
+                .stat
+                .lock_cf_bytes_written
+                .fetch_add(self.lock_cf_bytes_written, Ordering::Relaxed);
+            self.lock_cf_bytes_written = 0;
+        }
+        if self.engine_total_bytes_written != 0 {
+            self.global
+                .stat
+                .engine_total_bytes_written
+                .fetch_add(self.engine_total_bytes_written, Ordering::Relaxed);
+            self.engine_total_bytes_written = 0;
+        }
+        if self.engine_total_keys_written != 0 {
+            self.global
+                .stat
+                .engine_total_keys_written
+                .fetch_add(self.engine_total_keys_written, Ordering::Relaxed);
+            self.engine_total_keys_written = 0;
+        }
+        if self.is_busy {
+            self.global.stat.is_busy.store(true, Ordering::Relaxed);
+            self.is_busy = false;
+        }
+    }
 }

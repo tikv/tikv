@@ -135,6 +135,13 @@ lazy_static! {
             "Total number of GC raft log."
         ).unwrap();
 
+    pub static ref PEER_RAFT_LOG_NOT_GC: Histogram =
+        register_histogram!(
+            "tikv_raftstore_log_not_gc",
+            "Raft log not gc",
+            exponential_buckets(5.0, 2.0, 20).unwrap()
+        ).unwrap();
+
     pub static ref UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER: IntCounter =
         register_int_counter!(
             "update_region_size_count_by_compaction",
@@ -214,12 +221,21 @@ lazy_static! {
             exponential_buckets(0.005, 2.0, 20).unwrap()
         ).unwrap();
 
+    pub static ref RAFTSTORE_CHANNEL_FULL: IntCounter =
+        register_int_counter!("tikv_raftstore_channel_full", "Total number of raftstore channel full error").unwrap();
+
     pub static ref RAFT_INVALID_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_raft_invalid_proposal_total",
             "Total number of raft invalid proposal.",
             &["type"]
         ).unwrap();
+
+    pub static ref POLL_BATCH_SIZE: Histogram = register_histogram!(
+        "tikv_raftstore_poll_batch_size",
+        "The size of a poll batch.",
+        exponential_buckets(1.0, 2.0, 13).unwrap()
+    ).unwrap();
 
     pub static ref RAFT_EVENT_DURATION: HistogramVec =
         register_histogram_vec!(

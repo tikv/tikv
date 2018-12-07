@@ -638,7 +638,7 @@ impl RunnableWithTimer<Task, Event> for Runner {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use std::io;
     use std::sync::atomic::AtomicUsize;
     use std::sync::{mpsc, Arc};
@@ -648,8 +648,9 @@ mod tests {
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use raftstore::store::engine::{Mutable, Peekable};
     use raftstore::store::peer_storage::JOB_STATUS_PENDING;
-    use raftstore::store::snap::tests::get_test_db_for_regions;
+    use raftstore::store::snap::test::get_test_db_for_regions;
     use raftstore::store::worker::RegionRunner;
+    use raftstore::store::Router;
     use raftstore::store::{keys, Engines, SnapKey, SnapManager};
     use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use storage::{CF_DEFAULT, CF_RAFT};
@@ -766,7 +767,8 @@ mod tests {
         }
 
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let (router, _) = Router::new_for_test(1);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), router);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let runner = RegionRunner::new(
@@ -792,7 +794,8 @@ mod tests {
             let s1 = rx.recv().unwrap();
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+            let (router, _) = Router::new_for_test(1);
+            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), router);
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();

@@ -32,7 +32,6 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::storage::CF_DEFAULT;
 use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::transport::SendCh;
 use tikv::util::{escape, rocksdb, HandyRwLock};
 
 use super::*;
@@ -64,10 +63,10 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
-    fn add_send_filter(&mut self, node_id: u64, filter: SendFilter);
+    fn get_internal_router(&self, node_id: u64) -> Option<Router>;
+    fn add_send_filter(&mut self, node_id: u64, filter: Box<Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
-    fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter);
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<Filter>);
     fn clear_recv_filters(&mut self, node_id: u64);
 
     fn call_command(&self, request: RaftCmdRequest, timeout: Duration) -> Result<RaftCmdResponse> {
@@ -82,7 +81,14 @@ pub trait Simulator {
     ) -> Result<RaftCmdResponse> {
         let (cb, rx) = make_cb(&request);
 
-        self.async_command_on_node(node_id, request, cb)?;
+        match self.async_command_on_node(node_id, request, cb) {
+            Ok(()) => {}
+            Err(e) => {
+                let mut resp = RaftCmdResponse::new();
+                resp.mut_header().set_error(e.into());
+                return Ok(resp);
+            }
+        }
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
@@ -804,15 +810,17 @@ impl<T: Simulator> Cluster<T> {
         let ch = self
             .sim
             .rl()
-            .get_store_sendch(leader.get_store_id())
+            .get_internal_router(leader.get_store_id())
             .unwrap();
         let split_key = split_key.to_vec();
-        ch.try_send(Msg::SplitRegion {
-            region_id: region.get_id(),
-            region_epoch: region.get_region_epoch().clone(),
-            split_keys: vec![split_key.clone()],
-            callback: cb,
-        }).unwrap();
+        ch.send_peer_message(
+            region.get_id(),
+            PeerMsg::SplitRegion {
+                region_epoch: region.get_region_epoch().to_owned(),
+                split_keys: vec![split_key],
+                callback: cb,
+            },
+        ).unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {

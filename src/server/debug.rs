@@ -11,10 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::iter::FromIterator;
-use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{error, result};
@@ -38,7 +36,7 @@ use raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
+use raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::Key;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -400,7 +398,6 @@ impl Debugger {
                 region,
                 fake_snap_worker.scheduler(),
                 tag.clone(),
-                Rc::new(RefCell::new(CacheQueryStats::default())),
             ));
 
             let raft_cfg = raft::Config {

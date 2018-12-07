@@ -21,11 +21,14 @@
 #![feature(integer_atomics)]
 #![feature(duration_as_u128)]
 #![feature(entry_or_default)]
+#![feature(option_replace)]
 #![feature(proc_macro_non_items)]
 #![feature(proc_macro_gen)]
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
+#![feature(label_break_value)]
+#![feature(cell_update)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
@@ -62,7 +65,6 @@ extern crate lazy_static;
 extern crate libc;
 #[macro_use]
 extern crate log;
-extern crate mio;
 extern crate murmur3;
 extern crate num;
 extern crate num_traits;
@@ -104,6 +106,7 @@ extern crate tempdir;
 extern crate test;
 extern crate time;
 extern crate tipb;
+extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_timer;
 #[cfg(test)]

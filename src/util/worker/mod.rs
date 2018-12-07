@@ -168,6 +168,10 @@ impl<T: Display> Scheduler<T> {
         Ok(())
     }
 
+    pub fn pending(&self) -> usize {
+        self.counter.load(Ordering::Relaxed)
+    }
+
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
         self.counter.load(Ordering::SeqCst) > 0

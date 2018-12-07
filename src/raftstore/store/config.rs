@@ -57,6 +57,7 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
+    pub split_check_limit: u64,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_split_check_diff: ReadableSize,
@@ -71,6 +72,7 @@ pub struct Config {
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
     pub region_compact_tombstones_percent: u64,
+    pub region_compact_sub_compactions: u32,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -123,6 +125,10 @@ pub struct Config {
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
+    pub store_pool_size: usize,
+    pub max_batch_size: usize,
+    pub apply_pool_size: usize,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -156,12 +162,14 @@ impl Default for Config {
             raft_log_gc_size_limit: split_size * 3 / 4,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             split_region_check_tick_interval: ReadableDuration::secs(10),
+            split_check_limit: 100,
             region_split_check_diff: split_size / 16,
             clean_stale_peer_delay: ReadableDuration::minutes(10),
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
+            region_compact_sub_compactions: 2,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -188,6 +196,9 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
+            store_pool_size: 4,
+            max_batch_size: 1024,
+            apply_pool_size: 2,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -325,6 +336,18 @@ impl Config {
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
+
+        // For now, stop a store will block the thread, so it's better to use more than 2 threads.
+        if self.store_pool_size < 1 {
+            return Err(box_err!("store-pool-size can't be less than 1"));
+        }
+
+        if self.max_batch_size == 0 {
+            return Err(box_err!("batch-max-size can't be 0."));
+        }
+        if self.apply_pool_size < 1 {
+            return Err(box_err!("apply-pool-size can't be less than 1"));
+        }
         Ok(())
     }
 }
@@ -408,6 +431,22 @@ mod tests {
 
         cfg = Config::new();
         cfg.local_read_batch_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.store_pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.store_pool_size = 1;
+        assert!(cfg.validate().is_ok());
+
+        cfg = Config::new();
+        cfg.max_batch_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.apply_pool_size = 0;
         assert!(cfg.validate().is_err());
     }
 }
