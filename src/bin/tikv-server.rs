@@ -212,7 +212,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let trans = server.transport();
 
     // Create node.
-    let mut node = Node::new(router.clone(), &server_cfg, &cfg.raft_store, pd_client);
+    let mut node = Node::new(
+        router.clone(),
+        &server_cfg,
+        &cfg.raft_store,
+        Arc::clone(&pd_client),
+    );
 
     // Create CoprocessorHost.
     let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.router());

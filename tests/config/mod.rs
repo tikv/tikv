@@ -81,6 +81,8 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
         enable_load_statistics: true,
         helper_threadpool_size: 2,
+        heavy_load_threshold: 100,
+        heavy_load_wait_duration: ReadableDuration::millis(2),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
@@ -133,6 +135,7 @@ fn test_serde_custom_tikv_config() {
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
+        region_compact_sub_compactions: 2,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,

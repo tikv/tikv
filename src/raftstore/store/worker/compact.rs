@@ -277,7 +277,7 @@ mod test {
         let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
         let db = Arc::new(db);
 
-        let mut runner = Runner::new(Arc::clone(&db));
+        let mut runner = Runner::new(Arc::clone(&db), 1);
 
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 
