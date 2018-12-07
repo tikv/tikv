@@ -112,3 +112,30 @@ impl HttpServer {
             .unwrap_or_else(|e| error!("failed to stop HTTP server, error: {:?}", e));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::future::{lazy, Future};
+    use hyper::{Client, StatusCode, Uri};
+    use util::http_server::HttpServer;
+
+    #[test]
+    fn test_http_service() {
+        let mut http_server = HttpServer::new(1);
+        let _ = http_server.start("127.0.0.1:19999".to_string());
+        let client = Client::new();
+        let uri = "http://127.0.0.1:19999/metrics".parse::<Uri>().unwrap();
+        let handle = http_server.thread_pool.spawn_handle(lazy(move || {
+            client
+                .get(uri)
+                .map(|res| {
+                    assert_eq!(StatusCode::OK, res.status());
+                })
+                .map_err(|err| {
+                    panic!("response status is not OK: {:?}", err);
+                })
+        }));
+        handle.wait().unwrap();
+        http_server.stop();
+    }
+}
