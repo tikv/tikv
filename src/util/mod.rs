@@ -509,9 +509,7 @@ pub fn set_exit_hook(
         drop(log_guard.lock().unwrap().take());
 
         // If PANIC_MARK is true, create panic mark file.
-        if panic_mark_is_on() {
-            create_panic_mark_file(data_dir.clone());
-        }
+        create_panic_mark_file(data_dir.clone());
 
         if panic_abort {
             process::abort();
