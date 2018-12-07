@@ -24,6 +24,7 @@ use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, Server
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
+#[allow(deprecated)]
 use tokio::executor::thread_pool;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::timer::Interval;
@@ -310,7 +311,7 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
 
         let (tx, rx) = Router::new_for_test(1);
-        let (tx2, rx2) = loose_bounded(10);
+        let (tx2, rx2) = ::util::mpsc::loose_bounded(10);
         tx.register_mailbox(2, tx2);
         let router = TestRaftStoreRouter { router: tx };
 

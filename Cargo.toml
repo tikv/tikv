@@ -66,7 +66,7 @@ indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
 futures-cpupool = "0.1"
 tokio-core = "0.1"
-tokio = "0.1"
+tokio = "0.1.8"
 tokio-timer = "0.2"
 serde = "1.0"
 serde_json = "1.0"

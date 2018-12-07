@@ -10,4 +10,4 @@ futures = "0.1"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "super-batch-streaming"
+branch = "super-batch-streaming-old-grpc"

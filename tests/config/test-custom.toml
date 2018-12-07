@@ -38,6 +38,10 @@ end-point-stream-batch-row-limit = 4096
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
+enable-load-statistics = true
+helper-threadpool-size = 2
+heavy-load-threshold = 100
+heavy-load-wait-duration = "2ms"
 
 [server.labels]
 a = "b"
@@ -87,6 +91,7 @@ clean-stale-peer-delay = "13s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
+region-compact-sub-compactions = 2
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"

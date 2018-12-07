@@ -12,12 +12,16 @@
 // limitations under the License.
 
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
 use grpc::{EnvBuilder, Error as GrpcError};
 use tempdir::TempDir;
+#[allow(deprecated)]
+use tokio::executor::thread_pool;
+use tokio::runtime;
 
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
@@ -50,7 +54,7 @@ type SimulateServerTransport =
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
 struct ServerMeta {
-    node: Node<TestPdClient>,
+    node: Node<SimulateServerTransport, TestPdClient>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
@@ -76,13 +80,28 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+
+        let mut tp_builder = thread_pool::Builder::new();
+        tp_builder.pool_size(1);
+        let raft_client = RaftClient::new(
+            env,
+            Arc::new(Config::default()),
+            security_mgr,
+            Arc::new((AtomicUsize::new(0), AtomicUsize::new(0))),
+            Arc::new(
+                runtime::Builder::new()
+                    .threadpool_builder(tp_builder)
+                    .build()
+                    .unwrap(),
+            ),
+        );
         ServerCluster {
             metas: HashMap::default(),
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
             snap_paths: HashMap::default(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            raft_client,
         }
     }
 
