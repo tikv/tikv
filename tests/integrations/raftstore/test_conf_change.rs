@@ -591,6 +591,7 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
+    let cfg = cluster.cfg.clone();
 
     // Test adding nodes.
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -600,7 +601,7 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_ne!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
 
     // Test transfer leader after a safe duration.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(cfg.raft_store.raft_reject_transfer_leader_duration.into());
     cluster.transfer_leader(region_id, new_peer(3, 3));
     cluster.reset_leader_of_region(region_id);
     assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
@@ -707,20 +708,13 @@ fn test_server_safe_conf_change() {
 }
 
 #[test]
-fn test_node_transfer_leader_safe() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    configure_for_transfer_leader(&mut cluster);
-    test_transfer_leader_safe(&mut cluster);
-}
-
-#[test]
 fn test_server_transfer_leader_safe() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     configure_for_transfer_leader(&mut cluster);
     test_transfer_leader_safe(&mut cluster);
 }
+
 #[test]
 fn test_conf_change_remove_leader() {
     let mut cluster = new_node_cluster(0, 3);

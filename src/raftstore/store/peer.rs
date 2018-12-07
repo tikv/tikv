@@ -235,13 +235,9 @@ impl RecentAddedPeer {
         self.added_time = now;
     }
 
-    pub fn contains(&mut self, id: u64) -> bool {
-        if self.id == id
+    pub fn contains(&self, id: u64) -> bool {
+        self.id == id
             && duration_to_sec(self.added_time.elapsed()) < self.reject_duration_as_secs as f64
-        {
-            return true;
-        }
-        false
     }
 }
 
@@ -1516,7 +1512,7 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn ready_to_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
+    fn ready_to_transfer_leader(&self, peer: &metapb::Peer) -> bool {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
