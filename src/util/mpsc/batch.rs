@@ -52,7 +52,7 @@ impl State {
     #[inline]
     fn notify(&self) {
         let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
-        if t.is_null() {
+        if !t.is_null() {
             self.pending.store(0, Ordering::Release);
             let t = unsafe { Box::from_raw(t) };
             t.notify();
@@ -65,7 +65,12 @@ impl State {
     #[inline]
     fn yield_poll(&self) -> bool {
         let t = Box::into_raw(box task::current());
-        !self.recv_task.swap(t, Ordering::AcqRel).is_null()
+        let origin = self.recv_task.swap(t, Ordering::AcqRel);
+        if !origin.is_null() {
+            unsafe { drop(Box::from_raw(origin)) };
+            return true;
+        }
+        false
     }
 }
 
