@@ -63,7 +63,7 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
-    let cf = "lock";
+    let cf = "default";
 
     for i in 1..1000 {
         let (k, v) = (format!("key{}", i), format!("value{}", i));
