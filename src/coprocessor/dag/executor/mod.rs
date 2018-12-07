@@ -272,23 +272,58 @@ pub trait Executor {
         None
     }
 
-    /// Returns whether this executor supports batch execution.
-    ///
-    /// Executor must implement `next_batch` if this function returns `true`.
-    fn support_batch(&self) -> bool {
-        false
-    }
-
     /// Returns next several rows.
     ///
     /// This function is simply the batch version of `next()`. The executor should return as more
     /// rows as possible, but `expect_rows` rows at most.
     fn next_batch(&mut self, _expect_rows: usize) -> BatchExecuteResult {
         // Unreachable since this function shall never be called when corresponding executor does
-        // not support batch execution (i.e. `support_batch()` is not overwritten to return `true`).
+        // not support batch execution.
         unreachable!()
     }
 }
+
+/*
+/// Build an executor pipeline according to request. The executors can be batch executors.
+///
+/// It checks whether all executors in the pipeline support batch. If so, batch executors will be
+/// built. Otherwise, normal executors will be built.
+pub fn build_executor_tree<S: Snapshot + 'static>(
+    execs: Vec<executor::Executor>,
+    store: SnapshotStore<S>,
+    ranges: Vec<KeyRange>,
+    eval_ctx: Arc<EvalConfig>,
+    collect: bool,
+) -> Result<Box<Executor + Send>> {
+    let mut support_batch = true;
+    for exec in &execs {
+        match exec.get_tp() {
+            ExecType::TypeTableScan => {}
+            _ => {
+                support_batch = false;
+                break;
+            }
+        }
+    }
+    if !support_batch {
+        build_normal_executor_tree(execs, store, ranges, eval_ctx, collect)
+    } else {
+        build_batch_executor_tree(execs, store, ranges, eval_ctx)
+    }
+}
+
+fn build_batch_executor_tree<S: Snapshot + 'static>(
+    execs: Vec<executor::Executor>,
+    store: SnapshotStore<S>,
+    ranges: Vec<KeyRange>,
+    eval_ctx: Arc<EvalConfig>,
+) {
+    let mut execs = execs.into_iter();
+    let first_executor = execs
+        .next()
+        .ok_or_else(|| Error::Other(box_err!("No executors")))?;
+}
+*/
 
 pub fn build_exec<S: Snapshot + 'static>(
     execs: Vec<executor::Executor>,

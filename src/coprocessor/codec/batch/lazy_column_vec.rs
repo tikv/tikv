@@ -37,6 +37,7 @@ impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
 impl LazyBatchColumnVec {
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns
     /// and each of them reserves capacity according to `rows_capacity`.
+    #[inline]
     pub fn raw(columns_count: usize, rows_capacity: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
         for _ in 0..columns_count {
@@ -68,6 +69,24 @@ impl LazyBatchColumnVec {
             assert!(lazy_col.is_raw());
             lazy_col.push_raw(raw_datum);
         }
+
+        self.debug_assert_columns_equal_length();
+    }
+
+    /// Move all elements of `other` into `Self`, leaving `other` empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `other` and `Self` does not have same column schemas.
+    #[inline]
+    pub fn append(&mut self, other: &mut Self) {
+        let len = self.columns_len();
+        assert_eq!(len, other.columns_len());
+        for i in 0..len {
+            self.columns[i].append(&mut other[i]);
+        }
+
+        self.debug_assert_columns_equal_length();
     }
 
     /// Ensures that a column at specified `column_index` is decoded and returns a reference
@@ -111,6 +130,15 @@ impl LazyBatchColumnVec {
         self.columns[0].len()
     }
 
+    /// Debug asserts that all columns have equal length.
+    #[inline]
+    pub fn debug_assert_columns_equal_length(&self) {
+        let len = self.rows_len();
+        for column in &self.columns {
+            debug_assert_eq!(len, column.len());
+        }
+    }
+
     /// Returns the number of rows this container can hold without reallocating.
     #[inline]
     pub fn rows_capacity(&self) -> usize {
@@ -133,22 +161,14 @@ impl LazyBatchColumnVec {
         }
 
         let current_rows_len = self.rows_len();
-        let mut new_rows = None;
 
         // We retain column by column to be efficient.
         for col in &mut self.columns {
             assert_eq!(col.len(), current_rows_len);
             col.retain_by_index(&mut f);
-
-            match new_rows {
-                None => {
-                    new_rows = Some(col.len());
-                }
-                Some(rows) => {
-                    assert_eq!(col.len(), rows);
-                }
-            }
         }
+
+        self.debug_assert_columns_equal_length();
     }
 }
 

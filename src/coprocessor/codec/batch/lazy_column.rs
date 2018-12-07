@@ -215,6 +215,25 @@ impl LazyBatchColumn {
             LazyBatchColumn::Decoded(_) => panic!("LazyBatchColumn is already decoded"),
         }
     }
+
+    /// Move all elements of `other` into `Self`, leaving `other` empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `other` and `Self` does not have identical decoded status, i.e. one is `decoded`
+    /// but one is `raw`.
+    pub fn append(&mut self, other: &mut Self) {
+        match self {
+            LazyBatchColumn::Raw(ref mut dest) => match other {
+                LazyBatchColumn::Raw(ref mut src) => dest.append(src),
+                _ => panic!("Cannot append decoded LazyBatchColumn into raw LazyBatchColumn"),
+            },
+            LazyBatchColumn::Decoded(ref mut dest) => match other {
+                LazyBatchColumn::Decoded(ref mut src) => dest.append(src),
+                _ => panic!("Cannot append raw LazyBatchColumn into decoded LazyBatchColumn"),
+            },
+        }
+    }
 }
 
 #[cfg(test)]

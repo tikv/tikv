@@ -75,8 +75,6 @@ impl<S: Store> BatchTableScanExecutor<S> {
             key_ranges.reverse();
         }
 
-        // let columns_len = ;
-        // let unsafe_raw_rows_cache = vec![Default::default(); columns_len];
         let is_column_filled = vec![false; context.columns_info.len()];
 
         let mut key_only = true;
@@ -155,6 +153,10 @@ impl<S: Store> BatchTableScanExecutor<S> {
         use coprocessor::codec::datum;
         use util::codec::number;
 
+        if expect_rows == 0 {
+            return Ok(());
+        }
+
         let columns_len = self.context.columns_info.len();
 
         loop {
@@ -225,9 +227,9 @@ impl<S: Store> BatchTableScanExecutor<S> {
                         // Reset to not-filled, prepare for next function call.
                         self.is_column_filled[i] = false;
                     }
-                    // All columns have identical length.
-                    debug_assert_eq!(columns[i].len(), columns.rows_len());
                 }
+
+                columns.debug_assert_columns_equal_length();
 
                 if columns.rows_len() >= expect_rows {
                     break;
@@ -258,11 +260,6 @@ impl<S: Store> Executor for BatchTableScanExecutor<S> {
     fn get_len_of_columns(&self) -> usize {
         // Not used in batch execute.
         unreachable!()
-    }
-
-    #[inline]
-    fn support_batch(&self) -> bool {
-        true
     }
 
     #[inline]
@@ -305,7 +302,7 @@ mod tests {
     };
 
     const TABLE_ID: i64 = 1;
-    const KEY_NUMBER: usize = 10;
+    const KEY_NUMBER: usize = 100;
 
     #[test]
     fn test_point_get() {
@@ -342,39 +339,60 @@ mod tests {
         }
     }
 
-    /*
     #[test]
     fn test_multiple_ranges() {
-        let mut wrapper = TableScanTestWrapper::default();
-        // prepare range
+        use rand::Rng;
+
+        let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
+        let mut test_store = TestStore::new(&test_data.kv_data);
+        let context = {
+            let mut columns_info = test_data.get_prev_2_cols();
+            columns_info.push(test_data.get_col_pk());
+            ExecutorContext::new(columns_info)
+        };
+
         let r1 = get_range(TABLE_ID, i64::MIN, 0);
         let r2 = get_range(TABLE_ID, 0, (KEY_NUMBER / 2) as i64);
+        let r3 = get_point_range(TABLE_ID, (KEY_NUMBER / 2) as i64);
+        let r4 = get_range(TABLE_ID, (KEY_NUMBER / 2) as i64 + 1, i64::MAX);
+        let ranges = vec![r1, r2, r3, r4];
 
-        // prepare point get
-        let handle = KEY_NUMBER / 2;
-        let r3 = wrapper.get_point_range(handle as i64);
-
-        let r4 = get_range(TABLE_ID, (handle + 1) as i64, i64::MAX);
-        wrapper.ranges = vec![r1, r2, r3, r4];
-
-        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::new(wrapper.table_scan, wrapper.ranges, store, false).unwrap();
+            BatchTableScanExecutor::new(context.clone(), false, ranges, store).unwrap();
 
-        for handle in 0..KEY_NUMBER {
-            let row = table_scanner.next().unwrap().unwrap().take_origin();
-            assert_eq!(row.handle, handle as i64);
-            assert_eq!(row.data.len(), wrapper.cols.len());
-            let expect_row = &wrapper.data.expect_rows[handle];
-            for col in &wrapper.cols {
-                let cid = col.get_column_id();
-                let v = row.data.get(cid).unwrap();
-                assert_eq!(expect_row[&cid], v.to_vec());
+        let mut data = table_scanner.next_batch(0).data;
+        {
+            let mut rng = ::rand::thread_rng();
+            loop {
+                let mut result = table_scanner.next_batch(rng.gen_range(1, KEY_NUMBER / 5));
+                assert!(result.error.is_none());
+                if result.data.rows_len() == 0 {
+                    break;
+                }
+                data.append(&mut result.data);
             }
         }
-        assert!(table_scanner.next().unwrap().is_none());
-    }
-    */
+        assert_eq!(data.columns_len(), 3);
+        assert_eq!(data.rows_len(), KEY_NUMBER);
 
+        for row_index in 0..KEY_NUMBER {
+            // data[2] should be PK column, let's check it first.
+            assert_eq!(
+                data[2].decoded().as_int_slice()[row_index],
+                Some(row_index as i64)
+            );
+            // check rest columns
+            let expect_row = &test_data.expect_rows[row_index];
+            for (col_index, col) in context.columns_info.iter().enumerate() {
+                if col.get_pk_handle() {
+                    continue;
+                }
+                let cid = col.get_column_id();
+                let v = &data[col_index].raw()[row_index];
+                assert_eq!(expect_row[&cid].as_slice(), v.as_slice());
+            }
+        }
+    }
 }
