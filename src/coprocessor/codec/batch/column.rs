@@ -445,6 +445,107 @@ impl BatchColumn {
 
         Ok(())
     }
+
+    /// Returns maximum encoded size.
+    pub fn encoded_size(&self) -> Result<usize> {
+        match self {
+            BatchColumn::Int(ref vec) => Ok(vec.len() * 9),
+            BatchColumn::Real(ref vec) => Ok(vec.len() * 9),
+            BatchColumn::Decimal(ref _vec) => {
+                Err(Error::Other(box_err!("Decimal is not supported")))
+            }
+            BatchColumn::Bytes(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 9 + v.len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            BatchColumn::DateTime(ref vec) => Ok(vec.len() * 9),
+            BatchColumn::Duration(ref vec) => Ok(vec.len() * 9),
+            BatchColumn::Json(ref _vec) => Err(Error::Other(box_err!("JSON is not supported"))),
+        }
+    }
+
+    /// Encodes a single element into binary format.
+    pub fn encode(&self, row_index: usize, output: &mut Vec<u8>) -> Result<()> {
+        use util::codec::bytes::BytesEncoder;
+        use util::codec::number::NumberEncoder;
+
+        match self {
+            BatchColumn::Int(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::INT_FLAG);
+                        output.encode_i64(val)?;
+                    }
+                }
+                Ok(())
+            }
+            BatchColumn::Real(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::FLOAT_FLAG);
+                        output.encode_f64(val)?;
+                    }
+                }
+                Ok(())
+            }
+            BatchColumn::Decimal(ref _vec) => {
+                Err(Error::Other(box_err!("Decimal is not supported")))
+            }
+            BatchColumn::Bytes(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::COMPACT_BYTES_FLAG);
+                        output.encode_compact_bytes(val)?;
+                    }
+                }
+                Ok(())
+            }
+            BatchColumn::DateTime(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::UINT_FLAG);
+                        output.encode_u64(val.to_packed_u64())?;
+                    }
+                }
+                Ok(())
+            }
+            BatchColumn::Duration(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::DURATION_FLAG);
+                        output.encode_i64(val.to_nanos())?;
+                    }
+                }
+                Ok(())
+            }
+            BatchColumn::Json(ref _vec) => Err(Error::Other(box_err!("JSON is not supported"))),
+        }
+    }
 }
 
 macro_rules! impl_as_slice {

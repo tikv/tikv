@@ -612,10 +612,10 @@ fn bench_batch_table_scan_multi_rows(c: &mut Criterion) {
         b.iter_with_setup(
             || {
                 let mut executor = BatchTableScanExecutor::new(
-                    context.clone(),
-                    false,
-                    vec![table.get_select_range()],
                     store.to_fixture_store(),
+                    context.clone(),
+                    vec![table.get_select_range()],
+                    false,
                 ).unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
@@ -674,10 +674,10 @@ fn bench_batch_table_scan_datum_all_multi_rows(c: &mut Criterion) {
         b.iter_with_setup(
             || {
                 let mut executor = BatchTableScanExecutor::new(
-                    context.clone(),
-                    false,
-                    vec![table.get_select_range()],
                     store.to_fixture_store(),
+                    context.clone(),
+                    vec![table.get_select_range()],
+                    false,
                 ).unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.

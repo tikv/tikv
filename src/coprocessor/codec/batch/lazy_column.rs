@@ -234,6 +234,33 @@ impl LazyBatchColumn {
             },
         }
     }
+
+    /// Returns maximum encoded size.
+    pub fn encoded_size(&self) -> Result<usize> {
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                let mut size = 0;
+                for s in v {
+                    size += s.len();
+                }
+                Ok(size)
+            }
+            LazyBatchColumn::Decoded(ref v) => v.encoded_size(),
+        }
+    }
+
+    /// Encodes into binary format.
+    pub fn encode(&self, row_index: usize, output: &mut Vec<u8>) -> Result<()> {
+        // FIXME: TiKV should output the default value in encode if corresponding datum is absent.
+        // TODO: Maybe it is not necessary to output the default value since TiDB knows?
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                output.extend_from_slice(v[row_index].as_slice());
+                Ok(())
+            }
+            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, output),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -170,6 +170,27 @@ impl LazyBatchColumnVec {
 
         self.debug_assert_columns_equal_length();
     }
+
+    /// Returns maximum encoded size.
+    pub fn encoded_size(&self, output_offsets: impl AsRef<[u32]>) -> Result<usize> {
+        let mut size = 0;
+        for offset in output_offsets.as_ref() {
+            size += self.columns[(*offset) as usize].encoded_size()?;
+        }
+        Ok(size)
+    }
+
+    /// Encodes into binary format.
+    pub fn encode(&self, output_offsets: impl AsRef<[u32]>, output: &mut Vec<u8>) -> Result<()> {
+        let len = self.rows_len();
+        for i in 0..len {
+            for offset in output_offsets.as_ref() {
+                let col = &self.columns[(*offset) as usize];
+                col.encode(i, output)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl ::std::ops::Deref for LazyBatchColumnVec {

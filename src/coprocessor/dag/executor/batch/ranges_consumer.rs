@@ -43,15 +43,17 @@ pub enum ConsumerResult {
 /// corresponding range once.
 pub struct RangesConsumer {
     in_range: bool,
+    emit_point_range: bool,
     iter: ::std::vec::IntoIter<KeyRange>,
 }
 
 impl RangesConsumer {
     #[inline]
-    pub fn new(user_key_ranges: Vec<KeyRange>) -> Self {
+    pub fn new(user_key_ranges: Vec<KeyRange>, emit_point_range: bool) -> Self {
         Self {
             in_range: false,
             iter: user_key_ranges.into_iter(),
+            emit_point_range,
         }
     }
 
@@ -63,7 +65,7 @@ impl RangesConsumer {
         match self.iter.next() {
             None => ConsumerResult::Drained,
             Some(range) => {
-                if ::coprocessor::util::is_point(&range) {
+                if ::coprocessor::util::is_point(&range) && self.emit_point_range {
                     self.in_range = false;
                     ConsumerResult::NewPointRange(range)
                 } else {
@@ -110,10 +112,12 @@ mod tests {
         r
     }
 
+    // TODO: Test `RangesConsumer::new(..., false)`.
+
     #[test]
     fn test_basic() {
         // Empty
-        let mut c = RangesConsumer::new(vec![]);
+        let mut c = RangesConsumer::new(vec![], true);
         assert_eq!(c.next(), ConsumerResult::Drained);
         assert_eq!(c.next(), ConsumerResult::Drained);
         c.consume();
@@ -122,7 +126,7 @@ mod tests {
 
         // Pure non-point range
         let ranges = vec![new_range(), new_range(), new_range()];
-        let mut c = RangesConsumer::new(ranges.clone());
+        let mut c = RangesConsumer::new(ranges.clone(), true);
         assert_eq!(
             c.next(),
             ConsumerResult::NewNonPointRange(ranges[0].clone())
@@ -149,7 +153,7 @@ mod tests {
 
         // Pure point range
         let ranges = vec![new_point(), new_point(), new_point()];
-        let mut c = RangesConsumer::new(ranges.clone());
+        let mut c = RangesConsumer::new(ranges.clone(), true);
         assert_eq!(c.next(), ConsumerResult::NewPointRange(ranges[0].clone()));
         assert_eq!(c.next(), ConsumerResult::NewPointRange(ranges[1].clone()));
         c.consume(); // no effect
@@ -160,7 +164,7 @@ mod tests {
 
         // Mixed
         let ranges = vec![new_point(), new_range(), new_point()];
-        let mut c = RangesConsumer::new(ranges.clone());
+        let mut c = RangesConsumer::new(ranges.clone(), true);
         assert_eq!(c.next(), ConsumerResult::NewPointRange(ranges[0].clone()));
         assert_eq!(
             c.next(),
@@ -176,7 +180,7 @@ mod tests {
 
         // Mixed
         let ranges = vec![new_range(), new_point(), new_range(), new_range()];
-        let mut c = RangesConsumer::new(ranges.clone());
+        let mut c = RangesConsumer::new(ranges.clone(), true);
         assert_eq!(
             c.next(),
             ConsumerResult::NewNonPointRange(ranges[0].clone())
