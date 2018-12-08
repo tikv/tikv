@@ -309,7 +309,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Rpad
             | ScalarFuncSig::RpadBinary
             | ScalarFuncSig::Locate3Args
-            | ScalarFuncSig::LocateBinary3Args => (3, 3),
+            | ScalarFuncSig::LocateBinary3Args
+            | ScalarFuncSig::AesDecrypt
+            | ScalarFuncSig::AesEncrypt => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -377,8 +379,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddStringAndString
             | ScalarFuncSig::AddTimeDurationNull
             | ScalarFuncSig::AddTimeStringNull
-            | ScalarFuncSig::AesDecrypt
-            | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
             | ScalarFuncSig::ConnectionID
             | ScalarFuncSig::Convert
@@ -967,6 +967,8 @@ dispatch_call! {
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
         SHA1 => sha1,
+        AesDecrypt => aes_decrypt,
+        AesEncrypt => aes_encrypt,
         SHA2 => sha2,
         Elt => elt,
         FromBase64 => from_base64,
@@ -1343,6 +1345,8 @@ mod tests {
                     ScalarFuncSig::RpadBinary,
                     ScalarFuncSig::Locate3Args,
                     ScalarFuncSig::LocateBinary3Args,
+                    ScalarFuncSig::AesDecrypt,
+                    ScalarFuncSig::AesEncrypt,
                 ],
                 3,
                 3,
@@ -1453,8 +1457,6 @@ mod tests {
             ScalarFuncSig::AddStringAndString,
             ScalarFuncSig::AddTimeDurationNull,
             ScalarFuncSig::AddTimeStringNull,
-            ScalarFuncSig::AesDecrypt,
-            ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,
             ScalarFuncSig::ConnectionID,
             ScalarFuncSig::Convert,

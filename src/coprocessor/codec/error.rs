@@ -24,6 +24,7 @@ use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_REGEXP: i32 = 1139;
+pub const ERR_WRONG_ARGUMENTS: i32 = 1210;
 pub const ZLIB_LENGTH_CORRUPTED: i32 = 1258;
 pub const ZLIB_DATA_CORRUPTED: i32 = 1259;
 pub const WARN_DATA_TRUNCATED: i32 = 1265;
@@ -31,6 +32,7 @@ pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
 pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_DATA_TOO_LONG: i32 = 1406;
+pub const WARN_OPTION_IGNORED: i32 = 1618;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 
 quick_error! {
@@ -153,6 +155,21 @@ impl Error {
 
     pub fn zlib_data_corrupted() -> Error {
         Error::Eval("ZLIB: Input data corrupted".into(), ZLIB_DATA_CORRUPTED)
+    }
+
+    pub fn warn_option_ignored(val: &str) -> Error {
+        let msg = format!("ingnore option warn: {}", val);
+        Error::Eval(msg, WARN_OPTION_IGNORED)
+    }
+
+    pub fn wrong_args(val: &str) -> Error {
+        let msg = format!("wrong arguments: {}", val);
+        Error::Eval(msg, ERR_WRONG_ARGUMENTS)
+    }
+
+    pub fn not_supported(val: &str) -> Error {
+        let msg = format!("not supported: '{}'", val);
+        Error::Eval(msg, ERR_UNKNOWN)
     }
 }
 

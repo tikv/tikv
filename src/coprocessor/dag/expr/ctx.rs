@@ -321,6 +321,14 @@ impl EvalContext {
         }
     }
 
+    pub fn handle_wrong_arguments(&mut self, err: Error) -> Result<()> {
+        if err.code() != super::codec::error::ERR_WRONG_ARGUMENTS {
+            return Err(err);
+        }
+        self.warnings.append_warning(err);
+        Ok(())
+    }
+
     pub fn overflow_from_cast_str_as_int(
         &mut self,
         bytes: &[u8],

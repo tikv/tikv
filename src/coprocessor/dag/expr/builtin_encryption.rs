@@ -12,14 +12,18 @@
 // limitations under the License.
 
 use std::borrow::Cow;
+use std::str;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use crypto::{
+    aes, blockmodes, buffer,
+    buffer::{ReadBuffer, WriteBuffer},
     digest::Digest,
     md5::Md5,
     sha1::Sha1,
     sha2::{Sha224, Sha256, Sha384, Sha512},
+    symmetriccipher::{Decryptor, Encryptor},
 };
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
@@ -31,6 +35,118 @@ const SHA224: i64 = 224;
 const SHA256: i64 = 256;
 const SHA384: i64 = 384;
 const SHA512: i64 = 512;
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AesMode {
+    Aes128Ecb,
+    Aes192Ecb,
+    Aes256Ecb,
+    Aes128Cbc,
+    Aes192Cbc,
+    Aes256Cbc,
+}
+
+impl AesMode {
+    pub fn key_size(self) -> aes::KeySize {
+        match self {
+            AesMode::Aes128Ecb | AesMode::Aes128Cbc => aes::KeySize::KeySize128,
+            AesMode::Aes192Ecb | AesMode::Aes192Cbc => aes::KeySize::KeySize192,
+            AesMode::Aes256Ecb | AesMode::Aes256Cbc => aes::KeySize::KeySize256,
+        }
+    }
+
+    pub fn from(mode: &[u8]) -> Option<AesMode> {
+        let mode = match str::from_utf8(mode) {
+            Ok(v) => v,
+            Err(_) => {
+                return None;
+            }
+        };
+        match mode {
+            "aes-128-ecb" => Some(AesMode::Aes128Ecb),
+            "aes-192-ecb" => Some(AesMode::Aes192Ecb),
+            "aes-256-ecb" => Some(AesMode::Aes256Ecb),
+            "aes-128-cbc" => Some(AesMode::Aes128Cbc),
+            "aes-192-cbc" => Some(AesMode::Aes192Cbc),
+            "aes-256-cbc" => Some(AesMode::Aes256Cbc),
+            _ => None,
+        }
+    }
+
+    fn derive_key_mysql(input: &[u8], block_size: usize) -> Vec<u8> {
+        let mut output = vec![0; block_size];
+        let mut idx = 0;
+        for k in input {
+            if idx == block_size {
+                idx = 0;
+            }
+            output[idx] ^= k;
+            idx += 1;
+        }
+        output
+    }
+
+    pub fn build_encryptor(self, key: &[u8], iv: Option<&[u8]>) -> Result<Box<Encryptor>> {
+        let key_size = match self {
+            AesMode::Aes128Ecb | AesMode::Aes128Cbc => 16,
+            AesMode::Aes192Ecb | AesMode::Aes192Cbc => 24,
+            AesMode::Aes256Ecb | AesMode::Aes256Cbc => 32,
+        };
+
+        let mysql_key = AesMode::derive_key_mysql(key, key_size);
+        match self {
+            AesMode::Aes128Ecb | AesMode::Aes192Ecb | AesMode::Aes256Ecb => Ok(aes::ecb_encryptor(
+                self.key_size(),
+                &mysql_key,
+                blockmodes::PkcsPadding,
+            )),
+            AesMode::Aes128Cbc | AesMode::Aes192Cbc | AesMode::Aes256Cbc => {
+                let iv = match iv {
+                    Some(iv) => iv,
+                    None => {
+                        return Err(Error::wrong_args("IV"));
+                    }
+                };
+                Ok(aes::cbc_encryptor(
+                    self.key_size(),
+                    &mysql_key,
+                    iv,
+                    blockmodes::PkcsPadding,
+                ))
+            }
+        }
+    }
+
+    pub fn build_decryptor(self, key: &[u8], iv: Option<&[u8]>) -> Result<Box<Decryptor>> {
+        let key_size = match self {
+            AesMode::Aes128Ecb | AesMode::Aes128Cbc => 16,
+            AesMode::Aes192Ecb | AesMode::Aes192Cbc => 24,
+            AesMode::Aes256Ecb | AesMode::Aes256Cbc => 32,
+        };
+
+        let mysql_key = AesMode::derive_key_mysql(key, key_size);
+        match self {
+            AesMode::Aes128Ecb | AesMode::Aes192Ecb | AesMode::Aes256Ecb => Ok(aes::ecb_decryptor(
+                self.key_size(),
+                &mysql_key,
+                blockmodes::PkcsPadding,
+            )),
+            AesMode::Aes128Cbc | AesMode::Aes192Cbc | AesMode::Aes256Cbc => {
+                let iv = match iv {
+                    Some(iv) => iv,
+                    None => {
+                        return Err(Error::wrong_args("IV"));
+                    }
+                };
+                Ok(aes::cbc_decryptor(
+                    self.key_size(),
+                    &mysql_key,
+                    iv,
+                    blockmodes::PkcsPadding,
+                ))
+            }
+        }
+    }
+}
 
 impl ScalarFunc {
     pub fn md5<'a, 'b: 'a>(
@@ -175,8 +291,117 @@ impl ScalarFunc {
         }
         Ok(Some(i64::from(LittleEndian::read_u32(&input[0..4]))))
     }
-}
 
+    pub fn aes_encrypt<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let aes_mode = try_opt!(self.children[0].eval_string(ctx, row));
+        let origin = try_opt!(self.children[1].eval_string(ctx, row));
+        let key = try_opt!(self.children[2].eval_string(ctx, row));
+        let aes_mode = match AesMode::from(aes_mode.as_ref()) {
+            Some(mode) => mode,
+            None => {
+                ctx.warnings
+                    .append_warning(Error::not_supported(&format!("{:?}'", aes_mode)));
+                return Ok(None);
+            }
+        };
+
+        if key.is_empty() {
+            return Ok(Some(Cow::Owned(Vec::<u8>::new())));
+        }
+
+        let mut encryptor = match aes_mode.build_encryptor(key.as_ref(), None) {
+            Ok(encryptor) => encryptor,
+            Err(error) => {
+                ctx.warnings.append_warning(error);
+                return Ok(None);
+            }
+        };
+
+        let mut final_result = Vec::<u8>::new();
+        let mut read_buffer = buffer::RefReadBuffer::new(origin.as_ref());
+        let mut buffer = [0; 4096];
+        let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
+        loop {
+            let result = encryptor.encrypt(&mut read_buffer, &mut write_buffer, true);
+            final_result.extend(
+                write_buffer
+                    .take_read_buffer()
+                    .take_remaining()
+                    .iter()
+                    .cloned(),
+            );
+            match result {
+                Ok(buffer::BufferResult::BufferUnderflow) => break,
+                Ok(buffer::BufferResult::BufferOverflow) => {}
+                Err(_) => {
+                    ctx.warnings
+                        .append_warning(Error::wrong_args("aes::encrypt"));
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(Cow::Owned(final_result)))
+    }
+
+    pub fn aes_decrypt<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let aes_mode = try_opt!(self.children[0].eval_string(ctx, row));
+        let crypt = try_opt!(self.children[1].eval_string(ctx, row));
+        let key = try_opt!(self.children[2].eval_string(ctx, row));
+        let aes_mode = match AesMode::from(aes_mode.as_ref()) {
+            Some(mode) => mode,
+            None => {
+                ctx.warnings
+                    .append_warning(Error::not_supported(&format!("{:?}'", aes_mode)));
+                return Ok(None);
+            }
+        };
+
+        if key.is_empty() {
+            return Ok(Some(Cow::Owned(Vec::<u8>::new())));
+        }
+
+        let mut decryptor = match aes_mode.build_decryptor(key.as_ref(), None) {
+            Ok(decryptor) => decryptor,
+            Err(error) => {
+                ctx.warnings.append_warning(error);
+                return Ok(None);
+            }
+        };
+
+        let mut final_result = Vec::<u8>::new();
+        let mut read_buffer = buffer::RefReadBuffer::new(crypt.as_ref());
+        let mut buffer = [0; 4096];
+        let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
+        loop {
+            let result = decryptor.decrypt(&mut read_buffer, &mut write_buffer, true);
+            final_result.extend(
+                write_buffer
+                    .take_read_buffer()
+                    .take_remaining()
+                    .iter()
+                    .cloned(),
+            );
+            match result {
+                Ok(buffer::BufferResult::BufferUnderflow) => break,
+                Ok(buffer::BufferResult::BufferOverflow) => {}
+                Err(_) => {
+                    ctx.warnings
+                        .append_warning(Error::wrong_args("aes::decrypt"));
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(Cow::Owned(final_result)))
+    }
+}
 #[cfg(test)]
 mod tests {
     use coprocessor::codec::Datum;
@@ -369,5 +594,152 @@ mod tests {
             let got = eval_func(ScalarFuncSig::UncompressedLength, &[s]).unwrap();
             assert_eq!(got, Datum::I64(exp));
         }
+    }
+
+    const DATA: &[(&str, &str, &str, &str)] = &[
+        (
+            "aes-128-ecb",
+            "pingcap",
+            "1234567890123456",
+            "697BFE9B3F8C2F289DD82C88C7BC95C4",
+        ),
+        (
+            "aes-128-ecb",
+            "pingcap123",
+            "1234567890123456",
+            "CEC348F4EF5F84D3AA6C4FA184C65766",
+        ),
+        (
+            "aes-128-ecb",
+            "pingcap",
+            "123456789012345678901234",
+            "6F1589686860C8E8C7A40A78B25FF2C0",
+        ),
+        (
+            "aes-128-ecb",
+            "pingcap",
+            "123",
+            "996E0CA8688D7AD20819B90B273E01C6",
+        ),
+        (
+            "aes-192-ecb",
+            "pingcap",
+            "1234567890123456",
+            "9B139FD002E6496EA2D5C73A2265E661",
+        ),
+        (
+            "aes-256-ecb",
+            "pingcap",
+            "1234567890123456",
+            "F80DCDEDDBE5663BDB68F74AEDDB8EE3",
+        ),
+    ];
+
+    #[test]
+    fn test_aes_encrypt() {
+        use super::EvalContext;
+        let mut ctx = EvalContext::default();
+        for (aes_name, origin, key, crypt) in DATA {
+            let aes_name = datum_expr(Datum::Bytes(aes_name.as_bytes().to_vec()));
+            let origin = datum_expr(Datum::Bytes(origin.as_bytes().to_vec()));
+            let key = datum_expr(Datum::Bytes(key.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::AesEncrypt, &[aes_name, origin, key]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let crypt = Datum::Bytes(hex::decode(crypt.as_bytes().to_vec()).unwrap());
+            assert_eq!(got, crypt);
+        }
+    }
+
+    #[test]
+    fn test_aes_decrypt() {
+        use super::EvalContext;
+        let mut ctx = EvalContext::default();
+        for (aes_name, origin, key, crypt) in DATA {
+            let aes_name = datum_expr(Datum::Bytes(aes_name.as_bytes().to_vec()));
+            let crypt = datum_expr(Datum::Bytes(
+                hex::decode(crypt.as_bytes().to_vec()).unwrap(),
+            ));
+            let key = datum_expr(Datum::Bytes(key.as_bytes().to_vec()));
+            let op = scalar_func_expr(ScalarFuncSig::AesDecrypt, &[aes_name, crypt, key]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let origin = Datum::Bytes(origin.as_bytes().to_vec());
+            assert_eq!(got, origin);
+        }
+    }
+
+    #[test]
+    fn test_aes_null() {
+        use super::EvalContext;
+        let mut ctx = EvalContext::default();
+        let aes_name = datum_expr(Datum::Bytes(b"aes-128-ecb".to_vec()));
+        let crypt = datum_expr(Datum::Bytes(
+            hex::decode(b"697BFE9B3F8C2F289DD82C88C7BC95C4".to_vec()).unwrap(),
+        ));
+        let op = scalar_func_expr(
+            ScalarFuncSig::AesDecrypt,
+            &[aes_name, crypt, datum_expr(Datum::Null)],
+        );
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
+
+        let mut ctx = EvalContext::default();
+        let aes_name = datum_expr(Datum::Bytes(b"aes-128-ecb".to_vec()));
+        let key = datum_expr(Datum::Bytes(b"1234567890123456".to_vec()));
+        let op = scalar_func_expr(
+            ScalarFuncSig::AesDecrypt,
+            &[aes_name, datum_expr(Datum::Null), key],
+        );
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
+
+        let mut ctx = EvalContext::default();
+        let aes_name = datum_expr(Datum::Bytes(b"aes-128-ecb".to_vec()));
+        let origin = datum_expr(Datum::Bytes(b"pingcap".to_vec()));
+        let op = scalar_func_expr(
+            ScalarFuncSig::AesEncrypt,
+            &[aes_name, origin, datum_expr(Datum::Null)],
+        );
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
+
+        let mut ctx = EvalContext::default();
+        let aes_name = datum_expr(Datum::Bytes(b"aes-128-ecb".to_vec()));
+        let key = datum_expr(Datum::Bytes(b"1234567890123456".to_vec()));
+        let op = scalar_func_expr(
+            ScalarFuncSig::AesEncrypt,
+            &[aes_name, datum_expr(Datum::Null), key],
+        );
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
+    }
+
+    #[test]
+    fn test_aes_parameter_invalid() {
+        use super::EvalContext;
+        let mut ctx = EvalContext::default();
+        let aes_name = datum_expr(Datum::Bytes(b"aes-128-ecbbb".to_vec()));
+        let crypt = datum_expr(Datum::Bytes(
+            hex::decode(b"697BFE9B3F8C2F289DD82C88C7BC95C4".to_vec()).unwrap(),
+        ));
+        let key = datum_expr(Datum::Bytes(b"1234567890123456".to_vec()));
+        let op = scalar_func_expr(ScalarFuncSig::AesDecrypt, &[aes_name, crypt, key]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
+
+        let mut ctx = EvalContext::default();
+        let aes_name = datum_expr(Datum::Bytes(b"aes-128-ecbb".to_vec()));
+        let origin = datum_expr(Datum::Bytes(b"pingcap".to_vec()));
+        let key = datum_expr(Datum::Bytes(b"1234567890123456".to_vec()));
+        let op = scalar_func_expr(ScalarFuncSig::AesEncrypt, &[aes_name, origin, key]);
+        let op = Expression::build(&mut ctx, op).unwrap();
+        let got = op.eval(&mut ctx, &[]).unwrap();
+        assert_eq!(got, Datum::Null);
     }
 }
