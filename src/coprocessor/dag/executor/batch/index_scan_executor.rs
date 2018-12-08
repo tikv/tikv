@@ -41,6 +41,8 @@ pub struct BatchIndexScanExecutor<S: Store> {
 
     /// Whether PK handle column is interested. Handle will be always placed in the last column.
     decode_handle: bool,
+
+    has_thrown_error: bool,
 }
 
 impl<S: Store> BatchIndexScanExecutor<S> {
@@ -77,6 +79,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
 
             columns_len_without_handle,
             decode_handle,
+            has_thrown_error: false,
         })
     }
 
@@ -118,7 +121,6 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         Ok(value.map(move |v| (key, v)))
     }
 
-    #[inline]
     fn fill_batch_rows(
         &mut self,
         expect_rows: usize,
@@ -228,6 +230,8 @@ impl<S: Store> Executor for BatchIndexScanExecutor<S> {
 
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+        assert!(!self.has_thrown_error);
+
         // Construct empty columns, with PK in decoded format and the rest in raw format.
         let columns_len = self.context.columns_info.len();
         let mut columns = Vec::with_capacity(columns_len);
@@ -245,8 +249,12 @@ impl<S: Store> Executor for BatchIndexScanExecutor<S> {
             ));
         }
 
-        let mut data: LazyBatchColumnVec = columns.into();
+        let mut data = LazyBatchColumnVec::from(columns);
         let result = self.fill_batch_rows(expect_rows, &mut data);
+        if result.is_err() {
+            self.has_thrown_error = true;
+        }
+
         BatchExecuteResult {
             data,
             error: result.err(),

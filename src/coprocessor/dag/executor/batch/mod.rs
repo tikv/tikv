@@ -13,7 +13,9 @@
 
 mod index_scan_executor;
 mod ranges_consumer;
+mod selection_executor;
 mod table_scan_executor;
 
 pub use self::index_scan_executor::BatchIndexScanExecutor;
+pub use self::selection_executor::BatchSelectionExecutor;
 pub use self::table_scan_executor::BatchTableScanExecutor;

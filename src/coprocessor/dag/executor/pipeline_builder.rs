@@ -18,7 +18,7 @@ use tipb::executor::{self, ExecType};
 
 use storage::{Snapshot, SnapshotStore};
 
-use super::{BatchIndexScanExecutor, BatchTableScanExecutor};
+use super::{BatchIndexScanExecutor, BatchSelectionExecutor, BatchTableScanExecutor};
 use super::{Executor, ExecutorContext};
 use super::{
     HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor, StreamAggExecutor,
@@ -57,6 +57,24 @@ impl ExecutorPipelineBuilder {
                         }
                     }
                 }
+                ExecType::TypeIndexScan => {
+                    let descriptor = ed.get_idx_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        match eval_type {
+                            Err(_) => {
+                                info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                                return false;
+                            }
+                            // Currently decimal or JSON field is not supported
+                            Ok(EvalType::Decimal) | Ok(EvalType::Json) => {
+                                info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                                return false;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {
                     info!(
                         "Coprocessor request cannot be batched because {:?} is not supported",
@@ -74,7 +92,7 @@ impl ExecutorPipelineBuilder {
         executor_descriptors: Vec<executor::Executor>,
         store: SnapshotStore<S>,
         ranges: Vec<KeyRange>,
-        _eval_ctx: Arc<EvalConfig>,
+        eval_ctx: Arc<EvalConfig>,
     ) -> Result<Box<Executor + Send>> {
         let mut executor_descriptors = executor_descriptors.into_iter();
         let mut first_ed = executor_descriptors
@@ -82,7 +100,7 @@ impl ExecutorPipelineBuilder {
             .ok_or_else(|| Error::Other(box_err!("No executors")))?;
 
         let executor_context;
-        let executor;
+        let mut executor;
 
         match first_ed.get_tp() {
             ExecType::TypeTableScan => {
@@ -90,7 +108,7 @@ impl ExecutorPipelineBuilder {
                 executor_context = ExecutorContext::new(descriptor.take_columns().into_vec());
                 executor = BatchTableScanExecutor::new(
                     store,
-                    executor_context,
+                    executor_context.clone(),
                     ranges,
                     descriptor.get_desc(),
                 )?.into_boxed();
@@ -100,7 +118,7 @@ impl ExecutorPipelineBuilder {
                 executor_context = ExecutorContext::new(descriptor.take_columns().into_vec());
                 executor = BatchIndexScanExecutor::new(
                     store,
-                    executor_context,
+                    executor_context.clone(),
                     ranges,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
@@ -112,6 +130,30 @@ impl ExecutorPipelineBuilder {
                     first_ed.get_tp()
                 )))
             }
+        }
+
+        for mut ed in executor_descriptors {
+            let new_executor = match ed.get_tp() {
+                ExecType::TypeTableScan | ExecType::TypeIndexScan => {
+                    return Err(Error::Other(box_err!(
+                        "Unexpected non-first executor {:?}",
+                        ed.get_tp()
+                    )));
+                }
+                ExecType::TypeSelection => BatchSelectionExecutor::new(
+                    executor_context.clone(),
+                    executor,
+                    ed.take_selection().take_conditions().into_vec(),
+                    Arc::clone(&eval_ctx),
+                )?.into_boxed(),
+                _ => {
+                    return Err(Error::Other(box_err!(
+                        "Unexpected non-first executor {:?}",
+                        first_ed.get_tp()
+                    )))
+                }
+            };
+            executor = new_executor;
         }
 
         Ok(executor)

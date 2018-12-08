@@ -97,7 +97,7 @@ impl AggExecutor {
         visitor.batch_visit(&aggr_func)?;
         let mut ctx = EvalContext::new(eval_config);
         Ok(AggExecutor {
-            group_by: Expression::batch_build(&mut ctx, group_by)?,
+            group_by: Expression::batch_build(&ctx, group_by)?,
             aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
             executed: false,
             ctx,

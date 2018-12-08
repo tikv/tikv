@@ -61,6 +61,11 @@ pub struct BatchTableScanExecutor<S: Store> {
     /// It is a struct level field in order to prevent repeated memory allocations since its length
     /// is fixed for each `next_batch` call.
     is_column_filled: Vec<bool>,
+
+    /// A flag indicating whether this executor has encountered an error and the error has been
+    /// thrown to the upper executor during `next_batch`. If the implementation is correct, in
+    /// this case, `next_batch` should be never called again.
+    has_thrown_error: bool,
 }
 
 impl<S: Store> BatchTableScanExecutor<S> {
@@ -103,6 +108,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             column_id_index,
 
             is_column_filled,
+            has_thrown_error: false,
         })
     }
 
@@ -144,7 +150,6 @@ impl<S: Store> BatchTableScanExecutor<S> {
         Ok(value.map(move |v| (key, v)))
     }
 
-    #[inline]
     fn fill_batch_rows(
         &mut self,
         expect_rows: usize,
@@ -264,6 +269,8 @@ impl<S: Store> Executor for BatchTableScanExecutor<S> {
 
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+        assert!(!self.has_thrown_error);
+
         // Construct empty columns, with PK in decoded format and the rest in raw format.
         let columns_len = self.context.columns_info.len();
         let mut columns = Vec::with_capacity(columns_len);
@@ -280,8 +287,12 @@ impl<S: Store> Executor for BatchTableScanExecutor<S> {
             }
         }
 
-        let mut data: LazyBatchColumnVec = columns.into();
+        let mut data = LazyBatchColumnVec::from(columns);
         let result = self.fill_batch_rows(expect_rows, &mut data);
+        if result.is_err() {
+            self.has_thrown_error = true;
+        }
+
         BatchExecuteResult {
             data,
             error: result.err(),

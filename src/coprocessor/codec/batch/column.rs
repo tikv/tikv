@@ -63,28 +63,24 @@ macro_rules! match_self {
     }};
 }
 
-#[inline]
-fn clone_vec_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
-    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
-    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
-    // here.
-    let mut new_vec = Vec::with_capacity(vec.capacity());
-    new_vec.extend_from_slice(vec);
-    new_vec
-}
-
 impl Clone for BatchColumn {
     #[inline]
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
         match self {
-            BatchColumn::Int(ref vec) => BatchColumn::Int(clone_vec_with_capacity(vec)),
-            BatchColumn::Real(ref vec) => BatchColumn::Real(clone_vec_with_capacity(vec)),
-            BatchColumn::Decimal(ref vec) => BatchColumn::Decimal(clone_vec_with_capacity(vec)),
-            BatchColumn::Bytes(ref vec) => BatchColumn::Bytes(clone_vec_with_capacity(vec)),
-            BatchColumn::DateTime(ref vec) => BatchColumn::DateTime(clone_vec_with_capacity(vec)),
-            BatchColumn::Duration(ref vec) => BatchColumn::Duration(clone_vec_with_capacity(vec)),
-            BatchColumn::Json(ref vec) => BatchColumn::Json(clone_vec_with_capacity(vec)),
+            BatchColumn::Int(ref vec) => BatchColumn::Int(::util::vec_clone_with_capacity(vec)),
+            BatchColumn::Real(ref vec) => BatchColumn::Real(::util::vec_clone_with_capacity(vec)),
+            BatchColumn::Decimal(ref vec) => {
+                BatchColumn::Decimal(::util::vec_clone_with_capacity(vec))
+            }
+            BatchColumn::Bytes(ref vec) => BatchColumn::Bytes(::util::vec_clone_with_capacity(vec)),
+            BatchColumn::DateTime(ref vec) => {
+                BatchColumn::DateTime(::util::vec_clone_with_capacity(vec))
+            }
+            BatchColumn::Duration(ref vec) => {
+                BatchColumn::Duration(::util::vec_clone_with_capacity(vec))
+            }
+            BatchColumn::Json(ref vec) => BatchColumn::Json(::util::vec_clone_with_capacity(vec)),
         }
     }
 }
@@ -221,6 +217,106 @@ impl BatchColumn {
                 }
                 other => panic!("Cannot append {} to Json column", other.eval_type()),
             },
+        }
+    }
+
+    /// Conditionally moves elements of `other` into `Self` according to `f(index)`,
+    /// leaving `other` empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` does not have the same `EvalType` as `Self`.
+    #[inline]
+    pub fn append_by_index<F>(&mut self, other: &mut BatchColumn, f: F)
+    where
+        F: FnMut(usize) -> bool,
+    {
+        match self {
+            BatchColumn::Int(ref mut self_vec) => match other {
+                BatchColumn::Int(ref mut other_vec) => {
+                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                }
+                other => panic!("Cannot append_by_index {} to Int column", other.eval_type()),
+            },
+            BatchColumn::Real(ref mut self_vec) => match other {
+                BatchColumn::Real(ref mut other_vec) => {
+                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                }
+                other => panic!(
+                    "Cannot append_by_index {} to Real column",
+                    other.eval_type()
+                ),
+            },
+            BatchColumn::Decimal(ref mut self_vec) => match other {
+                BatchColumn::Decimal(ref mut other_vec) => {
+                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                }
+                other => panic!(
+                    "Cannot append_by_index {} to Decimal column",
+                    other.eval_type()
+                ),
+            },
+            BatchColumn::Bytes(ref mut self_vec) => match other {
+                BatchColumn::Bytes(ref mut other_vec) => {
+                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                }
+                other => panic!(
+                    "Cannot append_by_index {} to Bytes column",
+                    other.eval_type()
+                ),
+            },
+            BatchColumn::DateTime(ref mut self_vec) => match other {
+                BatchColumn::DateTime(ref mut other_vec) => {
+                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                }
+                other => panic!(
+                    "Cannot append_by_index {} to DateTime column",
+                    other.eval_type()
+                ),
+            },
+            BatchColumn::Duration(ref mut self_vec) => match other {
+                BatchColumn::Duration(ref mut other_vec) => {
+                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                }
+                other => panic!(
+                    "Cannot append_by_index {} to Duration column",
+                    other.eval_type()
+                ),
+            },
+            BatchColumn::Json(ref mut self_vec) => match other {
+                BatchColumn::Json(ref mut other_vec) => {
+                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                }
+                other => panic!(
+                    "Cannot append_by_index {} to Json column",
+                    other.eval_type()
+                ),
+            },
+        }
+    }
+
+    /// Takes first n elements and build a new instance.
+    pub fn take_and_collect(&mut self, n: usize) -> BatchColumn {
+        match self {
+            BatchColumn::Int(ref mut vec) => BatchColumn::Int(::util::vec_take_and_collect(vec, n)),
+            BatchColumn::Real(ref mut vec) => {
+                BatchColumn::Real(::util::vec_take_and_collect(vec, n))
+            }
+            BatchColumn::Decimal(ref mut vec) => {
+                BatchColumn::Decimal(::util::vec_take_and_collect(vec, n))
+            }
+            BatchColumn::Bytes(ref mut vec) => {
+                BatchColumn::Bytes(::util::vec_take_and_collect(vec, n))
+            }
+            BatchColumn::DateTime(ref mut vec) => {
+                BatchColumn::DateTime(::util::vec_take_and_collect(vec, n))
+            }
+            BatchColumn::Duration(ref mut vec) => {
+                BatchColumn::Duration(::util::vec_take_and_collect(vec, n))
+            }
+            BatchColumn::Json(ref mut vec) => {
+                BatchColumn::Json(::util::vec_take_and_collect(vec, n))
+            }
         }
     }
 
@@ -544,6 +640,60 @@ impl BatchColumn {
                 Ok(())
             }
             BatchColumn::Json(ref _vec) => Err(Error::Other(box_err!("JSON is not supported"))),
+        }
+    }
+
+    pub fn to_datum(&self, row_index: usize) -> datum::Datum {
+        match self {
+            BatchColumn::Int(ref vec) => {
+                if let Some(val) = vec[row_index] {
+                    datum::Datum::I64(val)
+                } else {
+                    datum::Datum::Null
+                }
+            }
+            BatchColumn::Real(ref vec) => {
+                if let Some(val) = vec[row_index] {
+                    datum::Datum::F64(val)
+                } else {
+                    datum::Datum::Null
+                }
+            }
+            BatchColumn::Decimal(ref vec) => {
+                if let Some(val) = &vec[row_index] {
+                    datum::Datum::Dec(val.clone()) // TODO: don't clone?
+                } else {
+                    datum::Datum::Null
+                }
+            }
+            BatchColumn::Bytes(ref vec) => {
+                if let Some(val) = &vec[row_index] {
+                    datum::Datum::Bytes(val.clone()) // TODO: don't clone?
+                } else {
+                    datum::Datum::Null
+                }
+            }
+            BatchColumn::DateTime(ref vec) => {
+                if let Some(val) = &vec[row_index] {
+                    datum::Datum::Time(val.clone()) // TODO: don't clone?
+                } else {
+                    datum::Datum::Null
+                }
+            }
+            BatchColumn::Duration(ref vec) => {
+                if let Some(val) = &vec[row_index] {
+                    datum::Datum::Dur(val.clone()) // TODO: don't clone?
+                } else {
+                    datum::Datum::Null
+                }
+            }
+            BatchColumn::Json(ref vec) => {
+                if let Some(val) = &vec[row_index] {
+                    datum::Datum::Json(val.clone()) // TODO: don't clone?
+                } else {
+                    datum::Datum::Null
+                }
+            }
         }
     }
 }
