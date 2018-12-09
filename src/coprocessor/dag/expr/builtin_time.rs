@@ -270,11 +270,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let mut t = try_opt_or!(
+        let mut t: Cow<'a, Time> = try_opt_or!(
             self.children[0].eval_time(ctx, row),
             Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
         );
-        let s = try_opt_or!(
+        let s: Cow<'a, [u8]> = try_opt_or!(
             self.children[1].eval_string(ctx, row),
             Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
         );
