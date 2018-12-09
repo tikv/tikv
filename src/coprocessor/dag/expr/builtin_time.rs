@@ -927,7 +927,7 @@ mod tests {
             ),
             (
                 Datum::Null,
-                Datum::Dur(Duration::parse("11:30:45.123456".as_bytes(), 6).unwrap()),
+                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
                 zero_datetime.clone(),
             ),
             (Datum::Null, Datum::Null, zero_datetime),
@@ -981,7 +981,7 @@ mod tests {
             ),
             (
                 Datum::Null,
-                Datum::Dur(Duration::parse("11:30:45.123456".as_bytes(), 6).unwrap()),
+                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
                 zero_datetime.clone(),
             ),
             (Datum::Null, Datum::Null, zero_datetime),
