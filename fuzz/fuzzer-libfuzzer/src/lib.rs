@@ -11,7 +11,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate libfuzzer_sys;
-extern crate tikv;
-
-pub mod util;
+//! Make cargo happy.
+//! Fuzzer binaries will be generated dynamically via `fuzz/cli.rs`.
