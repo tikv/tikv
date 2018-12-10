@@ -253,14 +253,15 @@ impl ScalarFunc {
             self.children[1].eval_duration(ctx, row),
             Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
         );
-        let add = t
+        let add = match t
             .get_time()
-            .checked_add_signed(Duration::nanoseconds(d.to_nanos()));
-        if add.is_none() {
-            return Err(box_err!("parse from duration {} overflows", d));
-        }
+            .checked_add_signed(Duration::nanoseconds(d.to_nanos()))
+        {
+            Some(result) => result,
+            None => return Err(box_err!("parse from duration {} overflows", d)),
+        };
         let mut res = t.to_mut().clone();
-        res.set_time(add.unwrap());
+        res.set_time(add);
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -282,14 +283,15 @@ impl ScalarFunc {
             Ok(res) => res,
             Err(_) => return Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))),
         };
-        let add = t
+        let add = match t
             .get_time()
-            .checked_add_signed(Duration::nanoseconds(d.to_nanos()));
-        if add.is_none() {
-            return Err(box_err!("parse from duration {} overflows", d));
-        }
+            .checked_add_signed(Duration::nanoseconds(d.to_nanos()))
+        {
+            Some(result) => result,
+            None => return Err(box_err!("parse from duration {} overflows", d)),
+        };
         let mut res = t.to_mut().clone();
-        res.set_time(add.unwrap());
+        res.set_time(add);
         Ok(Some(Cow::Owned(res)))
     }
 
