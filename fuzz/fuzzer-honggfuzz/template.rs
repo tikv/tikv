@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub type HashMap<K, V> = ::hashbrown::HashMap<K, V, ::hashbrown::hash_map::DefaultHashBuilder>;
-pub type HashSet<T> = ::hashbrown::HashSet<T, ::hashbrown::hash_map::DefaultHashBuilder>;
-pub use hashbrown::hash_map::Entry as HashMapEntry;
+//! __FUZZ_GENERATE_COMMENT__
 
-pub use indexmap::map::Entry as OrderMapEntry;
-pub use indexmap::IndexMap as OrderMap;
+#[macro_use]
+extern crate honggfuzz;
+extern crate fuzz_targets;
+
+use fuzz_targets::__FUZZ_CLI_TARGET__ as fuzz_target;
+
+fn main() {
+    loop {
+        fuzz!(|data: &[u8]| {
+            let _ = fuzz_target(data);
+        });
+    }
+}
