@@ -59,7 +59,7 @@ impl RpcClient {
                     })
                 }
                 Err(e) => {
-                    error!("validate PD endpoints failed: {:?}", e);
+                    warn!("validate PD endpoints failed: {:?}", e);
                     thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
                 }
             }
