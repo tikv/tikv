@@ -170,7 +170,7 @@ macro_rules! try_opt {
 }
 
 /// `try_opt_or` check `Result<Option<T>>`, return early when met `Err` or `Ok(None)`.
-/// return `or` when met `Ok(None)`.
+/// return `Ok(or)` when met `Ok(None)`.
 #[macro_export]
 macro_rules! try_opt_or {
     ($expr:expr, $or:expr) => {{

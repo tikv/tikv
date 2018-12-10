@@ -275,11 +275,12 @@ impl ScalarFunc {
             self.children[0].eval_time(ctx, row),
             Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
         );
-        let s: Cow<'a, [u8]> = try_opt_or!(
+        let cow_s: Cow<'a, [u8]> = try_opt_or!(
             self.children[1].eval_string(ctx, row),
             Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
         );
-        let d = match MyDuration::parse(s.as_ref(), 6) {
+        let s = box_try!(String::from_utf8(cow_s.to_vec()));
+        let d = match MyDuration::parse(s.as_bytes(), Time::parse_fsp(&s)) {
             Ok(res) => res,
             Err(_) => return Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))),
         };
