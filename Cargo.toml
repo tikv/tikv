@@ -94,8 +94,7 @@ fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.4"
-crossbeam-channel = "0.2"
-crossbeam = "0.2"
+crossbeam = "0.5"
 derive_more = "0.11.0"
 num = "0.2"
 num-traits = "0.2"
@@ -107,6 +106,7 @@ safemem = "0.3"
 cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+more-asserts = "0.1"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -149,6 +149,9 @@ signal = "0.6"
 [workspace]
 members = [
   "fuzz",
+  "fuzz/fuzzer-afl",
+  "fuzz/fuzzer-libfuzzer",
+  "fuzz/fuzzer-honggfuzz",
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
