@@ -190,21 +190,16 @@ impl<S: Snapshot> MvccTxn<S> {
             Mutation::Lock(key) => (key, None),
         };
 
-        if value.is_some() && is_short_value(value.as_ref().unwrap()) {
+        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
             self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
         } else {
-            self.lock_key(
-                key.clone(),
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                None,
-            );
-            if value.is_some() {
-                let ts = self.start_ts;
-                self.put_value(key, ts, value.unwrap());
-            }
+            // value is long
+            let ts = self.start_ts;
+            self.put_value(key.clone(), ts, value.unwrap());
+
+            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, None);
         }
+
         Ok(())
     }
 

@@ -82,7 +82,7 @@ where
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
-    let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
+    let mut kvs = KvGenerator::new(100, 128).generate(DEFAULT_DATA_SIZE);
     prepare_cluster(&mut cluster, &kvs);
 
     let mut keys = kvs
@@ -109,7 +109,7 @@ where
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
-    let mut kvs = generate_random_kvs(DEFAULT_DATA_SIZE, 100, 128);
+    let mut kvs = KvGenerator::new(100, 128).generate(DEFAULT_DATA_SIZE);
     prepare_cluster(&mut cluster, &kvs);
 
     let mut keys = kvs

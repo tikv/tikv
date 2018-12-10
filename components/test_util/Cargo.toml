@@ -6,6 +6,6 @@ publish = false
 [dependencies]
 tikv = { path = "../../" }
 time = "0.1"
-rand = "0.3"
+rand = "0.5"
 slog = "2.3"
 slog-scope = "4.0"
