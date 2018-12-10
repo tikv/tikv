@@ -118,8 +118,15 @@ impl<E: Engine> Endpoint<E> {
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = box move |snap, req_ctx: &_| {
                     // See rust-lang#41078 to know why we have `: &_` here.
-                    dag::DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit, true)
-                        .map(|h| h.into_boxed())
+                    dag::DAGContext::new(
+                        dag,
+                        ranges,
+                        snap,
+                        req_ctx,
+                        batch_row_limit,
+                        is_streaming,
+                        true,
+                    ).map(|h| h.into_boxed())
                 };
             }
             REQ_TYPE_ANALYZE => {

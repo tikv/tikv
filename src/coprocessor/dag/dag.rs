@@ -28,6 +28,7 @@ pub struct DAGContext {
     exec: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    is_streaming: bool,
     is_batch: bool,
 }
 
@@ -38,6 +39,7 @@ impl DAGContext {
         snap: S,
         req_ctx: &ReqContext,
         batch_row_limit: usize,
+        is_streaming: bool,
         enable_batch_if_possible: bool,
     ) -> Result<Self> {
         let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
@@ -67,6 +69,7 @@ impl DAGContext {
         );
 
         let is_batch = enable_batch_if_possible
+            && !is_streaming
             && ExecutorPipelineBuilder::can_build_batch(req.get_executors());
         let eval_ctx = Arc::new(eval_cfg);
         let executor_descriptors = req.take_executors().into_vec();
@@ -87,6 +90,7 @@ impl DAGContext {
             exec: executor_pipeline,
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
+            is_streaming,
             is_batch,
         })
     }
@@ -204,6 +208,7 @@ impl DAGContext {
 
 impl RequestHandler for DAGContext {
     fn handle_request(&mut self) -> Result<Response> {
+        assert!(!self.is_streaming);
         if self.is_batch {
             self.handle_batch_request()
         } else {
@@ -212,12 +217,7 @@ impl RequestHandler for DAGContext {
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        if self.is_batch {
-            return Err(Error::Other(box_err!(
-                "Batch execution does not support streaming"
-            )));
-        }
-
+        assert!(self.is_streaming);
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
         self.exec.start_scan();
