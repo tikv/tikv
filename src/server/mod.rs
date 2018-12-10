@@ -19,6 +19,7 @@ mod service;
 pub mod config;
 pub mod debug;
 pub mod errors;
+pub mod http_server;
 pub mod node;
 pub mod readpool;
 pub mod resolve;

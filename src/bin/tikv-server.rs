@@ -62,12 +62,12 @@ use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
+use tikv::server::http_server::HttpServer;
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::util::http_server::HttpServer;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
@@ -245,17 +245,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         error!("failed to start metrics flusher, error: {:?}", e);
     }
 
-    let http_cfg = cfg.http.clone();
+    let http_cfg = cfg.server.clone();
 
     // Run server.
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
 
-    let mut http_enabled = http_cfg.enabled;
+    let mut http_enabled = http_cfg.http_enabled;
     let mut http_server = HttpServer::new(http_cfg.thread_pool_size);
     if http_enabled {
-        if let Err(e) = http_server.start(http_cfg.addr) {
+        if let Err(e) = http_server.start(http_cfg.http_addr) {
             error!("failed to bind addr, error: {:?}", e);
             http_enabled = false;
         }

@@ -14,30 +14,14 @@
 use futures::sync::oneshot::{Receiver, Sender};
 use futures::{self, future, Future};
 use hyper::service::service_fn;
-use hyper::{self, Body, Error as HttpError, Method, Request, Response, Server, StatusCode};
+use hyper::{self, Body, Method, Request, Response, Server, StatusCode};
 use prometheus::{self, Encoder, TextEncoder};
 use tokio_threadpool::{Builder, ThreadPool};
 
-use std::net::{AddrParseError, SocketAddr};
+use std::net::SocketAddr;
 use std::str::FromStr;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        AddrParse(err: AddrParseError) {
-            from()
-            cause(err)
-            display("{:?}", err)
-            description(err.description())
-        }
-        Http(err: HttpError) {
-            from()
-            cause(err)
-            display("{:?}", err)
-            description(err.description())
-        }
-    }
-}
+use super::Result;
 
 pub struct HttpServer {
     thread_pool: ThreadPool,
@@ -65,7 +49,7 @@ impl HttpServer {
         }
     }
 
-    pub fn start(&mut self, http_addr: String) -> Result<(), Error> {
+    pub fn start(&mut self, http_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&http_addr)?;
 
         // TODO: support TLS for HTTP server.
@@ -117,7 +101,7 @@ impl HttpServer {
 mod tests {
     use futures::future::{lazy, Future};
     use hyper::{Client, StatusCode, Uri};
-    use util::http_server::HttpServer;
+    use server::http_server::HttpServer;
 
     #[test]
     fn test_http_service() {

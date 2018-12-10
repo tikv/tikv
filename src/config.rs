@@ -54,7 +54,6 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-const DEFAULT_HTTP_LISTENING_ADDR: &str = "127.0.0.1:9520";
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
@@ -699,39 +698,6 @@ impl Default for MetricConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct HttpConfig {
-    pub enabled: bool,
-    pub addr: String,
-    pub thread_pool_size: usize,
-}
-
-impl HttpConfig {
-    fn validate(&mut self) -> Result<(), Box<Error>> {
-        if !self.addr.is_empty() {
-            if let Err(e) = config::check_addr(&self.addr) {
-                return Err(e.into());
-            };
-        } else {
-            info!("addr is empty, use the default addr.");
-            self.addr = DEFAULT_HTTP_LISTENING_ADDR.to_owned();
-        }
-        Ok(())
-    }
-}
-
-impl Default for HttpConfig {
-    fn default() -> HttpConfig {
-        HttpConfig {
-            enabled: false,
-            addr: DEFAULT_HTTP_LISTENING_ADDR.to_owned(),
-            thread_pool_size: 1,
-        }
-    }
-}
-
 pub mod log_level_serde {
     use serde::{
         de::{Error, Unexpected},
@@ -956,7 +922,6 @@ pub struct TiKvConfig {
     pub log_file: String,
     pub log_rotation_timespan: ReadableDuration,
     pub readpool: ReadPoolConfig,
-    pub http: HttpConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub pd: PdConfig,
@@ -977,7 +942,6 @@ impl Default for TiKvConfig {
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
             readpool: ReadPoolConfig::default(),
-            http: HttpConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
             raft_store: RaftstoreConfig::default(),
@@ -1024,10 +988,6 @@ impl TiKvConfig {
                  raft tick interval (>= {})",
                 duration_to_sec(expect_keepalive)
             ).into());
-        }
-
-        if self.http.enabled {
-            self.http.validate()?;
         }
 
         self.rocksdb.validate()?;

@@ -56,17 +56,6 @@
 # max-tasks-per-worker-low = 2000
 # stack-size = "10MB"
 
-[http]
-## If HTTP service is enabled. If the value is true, the Prometheus can pull the metrics directly 
-## through the HTTP address. Otherwise, the Prometheus will get the metrics through the PushGateway.
-# enabled = false
-
-## HTTP listening address.
-# addr = "127.0.0.1:9520"
-
-## Set the maximum number of worker threads for the HTTP service.
-# thread_pool_size = 1
-
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"
@@ -74,6 +63,16 @@
 ## Advertise listening address for client communication.
 ## If not set, `addr` will be used.
 # advertise-addr = ""
+
+## If HTTP service is enabled. If the value is true, the Prometheus can pull the metrics directly 
+## through the HTTP address. Otherwise, the Prometheus will get the metrics through the PushGateway.
+# http-enabled = false
+
+## HTTP listening address.
+# http-addr = "127.0.0.1:9520"
+
+## Set the maximum number of worker threads for the HTTP service.
+# thread_pool_size = 1
 
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"

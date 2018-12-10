@@ -60,6 +60,9 @@ fn test_serde_custom_tikv_config() {
         addr: "example.com:443".to_owned(),
         labels: map!{ "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
+        http_enabled: false,
+        http_addr: "example.com:443".to_owned(),
+        thread_pool_size: 1,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -101,11 +104,6 @@ fn test_serde_custom_tikv_config() {
             max_tasks_per_worker_low: 3000,
             stack_size: ReadableSize::mb(12),
         },
-    };
-    value.http = HttpConfig {
-        enabled: false,
-        addr: "example.com:443".to_owned(),
-        thread_pool_size: 1,
     };
     value.metric = MetricConfig {
         interval: ReadableDuration::secs(12),
