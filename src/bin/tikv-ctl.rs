@@ -1154,7 +1154,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("diff")
-                .about("diff two region keys")
+                .about("calculate difference of region keys from different dbs")
                 .arg(
                     Arg::with_name("region")
                         .required(true)
@@ -1238,7 +1238,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("tombstone")
-                .about("set a region on the node to tombstone by manual")
+                .about("set some regions on the node to tombstone by manual")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
@@ -1248,7 +1248,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target region"),
+                        .help("the target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
@@ -1264,7 +1264,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("recover-mvcc")
-                .about("recover mvcc data of regions on one node")
+                .about("recover mvcc data of regions on one node by deleting corrupted keys")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
@@ -1274,7 +1274,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target region"),
+                        .help("the target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
@@ -1380,7 +1380,7 @@ fn main() {
         .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
-                .about("modify tikv config, eg. ./tikv-ctl -h ip:port -m kvdb -n default.disable_auto_compactions -v true")
+                .about("modify tikv config, eg. ./tikv-ctl -h ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
                 .arg(
                     Arg::with_name("module")
                         .required(true)
@@ -1514,7 +1514,7 @@ fn main() {
                             .takes_value(true)
                             .help(
                                 "Inject fail point and actions pairs.\
-                                E.g. tikv-fail inject fail::a=off fail::b=panic",
+                                E.g. tikv-ctl fail inject a=off b=panic",
                             ),
                     )
                     .arg(
@@ -1531,7 +1531,7 @@ fn main() {
                             Arg::with_name("args")
                                 .multiple(true)
                                 .takes_value(true)
-                                .help("Recover fail points. Eg. tikv-fail recover fail::a fail::b"),
+                                .help("Recover fail points. Eg. tikv-ctl fail recover a b"),
                         )
                         .arg(
                             Arg::with_name("file")
@@ -1551,6 +1551,14 @@ fn main() {
     }
 
     let matches = app.clone().get_matches();
+
+    // Deal with subcommand dump-snap-meta. This subcommand doesn't require other args, so process
+    // it before checking args.
+    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
+        let path = matches.value_of("file").unwrap();
+        return dump_snap_meta_file(path);
+    }
+
     if matches.args.is_empty() {
         let _ = app.print_help();
         println!();
@@ -1576,12 +1584,6 @@ fn main() {
     }
 
     let mgr = new_security_mgr(&matches);
-
-    // Deal with subcommand dump-snap-meta.
-    if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
-        let path = matches.value_of("file").unwrap();
-        return dump_snap_meta_file(path);
-    }
 
     // Deal with all subcommands needs PD.
     if let Some(pd) = matches.value_of("pd") {

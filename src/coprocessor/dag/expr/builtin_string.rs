@@ -111,6 +111,28 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn concat_ws<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mut output_sep: Vec<u8> = Vec::new();
+        let mut output: Vec<u8> = Vec::new();
+        for (index, expr) in self.children.iter().enumerate() {
+            let input = try_opt!(expr.eval_string(ctx, row));
+            match index {
+                0 => output_sep = input.to_vec(),
+                1 => output = input.to_vec(),
+                _ => {
+                    output.extend_from_slice(&output_sep);
+                    output.extend_from_slice(&input);
+                }
+            }
+        }
+        Ok(Some(Cow::Owned(output)))
+    }
+
+    #[inline]
     pub fn ltrim<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -491,7 +513,7 @@ impl ScalarFunc {
                 .map(|(_, (i, _))| i)
                 .unwrap_or_else(|| s.len())
         } else {
-            let mut positions = VecDeque::with_capacity(len);
+            let mut positions = VecDeque::with_capacity(len.min(s.len()));
             positions.push_back(s.len());
             start = s
                 .char_indices()
@@ -578,6 +600,44 @@ impl ScalarFunc {
 
         let end = start.saturating_add(len).min(s.len());
         Ok(Some(Cow::Owned(s[start..end].to_vec())))
+    }
+
+    #[inline]
+    pub fn space<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let len = try_opt!(self.children[0].eval_int(ctx, row));
+        let unsigned = self.children[0]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
+        let len = if unsigned {
+            len as u64 as usize
+        } else if len <= 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        } else {
+            len as usize
+        };
+
+        if len > cop_datatype::MAX_BLOB_WIDTH as usize {
+            return Ok(None);
+        }
+
+        Ok(Some(Cow::Owned(vec![SPACE; len])))
+    }
+
+    #[inline]
+    pub fn strcmp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        use std::cmp::Ordering::*;
+        let left = try_opt!(self.children[0].eval_string(ctx, row));
+        let right = try_opt!(self.children[1].eval_string(ctx, row));
+        match left.cmp(&right) {
+            Less => Ok(Some(-1)),
+            Equal => Ok(Some(0)),
+            Greater => Ok(Some(1)),
+        }
     }
 }
 
@@ -699,7 +759,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
-    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use coprocessor::codec::mysql::charset::CHARSET_BIN;
     use tipb::expression::{Expr, ScalarFuncSig};
 
@@ -1344,6 +1404,61 @@ mod tests {
             assert_eq!(res, exp);
         }
     }
+    #[test]
+    fn test_concat_ws() {
+        let cases = vec![
+            (
+                vec![
+		    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes(b"defg".to_vec()),
+                ],
+                Datum::Bytes(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                    Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                    Datum::Bytes( "НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                ],
+                Datum::Bytes(
+                    "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                ],
+                Datum::Bytes("abc,CAFÉ,数据库".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"defg".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (vec![Datum::Null], Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (row, exp) in cases {
+            let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
+            let mut expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
 
     #[test]
     fn test_char_length() {
@@ -1924,6 +2039,12 @@ mod tests {
                 Datum::U64(u64::max_value()),
                 "文a测a试",
             ),
+            (
+                "中文a测a试",
+                Datum::I64(-2),
+                Datum::U64(u64::max_value()),
+                "a试",
+            ),
         ];
         for (s, pos, len, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
@@ -2022,6 +2143,82 @@ mod tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let got = eval_func(ScalarFuncSig::SubstringBinary3Args, &[s, pos, len]).unwrap();
             assert_eq!(got, Datum::Bytes(exp));
+        }
+    }
+
+    #[test]
+    fn test_space() {
+        let tests = vec![
+            (Datum::I64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::I64(3), Datum::Bytes(b"   ".to_vec())),
+            (Datum::I64(-1), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(u64::max_value()), Datum::Null),
+            (Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1), Datum::Null),
+            (
+                Datum::I64(i64::from(MAX_BLOB_WIDTH)),
+                Datum::Bytes(vec![super::SPACE; MAX_BLOB_WIDTH as usize]),
+            ),
+        ];
+
+        for (len, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Space, &[len]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_strcmp() {
+        let tests = vec![
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(0),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"1".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"1".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"45".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes("你好".as_bytes().to_vec()),
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(0),
+            ),
+            (Datum::Null, Datum::Bytes(b"123".to_vec()), Datum::Null),
+            (Datum::Bytes(b"123".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
+        ];
+
+        for (left, right, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Strcmp, &[left, right]).unwrap();
+            assert_eq!(got, exp);
         }
     }
 
