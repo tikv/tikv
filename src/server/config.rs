@@ -135,7 +135,8 @@ impl Default for Config {
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
-            // 100 means gRPC threads are under heavy load if their CPU usage is greater than 100%.
+            // 100 means gRPC threads are under heavy load if their total CPU usage
+            // is greater than 100%.
             heavy_load_threshold: 100,
         }
     }
