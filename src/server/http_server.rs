@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::future::{ok, FutureResult};
 use futures::sync::oneshot::{Receiver, Sender};
-use futures::{self, future, Future};
+use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, Body, Method, Request, Response, Server, StatusCode};
 use prometheus::{self, Encoder, TextEncoder};
@@ -27,13 +28,14 @@ pub struct HttpServer {
     thread_pool: ThreadPool,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
+    addr: Option<SocketAddr>,
 }
 
 impl HttpServer {
     pub fn new(thread_pool_size: usize) -> Self {
         let thread_pool = Builder::new()
             .pool_size(thread_pool_size)
-            .name_prefix("tikv-http-server-")
+            .name_prefix("http-server-")
             .after_start(|| {
                 info!("HTTP server started");
             })
@@ -46,6 +48,7 @@ impl HttpServer {
             thread_pool,
             tx,
             rx: Some(rx),
+            addr: None,
         }
     }
 
@@ -56,8 +59,7 @@ impl HttpServer {
         let builder = Server::try_bind(&addr)?;
 
         // Create an HTTP service.
-        let service =
-        |req: Request<Body>| -> Box<Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        let service = |req: Request<Body>| -> FutureResult<Response<Body>, hyper::Error> {
             let mut response = Response::new(Body::empty());
 
             match (req.method(), req.uri().path()) {
@@ -75,13 +77,13 @@ impl HttpServer {
                     *response.status_mut() = StatusCode::NOT_FOUND;
                 }
             };
-
-            Box::new(future::ok(response))
+            ok(response)
         };
 
         // Start to serve.
-        let graceful = builder
-            .serve(move || service_fn(service))
+        let server = builder.serve(move || service_fn(service));
+        self.addr = Some(server.local_addr());
+        let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
             .map_err(|e| error!("HTTP server error: {:?}", e));
         self.thread_pool.spawn(graceful);
@@ -95,6 +97,13 @@ impl HttpServer {
             .wait()
             .unwrap_or_else(|e| error!("failed to stop HTTP server, error: {:?}", e));
     }
+
+    // Return listening address, this may only be used for outer test
+    // to get the real address because we may use "127.0.0.1:0"
+    // in test to avoid port conflict.
+    pub fn listening_addr(&self) -> SocketAddr {
+        self.addr.unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -106,9 +115,15 @@ mod tests {
     #[test]
     fn test_http_service() {
         let mut http_server = HttpServer::new(1);
-        let _ = http_server.start("127.0.0.1:19999".to_string());
+        let _ = http_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
-        let uri = "http://127.0.0.1:19999/metrics".parse::<Uri>().unwrap();
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(http_server.listening_addr().to_string().as_str())
+            .path_and_query("/metrics")
+            .build()
+            .unwrap();
+
         let handle = http_server.thread_pool.spawn_handle(lazy(move || {
             client
                 .get(uri)

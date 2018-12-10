@@ -71,9 +71,6 @@
 ## HTTP listening address.
 # http-addr = "127.0.0.1:9520"
 
-## Set the maximum number of worker threads for the HTTP service.
-# thread_pool_size = 1
-
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"
 

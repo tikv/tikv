@@ -210,7 +210,10 @@ impl Config {
             if !self.http_addr.is_empty() {
                 box_try!(config::check_addr(&self.http_addr));
             } else {
-                info!("http-addr is empty, use the default addr.");
+                info!(
+                    "http-addr is empty, use the default addr: {}",
+                    DEFAULT_HTTP_LISTENING_ADDR
+                );
                 self.http_addr = DEFAULT_HTTP_LISTENING_ADDR.to_owned();
             }
         }
