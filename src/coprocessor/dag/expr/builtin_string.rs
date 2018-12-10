@@ -639,6 +639,71 @@ impl ScalarFunc {
             Greater => Ok(Some(1)),
         }
     }
+
+    #[inline]
+    pub fn rpad<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string_and_decode(ctx, row));
+        let input_len = input.chars().count();
+        let len_unsigned = self.children[1]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
+        let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
+        if !target_len_positive || (pad.is_empty() && input_len < target_len) {
+            return Ok(None);
+        }
+        if target_len == 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+
+        // check max_allowed_packet when it's pushed down
+        let mut r = String::with_capacity(target_len);
+        for (len, c) in input.chars().chain(pad.chars().cycle()).enumerate() {
+            r.push(c);
+            if len + 1 == target_len {
+                break;
+            }
+        }
+        Ok(Some(Cow::Owned(r.as_bytes().to_vec())))
+    }
+
+    #[inline]
+    pub fn rpad_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string(ctx, row));
+        let len_unsigned = self.children[1]
+            .field_type()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
+        let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
+        if !target_len_positive || (pad.is_empty() && input.len() < target_len) {
+            return Ok(None);
+        }
+        if target_len == 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+
+        // check max_allowed_packet when it's pushed down
+        let mut r = Vec::with_capacity(target_len);
+        for c in input.iter().chain(pad.iter().cycle()) {
+            r.push(*c);
+            if r.len() == target_len {
+                break;
+            }
+        }
+        Ok(Some(Cow::Owned(r)))
+    }
 }
 
 // Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
@@ -2222,4 +2287,128 @@ mod tests {
         }
     }
 
+    fn common_rpad_cases() -> Vec<(Datum, Datum, Datum, Datum)> {
+        vec![
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"hi???".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"hiaba".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(6),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"hiabab".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_rpad() {
+        let mut cases = vec![
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(4),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(5),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(6),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测试".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(7),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测试测".as_bytes().to_vec()),
+            ),
+        ];
+        cases.append(&mut common_rpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::Rpad, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_rpad_binary() {
+        let mut cases = vec![
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x61\x76\x5e\x35\x35".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(2),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x61\x76".to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(13),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测".as_bytes().to_vec()),
+            ),
+        ];
+        cases.append(&mut common_rpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::RpadBinary, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
 }

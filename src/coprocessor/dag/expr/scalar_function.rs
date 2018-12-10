@@ -291,7 +291,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::Substring3Args
-            | ScalarFuncSig::SubstringBinary3Args => (3, 3),
+            | ScalarFuncSig::SubstringBinary3Args
+            | ScalarFuncSig::Rpad
+            | ScalarFuncSig::RpadBinary => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -436,8 +438,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
-            | ScalarFuncSig::Rpad
-            | ScalarFuncSig::RpadBinary
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
@@ -972,6 +972,8 @@ dispatch_call! {
         SubstringBinary2Args => substring_binary_2_args,
         SubstringBinary3Args => substring_binary_3_args,
         Space => space,
+        Rpad => rpad,
+        RpadBinary => rpad_binary,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1307,6 +1309,8 @@ mod tests {
                     ScalarFuncSig::SubstringIndex,
                     ScalarFuncSig::Substring3Args,
                     ScalarFuncSig::SubstringBinary3Args,
+                    ScalarFuncSig::Rpad,
+                    ScalarFuncSig::RpadBinary,
                 ],
                 3,
                 3,
@@ -1490,8 +1494,6 @@ mod tests {
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
-            ScalarFuncSig::Rpad,
-            ScalarFuncSig::RpadBinary,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
