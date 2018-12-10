@@ -18,6 +18,7 @@ crossbeam_channel. Comparing to the crossbeam_channel, this implementation
 supports closed detection and try operations.
 
 */
+pub mod batch;
 
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
