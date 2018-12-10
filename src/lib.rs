@@ -41,8 +41,6 @@ extern crate chrono;
 extern crate chrono_tz;
 extern crate crc;
 extern crate crossbeam;
-#[macro_use]
-extern crate crossbeam_channel;
 extern crate crypto;
 #[macro_use]
 extern crate fail;
@@ -115,13 +113,15 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
+extern crate safemem;
 extern crate smallvec;
-
+#[macro_use]
+extern crate more_asserts;
 extern crate base64;
+
 extern crate cop_datatype;
 extern crate flate2;
 extern crate panic_hook;
-extern crate safemem;
 
 #[macro_use]
 pub mod util;
