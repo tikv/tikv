@@ -171,7 +171,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::build(&mut ctx, case).unwrap();
+            let e = Expression::build(&ctx, case).unwrap();
 
             let i = e.eval_int(&mut ctx, &[]).unwrap_or(None);
             let r = e.eval_real(&mut ctx, &[]).unwrap_or(None);
