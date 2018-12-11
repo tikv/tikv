@@ -56,11 +56,11 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        RpcClient::new(&cfg, m_mgr).is_ok();
+        assert_eq!(RpcClient::new(&cfg, m_mgr).is_ok(), true);
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
-    child.join().is_ok();
+    assert_eq!(child.join().is_ok(), true);
 }
 
 #[test]
