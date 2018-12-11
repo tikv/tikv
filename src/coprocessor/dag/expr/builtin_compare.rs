@@ -605,7 +605,7 @@ mod tests {
             expr.set_sig(sig);
 
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(&mut ctx, expr).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
         }
@@ -740,7 +740,7 @@ mod tests {
             expr.set_sig(sig);
 
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(&mut ctx, expr).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
         }
@@ -927,7 +927,7 @@ mod tests {
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(greatest_sig);
                     expr.set_children(RepeatedField::from_vec(children));
-                    let e = Expression::build(&mut ctx, expr).unwrap();
+                    let e = Expression::build(&ctx, expr).unwrap();
                     let res = e.eval(&mut ctx, &[]).unwrap();
                     assert_eq!(res, greatest_exp);
                 }
@@ -938,7 +938,7 @@ mod tests {
                     expr.set_tp(ExprType::ScalarFunc);
                     expr.set_sig(least_sig);
                     expr.set_children(RepeatedField::from_vec(children));
-                    let e = Expression::build(&mut ctx, expr).unwrap();
+                    let e = Expression::build(&ctx, expr).unwrap();
                     let res = e.eval(&mut ctx, &[]).unwrap();
                     assert_eq!(res, least_exp);
                 }
@@ -988,7 +988,7 @@ mod tests {
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(ScalarFuncSig::GreatestTime);
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(&mut ctx, expr).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
             let err = e.eval(&mut ctx, &[]).unwrap_err();
             assert_eq!(err.code(), ERR_TRUNCATE_WRONG_VALUE);
         }
