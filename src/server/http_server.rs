@@ -68,7 +68,8 @@ impl HttpServer {
                     let metric_familys = prometheus::gather();
                     let mut buffer = vec![];
                     if let Err(e) = encoder.encode(&metric_familys, &mut buffer) {
-                        error!("failed to get metrics: {:?}", e)
+                        error!("failed to get metrics: {:?}", e);
+                        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                     } else {
                         *response.body_mut() = Body::from(buffer);
                     }
