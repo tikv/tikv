@@ -102,6 +102,7 @@ extern crate tempdir;
 extern crate test;
 extern crate time;
 extern crate tipb;
+extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_timer;
 #[cfg(test)]
