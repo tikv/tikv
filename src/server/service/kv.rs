@@ -76,10 +76,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        heavy_load_threshold: usize,
+        mut heavy_load_threshold: usize,
         helper_runtime: Arc<Runtime>,
         in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
     ) -> Self {
+        // Because here we returns messages to clients, `heavy_load_threshold` shouldn't be too
+        // small. We set the lower limit to 100 for now.
+        // TODO: make it configuable and fix the best default value.
+        heavy_load_threshold = ::std::cmp::max(heavy_load_threshold, 100);
         Service {
             storage,
             cop,
