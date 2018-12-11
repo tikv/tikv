@@ -279,8 +279,8 @@ impl ScalarFunc {
             self.children[1].eval_string(ctx, row),
             Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
         );
-        let s = box_try!(String::from_utf8(cow_s.to_vec()));
-        let d = match MyDuration::parse(s.as_bytes(), Time::parse_fsp(&s)) {
+        let s = box_try!(::std::str::from_utf8(cow_s.as_ref()));
+        let d = match MyDuration::parse(s.as_bytes(), Time::parse_fsp(s)) {
             Ok(res) => res,
             Err(_) => return Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))),
         };
