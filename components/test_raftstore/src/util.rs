@@ -105,6 +105,7 @@ pub fn new_store_cfg() -> Config {
         region_split_check_diff: ReadableSize(10000),
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(250),
+        raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         ..Config::default()
@@ -494,6 +495,10 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+}
+
+pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.raft_reject_transfer_leader_duration = ReadableDuration::secs(1);
 }
 
 pub fn configure_for_lease_read<T: Simulator>(
