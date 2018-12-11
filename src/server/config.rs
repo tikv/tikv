@@ -67,7 +67,7 @@ pub struct Config {
     // These parameters are related to the HTTP service.
     pub http_enabled: bool,
     pub http_addr: String,
-    pub thread_pool_size: usize,
+    pub http_thread_pool_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
@@ -119,7 +119,7 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             http_enabled: false,
             http_addr: DEFAULT_HTTP_LISTENING_ADDR.to_owned(),
-            thread_pool_size: 1,
+            http_thread_pool_size: 1,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,

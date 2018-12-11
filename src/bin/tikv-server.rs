@@ -253,7 +253,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
 
     let mut http_enabled = http_cfg.http_enabled;
-    let mut http_server = HttpServer::new(http_cfg.thread_pool_size);
+    let mut http_server = HttpServer::new(http_cfg.http_thread_pool_size);
     if http_enabled {
         if let Err(e) = http_server.start(http_cfg.http_addr) {
             error!("failed to bind addr, error: {:?}", e);

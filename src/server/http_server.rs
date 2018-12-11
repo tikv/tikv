@@ -32,9 +32,9 @@ pub struct HttpServer {
 }
 
 impl HttpServer {
-    pub fn new(thread_pool_size: usize) -> Self {
+    pub fn new(http_thread_pool_size: usize) -> Self {
         let thread_pool = Builder::new()
-            .pool_size(thread_pool_size)
+            .pool_size(http_thread_pool_size)
             .name_prefix("http-server-")
             .after_start(|| {
                 info!("HTTP server started");
