@@ -306,15 +306,14 @@ mod tests {
             let arg1 = datum_expr(lhs);
             let arg2 = datum_expr(rhs);
             {
-                let op = Expression::build(
-                    &mut ctx,
-                    scalar_func_expr(op, &[arg1.clone(), arg2.clone()]),
-                ).unwrap();
+                let op =
+                    Expression::build(&ctx, scalar_func_expr(op, &[arg1.clone(), arg2.clone()]))
+                        .unwrap();
                 let res = op.eval_int(&mut ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
             {
-                let op = Expression::build(&mut ctx, scalar_func_expr(op, &[arg2, arg1])).unwrap();
+                let op = Expression::build(&ctx, scalar_func_expr(op, &[arg2, arg1])).unwrap();
                 let res = op.eval_int(&mut ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
@@ -368,7 +367,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1])).unwrap();
+            let op = Expression::build(&ctx, scalar_func_expr(operator, &[arg1])).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -426,7 +425,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (op, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(&mut ctx, scalar_func_expr(op, &[arg1])).unwrap();
+            let op = Expression::build(&ctx, scalar_func_expr(op, &[arg1])).unwrap();
             let res = op.eval_int(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -444,7 +443,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (op, argument) in tests {
             let arg = datum_expr(argument);
-            let op = Expression::build(&mut ctx, scalar_func_expr(op, &[arg])).unwrap();
+            let op = Expression::build(&ctx, scalar_func_expr(op, &[arg])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
@@ -460,8 +459,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitAndSig, args))
-                .unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitAndSig, args)).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -477,8 +476,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitOrSig, args))
-                .unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitOrSig, args)).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -494,8 +493,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitXorSig, args))
-                .unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitXorSig, args)).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -511,8 +510,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let args = &[datum_expr(arg)];
-            let op = Expression::build(&mut ctx, scalar_func_expr(ScalarFuncSig::BitNegSig, args))
-                .unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitNegSig, args)).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -537,7 +536,7 @@ mod tests {
             let lhs = datum_expr(lhs);
             let rhs = datum_expr(rhs);
             let op = Expression::build(
-                &mut ctx,
+                &ctx,
                 scalar_func_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]),
             ).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
@@ -564,7 +563,7 @@ mod tests {
             let lhs = datum_expr(lhs);
             let rhs = datum_expr(rhs);
             let op = Expression::build(
-                &mut ctx,
+                &ctx,
                 scalar_func_expr(ScalarFuncSig::RightShift, &[lhs, rhs]),
             ).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
