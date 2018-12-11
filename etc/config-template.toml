@@ -505,6 +505,13 @@
 ## Pick target size of each level dynamically.
 # dynamic-level-bytes = true
 
+## Optimizes bloom filters. If true, RocksDB won't create bloom filters for the max level of
+## the LSM to reduce metadata that should fit in RAM.
+## This value is setted to true for `default` cf by default because its kv data could be determined
+## whether really exists by upper logic instead of bloom filters. But we suggest to set it to false
+## while using `Raw` mode.
+# optimize-filters-for-hits = true
+
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -535,6 +542,7 @@
 # compaction-pri = 3
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = false
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -553,6 +561,7 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = false
 
 [raftdb]
 # max-background-jobs = 2
@@ -576,6 +585,7 @@
 # info-log-roll-time = "0"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
+# optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -603,6 +613,7 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = true
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
