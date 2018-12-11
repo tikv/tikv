@@ -13,14 +13,14 @@
 
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
-use std::thread;
 use std::time::Duration;
+use std::{thread, usize};
 
 use grpc::{EnvBuilder, Error as GrpcError};
-use tempdir::TempDir;
-
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
+use tempdir::TempDir;
+use tokio::runtime::Builder as RuntimeBuilder;
 
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
@@ -28,6 +28,7 @@ use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::{store, Result};
+use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
@@ -77,13 +78,25 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+        let async_executor = RuntimeBuilder::new()
+            .core_threads(1)
+            .build()
+            .unwrap()
+            .executor();
+        let raft_client = RaftClient::new(
+            env,
+            Arc::new(Config::default()),
+            security_mgr,
+            Arc::new(ThreadLoad::with_threshold(usize::MAX)),
+            async_executor,
+        );
         ServerCluster {
             metas: HashMap::default(),
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
             snap_paths: HashMap::default(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            raft_client,
         }
     }
 

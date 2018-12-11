@@ -10,12 +10,14 @@ tempdir = "0.3"
 raft = "0.4"
 futures = "0.1"
 tokio-timer = "0.2"
+tokio = "0.1"
 grpcio = { version = "0.4", features = [ "secure" ] }
 rand = "0.3"
 log = "0.3.9"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "batch-raft-msg"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"

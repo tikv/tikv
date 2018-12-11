@@ -84,6 +84,7 @@ pub struct Config {
     pub snap_max_total_size: ReadableSize,
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
+    pub heavy_load_wait_duration: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -138,6 +139,7 @@ impl Default for Config {
             // 100 means gRPC threads are under heavy load if their total CPU usage
             // is greater than 100%.
             heavy_load_threshold: 100,
+            heavy_load_wait_duration: ReadableDuration::millis(2),
         }
     }
 }
