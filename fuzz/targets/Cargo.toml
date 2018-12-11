@@ -1,0 +1,12 @@
+[package]
+name = "fuzz-targets"
+version = "0.0.1"
+publish = false
+
+[lib]
+path = "mod.rs"
+
+[dependencies]
+byteorder = "1"
+failure = "0.1"
+tikv = {path = "../.."}
