@@ -14,7 +14,7 @@
 use std::thread;
 use std::time::Duration;
 
-use prometheus::{self, Encoder, TextEncoder};
+use prometheus::{self, Encoder, Error, TextEncoder};
 
 #[cfg(target_os = "linux")]
 mod threads_linux;
@@ -60,14 +60,14 @@ pub fn run_prometheus(
     Some(handler)
 }
 
-pub fn dump() -> String {
+pub fn dump() -> Result<String, Error> {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
     let metric_familys = prometheus::gather();
     for mf in metric_familys {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-            warn!("ignore prometheus encoding error: {:?}", e);
+            return Err(e);
         }
     }
-    String::from_utf8(buffer).unwrap()
+    Ok(String::from_utf8(buffer).unwrap())
 }

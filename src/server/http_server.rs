@@ -16,13 +16,13 @@ use futures::sync::oneshot::{Receiver, Sender};
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, Body, Method, Request, Response, Server, StatusCode};
-use prometheus::{self, Encoder, TextEncoder};
 use tokio_threadpool::{Builder, ThreadPool};
 
 use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
+use util::metrics::dump;
 
 pub struct HttpServer {
     thread_pool: ThreadPool,
@@ -63,17 +63,15 @@ impl HttpServer {
             let mut response = Response::new(Body::empty());
 
             match (req.method(), req.uri().path()) {
-                (&Method::GET, "/metrics") => {
-                    let encoder = TextEncoder::new();
-                    let metric_familys = prometheus::gather();
-                    let mut buffer = vec![];
-                    if let Err(e) = encoder.encode(&metric_familys, &mut buffer) {
+                (&Method::GET, "/metrics") => match dump() {
+                    Err(e) => {
                         error!("failed to get metrics: {:?}", e);
                         *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                    } else {
+                    }
+                    Ok(buffer) => {
                         *response.body_mut() = Body::from(buffer);
                     }
-                }
+                },
                 _ => {
                     *response.status_mut() = StatusCode::NOT_FOUND;
                 }
