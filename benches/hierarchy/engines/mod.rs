@@ -11,11 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate criterion;
-extern crate kvproto;
-extern crate test_util;
-extern crate tikv;
-
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use std::fmt;
@@ -25,10 +20,10 @@ use tikv::storage::engine::{
 };
 use tikv::storage::{Key, Value, CF_DEFAULT};
 
-const DEFAULT_KEY_LENGTH: usize = 64;
+use super::*;
+
 const DEFAULT_GET_KEYS_COUNT: usize = 1;
 const DEFAULT_PUT_KVS_COUNT: usize = 1;
-const DEFAULT_KV_GENERATOR_SEED: u64 = 0;
 
 trait EngineFactory<E: Engine>: Clone + Copy + fmt::Debug + 'static {
     fn build(&self) -> E;
@@ -74,7 +69,7 @@ fn fill_engine_with<E: Engine>(engine: &E, expect_engine_keys_count: usize, valu
             modifies.push(Modify::Put(CF_DEFAULT, Key::from_raw(&key), value))
         }
         let ctx = Context::new();
-        let _ = engine.async_write(&ctx, modifies, Box::new(move |(_, _)| {}));
+        let _ = engine.write(&ctx, modifies);
     }
 }
 
@@ -102,7 +97,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
         },
         |(test_kvs, ctx)| {
             for (key, value) in test_kvs {
-                black_box(engine.put(ctx, key, value).is_ok());
+                black_box(engine.put(ctx, key, value).unwrap());
             }
         },
     );
@@ -159,8 +154,8 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
     );
 }
 
-fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) {
-    let value_lengths = vec![64];
+fn bench_engine_with_factory<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) {
+    let value_lengths = DEFAULT_VALUE_LENGTHS;
     let engine_entries_counts = vec![0];
     let engine_put_kv_counts = vec![DEFAULT_PUT_KVS_COUNT];
     let engine_get_key_counts = vec![DEFAULT_GET_KEYS_COUNT];
@@ -195,18 +190,12 @@ fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) 
         }
     }
 
-    c.bench_function_over_inputs("bench_engine_get", bench_engine_get, get_configs);
-    c.bench_function_over_inputs("bench_engine_put", bench_engine_put, put_configs);
-    c.bench_function_over_inputs(
-        "bench_engine_snapshot",
-        bench_engine_snapshot,
-        snapshot_configs,
-    );
+    c.bench_function_over_inputs("engine_get", bench_engine_get, get_configs);
+    c.bench_function_over_inputs("engine_put", bench_engine_put, put_configs);
+    c.bench_function_over_inputs("engine_snapshot", bench_engine_snapshot, snapshot_configs);
 }
 
-fn main() {
-    let mut criterion = Criterion::default();
-    bench_engines(&mut criterion, RocksEngineFactory {});
-    bench_engines(&mut criterion, BTreeEngineFactory {});
-    criterion.final_summary();
+pub fn bench_engines(criterion: &mut Criterion) {
+    bench_engine_with_factory(criterion, RocksEngineFactory {});
+    bench_engine_with_factory(criterion, BTreeEngineFactory {});
 }
