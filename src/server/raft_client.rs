@@ -24,7 +24,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
-use tokio::runtime::TaskExecutor;
+use tokio::runtime::Runtime;
 use tokio::timer::Delay;
 
 use super::load_statistics::ThreadLoad;
@@ -154,7 +154,7 @@ pub struct RaftClient {
     cfg: Arc<Config>,
     security_mgr: Arc<SecurityManager>,
     grpc_thread_load: Arc<ThreadLoad>,
-    async_executor: TaskExecutor,
+    async_runtime: Arc<Runtime>,
 }
 
 impl RaftClient {
@@ -163,7 +163,7 @@ impl RaftClient {
         cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
         grpc_thread_load: Arc<ThreadLoad>,
-        async_executor: TaskExecutor,
+        async_runtime: Arc<Runtime>,
     ) -> RaftClient {
         RaftClient {
             env,
@@ -172,7 +172,7 @@ impl RaftClient {
             cfg,
             security_mgr,
             grpc_thread_load,
-            async_executor,
+            async_runtime,
         }
     }
 
@@ -218,7 +218,7 @@ impl RaftClient {
             if let Some(notifier) = conn.stream.get_notifier() {
                 if self.grpc_thread_load.in_heavy_load() {
                     let wait = self.cfg.heavy_load_wait_duration.0;
-                    self.async_executor.spawn(
+                    self.async_runtime.executor().spawn(
                         Delay::new(Instant::now() + wait)
                             .map_err(|_| error!("RaftClient delay flush error"))
                             .inspect(move |_| notifier.notify()),
@@ -231,13 +231,6 @@ impl RaftClient {
         }
         // Only update the metrics when flush immediately.
         RAFT_MESSAGE_FLUSH_COUNTER.inc_by(i64::from(counter));
-    }
-}
-
-impl Drop for RaftClient {
-    fn drop(&mut self) {
-        // Drop conns here to make sure all streams are dropped before Environment.
-        self.conns.clear();
     }
 }
 

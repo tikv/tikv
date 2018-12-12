@@ -78,17 +78,12 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
-        let async_executor = RuntimeBuilder::new()
-            .core_threads(1)
-            .build()
-            .unwrap()
-            .executor();
         let raft_client = RaftClient::new(
             env,
             Arc::new(Config::default()),
             security_mgr,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
-            async_executor,
+            Arc::new(RuntimeBuilder::new().core_threads(1).build().unwrap()),
         );
         ServerCluster {
             metas: HashMap::default(),

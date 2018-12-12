@@ -129,7 +129,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(cfg),
             Arc::clone(security_mgr),
             Arc::clone(&thread_load),
-            stats_runtime.executor(),
+            Arc::clone(&stats_runtime),
         )));
 
         let trans = ServerTransport::new(
