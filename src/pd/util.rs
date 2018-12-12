@@ -293,6 +293,14 @@ where
             Ok(_) => true,
             // Error::Incompatible is returned by response header from pd, no need to retry
             Err(Error::Incompatible) => true,
+            Err(Error::Grpc(::grpc::Error::RpcFinished(err))) => {
+                // This means the old rpc connected with PD is finished (maybe PD restart),
+                // and this error will be retruned by the first heartbeat request after connecting
+                // which calls sender.send_all(). If retry, it may send the first heartbeat region
+                // heartbeat request to PD again which maybe stale.
+                error!("rpc finished: {:?}, not retry", err);
+                true
+            }
             Err(err) => {
                 error!("request failed: {:?}, retry", err);
                 false

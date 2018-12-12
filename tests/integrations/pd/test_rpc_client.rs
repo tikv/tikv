@@ -288,6 +288,88 @@ fn restart_leader(mgr: SecurityManager) {
 }
 
 #[test]
+fn test_restart_heartbeat_insecure() {
+    let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
+    restart_heartbeat(mgr)
+}
+
+#[test]
+fn test_restart_heartbeat_secure() {
+    let security_cfg = test_util::new_security_cfg();
+    let mgr = SecurityManager::new(&security_cfg).unwrap();
+    restart_heartbeat(mgr)
+}
+
+fn restart_heartbeat(mgr: SecurityManager) {
+    let mgr = Arc::new(mgr);
+    // Service has only one GetMembersResponse, so the leader never changes.
+    let mut server =
+        MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 1], None);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
+    let poller = Builder::new()
+        .pool_size(1)
+        .name_prefix(thd_name!("poller"))
+        .create();
+    let (tx, rx) = mpsc::channel();
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
+        tx.send(resp).unwrap();
+    });
+    poller.spawn(f).forget();
+
+    // Put a region.
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::new();
+    store.set_id(store_id);
+
+    let peer_id = client.alloc_id().unwrap();
+    let mut peer = metapb::Peer::new();
+    peer.set_id(peer_id);
+    peer.set_store_id(store_id);
+
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.mut_peers().push(peer.clone());
+    region.set_start_key(b"".to_vec());
+    region.set_end_key(b"".to_vec());
+
+    poller
+        .spawn(client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()))
+        .forget();
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+
+    // Update the region info
+    region.set_start_key(b"v1".to_vec());
+    region.set_end_key(b"".to_vec());
+    poller
+        .spawn(client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()))
+        .forget();
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+
+    // Restart PD
+    server.stop();
+    server.start(&mgr, eps);
+
+    // Send some heartbeats to invoke pd-client to reconnect 
+    let mut region1 = region.clone();
+    region1.set_id(10);
+    poller
+        .spawn(client.region_heartbeat(region1.clone(), peer.clone(), RegionStat::default()))
+        .forget();
+    thread::sleep(Duration::from_millis(200));
+    poller
+        .spawn(client.region_heartbeat(region1.clone(), peer.clone(), RegionStat::default()))
+        .forget();
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
+
+    // Check whether region info is right
+    let region = client.get_region_by_id(region.get_id()).wait().unwrap();
+    assert_eq!(region.unwrap().get_start_key(), b"v1");
+}
+
+#[test]
 fn test_restart_leader_insecure() {
     let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
     restart_leader(mgr)
