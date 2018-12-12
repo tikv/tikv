@@ -18,7 +18,7 @@ use coprocessor::codec::mysql::Tz;
 use coprocessor::codec::Result;
 
 /// Stores multiple `LazyBatchColumn`s. Each column have equal length.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LazyBatchColumnVec {
     /// Multiple lazy batch columns. Each column is either decoded, or not decoded.
     ///

@@ -11,9 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod batch_executor;
 pub mod dag;
 pub mod executor;
 pub mod expr;
+mod pipeline;
+mod scanner;
 
 pub use self::dag::DAGContext;
-pub use self::executor::{ScanOn, Scanner};
+pub use self::scanner::{ScanOn, Scanner};

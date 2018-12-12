@@ -80,10 +80,10 @@ mod tests {
     use coprocessor::codec::datum::Datum;
     use storage::SnapshotStore;
 
-    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::super::topn::tests::gen_table_data;
     use super::*;
+    use coprocessor::dag::scanner::tests::{get_range, new_col_info, TestStore};
 
     #[test]
     fn test_limit_executor() {

@@ -1454,7 +1454,7 @@ mod tests {
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let mut expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
-            let e = Expression::build(&mut ctx, expr).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

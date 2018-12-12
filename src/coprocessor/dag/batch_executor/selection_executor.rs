@@ -17,17 +17,15 @@ use std::sync::Arc;
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::expression::Expr;
 
+use super::interface::*;
 use coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use coprocessor::dag::executor::interface::*;
-use coprocessor::dag::executor::metrics::*;
-use coprocessor::dag::executor::Executor;
 use coprocessor::dag::executor::ExprColumnRefVisitor;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 use coprocessor::*;
 
-pub struct BatchSelectionExecutor {
+pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: ExecutorContext,
-    src: Box<Executor + Send>,
+    src: Src,
     eval_context: EvalContext,
     conditions: Vec<Expression>,
 
@@ -44,10 +42,10 @@ pub struct BatchSelectionExecutor {
     has_drained: bool,
 }
 
-impl BatchSelectionExecutor {
+impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     pub fn new(
         context: ExecutorContext,
-        src: Box<Executor + Send>,
+        src: Src,
         conditions: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
     ) -> Result<Self> {
@@ -56,6 +54,7 @@ impl BatchSelectionExecutor {
             ref_visitor.batch_visit(&conditions)?;
             ref_visitor.column_offsets()
         };
+        // println!("referred_columns = {:?}", referred_columns);
         let pending_data = {
             let mut is_column_referred = vec![false; context.columns_info.len()];
             for idx in &referred_columns {
@@ -98,16 +97,17 @@ impl BatchSelectionExecutor {
 
         // For each row, calculate a remain map.
         // FIXME: We are still evaluating row by row here.
-        let cols_len = self.referred_columns.len();
+        let cols_len = self.context.columns_info.len();
         let rows_len = data.rows_len();
 
         // `cols` only contains referred columns.
         let mut cols = vec![datum::Datum::Null; cols_len];
         for ri in 0..rows_len {
             // Convert data into datum
-            for ci in 0..cols_len {
-                cols[ci] = data[self.referred_columns[ci]].decoded().to_datum(ri);
+            for ci in &self.referred_columns {
+                cols[*ci] = data[*ci].decoded().to_datum(ri);
             }
+
             let mut retain = true;
             for filter in &self.conditions {
                 // If there are any errors during filter rows, we just return.
@@ -118,6 +118,7 @@ impl BatchSelectionExecutor {
                     break;
                 }
             }
+
             retain_map[ri] = retain;
             // Clear columns, for next row evaluation
             for i in 0..cols_len {
@@ -161,25 +162,7 @@ impl BatchSelectionExecutor {
     }
 }
 
-impl Executor for BatchSelectionExecutor {
-    fn next(&mut self) -> Result<Option<::coprocessor::dag::executor::Row>> {
-        // Not used in batch execute.
-        unreachable!()
-    }
-
-    fn collect_output_counts(&mut self, _counts: &mut Vec<i64>) {
-        // unimplemented!()
-    }
-
-    fn collect_metrics_into(&mut self, _metrics: &mut ExecutorMetrics) {
-        // unimplemented!()
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        // Not used in batch execute.
-        unreachable!()
-    }
-
+impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.has_thrown_error);
@@ -192,6 +175,7 @@ impl Executor for BatchSelectionExecutor {
         // Retrive first `expect_rows` from the pending buffer.
         // If pending buffer is not sifficient, pending_error is also carried.
         let data = self.pending_data.take_and_collect(expect_rows);
+
         let error = if data.rows_len() < expect_rows {
             self.pending_error.take()
         } else {

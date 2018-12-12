@@ -30,9 +30,9 @@ use coprocessor::*;
 
 use storage::{Key, Store};
 
-use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
 use super::{Executor, Row};
+use coprocessor::dag::{ScanOn, Scanner};
 
 pub struct IndexScanExecutor<S: Store> {
     store: S,
@@ -283,8 +283,8 @@ pub mod tests {
     use storage::SnapshotStore;
     use util::collections::HashMap;
 
-    use super::super::scanner::tests::{new_col_info, Data, TestStore};
     use super::*;
+    use coprocessor::dag::scanner::tests::{new_col_info, Data, TestStore};
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

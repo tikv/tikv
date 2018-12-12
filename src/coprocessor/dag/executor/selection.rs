@@ -105,10 +105,10 @@ mod tests {
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
 
-    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::super::topn::tests::gen_table_data;
     use super::*;
+    use coprocessor::dag::scanner::tests::{get_range, new_col_info, TestStore};
 
     fn new_const_expr() -> Expr {
         let mut expr = Expr::new();

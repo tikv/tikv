@@ -178,9 +178,9 @@ pub mod tests {
 
     use storage::SnapshotStore;
 
-    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::*;
+    use coprocessor::dag::scanner::tests::{get_range, new_col_info, TestStore};
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();

@@ -30,12 +30,8 @@ use coprocessor::*;
 
 mod aggregate;
 mod aggregation;
-mod batch;
 mod index_scan;
-mod interface;
 mod limit;
-mod pipeline_builder;
-mod scanner;
 mod selection;
 mod table_scan;
 mod topn;
@@ -44,13 +40,9 @@ mod topn_heap;
 mod metrics;
 
 pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
-pub use self::batch::*;
 pub use self::index_scan::IndexScanExecutor;
-pub use self::interface::{BatchExecuteResult, ExecutorContext, ExecutorContextInner};
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
-pub use self::pipeline_builder::ExecutorPipelineBuilder;
-pub use self::scanner::{ScanOn, Scanner};
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
@@ -270,22 +262,5 @@ pub trait Executor {
     /// It returns a `KeyRange` the executor has scaned.
     fn stop_scan(&mut self) -> Option<KeyRange> {
         None
-    }
-
-    /// Returns next several rows.
-    ///
-    /// This function is simply the batch version of `next()`. The executor should return as more
-    /// rows as possible, but `expect_rows` rows at most.
-    fn next_batch(&mut self, _expect_rows: usize) -> BatchExecuteResult {
-        // Unreachable since this function shall never be called when corresponding executor does
-        // not support batch execution.
-        unreachable!()
-    }
-
-    fn into_boxed(self) -> Box<Executor + Send>
-    where
-        Self: 'static + Sized + Send,
-    {
-        box self
     }
 }

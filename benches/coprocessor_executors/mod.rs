@@ -26,7 +26,8 @@ use tipb::executor::{IndexScan, TableScan};
 
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
-use tikv::coprocessor::dag::executor::{Executor, ExecutorContext};
+use tikv::coprocessor::dag::batch_executor::interface::*;
+use tikv::coprocessor::dag::executor::Executor;
 use tikv::storage::RocksEngine;
 
 fn bench_table_scan_next(
@@ -580,7 +581,7 @@ fn bench_table_scan_datum_all_multi_rows(c: &mut Criterion) {
 ///
 /// This case benches the performance when all records of this range are consumed.
 fn bench_batch_table_scan_multi_rows(c: &mut Criterion) {
-    use tikv::coprocessor::dag::executor::BatchTableScanExecutor;
+    use tikv::coprocessor::dag::batch_executor::executors::BatchTableScanExecutor;
 
     c.bench_function("batch_table_scan_multi_rows", |b| {
         let id = ColumnBuilder::new()
@@ -636,7 +637,7 @@ fn bench_batch_table_scan_multi_rows(c: &mut Criterion) {
 /// This case benches the performance when all records of this range are consumed for SQLs like
 /// `SELECT *`.
 fn bench_batch_table_scan_datum_all_multi_rows(c: &mut Criterion) {
-    use tikv::coprocessor::dag::executor::BatchTableScanExecutor;
+    use tikv::coprocessor::dag::batch_executor::executors::BatchTableScanExecutor;
 
     c.bench_function("batch_table_scan_datum_all_multi_rows", |b| {
         let mut cols = vec![];

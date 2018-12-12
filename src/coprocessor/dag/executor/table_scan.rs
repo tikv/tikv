@@ -23,12 +23,11 @@ use tipb::schema::ColumnInfo;
 use storage::{Key, Store};
 use util::collections::HashSet;
 
+use super::{Executor, ExecutorMetrics, Row};
 use coprocessor::codec::table;
+use coprocessor::dag::{ScanOn, Scanner};
 use coprocessor::util;
 use coprocessor::*;
-
-use super::{Executor, ExecutorMetrics, Row};
-use super::{ScanOn, Scanner};
 
 pub struct TableScanExecutor<S: Store> {
     store: S,
@@ -233,10 +232,10 @@ mod tests {
 
     use storage::SnapshotStore;
 
-    use super::super::scanner::tests::{
+    use super::*;
+    use coprocessor::dag::scanner::tests::{
         get_point_range, get_range, prepare_table_data, Data, TestStore,
     };
-    use super::*;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;

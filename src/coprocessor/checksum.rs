@@ -20,7 +20,8 @@ use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, Check
 
 use storage::{Snapshot, SnapshotStore};
 
-use coprocessor::dag::executor::{ExecutorMetrics, ScanOn, Scanner};
+use coprocessor::dag::executor::ExecutorMetrics;
+use coprocessor::dag::{ScanOn, Scanner};
 use coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`

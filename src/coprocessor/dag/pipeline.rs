@@ -18,11 +18,11 @@ use tipb::executor::{self, ExecType};
 
 use storage::{Snapshot, SnapshotStore};
 
-use super::{BatchIndexScanExecutor, BatchSelectionExecutor, BatchTableScanExecutor};
-use super::{Executor, ExecutorContext};
-use super::{
-    HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor, StreamAggExecutor,
-    TableScanExecutor, TopNExecutor,
+use super::batch_executor::executors::*;
+use super::batch_executor::interface::*;
+use super::executor::{
+    Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
+    StreamAggExecutor, TableScanExecutor, TopNExecutor,
 };
 use coprocessor::dag::expr::EvalConfig;
 use coprocessor::*;
@@ -75,6 +75,7 @@ impl ExecutorPipelineBuilder {
                         }
                     }
                 }
+                ExecType::TypeSelection => {}
                 _ => {
                     info!(
                         "Coprocessor request cannot be batched because {:?} is not supported",
@@ -93,36 +94,38 @@ impl ExecutorPipelineBuilder {
         store: SnapshotStore<S>,
         ranges: Vec<KeyRange>,
         eval_ctx: Arc<EvalConfig>,
-    ) -> Result<Box<Executor + Send>> {
+    ) -> Result<Box<BatchExecutor>> {
         let mut executor_descriptors = executor_descriptors.into_iter();
         let mut first_ed = executor_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("No executors")))?;
 
         let executor_context;
-        let mut executor;
+        let mut executor: Box<BatchExecutor>;
 
         match first_ed.get_tp() {
             ExecType::TypeTableScan => {
                 let mut descriptor = first_ed.take_tbl_scan();
+                // println!("Table Scan {:?}", descriptor);
                 executor_context = ExecutorContext::new(descriptor.take_columns().into_vec());
-                executor = BatchTableScanExecutor::new(
+                executor = box BatchTableScanExecutor::new(
                     store,
                     executor_context.clone(),
                     ranges,
                     descriptor.get_desc(),
-                )?.into_boxed();
+                )?;
             }
             ExecType::TypeIndexScan => {
                 let mut descriptor = first_ed.take_idx_scan();
+                // println!("Index Scan {:?}", descriptor);
                 executor_context = ExecutorContext::new(descriptor.take_columns().into_vec());
-                executor = BatchIndexScanExecutor::new(
+                executor = box BatchIndexScanExecutor::new(
                     store,
                     executor_context.clone(),
                     ranges,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
-                )?.into_boxed();
+                )?;
             }
             _ => {
                 return Err(Error::Other(box_err!(
@@ -133,19 +136,22 @@ impl ExecutorPipelineBuilder {
         }
 
         for mut ed in executor_descriptors {
-            let new_executor = match ed.get_tp() {
+            let new_executor: Box<BatchExecutor> = match ed.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(Error::Other(box_err!(
                         "Unexpected non-first executor {:?}",
                         ed.get_tp()
                     )));
                 }
-                ExecType::TypeSelection => BatchSelectionExecutor::new(
-                    executor_context.clone(),
-                    executor,
-                    ed.take_selection().take_conditions().into_vec(),
-                    Arc::clone(&eval_ctx),
-                )?.into_boxed(),
+                ExecType::TypeSelection => {
+                    // println!("Selection {:?}", ed.get_selection());
+                    Box::new(BatchSelectionExecutor::new(
+                        executor_context.clone(),
+                        executor,
+                        ed.take_selection().take_conditions().into_vec(),
+                        Arc::clone(&eval_ctx),
+                    )?)
+                }
                 _ => {
                     return Err(Error::Other(box_err!(
                         "Unexpected non-first executor {:?}",

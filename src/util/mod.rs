@@ -555,6 +555,7 @@ pub fn vec_take_and_collect<T>(src: &mut Vec<T>, n: usize) -> Vec<T> {
         // Want `n`, but may only filled with `take_n` data.
         let mut dest = Vec::with_capacity(n);
         ::std::ptr::copy_nonoverlapping(src.as_ptr(), dest.as_mut_ptr(), take_n);
+        dest.set_len(take_n);
 
         let remainings = src.len() - take_n;
         ::std::ptr::copy(src.as_ptr().add(take_n), src.as_mut_ptr(), remainings);

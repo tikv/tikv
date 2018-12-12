@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Executor common interfaces
+//! Batch executor common structures.
 
 use std::sync::Arc;
 
@@ -19,6 +19,21 @@ use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::batch::LazyBatchColumnVec;
 use coprocessor::Error;
+
+/// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
+/// pulls data in batch and stores data by column.
+pub trait BatchExecutor: Send {
+    /// Pulls next several rows of data (stored by column).
+    ///
+    /// The executor should return as more rows as possible, but `expect_rows` rows at most.
+    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult;
+}
+
+impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
+    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+        (**self).next_batch(expect_rows)
+    }
+}
 
 /// A shared context for all executors built from a single Coprocessor DAG request.
 ///
@@ -58,9 +73,11 @@ pub struct ExecutorContextInner {
 
 /// Data to be flowed between parent and child executors' single `next_batch()` invocation.
 ///
-/// Note: there are other data flow between executors, like warnings, metrics and output statistics.
+/// Note: there are other data flow between executors, like metrics and output statistics.
 /// However they are flowed at once, just before response, instead of each step during execution.
 /// Hence they are not covered by this structure.
+///
+/// TODO: Warnings should be flowed in each function call.
 ///
 /// It is only Send but not Sync because executor returns its own data copy. However Send enables
 /// executors to live in different threads.

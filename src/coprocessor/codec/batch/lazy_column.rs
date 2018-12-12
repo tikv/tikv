@@ -32,6 +32,21 @@ pub enum LazyBatchColumn {
     Decoded(BatchColumn),
 }
 
+impl ::std::fmt::Debug for LazyBatchColumn {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                let vec_display: Vec<_> = v
+                    .iter()
+                    .map(|item| ::util::escape(item.as_slice()))
+                    .collect();
+                f.debug_tuple("Raw").field(&vec_display).finish()
+            }
+            LazyBatchColumn::Decoded(ref v) => f.debug_tuple("Decoded").field(v).finish(),
+        }
+    }
+}
+
 impl Clone for LazyBatchColumn {
     #[inline]
     fn clone(&self) -> Self {

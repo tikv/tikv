@@ -16,81 +16,53 @@ use kvproto::coprocessor::KeyRange;
 
 use storage::{Key, Store};
 
-use util::collections::HashMap;
-
+use super::interface::*;
 use super::ranges_consumer::{ConsumerResult, RangesConsumer};
 use coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use coprocessor::codec::table;
-use coprocessor::dag::executor::interface::*;
-use coprocessor::dag::executor::metrics::*;
-use coprocessor::dag::executor::Executor;
 use coprocessor::dag::Scanner;
 use coprocessor::*;
 
-pub struct BatchTableScanExecutor<S: Store> {
+// TODO: Merge with BatchTableScanExecutor
+
+pub struct BatchIndexScanExecutor<S: Store> {
+    // Please refer to `BatchTableScanExecutor` for field descriptions.
     context: ExecutorContext,
     store: S,
     desc: bool,
-    // scanned_count_per_range: Vec<usize>,
-    metrics: ExecutorMetrics,
-
-    /// Consume and produce ranges.
     ranges: RangesConsumer,
-
-    /// Row scanner.
-    ///
-    /// It is optional because sometimes it is not needed, e.g. when point range is given.
-    /// Also, the value may be re-constructed several times if there are multiple key ranges.
     scanner: Option<Scanner<S>>,
 
-    /// Whether or not KV value can be omitted.
-    ///
-    /// It will be set to `true` if only PK handle column exists in `context.columns_info`.
-    key_only: bool,
+    /// Number of interested columns (exclude PK handle column).
+    columns_len_without_handle: usize,
 
-    /// The index in output row to put the handle.
-    ///
-    /// If PK handle column does not exist in `context.columns_info`, this field will be set to
-    /// `usize::MAX`.
-    handle_index: usize,
+    /// Whether PK handle column is interested. Handle will be always placed in the last column.
+    decode_handle: bool,
 
-    /// A hash map to map column id to the index of `context.columns_info`.
-    column_id_index: HashMap<i64, usize>,
-
-    /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
-    /// It is a struct level field in order to prevent repeated memory allocations since its length
-    /// is fixed for each `next_batch` call.
-    is_column_filled: Vec<bool>,
-
-    /// A flag indicating whether this executor has encountered an error and the error has been
-    /// thrown to the upper executor during `next_batch`. If the implementation is correct, in
-    /// this case, `next_batch` should be never called again.
     has_thrown_error: bool,
 }
 
-impl<S: Store> BatchTableScanExecutor<S> {
+impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
         store: S,
         context: ExecutorContext,
         mut key_ranges: Vec<KeyRange>,
         desc: bool,
+        unique: bool,
+        // TODO: this does not mean that it is a unique index scan. What does it mean?
     ) -> Result<Self> {
         table::check_table_ranges(&key_ranges)?;
         if desc {
             key_ranges.reverse();
         }
 
-        let is_column_filled = vec![false; context.columns_info.len()];
-
-        let mut key_only = true;
-        let mut handle_index = ::std::usize::MAX;
-        let mut column_id_index = HashMap::default();
-        for (index, column_info) in context.columns_info.iter().enumerate() {
+        let mut columns_len_without_handle = 0;
+        let mut decode_handle = false;
+        for column_info in &context.columns_info {
             if column_info.get_pk_handle() {
-                handle_index = index;
+                decode_handle = true;
             } else {
-                key_only = false;
-                column_id_index.insert(column_info.get_column_id(), index);
+                columns_len_without_handle += 1;
             }
         }
 
@@ -98,16 +70,11 @@ impl<S: Store> BatchTableScanExecutor<S> {
             context,
             store,
             desc,
-            // scanned_count_per_range: Vec::new(),
-            metrics: Default::default(),
-            ranges: RangesConsumer::new(key_ranges, true),
+            ranges: RangesConsumer::new(key_ranges, unique),
             scanner: None,
 
-            handle_index,
-            key_only,
-            column_id_index,
-
-            is_column_filled,
+            columns_len_without_handle,
+            decode_handle,
             has_thrown_error: false,
         })
     }
@@ -119,9 +86,9 @@ impl<S: Store> BatchTableScanExecutor<S> {
 
         self.scanner = Some(Scanner::new(
             &self.store,
-            ScanOn::Table,
+            ScanOn::Index,
             self.desc,
-            self.key_only,
+            false,
             range,
         )?);
         Ok(())
@@ -142,11 +109,10 @@ impl<S: Store> BatchTableScanExecutor<S> {
     /// Get one row from the store.
     #[inline]
     fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let mut statistics = ::storage::Statistics::default();
         // TODO: Key and value doesn't have to be owned
         let key = range.take_start();
-        let value = self
-            .store
-            .get(&Key::from_raw(&key), &mut self.metrics.cf_stats)?;
+        let value = self.store.get(&Key::from_raw(&key), &mut statistics)?;
         Ok(value.map(move |v| (key, v)))
     }
 
@@ -155,14 +121,13 @@ impl<S: Store> BatchTableScanExecutor<S> {
         expect_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        use byteorder::{BigEndian, ReadBytesExt};
         use coprocessor::codec::datum;
         use util::codec::number;
 
         if expect_rows == 0 {
             return Ok(());
         }
-
-        let columns_len = self.context.columns_info.len();
 
         loop {
             let range = self.ranges.next();
@@ -176,62 +141,53 @@ impl<S: Store> BatchTableScanExecutor<S> {
                 ConsumerResult::Drained => break,
             };
             if let Some((key, value)) = some_row {
-                let mut decoded_columns = 0;
+                // The payload part of the key
+                let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
-                // Decode handle from key if handle is specified in columns.
-                if self.handle_index != ::std::usize::MAX {
-                    if !self.is_column_filled[self.handle_index] {
-                        let handle_id = table::decode_handle(&key)?;
-                        columns[self.handle_index]
-                            .mut_decoded()
-                            .push_int(Some(handle_id));
-                        decoded_columns += 1;
-                        self.is_column_filled[self.handle_index] = true;
-                    }
-                    // TODO: Shall we just returns error when met
-                    // `self.unsafe_raw_rows_cache_filled[self.handle_index] == true`?
+                for i in 0..self.columns_len_without_handle {
+                    let (val, remaining) = datum::split_datum(key_payload, false)?;
+                    columns[i].push_raw(val);
+                    key_payload = remaining;
                 }
 
-                if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
-                    // Do nothing
-                } else {
-                    // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
-                    // where each element is datum encoded.
-                    // The column id datum must be in var i64 type.
-                    let mut remaining = value.as_slice();
-                    while !remaining.is_empty() && decoded_columns < columns_len {
-                        if remaining[0] != datum::VAR_INT_FLAG {
-                            return Err(box_err!("Expect VAR_INT flag for column id"));
-                        }
-                        remaining = &remaining[1..];
-                        let column_id = box_try!(number::decode_var_i64(&mut remaining));
-                        let (val, new_remaining) = datum::split_datum(remaining, false)?;
-                        let some_index = self.column_id_index.get(&column_id);
-                        if let Some(index) = some_index {
-                            let index = *index;
-                            if !self.is_column_filled[index] {
-                                columns[index].push_raw(val);
-                                decoded_columns += 1;
-                                self.is_column_filled[index] = true;
-                            }
-                            // TODO: Shall we just returns error when met
-                            // `self.unsafe_raw_rows_cache_filled[index] == true`?
-                        }
-                        remaining = new_remaining;
-                    }
-                }
+                if self.decode_handle {
+                    // For normal index, it is placed at the end and any columns prior to it are
+                    // ensured to be interested. For unique index, it is placed in the value.
+                    let handle_val = if key_payload.is_empty() {
+                        // This is a unique index, and we should look up PK handle in value.
 
-                // Some fields may be missing in the row, we push empty slot to make all columns
-                // in same length.
-                for i in 0..columns_len {
-                    if !self.is_column_filled[i] {
-                        // Missing fields must not be a primary key, so it must be
-                        // `LazyBatchColumn::raw`.
-                        columns[i].push_raw(&[]);
+                        // NOTE: it is not `number::decode_i64`.
+                        value.as_slice().read_i64::<BigEndian>().map_err(|_| {
+                            Error::Other(box_err!("Failed to decode handle in value as i64"))
+                        })?
                     } else {
-                        // Reset to not-filled, prepare for next function call.
-                        self.is_column_filled[i] = false;
-                    }
+                        // This is a normal index. The remaining payload part is the PK handle.
+                        // Let's decode it and put in the column.
+
+                        let flag = key_payload[0];
+                        let mut val = &key_payload[1..];
+
+                        match flag {
+                            datum::INT_FLAG => number::decode_i64(&mut val).map_err(|_| {
+                                Error::Other(box_err!("Failed to decode handle in key as i64"))
+                            })?,
+                            datum::UINT_FLAG => {
+                                (number::decode_u64(&mut val).map_err(|_| {
+                                    Error::Other(box_err!("Failed to decode handle in key as u64"))
+                                })?) as i64
+                            }
+                            _ => {
+                                return Err(Error::Other(box_err!(
+                                    "Unexpected handle flag {}",
+                                    flag
+                                )))
+                            }
+                        }
+                    };
+
+                    columns[self.columns_len_without_handle]
+                        .mut_decoded()
+                        .push_int(Some(handle_val));
                 }
 
                 columns.debug_assert_columns_equal_length();
@@ -248,25 +204,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
     }
 }
 
-impl<S: Store> Executor for BatchTableScanExecutor<S> {
-    fn next(&mut self) -> Result<Option<::coprocessor::dag::executor::Row>> {
-        // Not used in batch execute.
-        unreachable!()
-    }
-
-    fn collect_output_counts(&mut self, _counts: &mut Vec<i64>) {
-        // unimplemented!()
-    }
-
-    fn collect_metrics_into(&mut self, _metrics: &mut ExecutorMetrics) {
-        // unimplemented!()
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        // Not used in batch execute.
-        unreachable!()
-    }
-
+impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.has_thrown_error);
@@ -274,17 +212,18 @@ impl<S: Store> Executor for BatchTableScanExecutor<S> {
         // Construct empty columns, with PK in decoded format and the rest in raw format.
         let columns_len = self.context.columns_info.len();
         let mut columns = Vec::with_capacity(columns_len);
-        for i in 0..columns_len {
-            if i == self.handle_index {
-                // For primary key, we construct a decoded `BatchColumn` because it is directly
-                // stored as i64, without a datum flag, at the end of key.
-                columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                    expect_rows,
-                    EvalType::Int,
-                ));
-            } else {
-                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
-            }
+        for _ in 0..self.columns_len_without_handle {
+            columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+        }
+        if self.decode_handle {
+            // For primary key, we construct a decoded `BatchColumn` because it is directly
+            // stored as i64, without a datum flag, in the value (for unique index).
+            // Note that for normal index, primary key is appended at the end of key with a
+            // datum flag.
+            columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                expect_rows,
+                EvalType::Int,
+            ));
         }
 
         let mut data = LazyBatchColumnVec::from(columns);
@@ -300,6 +239,7 @@ impl<S: Store> Executor for BatchTableScanExecutor<S> {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::i64;
@@ -309,7 +249,7 @@ mod tests {
     use storage::SnapshotStore;
 
     use super::*;
-    use coprocessor::dag::executor::scanner::tests::{
+    use coprocessor::dag::scanner::tests::{
         get_point_range, get_range, prepare_table_data, TestStore,
     };
 
@@ -336,7 +276,7 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            BatchTableScanExecutor::new(store, context.clone(), ranges, false).unwrap();
+            BatchTableScanExecutor::new(store, context.clone(), ranges,false).unwrap();
 
         let result = table_scanner.next_batch(10);
         assert!(result.error.is_none());
@@ -372,7 +312,7 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            BatchTableScanExecutor::new(store, context.clone(), ranges, false).unwrap();
+            BatchTableScanExecutor::new(context.clone(), false, ranges, store).unwrap();
 
         let mut data = table_scanner.next_batch(0).data;
         {
@@ -408,3 +348,4 @@ mod tests {
         }
     }
 }
+*/
