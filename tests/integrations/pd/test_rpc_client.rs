@@ -302,7 +302,6 @@ fn test_restart_heartbeat_secure() {
 
 fn restart_heartbeat(mgr: SecurityManager) {
     let mgr = Arc::new(mgr);
-    // Service has only one GetMembersResponse, so the leader never changes.
     let mut server =
         MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 1], None);
     let eps = server.bind_addrs();
@@ -352,7 +351,7 @@ fn restart_heartbeat(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // Send some heartbeats to invoke pd-client to reconnect 
+    // Send some heartbeats to invoke pd-client to reconnect
     let mut region1 = region.clone();
     region1.set_id(10);
     poller
