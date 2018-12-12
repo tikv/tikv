@@ -1154,6 +1154,7 @@ fn main() {
                 .about("print all raw keys in the range")
                 .arg(
                     Arg::with_name("from")
+                        .short("f")
                         .long("from")
                         .takes_value(true)
                         .default_value("z")
@@ -1161,6 +1162,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("to")
+                        .short("t")
                         .long("to")
                         .takes_value(true)
                         .default_value("\\173") // 'z' + 1
