@@ -64,8 +64,7 @@ impl HttpServer {
 
             match (req.method(), req.uri().path()) {
                 (&Method::GET, "/metrics") => match dump() {
-                    Err(e) => {
-                        error!("failed to get metrics: {:?}", e);
+                    Err(_) => {
                         *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                     }
                     Ok(buffer) => {

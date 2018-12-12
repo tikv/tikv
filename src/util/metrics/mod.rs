@@ -66,6 +66,7 @@ pub fn dump() -> Result<String, Error> {
     let metric_familys = prometheus::gather();
     for mf in metric_familys {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+            warn!("prometheus encoding error: {:?}", e);
             return Err(e);
         }
     }
