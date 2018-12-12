@@ -60,6 +60,8 @@ fn test_serde_custom_tikv_config() {
         addr: "example.com:443".to_owned(),
         labels: map!{ "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
+        status_addr: "example.com:443".to_owned(),
+        status_thread_pool_size: 1,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
         grpc_compression_type: GrpcCompressionType::Gzip,
@@ -106,8 +108,6 @@ fn test_serde_custom_tikv_config() {
         interval: ReadableDuration::secs(12),
         address: "example.com:443".to_owned(),
         job: "tikv_1".to_owned(),
-        http_addr: "example.com:443".to_owned(),
-        http_thread_pool_size: 1,
     };
     value.raft_store = RaftstoreConfig {
         sync_log: false,

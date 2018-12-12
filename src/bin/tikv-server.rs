@@ -250,22 +250,22 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
 
-    let metric_cfg = cfg.metric.clone();
-    let mut http_enabled = !metric_cfg.http_addr.is_empty();
+    let server_cfg = cfg.server.clone();
+    let mut status_enabled = !server_cfg.status_addr.is_empty();
 
     // Create an HTTP server.
-    let mut http_server = HttpServer::new(metric_cfg.http_thread_pool_size);
-    if http_enabled {
+    let mut http_server = HttpServer::new(server_cfg.status_thread_pool_size);
+    if status_enabled {
         // Start the HTTP server.
-        if let Err(e) = http_server.start(metric_cfg.http_addr) {
+        if let Err(e) = http_server.start(server_cfg.status_addr) {
             error!("failed to bind addr, error: {:?}", e);
-            http_enabled = false;
+            status_enabled = false;
         }
     }
 
     signal_handler::handle_signal(Some(engines));
 
-    if http_enabled {
+    if status_enabled {
         // Stop the HTTP server.
         http_server.stop()
     }
@@ -313,12 +313,11 @@ fn main() {
                 .help("Sets advertise listening address for client communication"),
         )
         .arg(
-            Arg::with_name("metrics-http-addr")
-                .long("metrics-http-addr")
-                .short("m")
+            Arg::with_name("status-addr")
+                .long("status-addr")
                 .takes_value(true)
                 .value_name("IP:PORT")
-                .help("Sets HTTP listening address"),
+                .help("Sets status report HTTP service address"),
         )
         .arg(
             Arg::with_name("log-level")

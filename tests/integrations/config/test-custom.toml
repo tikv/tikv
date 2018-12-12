@@ -22,6 +22,8 @@ stack-size = "12MB"
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
+status-addr = "example.com:443"
+status-thread-pool-size = 1
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
@@ -62,8 +64,6 @@ endpoints = [
 interval = "12s"
 address = "example.com:443"
 job = "tikv_1"
-http-addr = "example.com:443"
-http-thread-pool-size = 1
 
 [raftstore]
 sync-log = false

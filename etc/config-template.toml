@@ -64,6 +64,14 @@
 ## If not set, `addr` will be used.
 # advertise-addr = ""
 
+## Status address.
+## This is used for reporting the status of TiKV directly through the HTTP address.
+## If the value is an empty string, it will use PushGateway.
+# status-addr = "127.0.0.1:9520"
+
+## Set the maximum number of worker threads for the status report HTTP service.
+# status-thread-pool-size = 1
+
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"
 
@@ -142,14 +150,6 @@
 ## Prometheus client push job name.
 ## Note: A node id will automatically append, e.g., "tikv_1".
 # job = "tikv"
-
-## HTTP listening address.
-## This is used for Prometheus pulling the metrics directly through the HTTP address.
-## If the value is an empty string, Prometheus will get the metrics through PushGateway.
-# http-addr = "127.0.0.1:9520"
-
-## Set the maximum number of worker threads for the HTTP service.
-# http-thread-pool-size = 1
 
 [raftstore]
 ## Whether to force to flush logs.

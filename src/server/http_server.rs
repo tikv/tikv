@@ -126,7 +126,7 @@ mod tests {
             client
                 .get(uri)
                 .map(|res| {
-                    assert_eq!(StatusCode::OK, res.status());
+                    assert_eq!(res.status(), StatusCode::OK);
                 })
                 .map_err(|err| {
                     panic!("response status is not OK: {:?}", err);
