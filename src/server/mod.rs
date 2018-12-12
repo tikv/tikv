@@ -33,3 +33,93 @@ pub use self::raft_client::RaftClient;
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::server::Server;
 pub use self::transport::{ServerRaftStoreRouter, ServerTransport};
+
+#[cfg(test)]
+pub mod tests {
+    use futures::Future;
+    use grpc::*;
+    use kvproto::coprocessor::*;
+    use kvproto::kvrpcpb::*;
+    use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
+    use kvproto::tikvpb::BatchRaftMessage;
+    use kvproto::tikvpb_grpc::Tikv;
+
+    macro_rules! unary_call {
+        ($name:tt, $req_name:tt, $resp_name:tt) => {
+            fn $name(&mut self, ctx: RpcContext, _: $req_name, sink: UnarySink<$resp_name>) {
+                let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+                ctx.spawn(sink.fail(status).map_err(|_| ()));
+            }
+        }
+    }
+
+    macro_rules! cstream_call {
+        ($name:tt, $req_name:tt, $resp_name:tt) => {
+            fn $name(&mut self, ctx: RpcContext, _: $req_name, sink: ServerStreamingSink<$resp_name>) {
+                let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+                ctx.spawn(sink.fail(status).map_err(|_| ()));
+            }
+        }
+    }
+
+    macro_rules! bstream_call {
+        ($name:tt, $req_name:tt, $resp_name:tt) => {
+            fn $name(&mut self, ctx: RpcContext, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
+                let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+                ctx.spawn(sink.fail(status).map_err(|_| ()));
+            }
+        }
+    }
+
+    pub trait MockKvService: Tikv {
+        unary_call!(kv_get, GetRequest, GetResponse);
+        unary_call!(kv_scan, ScanRequest, ScanResponse);
+        unary_call!(kv_prewrite, PrewriteRequest, PrewriteResponse);
+        unary_call!(kv_commit, CommitRequest, CommitResponse);
+        unary_call!(kv_import, ImportRequest, ImportRequest);
+        unary_call!(kv_cleanup, CleanupRequest, CleanupResponse);
+        unary_call!(kv_batch_get, BatchGetRequest, BatchGetResponse);
+        unary_call!(
+            kv_batch_rollback,
+            BatchRollbackRequest,
+            BatchRollbackResponse
+        );
+        unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
+        unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
+        unary_call!(kv_gc, GCRequest, GCResponse);
+        unary_call!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
+        unary_call!(raw_get, RawGetRequest, RawGetResponse);
+        unary_call!(raw_batch_get, RawBatchGetRequest, RawBatchGetResponse);
+        unary_call!(raw_scan, RawScanRequest, RawScanResponse);
+        unary_call!(raw_batch_scan, RawBatchScanRequest, RawBatchScanResponse);
+        unary_call!(raw_put, RawPutRequest, RawPutResponse);
+        unary_call!(raw_batch_put, RawBatchPutRequest, RawBatchPutResponse);
+        unary_call!(raw_delete, RawDeleteRequest, RawDeleteResponse);
+        unary_call!(
+            raw_batch_delete,
+            RawBatchDeleteRequest,
+            RawBatchDeleteResponse
+        );
+        unary_call!(
+            raw_delete_range,
+            RawDeleteRangeRequest,
+            RawDeleteRangeResponse
+        );
+        unary_call!(
+            unsafe_destroy_range,
+            UnsafeDestroyRangeRequest,
+            UnsafeDestroyRangeResponse
+        );
+        unary_call!(coprocessor, Request, Response);
+        cstream_call!(coprocessor_stream, Request, Response);
+        bstream_call!(raft, RaftMessage, Done);
+        bstream_call!(batch_raft, BatchRaftMessage, Done);
+        bstream_call!(snapshot, SnapshotChunk, Done);
+        unary_call!(
+            mvcc_get_by_start_ts,
+            MvccGetByStartTsRequest,
+            MvccGetByStartTsResponse
+        );
+        unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
+    }
+}

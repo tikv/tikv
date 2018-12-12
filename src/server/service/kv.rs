@@ -18,8 +18,7 @@ use grpc::{
 };
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb;
-use kvproto::kvrpcpb::*;
+use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc;
@@ -977,7 +976,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         }
                         Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
                     };
-                    sink.fail(status).map_err(|_| ())
+                    sink.fail(status)
+                        .map_err(|e| error!("KvService::batch_raft send response fail: {:?}", e))
                 }),
         )
     }
