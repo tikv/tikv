@@ -251,7 +251,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
 
     let metric_cfg = cfg.metric.clone();
-    let mut http_enabled = metric_cfg.http_addr != "";
+    let mut http_enabled = !metric_cfg.http_addr.is_empty();
 
     // Create an HTTP server.
     let mut http_server = HttpServer::new(metric_cfg.http_thread_pool_size);
@@ -313,8 +313,9 @@ fn main() {
                 .help("Sets advertise listening address for client communication"),
         )
         .arg(
-            Arg::with_name("http-addr")
-                .long("http-addr")
+            Arg::with_name("metrics-http-addr")
+                .long("metrics-http-addr")
+                .short("m")
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Sets HTTP listening address"),

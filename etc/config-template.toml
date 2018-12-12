@@ -144,8 +144,8 @@
 # job = "tikv"
 
 ## HTTP listening address.
-## This is used for the Prometheus pulling the metrics directly through the HTTP address.
-## If the value is an empty string, the Prometheus will get the metrics through the PushGateway.
+## This is used for Prometheus pulling the metrics directly through the HTTP address.
+## If the value is an empty string, Prometheus will get the metrics through PushGateway.
 # http-addr = "127.0.0.1:9520"
 
 ## Set the maximum number of worker threads for the HTTP service.

@@ -131,8 +131,8 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
         config.server.advertise_addr = advertise_addr.to_owned();
     }
 
-    if let Some(http_addr) = matches.value_of("http-addr") {
-        config.metric.http_addr = http_addr.to_owned();
+    if let Some(metrics_http_addr) = matches.value_of("metrics-http-addr") {
+        config.metric.http_addr = metrics_http_addr.to_owned();
     }
 
     if let Some(data_dir) = matches.value_of("data-dir") {
