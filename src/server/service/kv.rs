@@ -476,7 +476,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    // WARNING: Currently this API may leave some dirty keys in TiKV. Be careful using this API.
     fn kv_delete_range(
         &mut self,
         ctx: RpcContext,
@@ -1174,6 +1173,10 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts: {:?}", err);
+            key_error.set_retryable(format!("{:?}", err));
+        }
+        storage::Error::Closed => {
+            warn!("tikv server is closing");
             key_error.set_retryable(format!("{:?}", err));
         }
         _ => {

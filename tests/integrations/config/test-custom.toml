@@ -38,6 +38,8 @@ end-point-stream-batch-row-limit = 4096
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
+stats-concurrency = 10
+heavy-load-threshold = 1000
 
 [server.labels]
 a = "b"
@@ -79,6 +81,7 @@ raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
 raft-log-gc-size-limit = "1KB"
 raft-entry-cache-life-time = "12s"
+raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
 region-split-check-diff = "6MB"
 region-compact-check-interval = "12s"

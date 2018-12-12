@@ -309,6 +309,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenReal
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
+            | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
@@ -363,7 +364,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
-            | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::ConnectionID
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
@@ -942,6 +942,7 @@ dispatch_call! {
         DayName => day_name,
         Bin => bin,
         Concat => concat,
+        ConcatWS => concat_ws,
         LTrim => ltrim,
         RTrim => rtrim,
         Reverse => reverse,
@@ -1332,6 +1333,7 @@ mod tests {
                     ScalarFuncSig::CaseWhenString,
                     ScalarFuncSig::CaseWhenTime,
                     ScalarFuncSig::Concat,
+                    ScalarFuncSig::ConcatWS,
                 ],
                 1,
                 usize::MAX,
@@ -1416,7 +1418,6 @@ mod tests {
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,
-            ScalarFuncSig::ConcatWS,
             ScalarFuncSig::ConnectionID,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
