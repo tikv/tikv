@@ -245,17 +245,19 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         error!("failed to start metrics flusher, error: {:?}", e);
     }
 
-    let http_cfg = cfg.server.clone();
-
     // Run server.
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
 
-    let mut http_enabled = http_cfg.http_enabled;
-    let mut http_server = HttpServer::new(http_cfg.http_thread_pool_size);
+    let metric_cfg = cfg.metric.clone();
+    let mut http_enabled = metric_cfg.http_addr != "";
+
+    // Create an HTTP server.
+    let mut http_server = HttpServer::new(metric_cfg.http_thread_pool_size);
     if http_enabled {
-        if let Err(e) = http_server.start(http_cfg.http_addr) {
+        // Start the HTTP server.
+        if let Err(e) = http_server.start(metric_cfg.http_addr) {
             error!("failed to bind addr, error: {:?}", e);
             http_enabled = false;
         }
@@ -264,6 +266,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     signal_handler::handle_signal(Some(engines));
 
     if http_enabled {
+        // Stop the HTTP server.
         http_server.stop()
     }
 

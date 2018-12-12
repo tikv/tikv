@@ -25,7 +25,6 @@ pub use storage::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
-const DEFAULT_HTTP_LISTENING_ADDR: &str = "127.0.0.1:9520";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
@@ -63,11 +62,6 @@ pub struct Config {
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
     pub advertise_addr: String,
-
-    // These parameters are related to the HTTP service.
-    pub http_enabled: bool,
-    pub http_addr: String,
-    pub http_thread_pool_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     pub grpc_compression_type: GrpcCompressionType,
@@ -117,9 +111,6 @@ impl Default for Config {
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
-            http_enabled: false,
-            http_addr: DEFAULT_HTTP_LISTENING_ADDR.to_owned(),
-            http_thread_pool_size: 1,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
@@ -204,18 +195,6 @@ impl Config {
         for (k, v) in &self.labels {
             validate_label(k, "key")?;
             validate_label(v, "value")?;
-        }
-
-        if self.http_enabled {
-            if !self.http_addr.is_empty() {
-                box_try!(config::check_addr(&self.http_addr));
-            } else {
-                info!(
-                    "http-addr is empty, use the default addr: {}",
-                    DEFAULT_HTTP_LISTENING_ADDR
-                );
-                self.http_addr = DEFAULT_HTTP_LISTENING_ADDR.to_owned();
-            }
         }
 
         Ok(())

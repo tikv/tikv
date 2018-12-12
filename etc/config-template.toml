@@ -64,13 +64,6 @@
 ## If not set, `addr` will be used.
 # advertise-addr = ""
 
-## If HTTP service is enabled. If the value is true, the Prometheus can pull the metrics directly 
-## through the HTTP address. Otherwise, the Prometheus will get the metrics through the PushGateway.
-# http-enabled = false
-
-## HTTP listening address.
-# http-addr = "127.0.0.1:9520"
-
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"
 
@@ -149,6 +142,14 @@
 ## Prometheus client push job name.
 ## Note: A node id will automatically append, e.g., "tikv_1".
 # job = "tikv"
+
+## HTTP listening address.
+## This is used for the Prometheus pulling the metrics directly through the HTTP address.
+## If the value is an empty string, the Prometheus will get the metrics through the PushGateway.
+# http-addr = "127.0.0.1:9520"
+
+## Set the maximum number of worker threads for the HTTP service.
+# http-thread-pool-size = 1
 
 [raftstore]
 ## Whether to force to flush logs.

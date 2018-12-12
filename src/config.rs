@@ -54,6 +54,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
+const DEFAULT_HTTP_LISTENING_ADDR: &str = "127.0.0.1:9520";
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
@@ -686,6 +687,9 @@ pub struct MetricConfig {
     pub interval: ReadableDuration,
     pub address: String,
     pub job: String,
+    // These are related to the HTTP service.
+    pub http_addr: String,
+    pub http_thread_pool_size: usize,
 }
 
 impl Default for MetricConfig {
@@ -694,7 +698,20 @@ impl Default for MetricConfig {
             interval: ReadableDuration::secs(15),
             address: "".to_owned(),
             job: "tikv".to_owned(),
+            http_addr: DEFAULT_HTTP_LISTENING_ADDR.to_owned(),
+            http_thread_pool_size: 1,
         }
+    }
+}
+
+impl MetricConfig {
+    fn validate(&mut self) -> Result<(), Box<Error>> {
+        if !self.http_addr.is_empty() {
+            if let Err(e) = config::check_addr(&self.http_addr) {
+                return Err(e.into());
+            };
+        }
+        Ok(())
     }
 }
 
@@ -991,6 +1008,7 @@ impl TiKvConfig {
         }
 
         self.rocksdb.validate()?;
+        self.metric.validate()?;
         self.server.validate()?;
         self.raft_store.validate()?;
         self.pd.validate()?;
