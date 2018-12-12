@@ -51,11 +51,19 @@ mod linux;
 pub use self::linux::*;
 
 #[cfg(not(target_os = "linux"))]
-pub struct ThreadLoadStatistics {}
-#[cfg(not(target_os = "linux"))]
-impl ThreadLoadStatistics {
-    pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
-        ThreadLoadStatistics {}
+mod other_os {
+    use super::ThreadLoad;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    pub struct ThreadLoadStatistics {}
+
+    impl ThreadLoadStatistics {
+        pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
+            ThreadLoadStatistics {}
+        }
+        pub fn record(&mut self, _instant: Instant) {}
     }
-    pub fn record(&mut self, instant: Instant) {}
 }
+#[cfg(not(target_os = "linux"))]
+pub use self::other_os::ThreadLoadStatistics;
