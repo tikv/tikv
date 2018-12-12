@@ -19,7 +19,7 @@ use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
 
 use coprocessor::dag::expr::EvalConfig;
 use coprocessor::*;
-use storage::{Snapshot, SnapshotStore};
+use storage::Store;
 
 use super::batch_executor::interface::BatchExecutor;
 use super::executor::{Executor, ExecutorMetrics};
@@ -35,11 +35,11 @@ pub struct DAGContext {
 }
 
 impl DAGContext {
-    pub fn new<S: Snapshot + 'static>(
+    pub fn new<S: Store + 'static>(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
-        snap: S,
-        req_ctx: &ReqContext,
+        store: S,
+        deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
         enable_batch_if_possible: bool,
@@ -63,12 +63,6 @@ impl DAGContext {
         if req.has_is_strict_sql_mode() {
             eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
         }
-        let store = SnapshotStore::new(
-            snap,
-            req.get_start_ts(),
-            req_ctx.context.get_isolation_level(),
-            !req_ctx.context.get_not_fill_cache(),
-        );
 
         let is_batch = enable_batch_if_possible
             && !is_streaming
@@ -76,28 +70,31 @@ impl DAGContext {
         let eval_ctx = Arc::new(eval_cfg);
         let executor_descriptors = req.take_executors().into_vec();
 
-        let mut normal_executor = None;
-        let mut batch_executor = None;
-
-        if is_batch {
-            batch_executor = Some(super::pipeline::ExecutorPipelineBuilder::build_batch(
-                executor_descriptors,
-                store,
-                ranges,
-                eval_ctx,
-            )?);
+        let (normal_executor, batch_executor) = if is_batch {
+            (
+                None,
+                Some(super::pipeline::ExecutorPipelineBuilder::build_batch(
+                    executor_descriptors,
+                    store,
+                    ranges,
+                    eval_ctx,
+                )?),
+            )
         } else {
-            normal_executor = Some(super::pipeline::ExecutorPipelineBuilder::build_normal(
-                executor_descriptors,
-                store,
-                ranges,
-                eval_ctx,
-                req.get_collect_range_counts(),
-            )?);
-        }
+            (
+                Some(super::pipeline::ExecutorPipelineBuilder::build_normal(
+                    executor_descriptors,
+                    store,
+                    ranges,
+                    eval_ctx,
+                    req.get_collect_range_counts(),
+                )?),
+                None,
+            )
+        };
 
         Ok(Self {
-            deadline: req_ctx.deadline,
+            deadline,
             normal_executor,
             batch_executor,
             output_offsets: req.take_output_offsets(),

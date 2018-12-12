@@ -16,7 +16,7 @@ use std::sync::Arc;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 
-use storage::{Snapshot, SnapshotStore};
+use storage::Store;
 
 use super::batch_executor::executors::*;
 use super::batch_executor::interface::*;
@@ -89,9 +89,9 @@ impl ExecutorPipelineBuilder {
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.
-    pub fn build_batch<S: Snapshot + 'static>(
+    pub fn build_batch<S: Store + 'static>(
         executor_descriptors: Vec<executor::Executor>,
-        store: SnapshotStore<S>,
+        store: S,
         ranges: Vec<KeyRange>,
         eval_ctx: Arc<EvalConfig>,
     ) -> Result<Box<BatchExecutor>> {
@@ -165,9 +165,9 @@ impl ExecutorPipelineBuilder {
         Ok(executor)
     }
 
-    pub fn build_normal<S: Snapshot + 'static>(
+    pub fn build_normal<S: Store + 'static>(
         execs: Vec<executor::Executor>,
-        store: SnapshotStore<S>,
+        store: S,
         ranges: Vec<KeyRange>,
         ctx: Arc<EvalConfig>,
         collect: bool,
@@ -207,9 +207,9 @@ impl ExecutorPipelineBuilder {
         Ok(src)
     }
 
-    fn build_normal_first_executor<S: Snapshot + 'static>(
+    fn build_normal_first_executor<S: Store + 'static>(
         mut first: executor::Executor,
-        store: SnapshotStore<S>,
+        store: S,
         ranges: Vec<KeyRange>,
         collect: bool,
     ) -> Result<Box<Executor + Send>> {

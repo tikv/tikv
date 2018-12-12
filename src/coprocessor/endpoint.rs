@@ -25,7 +25,7 @@ use tipb::select::DAGRequest;
 
 use server::readpool::{self, ReadPool};
 use server::Config;
-use storage::{self, Engine};
+use storage::{self, Engine, SnapshotStore};
 use util::Either;
 
 use coprocessor::dag::executor::ExecutorMetrics;
@@ -116,13 +116,19 @@ impl<E: Engine> Endpoint<E> {
                     Some(dag.get_start_ts()),
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                builder = box move |snap, req_ctx: &_| {
+                builder = box move |snap, req_ctx: &ReqContext| {
                     // See rust-lang#41078 to know why we have `: &_` here.
+                    let store = SnapshotStore::new(
+                        snap,
+                        dag.get_start_ts(),
+                        req_ctx.context.get_isolation_level(),
+                        !req_ctx.context.get_not_fill_cache(),
+                    );
                     dag::DAGContext::new(
                         dag,
                         ranges,
-                        snap,
-                        req_ctx,
+                        store,
+                        req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
                         true,
