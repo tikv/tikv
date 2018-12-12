@@ -655,21 +655,22 @@ impl ScalarFunc {
             .flag()
             .contains(FieldTypeFlag::UNSIGNED);
         let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
-        if !target_len_positive || (pad.is_empty() && input_len < target_len) {
-            return Ok(None);
-        }
         if target_len == 0 {
             return Ok(Some(Cow::Borrowed(b"")));
         }
-
-        // check max_allowed_packet when it's pushed down
-        let mut r = String::with_capacity(target_len);
-        for (len, c) in input.chars().chain(pad.chars().cycle()).enumerate() {
-            r.push(c);
-            if len + 1 == target_len {
-                break;
-            }
+        // check max_allowed_packet when it's pushed down, add warning if needed
+        if !target_len_positive
+            || target_len.saturating_mul(4) > cop_datatype::MAX_BLOB_WIDTH as usize
+            || (pad.is_empty() && input_len < target_len)
+        {
+            return Ok(None);
         }
+
+        let r = input
+            .chars()
+            .chain(pad.chars().cycle())
+            .take(target_len)
+            .collect::<String>();
         Ok(Some(Cow::Owned(r.as_bytes().to_vec())))
     }
 
@@ -687,21 +688,23 @@ impl ScalarFunc {
             .flag()
             .contains(FieldTypeFlag::UNSIGNED);
         let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
-        if !target_len_positive || (pad.is_empty() && input.len() < target_len) {
-            return Ok(None);
-        }
         if target_len == 0 {
             return Ok(Some(Cow::Borrowed(b"")));
         }
-
-        // check max_allowed_packet when it's pushed down
-        let mut r = Vec::with_capacity(target_len);
-        for c in input.iter().chain(pad.iter().cycle()) {
-            r.push(*c);
-            if r.len() == target_len {
-                break;
-            }
+        // check max_allowed_packet when it's pushed down, add warning if needed
+        if !target_len_positive
+            || target_len > cop_datatype::MAX_BLOB_WIDTH as usize
+            || (pad.is_empty() && input.len() < target_len)
+        {
+            return Ok(None);
         }
+
+        let r = input
+            .iter()
+            .chain(pad.iter().cycle())
+            .cloned()
+            .take(target_len)
+            .collect::<Vec<_>>();
         Ok(Some(Cow::Owned(r)))
     }
 }
@@ -2337,6 +2340,12 @@ mod tests {
                 Datum::Bytes(b"".to_vec()),
                 Datum::Null,
             ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+            ),
         ]
     }
 
@@ -2373,6 +2382,12 @@ mod tests {
                 Datum::Bytes("测试".as_bytes().to_vec()),
                 Datum::Bytes("a多字节测试测".as_bytes().to_vec()),
             ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) / 4 + 1),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Null,
+            ),
         ];
         cases.append(&mut common_rpad_cases());
 
@@ -2402,6 +2417,12 @@ mod tests {
                 Datum::I64(13),
                 Datum::Bytes("测试".as_bytes().to_vec()),
                 Datum::Bytes("a多字节测".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1),
+                Datum::Bytes(b"aa".to_vec()),
+                Datum::Null,
             ),
         ];
         cases.append(&mut common_rpad_cases());
