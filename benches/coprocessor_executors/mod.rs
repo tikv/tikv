@@ -13,6 +13,7 @@
 
 #[macro_use]
 extern crate criterion;
+extern crate protobuf;
 
 extern crate kvproto;
 extern crate test_coprocessor;
@@ -22,7 +23,7 @@ extern crate tipb;
 use criterion::{black_box, Bencher, Criterion};
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{IndexScan, TableScan};
+use tipb::executor::{Executor as PbExecutor, IndexScan, TableScan};
 
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
@@ -807,6 +808,181 @@ fn bench_normal_index_scan_index(c: &mut Criterion) {
     });
 }
 
+fn bench_dag_handle(
+    b: &mut Bencher,
+    executors: &[PbExecutor],
+    ranges: &[KeyRange],
+    store: &Store<RocksEngine>,
+    enable_batch: bool,
+) {
+    use tikv::coprocessor::dag::DAGContext;
+    use tikv::coprocessor::Deadline;
+    use tipb::select::DAGRequest;
+
+    let mut dag = DAGRequest::new();
+    dag.set_executors(::protobuf::RepeatedField::from_vec(executors.to_vec()));
+
+    b.iter_with_setup(
+        || {
+            DAGContext::new(
+                dag.clone(),
+                ranges.to_vec(),
+                store.to_fixture_store(),
+                Deadline::from_now("", ::std::time::Duration::from_secs(10)),
+                64,
+                false,
+                enable_batch,
+            ).unwrap()
+        },
+        |mut dag| {
+            use tikv::coprocessor::RequestHandler;
+            dag.handle_request().unwrap();
+        },
+    );
+}
+
+/// Integrate DAGContext + TableScan, scans a range with 1000 keys, 1 interested column (PK).
+fn bench_dag_table_scan_primary_key(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let id = ColumnBuilder::new()
+                .col_type(TYPE_LONG)
+                .primary_key(true)
+                .build();
+            let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            let table = TableBuilder::new()
+                .add_col(id.clone())
+                .add_col(foo.clone())
+                .build();
+
+            let mut store = Store::new();
+            for i in 0..1000 {
+                store.begin();
+                store
+                    .insert_into(&table)
+                    .set(&id, Datum::I64(i))
+                    .set(&foo, Datum::I64(0xDEADBEEF))
+                    .execute();
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            meta.mut_columns().push(id.get_column_info());
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_select_range()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_primary_key", false);
+    bench(c, "dag_batch_table_scan_primary_key", true);
+}
+
+/// Integrate DAGContext + TableScan, scans a range with 1000 keys, 1 interested column, which is
+/// at the front in a 100 columns row.
+fn bench_dag_table_scan_datum_front(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let mut cols = vec![];
+            for _ in 0..100 {
+                let col = ColumnBuilder::new().col_type(TYPE_LONG).build();
+                cols.push(col);
+            }
+            let mut table = TableBuilder::new();
+            for col in &cols {
+                table = table.add_col(col.clone());
+            }
+            let table = table.build();
+
+            let mut store = Store::new();
+            for i in 0..1000 {
+                store.begin();
+                {
+                    let mut insert = store.insert_into(&table);
+                    for (idx, col) in cols.iter().enumerate() {
+                        insert = insert.set(&col, Datum::I64((i ^ idx) as i64));
+                    }
+                    insert.execute();
+                }
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            meta.mut_columns().push(cols[0].get_column_info());
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_select_range()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_datum_front", false);
+    bench(c, "dag_batch_table_scan_datum_front", true);
+}
+
+/// Integrate DAGContext + TableScan, scans a range with 1000 keys, all column are interested and
+/// there are 100 columns in the row.
+fn bench_dag_table_scan_datum_all(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let mut cols = vec![];
+            for _ in 0..100 {
+                let col = ColumnBuilder::new().col_type(TYPE_LONG).build();
+                cols.push(col);
+            }
+            let mut table = TableBuilder::new();
+            for col in &cols {
+                table = table.add_col(col.clone());
+            }
+            let table = table.build();
+
+            let mut store = Store::new();
+            for i in 0..1000 {
+                store.begin();
+                {
+                    let mut insert = store.insert_into(&table);
+                    for (idx, col) in cols.iter().enumerate() {
+                        insert = insert.set(&col, Datum::I64((i ^ idx) as i64));
+                    }
+                    insert.execute();
+                }
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            for col in &cols {
+                meta.mut_columns().push(col.get_column_info());
+            }
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_select_range()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_datum_all", false);
+    bench(c, "dag_batch_table_scan_datum_all", true);
+}
+
 criterion_group!(
     benches,
     bench_table_scan_primary_key,
@@ -826,5 +1002,8 @@ criterion_group!(
     bench_batch_table_scan_datum_all_multi_rows,
     bench_normal_index_scan_primary_key,
     bench_normal_index_scan_index,
+    bench_dag_table_scan_primary_key,
+    bench_dag_table_scan_datum_front,
+    bench_dag_table_scan_datum_all,
 );
 criterion_main!(benches);

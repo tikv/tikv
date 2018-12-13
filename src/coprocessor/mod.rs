@@ -41,7 +41,7 @@ const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
-trait RequestHandler: Send {
+pub trait RequestHandler: Send {
     fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
