@@ -31,6 +31,7 @@ extern crate slog;
 extern crate hex;
 #[cfg(unix)]
 extern crate nix;
+extern crate rand;
 #[cfg(unix)]
 extern crate signal;
 extern crate slog_async;
@@ -1541,6 +1542,19 @@ fn main() {
                         ),
                 )
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
+        )
+        .subcommand(
+            SubCommand::with_name("random-hex")
+                .about("Generate random bytes with specified length and print as hex")
+                .arg(
+                    Arg::with_name("len")
+                        .short("l")
+                        .long("len")
+                        .takes_value(true)
+                        .required(true)
+                        .default_value("1024")
+                        .help("the length"),
+                ),
         );
 
     // tikv-ctl just encapsulates the related module in rust-rocksdb. So, we don't need to parse
@@ -1557,6 +1571,11 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
+    } else if let Some(matches) = matches.subcommand_matches("random-hex") {
+        let len = value_t_or_exit!(matches.value_of("len"), usize);
+        let random_bytes = gen_random_bytes(len);
+        println!("{}", hex::encode_upper(&random_bytes));
+        return;
     }
 
     if matches.args.is_empty() {
@@ -1813,6 +1832,10 @@ fn main() {
     }
 }
 
+fn gen_random_bytes(len: usize) -> Vec<u8> {
+    (0..len).map(|_| rand::random::<u8>()).collect()
+}
+
 fn get_module_type(module: &str) -> MODULE {
     match module {
         "kvdb" => MODULE::KVDB,
@@ -2034,7 +2057,7 @@ fn check_run_ldb_cmd() -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::from_hex;
+    use super::*;
 
     #[test]
     fn test_from_hex() {
@@ -2042,5 +2065,11 @@ mod tests {
         assert_eq!(from_hex("74").unwrap(), result);
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
+    }
+
+    #[test]
+    fn test_gen_random_bytes() {
+        assert_eq!(gen_random_bytes(8).len(), 8);
+        assert_eq!(gen_random_bytes(0).len(), 0);
     }
 }
