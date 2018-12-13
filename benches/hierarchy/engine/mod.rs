@@ -39,7 +39,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
         },
         |(test_kvs, ctx)| {
             for (key, value) in test_kvs {
-                black_box(engine.put(ctx, key, value).unwrap());
+                black_box(engine.put(ctx, key, value)).unwrap();
             }
         },
     );
@@ -83,15 +83,12 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     );
 }
 
-pub fn bench_engine<E: Engine, F: EngineFactory<E>>(
-    c: &mut Criterion,
-    configs: &Vec<BenchConfig<F>>,
-) {
+pub fn bench_engine<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &[BenchConfig<F>]) {
     c.bench_function_over_inputs(
         "engine_get(exclude snapshot)",
         bench_engine_get,
-        configs.clone(),
+        configs.to_vec(),
     );
-    c.bench_function_over_inputs("engine_put", bench_engine_put, configs.clone());
-    c.bench_function_over_inputs("engine_snapshot", bench_engine_snapshot, configs.clone());
+    c.bench_function_over_inputs("engine_put", bench_engine_put, configs.to_owned());
+    c.bench_function_over_inputs("engine_snapshot", bench_engine_snapshot, configs.to_owned());
 }

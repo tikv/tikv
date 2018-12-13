@@ -40,7 +40,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         |(mutations, snapshot, option)| {
             for (mutation, primary) in mutations {
                 let mut txn = MvccTxn::new(snapshot.clone(), 1, false).unwrap();
-                black_box(txn.prewrite(mutation, &primary, option).unwrap());
+                txn.prewrite(mutation, &primary, option).unwrap();
             }
         },
     )
@@ -76,7 +76,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = MvccTxn::new(snapshot.clone(), 1, false).unwrap();
-                txn.commit(key, 1).unwrap();
+                black_box(txn.commit(key, 1)).unwrap();
             }
         },
     );
@@ -150,12 +150,13 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
     );
 }
 
-pub fn bench_mvcc<E: Engine, F: EngineFactory<E>>(
-    c: &mut Criterion,
-    configs: &Vec<BenchConfig<F>>,
-) {
-    c.bench_function_over_inputs("mvcc_prewrite", mvcc_prewrite, configs.clone());
-    c.bench_function_over_inputs("mvcc_commit", mvcc_commit, configs.clone());
-    c.bench_function_over_inputs("mvcc_load_lock", mvcc_reader_load_lock, configs.clone());
-    c.bench_function_over_inputs("mvcc_seek_write", mvcc_reader_seek_write, configs.clone());
+pub fn bench_mvcc<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &[BenchConfig<F>]) {
+    c.bench_function_over_inputs("mvcc_prewrite", mvcc_prewrite, configs.to_owned());
+    c.bench_function_over_inputs("mvcc_commit", mvcc_commit, configs.to_owned());
+    c.bench_function_over_inputs("mvcc_load_lock", mvcc_reader_load_lock, configs.to_owned());
+    c.bench_function_over_inputs(
+        "mvcc_seek_write",
+        mvcc_reader_seek_write,
+        configs.to_owned(),
+    );
 }

@@ -36,11 +36,7 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Ben
         },
         |(data, store)| {
             for (context, key) in data {
-                black_box(
-                    store
-                        .raw_get(context, CF_DEFAULT.clone().to_string(), key)
-                        .unwrap(),
-                );
+                black_box(store.raw_get(context, CF_DEFAULT.to_owned(), key).unwrap());
             }
         },
     );
@@ -97,11 +93,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
         },
         |(kvs, store)| {
             for (k, _) in &kvs {
-                black_box(
-                    store
-                        .commit(Context::new(), vec![Key::from_raw(k)], 1, 2)
-                        .unwrap(),
-                );
+                black_box(store.commit(Context::new(), vec![Key::from_raw(k)], 1, 2)).unwrap();
             }
         },
     );
@@ -109,9 +101,13 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
 
 pub fn bench_storage<E: Engine, F: EngineFactory<E>>(
     c: &mut Criterion,
-    configs: &Vec<BenchConfig<F>>,
+    configs: &[BenchConfig<F>],
 ) {
-    c.bench_function_over_inputs("storage_async_prewrite", storage_prewrite, configs.clone());
-    c.bench_function_over_inputs("storage_async_commit", storage_commit, configs.clone());
-    c.bench_function_over_inputs("storage_async_raw_get", storage_raw_get, configs.clone());
+    c.bench_function_over_inputs(
+        "storage_async_prewrite",
+        storage_prewrite,
+        configs.to_owned(),
+    );
+    c.bench_function_over_inputs("storage_async_commit", storage_commit, configs.to_owned());
+    c.bench_function_over_inputs("storage_async_raw_get", storage_raw_get, configs.to_owned());
 }
