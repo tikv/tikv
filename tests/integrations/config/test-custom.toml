@@ -38,6 +38,8 @@ end-point-stream-batch-row-limit = 4096
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
+stats-concurrency = 10
+heavy-load-threshold = 1000
 
 [server.labels]
 a = "b"
