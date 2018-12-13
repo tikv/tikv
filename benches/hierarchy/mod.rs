@@ -36,7 +36,7 @@ impl<F: fmt::Debug> fmt::Debug for BenchConfig<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{:?}_k{:?}_v{:?}",
+            "{:?}_kl{:?}_vl{:?}",
             self.engine_factory, self.key_length, self.value_length
         )
     }

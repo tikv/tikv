@@ -12,10 +12,12 @@
 // limitations under the License.
 
 use std::fmt;
+
 use tikv::storage::{
     engine::{BTreeEngine, RocksEngine},
     Engine, TestEngineBuilder,
 };
+
 pub trait EngineFactory<E: Engine>: Clone + Copy + fmt::Debug + 'static {
     fn build(&self) -> E;
 }
