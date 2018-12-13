@@ -1,4 +1,3 @@
-#[macro_use]
 extern crate criterion;
 extern crate kvproto;
 extern crate test_storage;
@@ -9,18 +8,15 @@ mod engines;
 mod mvcc;
 mod storage;
 mod txn;
-
-use std::fmt;
+mod engine_factory;
 
 use self::engines::bench_engine;
 use self::mvcc::bench_mvcc;
 use self::storage::bench_storage;
 use self::txn::bench_txn;
+use self::engine_factory::{EngineFactory,BTreeEngineFactory,RocksEngineFactory};
 use criterion::Criterion;
-use tikv::storage::{
-    engine::{BTreeEngine, RocksEngine},
-    Engine, TestEngineBuilder,
-};
+use tikv::storage::Engine;
 
 const DEFAULT_ITERATIONS: usize = 1;
 const DEFAULT_KEY_LENGTHS: [usize; 1] = [64];
@@ -49,45 +45,6 @@ pub fn generate_kv_configs<E: Engine, F: EngineFactory<E>>(engine_factory: F) ->
         }
     }
     configs
-}
-
-pub trait EngineFactory<E: Engine>: Clone + Copy + fmt::Debug + 'static {
-    fn build(&self) -> E;
-}
-
-#[derive(Clone, Copy)]
-struct BTreeEngineFactory {}
-
-impl EngineFactory<BTreeEngine> for BTreeEngineFactory {
-    fn build(&self) -> BTreeEngine {
-        BTreeEngine::default()
-    }
-}
-
-impl fmt::Debug for BTreeEngineFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "BTreeEngine")
-    }
-}
-
-#[derive(Clone, Copy)]
-struct RocksEngineFactory {}
-
-impl EngineFactory<RocksEngine> for RocksEngineFactory {
-    fn build(&self) -> RocksEngine {
-        TestEngineBuilder::new().build().unwrap()
-    }
-}
-
-impl fmt::Debug for RocksEngineFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "RocksEngine")
-    }
-}
-
-pub fn make_engine() -> impl Engine {
-    //    TestEngineBuilder::new().build().unwrap()
-    BTreeEngine::default()
 }
 
 fn main() {

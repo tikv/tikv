@@ -13,14 +13,11 @@
 
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
-use std::fmt;
 use test_util::KvGenerator;
-use tikv::storage::engine::{
-    BTreeEngine, Engine, Modify, RocksEngine, Snapshot, TestEngineBuilder,
-};
-use tikv::storage::{Key, Value, CF_DEFAULT};
+use tikv::storage::engine::{Engine, Snapshot};
+use tikv::storage::{Key, Value};
 
-use super::*;
+use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS,DEFAULT_KV_GENERATOR_SEED};
 
 fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &KvConfig<F>) {
     let engine = config.engine_factory.build();

@@ -14,14 +14,14 @@
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::engine::{Engine, TestEngineBuilder};
 use tikv::storage::mvcc::MvccTxn;
 use tikv::storage::{Key, Mutation, Options};
+use tikv::storage::engine::Engine;
 
-use super::*;
+use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS};
 
 fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
-    let engine = make_engine();
+    let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
     b.iter_with_setup(
@@ -47,7 +47,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConf
 }
 
 fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
-    let engine = make_engine();
+    let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
     b.iter_with_setup(

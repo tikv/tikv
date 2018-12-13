@@ -14,14 +14,14 @@
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::engine::{Engine, TestEngineBuilder};
+use tikv::storage::engine::Engine;
 use tikv::storage::mvcc::{MvccReader, MvccTxn};
 use tikv::storage::{Key, Mutation, Options};
 
-use super::*;
+use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS,DEFAULT_KV_GENERATOR_SEED};
 
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
-    let engine = make_engine();
+    let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
@@ -47,7 +47,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvCon
 }
 
 fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
-    let engine = make_engine();
+    let engine = config.engine_factory.build();
     let ctx = Context::new();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let option = Options::default();
@@ -85,7 +85,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfi
 }
 
 fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
-    let engine = make_engine();
+    let engine = config.engine_factory.build();
     let ctx = Context::default();
     let test_keys: Vec<Key> = KvGenerator::with_seed(
         config.key_length,
@@ -111,7 +111,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
 }
 
 fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
-    let engine = make_engine();
+    let engine = config.engine_factory.build();
     let ctx = Context::default();
     b.iter_with_setup(
         || {

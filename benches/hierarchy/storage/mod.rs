@@ -15,9 +15,11 @@ use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_storage::SyncTestStorageBuilder;
 use test_util::KvGenerator;
+use tikv::storage::engine::Engine;
+
 use tikv::storage::{Key, Mutation, CF_DEFAULT};
 
-use super::*;
+use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS};
 
 fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = config.engine_factory.build();
