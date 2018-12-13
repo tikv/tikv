@@ -19,7 +19,7 @@ use tikv::storage::engine::Engine;
 
 use tikv::storage::{Key, Mutation, CF_DEFAULT};
 
-use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS};
+use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS};
 
 fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = config.engine_factory.build();
@@ -107,7 +107,10 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvCo
     );
 }
 
-pub fn bench_storage<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<KvConfig<F>>) {
+pub fn bench_storage<E: Engine, F: EngineFactory<E>>(
+    c: &mut Criterion,
+    configs: &Vec<KvConfig<F>>,
+) {
     c.bench_function_over_inputs("storage_async_prewrite", storage_prewrite, configs.clone());
     c.bench_function_over_inputs("storage_async_commit", storage_commit, configs.clone());
     c.bench_function_over_inputs("storage_async_raw_get", storage_raw_get, configs.clone());

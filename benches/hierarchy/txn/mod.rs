@@ -14,11 +14,11 @@
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
+use tikv::storage::engine::Engine;
 use tikv::storage::mvcc::MvccTxn;
 use tikv::storage::{Key, Mutation, Options};
-use tikv::storage::engine::Engine;
 
-use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS};
+use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS};
 
 fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = config.engine_factory.build();

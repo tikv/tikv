@@ -18,7 +18,7 @@ use tikv::storage::engine::Engine;
 use tikv::storage::mvcc::{MvccReader, MvccTxn};
 use tikv::storage::{Key, Mutation, Options};
 
-use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS,DEFAULT_KV_GENERATOR_SEED};
+use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = config.engine_factory.build();

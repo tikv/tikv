@@ -17,7 +17,7 @@ use test_util::KvGenerator;
 use tikv::storage::engine::{Engine, Snapshot};
 use tikv::storage::{Key, Value};
 
-use super::{KvConfig,EngineFactory,DEFAULT_ITERATIONS,DEFAULT_KV_GENERATOR_SEED};
+use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
 fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &KvConfig<F>) {
     let engine = config.engine_factory.build();

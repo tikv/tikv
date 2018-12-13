@@ -31,7 +31,7 @@ impl EngineFactory<BTreeEngine> for BTreeEngineFactory {
 
 impl fmt::Debug for BTreeEngineFactory {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "BTreeEngine")
+        write!(f, "BTree")
     }
 }
 
@@ -46,6 +46,6 @@ impl EngineFactory<RocksEngine> for RocksEngineFactory {
 
 impl fmt::Debug for RocksEngineFactory {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "RocksEngine")
+        write!(f, "Rocks")
     }
 }

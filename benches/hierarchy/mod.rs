@@ -4,17 +4,19 @@ extern crate test_storage;
 extern crate test_util;
 extern crate tikv;
 
+mod engine_factory;
 mod engines;
 mod mvcc;
 mod storage;
 mod txn;
-mod engine_factory;
 
+use std::fmt;
+
+use self::engine_factory::{BTreeEngineFactory, EngineFactory, RocksEngineFactory};
 use self::engines::bench_engine;
 use self::mvcc::bench_mvcc;
 use self::storage::bench_storage;
 use self::txn::bench_txn;
-use self::engine_factory::{EngineFactory,BTreeEngineFactory,RocksEngineFactory};
 use criterion::Criterion;
 use tikv::storage::Engine;
 
@@ -23,11 +25,21 @@ const DEFAULT_KEY_LENGTHS: [usize; 1] = [64];
 const DEFAULT_VALUE_LENGTHS: [usize; 2] = [64, 65];
 const DEFAULT_KV_GENERATOR_SEED: u64 = 0;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct KvConfig<F> {
     pub key_length: usize,
     pub value_length: usize,
     pub engine_factory: F,
+}
+
+impl<F: fmt::Debug> fmt::Debug for KvConfig<F> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:?}_k{:?}_v{:?}",
+            self.engine_factory, self.key_length, self.value_length
+        )
+    }
 }
 
 pub fn generate_kv_configs<E: Engine, F: EngineFactory<E>>(engine_factory: F) -> Vec<KvConfig<F>> {
