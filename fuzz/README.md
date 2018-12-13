@@ -1,21 +1,35 @@
-# Fuzz testing
+# Fuzz Testing
 
-Fuzz testing for TiKV.
+This directory contains TiKV fuzz test cases as well as a CLI utility to run these fuzz tests using
+a specific fuzzer.
 
-Currently, it targets in following components:
+Supported fuzzers:
 
- - `tikv::util::codec::bytes`
- - `tikv::util::codec::number`
- - `tikv::coprocessor::codec::mysql::decimal::Decimal`
+- [libfuzzer](https://llvm.org/docs/LibFuzzer.html)
+- [Honggfuzz](https://github.com/google/honggfuzz)
 
-To run fuzz testing, you need to install `cargo-fuzz`:
+Planned to support:
 
-```sh
-$ cargo install cargo-fuzz
+- [AFL](http://lcamtuf.coredump.cx/afl/)
+
+## Prerequisites
+
+### Honggfuzz
+
+See [honggfuzz-rs documentation](https://github.com/rust-fuzz/honggfuzz-rs).
+
+## Usage
+
+### List Available Fuzz Targets
+
+```bash
+# In TiKV directory
+cargo run --package fuzz -- list-targets
 ```
 
-Then pick a target:
+### Fuzz Specific Target with a Fuzzer
 
-```sh
-$ cargo fuzz run codec_bytes
+```bash
+# In TiKV directory
+cargo run --package fuzz -- run [FUZZER] [TARGET]
 ```

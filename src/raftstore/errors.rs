@@ -166,7 +166,14 @@ impl Into<errorpb::Error> for Error {
                     .mut_raft_entry_too_large()
                     .set_entry_size(entry_size);
             }
-            Error::StoreNotMatch(..) => errorpb.set_store_not_match(errorpb::StoreNotMatch::new()),
+            Error::StoreNotMatch(to_store_id, my_store_id) => {
+                errorpb
+                    .mut_store_not_match()
+                    .set_request_store_id(to_store_id);
+                errorpb
+                    .mut_store_not_match()
+                    .set_actual_store_id(my_store_id);
+            }
             Error::KeyNotInRegion(key, region) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb
