@@ -20,7 +20,7 @@ use tikv::storage::{Key, Mutation, Options};
 
 use super::*;
 
-fn mvcc_prewrite(b: &mut Bencher, config: &KvConfig) {
+fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = make_engine();
     let ctx = Context::new();
     let option = Options::default();
@@ -46,7 +46,7 @@ fn mvcc_prewrite(b: &mut Bencher, config: &KvConfig) {
     )
 }
 
-fn mvcc_commit(b: &mut Bencher, config: &KvConfig) {
+fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = make_engine();
     let ctx = Context::new();
     let snapshot = engine.snapshot(&ctx).unwrap();
@@ -84,7 +84,7 @@ fn mvcc_commit(b: &mut Bencher, config: &KvConfig) {
     );
 }
 
-fn mvcc_reader_load_lock(b: &mut Bencher, config: &KvConfig) {
+fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = make_engine();
     let ctx = Context::default();
     let test_keys: Vec<Key> = KvGenerator::with_seed(
@@ -110,7 +110,7 @@ fn mvcc_reader_load_lock(b: &mut Bencher, config: &KvConfig) {
     );
 }
 
-fn mvcc_reader_seek_write(b: &mut Bencher, config: &KvConfig) {
+fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = make_engine();
     let ctx = Context::default();
     b.iter_with_setup(
@@ -135,17 +135,9 @@ fn mvcc_reader_seek_write(b: &mut Bencher, config: &KvConfig) {
     );
 }
 
-pub fn bench_mvcc(c: &mut Criterion) {
-    c.bench_function_over_inputs("mvcc_prewrite", mvcc_prewrite, generate_kv_configs());
-    c.bench_function_over_inputs("mvcc_commit", mvcc_commit, generate_kv_configs());
-    c.bench_function_over_inputs(
-        "mvcc_load_lock",
-        mvcc_reader_load_lock,
-        generate_kv_configs(),
-    );
-    c.bench_function_over_inputs(
-        "mvcc_seek_write",
-        mvcc_reader_seek_write,
-        generate_kv_configs(),
-    );
+pub fn bench_mvcc<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<KvConfig<F>>) {
+    c.bench_function_over_inputs("mvcc_prewrite", mvcc_prewrite, configs.clone());
+    c.bench_function_over_inputs("mvcc_commit", mvcc_commit, configs.clone());
+    c.bench_function_over_inputs("mvcc_load_lock", mvcc_reader_load_lock, configs.clone());
+    c.bench_function_over_inputs("mvcc_seek_write", mvcc_reader_seek_write, configs.clone());
 }

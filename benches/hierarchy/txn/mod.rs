@@ -20,7 +20,7 @@ use tikv::storage::{Key, Mutation, Options};
 
 use super::*;
 
-fn txn_prewrite(b: &mut Bencher, config: &KvConfig) {
+fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = make_engine();
     let ctx = Context::new();
     let option = Options::default();
@@ -46,7 +46,7 @@ fn txn_prewrite(b: &mut Bencher, config: &KvConfig) {
     )
 }
 
-fn txn_commit(b: &mut Bencher, config: &KvConfig) {
+fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
     let engine = make_engine();
     let ctx = Context::new();
     let option = Options::default();
@@ -80,7 +80,7 @@ fn txn_commit(b: &mut Bencher, config: &KvConfig) {
     );
 }
 
-pub fn bench_txn(c: &mut Criterion) {
-    c.bench_function_over_inputs("txn_prewrite", txn_prewrite, generate_kv_configs());
-    c.bench_function_over_inputs("txn_commit", txn_commit, generate_kv_configs());
+pub fn bench_txn<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<KvConfig<F>>) {
+    c.bench_function_over_inputs("txn_prewrite", txn_prewrite, configs.clone());
+    c.bench_function_over_inputs("txn_commit", txn_commit, configs.clone());
 }

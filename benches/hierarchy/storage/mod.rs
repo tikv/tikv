@@ -19,8 +19,8 @@ use tikv::storage::{Key, Mutation, CF_DEFAULT};
 
 use super::*;
 
-fn storage_raw_get(b: &mut Bencher, config: &KvConfig) {
-    let engine = make_engine();
+fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+    let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_with_setup(
         || {
@@ -44,8 +44,8 @@ fn storage_raw_get(b: &mut Bencher, config: &KvConfig) {
     );
 }
 
-fn storage_prewrite(b: &mut Bencher, config: &KvConfig) {
-    let engine = make_engine();
+fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+    let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_with_setup(
         || {
@@ -72,8 +72,8 @@ fn storage_prewrite(b: &mut Bencher, config: &KvConfig) {
     );
 }
 
-fn storage_commit(b: &mut Bencher, config: &KvConfig) {
-    let engine = make_engine();
+fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+    let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_with_setup(
         || {
@@ -105,20 +105,8 @@ fn storage_commit(b: &mut Bencher, config: &KvConfig) {
     );
 }
 
-pub fn bench_storage(c: &mut Criterion) {
-    c.bench_function_over_inputs(
-        "storage_async_prewrite",
-        storage_prewrite,
-        generate_kv_configs(),
-    );
-    c.bench_function_over_inputs(
-        "storage_async_commit",
-        storage_commit,
-        generate_kv_configs(),
-    );
-    c.bench_function_over_inputs(
-        "storage_async_raw_get",
-        storage_raw_get,
-        generate_kv_configs(),
-    );
+pub fn bench_storage<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<KvConfig<F>>) {
+    c.bench_function_over_inputs("storage_async_prewrite", storage_prewrite, configs.clone());
+    c.bench_function_over_inputs("storage_async_commit", storage_commit, configs.clone());
+    c.bench_function_over_inputs("storage_async_raw_get", storage_raw_get, configs.clone());
 }
