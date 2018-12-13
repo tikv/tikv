@@ -84,14 +84,17 @@ pub trait Fsm: Sized {
 /// When a message is sent to a mailbox, its owner will be checked whether it's
 /// idle. An idle owner will be scheduled via `FsmScheduler` immediately, which
 /// will drive the fsm to poll for messages.
-pub struct BasicMailbox<N: Fsm> {
-    sender: mpsc::LooseBoundedSender<N::Message>,
-    state: Arc<State<N>>,
+pub struct BasicMailbox<Owner: Fsm> {
+    sender: mpsc::LooseBoundedSender<Owner::Message>,
+    state: Arc<State<Owner>>,
 }
 
-impl<N: Fsm> BasicMailbox<N> {
+impl<Owner: Fsm> BasicMailbox<Owner> {
     #[inline]
-    fn new(sender: mpsc::LooseBoundedSender<N::Message>, fsm: Box<N>) -> BasicMailbox<N> {
+    fn new(
+        sender: mpsc::LooseBoundedSender<Owner::Message>,
+        fsm: Box<Owner>,
+    ) -> BasicMailbox<Owner> {
         BasicMailbox {
             sender,
             state: Arc::new(State {
@@ -102,15 +105,14 @@ impl<N: Fsm> BasicMailbox<N> {
     }
 
     /// Take the owner if it's IDLE.
-    fn maybe_catch_fsm(&self) -> Option<Box<N>> {
-        match self
-            .state
-            .status
-            .swap(NOTIFYSTATE_NOTIFIED, Ordering::AcqRel)
-        {
-            NOTIFYSTATE_NOTIFIED => return None,
-            NOTIFYSTATE_IDLE => {}
-            _ => return None,
+    fn maybe_catch_fsm(&self) -> Option<Box<Owner>> {
+        let previous_state = self.state.status.compare_and_swap(
+            NOTIFYSTATE_IDLE,
+            NOTIFYSTATE_NOTIFIED,
+            Ordering::AcqRel,
+        );
+        if previous_state != NOTIFYSTATE_IDLE {
+            return None;
         }
 
         let p = self.state.data.swap(ptr::null_mut(), Ordering::AcqRel);
@@ -123,7 +125,7 @@ impl<N: Fsm> BasicMailbox<N> {
 
     /// Notify owner via a `FsmScheduler`.
     #[inline]
-    fn notify<S: FsmScheduler<Fsm = N>>(&self, scheduler: &S) {
+    fn notify<S: FsmScheduler<Fsm = Owner>>(&self, scheduler: &S) {
         match self.maybe_catch_fsm() {
             None => {}
             Some(mut n) => {
@@ -139,7 +141,7 @@ impl<N: Fsm> BasicMailbox<N> {
     /// releasing a fsm. However, a fsm is guaranteed to be notify only
     /// when new messages arrives after it's released.
     #[inline]
-    fn release(&self, fsm: Box<N>) {
+    fn release(&self, fsm: Box<Owner>) {
         let previous = self.state.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
@@ -163,11 +165,11 @@ impl<N: Fsm> BasicMailbox<N> {
 
     /// Force sending a message dispite the capacity limit on channel.
     #[inline]
-    pub fn force_send<S: FsmScheduler<Fsm = N>>(
+    pub fn force_send<S: FsmScheduler<Fsm = Owner>>(
         &self,
-        msg: N::Message,
+        msg: Owner::Message,
         scheduler: &S,
-    ) -> Result<(), SendError<N::Message>> {
+    ) -> Result<(), SendError<Owner::Message>> {
         self.sender.force_send(msg)?;
         self.notify(scheduler);
         Ok(())
@@ -177,11 +179,11 @@ impl<N: Fsm> BasicMailbox<N> {
     ///
     /// If there are too many pending messages, function may fail.
     #[inline]
-    pub fn try_send<S: FsmScheduler<Fsm = N>>(
+    pub fn try_send<S: FsmScheduler<Fsm = Owner>>(
         &self,
-        msg: N::Message,
+        msg: Owner::Message,
         scheduler: &S,
-    ) -> Result<(), TrySendError<N::Message>> {
+    ) -> Result<(), TrySendError<Owner::Message>> {
         self.sender.try_send(msg)?;
         self.notify(scheduler);
         Ok(())
@@ -205,9 +207,9 @@ impl<N: Fsm> BasicMailbox<N> {
     }
 }
 
-impl<N: Fsm> Clone for BasicMailbox<N> {
+impl<Owner: Fsm> Clone for BasicMailbox<Owner> {
     #[inline]
-    fn clone(&self) -> BasicMailbox<N> {
+    fn clone(&self) -> BasicMailbox<Owner> {
         BasicMailbox {
             sender: self.sender.clone(),
             state: self.state.clone(),
@@ -216,21 +218,21 @@ impl<N: Fsm> Clone for BasicMailbox<N> {
 }
 
 /// A more high level mailbox.
-pub struct Mailbox<N: Fsm, S: FsmScheduler<Fsm = N>> {
-    mailbox: BasicMailbox<N>,
-    scheduler: S,
+pub struct Mailbox<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> {
+    mailbox: BasicMailbox<Owner>,
+    scheduler: Scheduler,
 }
 
-impl<N: Fsm, S: FsmScheduler<Fsm = N>> Mailbox<N, S> {
+impl<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> Mailbox<Owner, Scheduler> {
     /// Force sending a message despite channel capacity limit.
     #[inline]
-    pub fn force_send(&self, msg: N::Message) -> Result<(), SendError<N::Message>> {
+    pub fn force_send(&self, msg: Owner::Message) -> Result<(), SendError<Owner::Message>> {
         self.mailbox.force_send(msg, &self.scheduler)
     }
 
     /// Try to send a message.
     #[inline]
-    pub fn try_send(&self, msg: N::Message) -> Result<(), TrySendError<N::Message>> {
+    pub fn try_send(&self, msg: Owner::Message) -> Result<(), TrySendError<Owner::Message>> {
         self.mailbox.try_send(msg, &self.scheduler)
     }
 }
