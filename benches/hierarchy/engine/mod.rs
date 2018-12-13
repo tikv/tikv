@@ -17,9 +17,12 @@ use test_util::KvGenerator;
 use tikv::storage::engine::{Engine, Snapshot};
 use tikv::storage::{Key, Value};
 
-use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
+use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
-fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &KvConfig<F>) {
+fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
+    bencher: &mut Bencher,
+    config: &BenchConfig<F>,
+) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     bencher.iter_with_setup(
@@ -44,14 +47,18 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
 
 fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
     bencher: &mut Bencher,
-    config: &KvConfig<F>,
+    config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     bencher.iter(|| black_box(&engine).snapshot(black_box(&ctx)).unwrap());
 }
 
-fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, config: &KvConfig<F>) {
+//exclude snapshot
+fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
+    bencher: &mut Bencher,
+    config: &BenchConfig<F>,
+) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let test_kvs: Vec<Key> = KvGenerator::with_seed(
@@ -76,8 +83,15 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
     );
 }
 
-pub fn bench_engine<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<KvConfig<F>>) {
-    c.bench_function_over_inputs("engine_get", bench_engine_get, configs.clone());
+pub fn bench_engine<E: Engine, F: EngineFactory<E>>(
+    c: &mut Criterion,
+    configs: &Vec<BenchConfig<F>>,
+) {
+    c.bench_function_over_inputs(
+        "engine_get(exclude snapshot)",
+        bench_engine_get,
+        configs.clone(),
+    );
     c.bench_function_over_inputs("engine_put", bench_engine_put, configs.clone());
     c.bench_function_over_inputs("engine_snapshot", bench_engine_snapshot, configs.clone());
 }

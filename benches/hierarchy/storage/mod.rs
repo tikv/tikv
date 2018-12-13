@@ -19,9 +19,9 @@ use tikv::storage::engine::Engine;
 
 use tikv::storage::{Key, Mutation, CF_DEFAULT};
 
-use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS};
+use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
-fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_with_setup(
@@ -46,7 +46,7 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvC
     );
 }
 
-fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_with_setup(
@@ -74,7 +74,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Kv
     );
 }
 
-fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_with_setup(
@@ -109,7 +109,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvCo
 
 pub fn bench_storage<E: Engine, F: EngineFactory<E>>(
     c: &mut Criterion,
-    configs: &Vec<KvConfig<F>>,
+    configs: &Vec<BenchConfig<F>>,
 ) {
     c.bench_function_over_inputs("storage_async_prewrite", storage_prewrite, configs.clone());
     c.bench_function_over_inputs("storage_async_commit", storage_commit, configs.clone());

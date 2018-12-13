@@ -18,9 +18,9 @@ use tikv::storage::engine::Engine;
 use tikv::storage::mvcc::MvccTxn;
 use tikv::storage::{Key, Mutation, Options};
 
-use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS};
+use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
-fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
@@ -46,7 +46,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConf
     )
 }
 
-fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
@@ -80,7 +80,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig
     );
 }
 
-pub fn bench_txn<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<KvConfig<F>>) {
+pub fn bench_txn<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<BenchConfig<F>>) {
     c.bench_function_over_inputs("txn_prewrite", txn_prewrite, configs.clone());
     c.bench_function_over_inputs("txn_commit", txn_commit, configs.clone());
 }

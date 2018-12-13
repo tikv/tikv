@@ -18,13 +18,12 @@ use tikv::storage::engine::Engine;
 use tikv::storage::mvcc::{MvccReader, MvccTxn};
 use tikv::storage::{Key, Mutation, Options};
 
-use super::{EngineFactory, KvConfig, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
+use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
-fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
     b.iter_with_setup(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
@@ -35,18 +34,19 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvCon
                 .iter()
                 .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
                 .collect();
-            let txn = MvccTxn::new(snapshot.clone(), 1, false).unwrap();
-            (mutations, txn, &option)
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            (mutations, snapshot, &option)
         },
-        |(mutations, mut txn, option)| {
+        |(mutations, snapshot, option)| {
             for (mutation, primary) in mutations {
+                let mut txn = MvccTxn::new(snapshot.clone(), 1, false).unwrap();
                 black_box(txn.prewrite(mutation, &primary, option).unwrap());
             }
         },
     )
 }
 
-fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let snapshot = engine.snapshot(&ctx).unwrap();
@@ -68,23 +68,21 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfi
                 ).unwrap();
             }
             let modifies = txn.into_modifies();
-
             let _ = engine.async_write(&ctx, modifies, Box::new(move |(_, _)| {}));
-
             let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let txn = MvccTxn::new(snapshot, 1, false).unwrap();
-            (txn, keys)
+            (snapshot, keys)
         },
-        |(mut txn, keys)| {
+        |(snapshot, keys)| {
             for key in keys {
+                let mut txn = MvccTxn::new(snapshot.clone(), 1, false).unwrap();
                 txn.commit(key, 1).unwrap();
             }
         },
     );
 }
 
-fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
     let test_keys: Vec<Key> = KvGenerator::with_seed(
@@ -99,24 +97,33 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
     b.iter_with_setup(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let reader = MvccReader::new(snapshot, None, false, None, None, ctx.isolation_level);
-            (reader, &test_keys)
+            (snapshot, &test_keys)
         },
-        |(mut reader, test_kvs)| {
+        |(snapshot, test_kvs)| {
             for key in test_kvs {
+                let mut reader = MvccReader::new(
+                    snapshot.clone(),
+                    None,
+                    false,
+                    None,
+                    None,
+                    ctx.isolation_level,
+                );
                 black_box(reader.load_lock(&key).unwrap());
             }
         },
     );
 }
 
-fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &KvConfig<F>) {
+fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
+    b: &mut Bencher,
+    config: &BenchConfig<F>,
+) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
     b.iter_with_setup(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let reader = MvccReader::new(snapshot, None, false, None, None, ctx.isolation_level);
             let test_keys: Vec<Key> = KvGenerator::with_seed(
                 config.key_length,
                 config.value_length,
@@ -125,17 +132,28 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, confi
                 .iter()
                 .map(|(k, _)| Key::from_raw(&k))
                 .collect();
-            (reader, test_keys)
+            (snapshot, test_keys)
         },
-        |(mut reader, test_keys)| {
+        |(snapshot, test_keys)| {
             for key in &test_keys {
+                let mut reader = MvccReader::new(
+                    snapshot.clone(),
+                    None,
+                    false,
+                    None,
+                    None,
+                    ctx.isolation_level,
+                );
                 black_box(reader.seek_write(&key, u64::max_value()).unwrap());
             }
         },
     );
 }
 
-pub fn bench_mvcc<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &Vec<KvConfig<F>>) {
+pub fn bench_mvcc<E: Engine, F: EngineFactory<E>>(
+    c: &mut Criterion,
+    configs: &Vec<BenchConfig<F>>,
+) {
     c.bench_function_over_inputs("mvcc_prewrite", mvcc_prewrite, configs.clone());
     c.bench_function_over_inputs("mvcc_commit", mvcc_commit, configs.clone());
     c.bench_function_over_inputs("mvcc_load_lock", mvcc_reader_load_lock, configs.clone());
