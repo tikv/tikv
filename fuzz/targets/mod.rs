@@ -101,9 +101,23 @@ pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+trait ReadAsDecimalRoundMode: ReadLiteralExt {
+    fn read_as_decimal_round_mode(
+        &mut self,
+    ) -> Result<::tikv::coprocessor::codec::mysql::decimal::RoundMode, Error> {
+        Ok(match self.read_as_u8()? % 3 {
+            0 => ::tikv::coprocessor::codec::mysql::decimal::RoundMode::HalfEven,
+            1 => ::tikv::coprocessor::codec::mysql::decimal::RoundMode::Truncate,
+            _ => ::tikv::coprocessor::codec::mysql::decimal::RoundMode::Ceiling,
+        })
+    }
+}
+
+impl<T: ReadLiteralExt> ReadAsDecimalRoundMode for T {}
+
 #[inline(always)]
 pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
-    use tikv::coprocessor::codec::mysql::decimal::{Decimal, RoundMode};
+    use tikv::coprocessor::codec::mysql::decimal::Decimal;
 
     fn fuzz(lhs: &Decimal, rhs: &Decimal, cursor: &mut Cursor<&[u8]>) -> Result<(), Error> {
         let _ = lhs.clone().abs();
@@ -111,11 +125,7 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
         let _ = lhs.floor();
         let _ = lhs.prec_and_frac();
 
-        let mode = match cursor.read_as_u8()? % 3 {
-            0 => RoundMode::HalfEven,
-            1 => RoundMode::Truncate,
-            _ => RoundMode::Ceiling,
-        };
+        let mode = cursor.read_as_decimal_round_mode()?;
         let frac = cursor.read_as_i8()?;
         let _ = lhs.clone().round(frac, mode.clone());
 
@@ -145,4 +155,60 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
     let _ = fuzz(&decimal1, &decimal2, &mut cursor);
     let _ = fuzz(&decimal2, &decimal1, &mut cursor);
     Ok(())
+}
+
+trait ReadAsTimeType: ReadLiteralExt {
+    fn read_as_time_type(&mut self) -> Result<::tikv::coprocessor::codec::mysql::TimeType, Error> {
+        Ok(match self.read_as_u8()? % 3 {
+            0 => ::tikv::coprocessor::codec::mysql::TimeType::Date,
+            1 => ::tikv::coprocessor::codec::mysql::TimeType::DateTime,
+            _ => ::tikv::coprocessor::codec::mysql::TimeType::Timestamp,
+        })
+    }
+}
+
+impl<T: ReadLiteralExt> ReadAsTimeType for T {}
+
+fn fuzz_time(
+    t: ::tikv::coprocessor::codec::mysql::Time,
+    mut cursor: Cursor<&[u8]>,
+) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::TimeEncoder;
+    let _ = t.clone().set_time_type(cursor.read_as_time_type()?);
+    let _ = t.is_zero();
+    let _ = t.invalid_zero();
+    let _ = t.to_decimal();
+    let _ = t.to_f64();
+    let _ = t.to_duration();
+    let _ = t.to_packed_u64();
+    let _ = t.clone().round_frac(cursor.read_as_i8()?);
+    let _ = t.is_leap_year();
+    let _ = t.last_day_of_month();
+    let _ = t.to_string();
+    let mut v = Vec::new();
+    let _ = v.encode_time(&t);
+    Ok(())
+}
+
+pub fn fuzz_coprocessor_codec_time_from_parse(data: &[u8]) -> Result<(), Error> {
+    use std::io::Read;
+    use tikv::coprocessor::codec::mysql::{Time, Tz};
+    let mut cursor = Cursor::new(data);
+    let tz = Tz::from_offset(cursor.read_as_i64()?).unwrap_or_else(Tz::utc);
+    let fsp = cursor.read_as_i8()?;
+    let mut buf: [u8; 32] = [b' '; 32];
+    cursor.read_exact(&mut buf)?;
+    let t = Time::parse_datetime(::std::str::from_utf8(&buf)?, fsp, tz)?;
+    fuzz_time(t, cursor)
+}
+
+pub fn fuzz_coprocessor_codec_time_from_u64(data: &[u8]) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::{Time, Tz};
+    let mut cursor = Cursor::new(data);
+    let u = cursor.read_as_u64()?;
+    let time_type = cursor.read_as_time_type()?;
+    let tz = Tz::from_offset(cursor.read_as_i64()?).unwrap_or_else(Tz::utc);
+    let fsp = cursor.read_as_i8()?;
+    let t = Time::from_packed_u64(u, time_type, fsp, tz)?;
+    fuzz_time(t, cursor)
 }
