@@ -671,7 +671,7 @@ impl ScalarFunc {
             .chain(pad.chars().cycle())
             .take(target_len)
             .collect::<String>();
-        Ok(Some(Cow::Owned(r.as_bytes().to_vec())))
+        Ok(Some(Cow::Owned(r.into_bytes())))
     }
 
     #[inline]
