@@ -26,12 +26,12 @@ TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a di
 
 ### Required Rust version
 
-Rust Nightly is required. TiKV is currently tested mainly with the version specified in the `RUST_VERSION` file, however we would like to track `nightly`, so please report new breakage.
+Rust Nightly is required. TiKV is currently tested mainly with the version specified in the `rust-toolchain` file, however we would like to track `nightly`, so please report new breakage.
 
 ```bash
 # Get rustup from rustup.rs, then in your `tikv` folder:
-rustup override set `tail -n 1 RUST_VERSION`
-rustup component add rustfmt-preview --toolchain `tail -n 1 RUST_VERSION`
+rustup override set `tail -n 1 rust-toolchain`
+rustup component add rustfmt-preview --toolchain `tail -n 1 rust-toolchain`
 ```
 
 ### Tikv-server software stack
