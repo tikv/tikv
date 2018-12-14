@@ -45,13 +45,13 @@ jobs:
       - run:
           name: Setting up Rust and the rest of the Build Environment
           command: |
-            rust-toolchain=`tail -n 1 rust-toolchain`
+            RUST_VERSION=`tail -n 1 rust-toolchain`
             if [[ ! -e $HOME/.cargo ]]; then
               curl https://sh.rustup.rs -sSf |
-                sh -s -- --no-modify-path --default-toolchain ${rust-toolchain} -y;
-              rustup default ${rust-toolchain};
+                sh -s -- --no-modify-path --default-toolchain ${RUST_VERSION} -y;
+              rustup default ${RUST_VERSION};
             else
-              rustup default ${rust-toolchain};
+              rustup default ${RUST_VERSION};
             fi
 
             make -f ci-build/Makefile prepare-rustfmt
