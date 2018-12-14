@@ -79,6 +79,8 @@ fn test_serde_custom_tikv_config() {
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
+        stats_concurrency: 10,
+        heavy_load_threshold: 1000,
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
@@ -123,6 +125,7 @@ fn test_serde_custom_tikv_config() {
         raft_log_gc_count_limit: 12,
         raft_log_gc_size_limit: ReadableSize::kb(1),
         raft_entry_cache_life_time: ReadableDuration::secs(12),
+        raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),

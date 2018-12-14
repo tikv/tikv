@@ -18,48 +18,48 @@ crossbeam_channel. Comparing to the crossbeam_channel, this implementation
 supports closed detection and try operations.
 
 */
+pub mod batch;
 
-#![cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-
-use crossbeam::sync::AtomicOption;
-use crossbeam_channel;
-use futures::task::{self, Task};
-use futures::{Async, Poll, Stream};
-use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError};
+use crossbeam::channel::{
+    self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
+};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 struct State {
     sender_cnt: AtomicIsize,
-    receiver_cnt: AtomicIsize,
-    // Because we don't support sending messages asychrounously, so
-    // only recv_task needs to be kept.
-    recv_task: AtomicOption<Task>,
+    connected: AtomicBool,
 }
 
 impl State {
     fn new() -> State {
         State {
             sender_cnt: AtomicIsize::new(1),
-            receiver_cnt: AtomicIsize::new(1),
-            recv_task: AtomicOption::new(),
+            connected: AtomicBool::new(true),
         }
     }
 
     #[inline]
-    fn is_receiver_closed(&self) -> bool {
-        self.receiver_cnt.load(Ordering::Acquire) == 0
-    }
-
-    #[inline]
-    fn is_sender_closed(&self) -> bool {
-        self.sender_cnt.load(Ordering::Acquire) == 0
+    fn is_sender_connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
     }
 }
 
+/// A sender that can be closed.
+///
+/// Closed means that sender can no longer send out any messages after closing.
+/// However, receiver may still block at receiving.
+///
+/// Note that a receiver should reports error in such case.
+/// However, to fully implement a close mechanism, like waking up waiting
+/// receivers, requires a cost of performance. And the mechanism is unnecessary
+/// for current usage.
+///
+/// TODO: use builtin close when crossbeam-rs/crossbeam#236 is resolved.
 pub struct Sender<T> {
-    sender: crossbeam_channel::Sender<T>,
+    sender: channel::Sender<T>,
     state: Arc<State>,
 }
 
@@ -77,97 +77,115 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
-        self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
-        if self.state.is_sender_closed() {
-            self.notify();
+        let res = self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
+        if res == 1 {
+            self.close_sender();
         }
     }
 }
 
+/// The receive end of a channel.
 pub struct Receiver<T> {
-    receiver: crossbeam_channel::Receiver<T>,
+    receiver: channel::Receiver<T>,
     state: Arc<State>,
 }
 
 impl<T> Sender<T> {
+    /// Returns the number of messages in the channel.
     #[inline]
-    fn notify(&self) {
-        let task = self.state.recv_task.take(Ordering::AcqRel);
-        if let Some(t) = task {
-            t.notify();
-        }
+    pub fn len(&self) -> usize {
+        self.sender.len()
     }
 
+    /// Returns true if the channel is empty.
+    ///
+    /// Note: Zero-capacity channels are always empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.sender.is_empty()
+    }
+
+    /// Blocks the current thread until a message is sent or the channel is disconnected.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        if !self.state.is_receiver_closed() {
-            self.sender.send(t);
-            self.notify();
-            return Ok(());
+        if self.state.is_sender_connected() {
+            self.sender.send(t)
+        } else {
+            Err(SendError(t))
         }
-        Err(SendError(t))
     }
 
+    /// Attempts to send a message into the channel without blocking.
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        if !self.state.is_receiver_closed() {
-            crossbeam_channel::select! {
-                send(self.sender, t) => {},
-                default => return Err(TrySendError::Full(t)),
-            }
-            self.notify();
-            Ok(())
+        if self.state.is_sender_connected() {
+            self.sender.try_send(t)
         } else {
             Err(TrySendError::Disconnected(t))
         }
     }
+
+    /// Stop the sender from sending any further messages.
+    #[inline]
+    pub fn close_sender(&self) {
+        self.state.connected.store(false, Ordering::Release);
+    }
+
+    /// Check if the sender is still connected.
+    #[inline]
+    pub fn is_sender_connected(&self) -> bool {
+        self.state.is_sender_connected()
+    }
 }
 
 impl<T> Receiver<T> {
+    /// Returns the number of messages in the channel.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.receiver.len()
+    }
+
+    /// Returns true if the channel is empty.
+    ///
+    /// Note: Zero-capacity channels are always empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.receiver.is_empty()
+    }
+
+    /// Blocks the current thread until a message is received or
+    /// the channel is empty and disconnected.
     #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
-        match self.receiver.recv() {
-            Some(t) => Ok(t),
-            None => Err(RecvError),
-        }
+        self.receiver.recv()
     }
 
+    /// Attempts to receive a message from the channel without blocking.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        match self.receiver.try_recv() {
-            Some(t) => Ok(t),
-            None => {
-                if !self.state.is_sender_closed() {
-                    return Err(TryRecvError::Empty);
-                }
-                self.receiver.try_recv().ok_or(TryRecvError::Disconnected)
-            }
-        }
+        self.receiver.try_recv()
     }
 
+    /// Waits for a message to be received from the channel,
+    /// but only for a limited time.
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
-        crossbeam_channel::select! {
-            recv(self.receiver, task) => match task {
-                Some(t) => Ok(t),
-                None => Err(RecvTimeoutError::Disconnected),
-            }
-            recv(crossbeam_channel::after(timeout)) => Err(RecvTimeoutError::Timeout),
-        }
+        self.receiver.recv_timeout(timeout)
     }
 }
 
 impl<T> Drop for Receiver<T> {
     #[inline]
     fn drop(&mut self) {
-        self.state.receiver_cnt.fetch_add(-1, Ordering::AcqRel);
+        self.state.connected.store(false, Ordering::Release);
     }
 }
 
+/// Create an unbounded channel.
 #[inline]
 pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
     let state = Arc::new(State::new());
-    let (sender, receiver) = crossbeam_channel::unbounded();
+    let (sender, receiver) = channel::unbounded();
     (
         Sender {
             sender,
@@ -177,10 +195,11 @@ pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
     )
 }
 
+/// Create a bounded channel.
 #[inline]
 pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     let state = Arc::new(State::new());
-    let (sender, receiver) = crossbeam_channel::bounded(cap);
+    let (sender, receiver) = channel::bounded(cap);
     (
         Sender {
             sender,
@@ -188,27 +207,6 @@ pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
         },
         Receiver { receiver, state },
     )
-}
-
-impl<T> Stream for Receiver<T> {
-    type Error = ();
-    type Item = T;
-
-    fn poll(&mut self) -> Poll<Option<T>, ()> {
-        match self.try_recv() {
-            Ok(m) => Ok(Async::Ready(Some(m))),
-            Err(TryRecvError::Empty) => {
-                let t = self.state.recv_task.swap(task::current(), Ordering::AcqRel);
-                if t.is_some() {
-                    return Ok(Async::NotReady);
-                }
-                // Note: If there is a message or all the senders are dropped after
-                // polling but before task is set, `t` should be None.
-                self.poll()
-            }
-            Err(TryRecvError::Disconnected) => Ok(Async::Ready(None)),
-        }
-    }
 }
 
 const CHECK_INTERVAL: usize = 8;
@@ -216,30 +214,61 @@ const CHECK_INTERVAL: usize = 8;
 /// A sender of channel that limits the maximun pending messages count loosely.
 pub struct LooseBoundedSender<T> {
     sender: Sender<T>,
-    tried_cnt: usize,
+    tried_cnt: Cell<usize>,
     limit: usize,
 }
 
 impl<T> LooseBoundedSender<T> {
+    /// Returns the number of messages in the channel.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.sender.len()
+    }
+
+    /// Returns true if the channel is empty.
+    ///
+    /// Note: Zero-capacity channels are always empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.sender.is_empty()
+    }
+
     /// Send a message regardless its capacity limit.
     #[inline]
-    pub fn force_send(&mut self, t: T) -> Result<(), SendError<T>> {
-        self.tried_cnt += 1;
+    pub fn force_send(&self, t: T) -> Result<(), SendError<T>> {
+        let cnt = self.tried_cnt.get();
+        self.tried_cnt.set(cnt + 1);
         self.sender.send(t)
     }
 
+    /// Attempts to send a message into the channel without blocking.
     #[inline]
-    pub fn try_send(&mut self, t: T) -> Result<(), TrySendError<T>> {
-        if self.tried_cnt < CHECK_INTERVAL {
-            self.force_send(t)
-                .map_err(|SendError(t)| TrySendError::Disconnected(t))
-        } else if self.sender.sender.len() < self.limit {
-            self.tried_cnt = 0;
-            self.force_send(t)
-                .map_err(|SendError(t)| TrySendError::Disconnected(t))
+    pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
+        let cnt = self.tried_cnt.get();
+        if cnt < CHECK_INTERVAL {
+            self.tried_cnt.set(cnt + 1);
+        } else if self.len() < self.limit {
+            self.tried_cnt.set(1);
         } else {
-            Err(TrySendError::Full(t))
+            return Err(TrySendError::Full(t));
         }
+
+        match self.sender.send(t) {
+            Ok(()) => Ok(()),
+            Err(SendError(t)) => Err(TrySendError::Disconnected(t)),
+        }
+    }
+
+    /// Stop the sender from sending any further messages.
+    #[inline]
+    pub fn close_sender(&self) {
+        self.sender.close_sender();
+    }
+
+    /// Check if the sender is still connected.
+    #[inline]
+    pub fn is_sender_connected(&self) -> bool {
+        self.sender.state.is_sender_connected()
     }
 }
 
@@ -248,18 +277,19 @@ impl<T> Clone for LooseBoundedSender<T> {
     fn clone(&self) -> LooseBoundedSender<T> {
         LooseBoundedSender {
             sender: self.sender.clone(),
-            tried_cnt: self.tried_cnt,
+            tried_cnt: self.tried_cnt.clone(),
             limit: self.limit,
         }
     }
 }
 
+/// Create a loosely bounded channel with the given capacity.
 pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
     let (sender, receiver) = unbounded();
     (
         LooseBoundedSender {
             sender,
-            tried_cnt: 0,
+            tried_cnt: Cell::new(0),
             limit: cap,
         },
         receiver,
@@ -268,9 +298,7 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
-    use futures::sync::mpsc;
-    use futures::{Future, Sink, Stream};
-    use std::sync::mpsc::*;
+    use crossbeam::channel::*;
     use std::thread;
     use std::time::*;
 
@@ -299,6 +327,7 @@ mod tests {
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
         assert_eq!(tx.try_send(2), Err(TrySendError::Disconnected(2)));
+        assert!(!tx.is_sender_connected());
 
         let (tx, rx) = super::bounded::<u64>(10);
         tx.send(2).unwrap();
@@ -312,6 +341,25 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Disconnected)
         );
+
+        let (tx, rx) = super::bounded::<u64>(10);
+        assert!(tx.is_empty());
+        assert!(tx.is_sender_connected());
+        assert_eq!(tx.len(), 0);
+        assert!(rx.is_empty());
+        assert_eq!(rx.len(), 0);
+        tx.send(2).unwrap();
+        tx.send(3).unwrap();
+        assert_eq!(tx.len(), 2);
+        assert_eq!(rx.len(), 2);
+        tx.close_sender();
+        assert_eq!(tx.send(3), Err(SendError(3)));
+        assert_eq!(tx.try_send(3), Err(TrySendError::Disconnected(3)));
+        assert!(!tx.is_sender_connected());
+        assert_eq!(rx.try_recv(), Ok(2));
+        assert_eq!(rx.recv(), Ok(3));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        // assert_eq!(rx.recv(), Err(RecvError));
 
         let (tx1, rx1) = super::bounded::<u64>(10);
         let (tx2, rx2) = super::bounded::<u64>(0);
@@ -351,6 +399,7 @@ mod tests {
         drop(rx);
         assert_eq!(tx.send(2), Err(SendError(2)));
         assert_eq!(tx.try_send(2), Err(TrySendError::Disconnected(2)));
+        assert!(!tx.is_sender_connected());
 
         let (tx, rx) = super::unbounded::<u64>();
         drop(tx);
@@ -370,42 +419,30 @@ mod tests {
         assert_eq!(rx.recv(), Ok(10));
         let elapsed = timer.elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
-    }
 
-    #[test]
-    fn test_notify() {
-        let (tx1, rx1) = super::unbounded();
-        let (tx2, rx2) = mpsc::unbounded();
-        let mut rx2 = rx2.wait();
-        let j = thread::spawn(move || {
-            rx1.map_err(|_| ())
-                .forward(tx2.sink_map_err(|_| ()))
-                .wait()
-                .unwrap();
-        });
-        tx1.send(2).unwrap();
-        assert_eq!(rx2.next().unwrap(), Ok(2));
-        for i in 0..100 {
-            tx1.send(i).unwrap();
-        }
-        for i in 0..100 {
-            assert_eq!(rx2.next().unwrap(), Ok(i));
-        }
-        thread::spawn(move || {
-            for i in 100..10000 {
-                tx1.send(i).unwrap();
-            }
-        });
-        for i in 100..10000 {
-            assert_eq!(rx2.next().unwrap(), Ok(i));
-        }
-        // j should automatically stop when tx1 is dropped.
-        j.join().unwrap();
+        let (tx, rx) = super::unbounded::<u64>();
+        assert!(tx.is_empty());
+        assert!(tx.is_sender_connected());
+        assert_eq!(tx.len(), 0);
+        assert!(rx.is_empty());
+        assert_eq!(rx.len(), 0);
+        tx.send(2).unwrap();
+        tx.send(3).unwrap();
+        assert_eq!(tx.len(), 2);
+        assert_eq!(rx.len(), 2);
+        tx.close_sender();
+        assert_eq!(tx.send(3), Err(SendError(3)));
+        assert_eq!(tx.try_send(3), Err(TrySendError::Disconnected(3)));
+        assert!(!tx.is_sender_connected());
+        assert_eq!(rx.try_recv(), Ok(2));
+        assert_eq!(rx.recv(), Ok(3));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        // assert_eq!(rx.recv(), Err(RecvError));
     }
 
     #[test]
     fn test_loose() {
-        let (mut tx, rx) = super::loose_bounded(10);
+        let (tx, rx) = super::loose_bounded(10);
         tx.try_send(1).unwrap();
         for i in 2..11 {
             tx.clone().try_send(i).unwrap();
@@ -442,7 +479,7 @@ mod tests {
             assert_eq!(tx.try_send(2), Err(TrySendError::Disconnected(2)));
         }
 
-        let (mut tx, rx) = super::loose_bounded(10);
+        let (tx, rx) = super::loose_bounded(10);
         tx.try_send(2).unwrap();
         drop(tx);
         assert_eq!(rx.recv(), Ok(2));
@@ -453,7 +490,7 @@ mod tests {
             Err(RecvTimeoutError::Disconnected)
         );
 
-        let (mut tx, rx) = super::loose_bounded(10);
+        let (tx, rx) = super::loose_bounded(10);
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
             tx.try_send(10).unwrap();

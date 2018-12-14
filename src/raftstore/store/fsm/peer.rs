@@ -878,15 +878,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
             p.set_region(cp.region);
-            if p.is_leader() {
-                // Notify pd immediately.
-                info!(
-                    "{} notify pd with change peer region {:?}",
-                    p.tag,
-                    p.region()
-                );
-                p.heartbeat_pd(&self.pd_worker);
-            }
 
             let peer_id = cp.peer.get_id();
             match change_type {
@@ -898,10 +889,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                     // Add this peer to cache and heartbeats.
                     let now = Instant::now();
-                    p.peer_heartbeats.insert(peer.get_id(), now);
+                    let id = peer.get_id();
+                    p.peer_heartbeats.insert(id, now);
                     if p.is_leader() {
-                        p.peers_start_pending_time.push((peer.get_id(), now));
+                        p.peers_start_pending_time.push((id, now));
                     }
+                    p.recent_added_peer.update(id, now);
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
@@ -912,6 +905,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
                     p.remove_peer_from_cache(peer_id);
                 }
+            }
+
+            // In pattern matching above, if the peer is the leader,
+            // it will push the change peer into `peers_start_pending_time`
+            // without checking if it is duplicated. We move `heartbeat_pd` here
+            // to utilize `collect_pending_peers` in `heartbeat_pd` to avoid
+            // adding the redundant peer.
+            if p.is_leader() {
+                // Notify pd immediately.
+                info!(
+                    "{} notify pd with change peer region {:?}",
+                    p.tag,
+                    p.region()
+                );
+                p.heartbeat_pd(&self.pd_worker);
             }
             my_peer_id = p.peer_id();
         } else {
