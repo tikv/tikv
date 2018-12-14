@@ -469,10 +469,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .map(|p| p.region().get_region_epoch())
         }) {
             info!(
-                "[region {}] checking target {} epoch: {:?}",
+                "[region {}] checking target {} epoch: {:?}, msg target epoch: {:?}",
                 msg.get_region_id(),
                 target_region_id,
-                epoch
+                epoch,
+                merge_target.get_region_epoch(),
             );
             // So the target peer has moved on, we should let it go.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
