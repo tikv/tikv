@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.0.10]
+### Bug Fixes
+* Avoid transferring the leader to a newly created peer, to optimize the possible delay [#3929](https://github.com/tikv/tikv/pull/3929)
+
 ## [2.0.9]
 ### Bug Fixes
 * Add the `end-key` limit to the `kv_scan` interface [#3749](https://github.com/tikv/tikv/pull/3749)
