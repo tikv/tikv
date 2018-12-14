@@ -609,7 +609,7 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_ne!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
 
     // Test transfer leader after a safe duration.
-    thread::sleep(cfg.raft_store.raft_reject_transfer_leader_duration.into());
+    thread::sleep(cfg.raft_store.raft_reject_transfer_leader_duration.0);
     cluster.transfer_leader(region_id, new_peer(3, 3));
     // Retry for more stability
     for _ in 0..20 {
