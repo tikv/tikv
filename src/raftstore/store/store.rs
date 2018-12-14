@@ -1483,6 +1483,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     if p.is_leader() {
                         p.peers_start_pending_time.push((peer.get_id(), now));
                     }
+                    p.recent_added_peer.update(peer.get_id(), now);
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
