@@ -345,7 +345,7 @@ fn restart_heartbeat(mgr: SecurityManager) {
     poller
         .spawn(client.region_heartbeat(region.clone(), peer.clone(), RegionStat::default()))
         .forget();
-    rx.recv_timeout(Duration::from_millis(300)).unwrap();
+    rx.recv_timeout(Duration::from_millis(100)).unwrap();
 
     // Restart PD
     server.stop();
@@ -357,7 +357,7 @@ fn restart_heartbeat(mgr: SecurityManager) {
     poller
         .spawn(client.region_heartbeat(region1.clone(), peer.clone(), RegionStat::default()))
         .forget();
-    thread::sleep(Duration::from_millis(1500));
+    thread::sleep(Duration::from_millis(1200));
     poller
         .spawn(client.region_heartbeat(region1.clone(), peer.clone(), RegionStat::default()))
         .forget();
