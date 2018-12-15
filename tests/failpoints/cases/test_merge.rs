@@ -14,6 +14,7 @@
 use std::sync::Arc;
 use std::thread;
 use std::time::*;
+use std::sync::mpsc;
 
 use fail;
 use futures::Future;
@@ -26,6 +27,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
 use tikv::storage::CF_RAFT;
+use tikv::util::HandyRwLock;
 use tikv::util::config::*;
 
 /// Test if merge is rollback as expected.
@@ -261,11 +263,9 @@ fn test_node_merge_recover_snapshot() {
     cluster.must_put(b"k40", b"v5");
 }
 
+// Test if a merge handled properly when there are two different snapshots of one region arrive in one raftstore tick.
 #[test]
 fn test_node_merge_multiple_snapshots() {
-    use std::sync::mpsc;
-    use tikv::util::HandyRwLock;
-
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
