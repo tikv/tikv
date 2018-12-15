@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::*;
-use std::sync::mpsc;
 
 use fail;
 use futures::Future;
@@ -27,8 +27,8 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
 use tikv::storage::CF_RAFT;
-use tikv::util::HandyRwLock;
 use tikv::util::config::*;
+use tikv::util::HandyRwLock;
 
 /// Test if merge is rollback as expected.
 #[test]
