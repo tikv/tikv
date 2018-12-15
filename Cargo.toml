@@ -113,7 +113,8 @@ more-asserts = "0.1"
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/zhangjinpeng1987/rust-rocksdb.git"
+branch = "encrypted_env"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"

@@ -30,6 +30,7 @@ pub struct SecurityConfig {
     // Test purpose only.
     #[serde(skip)]
     pub override_ssl_target: String,
+    pub cipher_file: String,
 }
 
 impl Default for SecurityConfig {
@@ -39,6 +40,7 @@ impl Default for SecurityConfig {
             cert_path: String::new(),
             key_path: String::new(),
             override_ssl_target: String::new(),
+            cipher_file: String::new(),
         }
     }
 }

@@ -513,6 +513,11 @@ impl Snap {
                 // being used, we must set them empty or disabled.
                 io_options.compression_per_level(&[]);
                 io_options.bottommost_compression(DBCompressionType::Disable);
+
+                // When open db with encrypted env, we need to send the same env to the SstFileWriter.
+                if let Some(env) = snap.get_db().env() {
+                    io_options.set_env(env);
+                }
                 let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
                 box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                 cf_file.sst_writer = Some(writer);

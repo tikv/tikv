@@ -22,5 +22,6 @@ pub fn new_security_cfg() -> SecurityConfig {
         cert_path: format!("{}", p.join("data/server.crt").display()),
         key_path: format!("{}", p.join("data/server.pem").display()),
         override_ssl_target: "example.com".to_owned(),
+        cipher_file: "".to_owned(),
     }
 }

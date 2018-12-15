@@ -24,6 +24,7 @@ extern crate libc;
 extern crate log;
 #[macro_use(slog_o, slog_kv)]
 extern crate slog;
+extern crate hex;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
@@ -67,12 +68,15 @@ use tikv::server::resolve;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::util::file;
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
 use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
+
+use rocksdb::Env;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -145,9 +149,30 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {:?}", e));
     let pd_sender = pd_worker.scheduler();
 
+    // Load cipher text if needed
+    let encrypted_env = if cfg.security.cipher_file.is_empty() {
+        None
+    } else {
+        let cipher_hex = match file::read_all(&cfg.security.cipher_file) {
+            Err(e) => fatal!("failed to load cipher file: {:?}", e),
+            Ok(content) => content,
+        };
+        let cipher_text = match hex::decode(cipher_hex) {
+            Err(e) => fatal!("cipher file should be hex type, error: {:?}", e),
+            Ok(text) => text,
+        };
+        match Env::new_default_ctr_encrypted_env(&cipher_text) {
+            Err(e) => fatal!("failed to create encrypted env: {:?}", e),
+            Ok(env) => Some(Arc::new(env)),
+        }
+    };
+
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.add_event_listener(compaction_listener);
+    if encrypted_env.is_some() {
+        kv_db_opts.set_env(encrypted_env.as_ref().unwrap().clone());
+    }
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
@@ -167,7 +192,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
-    let raft_db_opts = cfg.raftdb.build_opt();
+    let mut raft_db_opts = cfg.raftdb.build_opt();
+    if encrypted_env.is_some() {
+        raft_db_opts.set_env(encrypted_env.unwrap());
+    }
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
     let raft_engine = Arc::new(
         rocksdb_util::new_engine_opt(
