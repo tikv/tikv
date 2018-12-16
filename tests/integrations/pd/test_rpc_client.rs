@@ -350,14 +350,14 @@ fn restart_heartbeat(mgr: SecurityManager) {
     // Restart PD
     server.stop();
     server.start(&mgr, eps);
-    thread::sleep(Duration::from_millis(500));
+    thread::sleep(Duration::from_millis(100));
     // Send some heartbeats to invoke pd-client to reconnect
     let mut region1 = region.clone();
     region1.set_id(10);
     poller
         .spawn(client.region_heartbeat(region1.clone(), peer.clone(), RegionStat::default()))
         .forget();
-    thread::sleep(Duration::from_millis(1200));
+    thread::sleep(Duration::from_millis(1000));
     poller
         .spawn(client.region_heartbeat(region1.clone(), peer.clone(), RegionStat::default()))
         .forget();
