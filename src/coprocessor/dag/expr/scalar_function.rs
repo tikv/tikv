@@ -121,6 +121,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::WeekWithMode
+            | ScalarFuncSig::YearWeekWithMode
             | ScalarFuncSig::TruncateReal
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
@@ -274,6 +275,7 @@ impl ScalarFunc {
             | ScalarFuncSig::FromBase64
             | ScalarFuncSig::ToBase64
             | ScalarFuncSig::WeekWithoutMode
+            | ScalarFuncSig::YearWeekWithoutMode
             | ScalarFuncSig::Space
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Uncompress
@@ -291,7 +293,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::Substring3Args
-            | ScalarFuncSig::SubstringBinary3Args => (3, 3),
+            | ScalarFuncSig::SubstringBinary3Args
+            | ScalarFuncSig::Rpad
+            | ScalarFuncSig::RpadBinary => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -436,8 +440,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
-            | ScalarFuncSig::Rpad
-            | ScalarFuncSig::RpadBinary
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
@@ -501,8 +503,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ValuesString
             | ScalarFuncSig::ValuesTime
             | ScalarFuncSig::Version
-            | ScalarFuncSig::YearWeekWithMode
-            | ScalarFuncSig::YearWeekWithoutMode
             | ScalarFuncSig::JsonArrayAppendSig
             | ScalarFuncSig::JsonArrayInsertSig
             | ScalarFuncSig::JsonMergePatchSig
@@ -758,6 +758,8 @@ dispatch_call! {
         DayOfYear => day_of_year,
         WeekWithMode => week_with_mode,
         WeekWithoutMode => week_without_mode,
+        YearWeekWithMode => year_week_with_mode,
+        YearWeekWithoutMode => year_week_without_mode,
         WeekDay => week_day,
         WeekOfYear => week_of_year,
         Year => year,
@@ -972,6 +974,8 @@ dispatch_call! {
         SubstringBinary2Args => substring_binary_2_args,
         SubstringBinary3Args => substring_binary_3_args,
         Space => space,
+        Rpad => rpad,
+        RpadBinary => rpad_binary,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1307,6 +1311,8 @@ mod tests {
                     ScalarFuncSig::SubstringIndex,
                     ScalarFuncSig::Substring3Args,
                     ScalarFuncSig::SubstringBinary3Args,
+                    ScalarFuncSig::Rpad,
+                    ScalarFuncSig::RpadBinary,
                 ],
                 3,
                 3,
@@ -1490,8 +1496,6 @@ mod tests {
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
-            ScalarFuncSig::Rpad,
-            ScalarFuncSig::RpadBinary,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
@@ -1555,8 +1559,6 @@ mod tests {
             ScalarFuncSig::ValuesString,
             ScalarFuncSig::ValuesTime,
             ScalarFuncSig::Version,
-            ScalarFuncSig::YearWeekWithMode,
-            ScalarFuncSig::YearWeekWithoutMode,
         ];
 
         for sig in cases {
