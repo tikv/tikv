@@ -5,6 +5,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ## [2.0.10]
 ### Bug Fixes
 * Avoid transferring the leader to a newly created peer, to optimize the possible delay [#3929](https://github.com/tikv/tikv/pull/3929)
+* Fix redundant Region heartbeats [#3930](https://github.com/tikv/tikv/pull/3930)
 
 ## [2.0.9]
 ### Bug Fixes
