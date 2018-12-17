@@ -18,15 +18,17 @@ other than Linux. PRs are welcome!
 
 */
 
+use libc::pid_t;
 use std::io;
-use std::io::{Result};
-use libc::{pid_t};
+use std::io::Result;
 
 pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
     Ok(())
 }
 
-pub fn get_thread_ids(_: pid_t) -> Result<Vec<pid_t>> { Ok(Vec::new()) }
+pub fn get_thread_ids(_: pid_t) -> Result<Vec<pid_t>> {
+    Ok(Vec::new())
+}
 
 pub struct Stat {
     name: String,
@@ -34,7 +36,7 @@ pub struct Stat {
 
 impl Stat {
     pub fn collect(_: pid_t, _: pid_t) -> Result<Stat> {
-        Ok(Stat{
+        Ok(Stat {
             name: "".to_owned(),
         })
     }
@@ -47,4 +49,3 @@ impl Stat {
         0.0
     }
 }
-

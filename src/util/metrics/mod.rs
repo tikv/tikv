@@ -26,7 +26,6 @@ mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::{get_thread_ids, monitor_threads, Stat};
 
-
 /// `run_prometheus` runs a background prometheus client.
 pub fn run_prometheus(
     interval: Duration,
