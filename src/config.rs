@@ -222,7 +222,7 @@ cf_config!(DefaultCfConfig);
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
         let mut titandb = TitanDbConfig::default();
-        titandb.blob_cache_size = ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64);
+        titandb.min_blob_size = 4096;
         DefaultCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64),
@@ -282,8 +282,7 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
-        let mut titandb = TitanDbConfig::default();
-        titandb.blob_cache_size = ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64);
+        let titandb = TitanDbConfig::default();
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -351,8 +350,7 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
-        let mut titandb = TitanDbConfig::default();
-        titandb.blob_cache_size = ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64);
+        let titandb = TitanDbConfig::default();
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
