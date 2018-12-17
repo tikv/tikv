@@ -76,7 +76,7 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
-/// Calculate the sum32 of the given file.
+/// Calculate the given file's sum32.
 pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
     let mut f = OpenOptions::new().read(true).open(path)?;

@@ -52,7 +52,7 @@ fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
 
 /// This FileLogger will rotate logs according to a time span.
 /// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}"
-/// Note: log will *not* be compressed or any changed except its name.
+/// Note: log file will *not* be compressed or any changed except its name.
 pub struct RotatingFileLogger {
     rotation_timespan: Duration,
     next_rotation_time: DateTime<Utc>,

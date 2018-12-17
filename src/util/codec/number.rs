@@ -121,32 +121,32 @@ pub trait NumberEncoder: Write {
         self.encode_u64_desc(u)
     }
 
-    ///Write `u16` numbers in little endian order.
+    /// Write `u16` numbers in little endian order.
     fn encode_u16_le(&mut self, v: u16) -> Result<()> {
         self.write_u16::<LittleEndian>(v).map_err(From::from)
     }
 
-    ///Write `u32` numbers in little endian order.
+    /// Write `u32` numbers in little endian order.
     fn encode_u32_le(&mut self, v: u32) -> Result<()> {
         self.write_u32::<LittleEndian>(v).map_err(From::from)
     }
 
-    ///Write `i32` numbers in little endian order.
+    /// Write `i32` numbers in little endian order.
     fn encode_i32_le(&mut self, v: i32) -> Result<()> {
         self.write_i32::<LittleEndian>(v).map_err(From::from)
     }
 
-    ///Write `f64` numbers in little endian order.
+    /// Write `f64` numbers in little endian order.
     fn encode_f64_le(&mut self, v: f64) -> Result<()> {
         self.write_f64::<LittleEndian>(v).map_err(From::from)
     }
 
-    ///Write `i64` numbers in little endian order.
+    /// Write `i64` numbers in little endian order.
     fn encode_i64_le(&mut self, v: i64) -> Result<()> {
         self.write_i64::<LittleEndian>(v).map_err(From::from)
     }
 
-    ///Write `u64` numbers in little endian order.
+    /// Write `u64` numbers in little endian order.
     fn encode_u64_le(&mut self, v: u64) -> Result<()> {
         self.write_u64::<LittleEndian>(v).map_err(From::from)
     }

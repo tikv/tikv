@@ -42,8 +42,7 @@ impl IOLimiter {
         self.inner.set_bytes_per_second(bytes_per_sec)
     }
 
-    /// Request for token for bytes. If this request can not be satisfied, the call
-    /// is blocked.
+    /// Request for token for bytes. If this request can not be satisfied, the call is blocked.
     pub fn request(&self, bytes: i64) {
         self.inner.request(bytes, PRIORITY_HIGH)
     }
