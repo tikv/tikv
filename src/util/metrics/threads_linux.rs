@@ -156,6 +156,7 @@ impl Collector for ThreadsCollector {
     }
 }
 
+/// Get thread ids of the given process id.
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     let mut tids = Vec::new();
     let dirs = fs::read_dir(format!("/proc/{}/task", pid))?;
@@ -187,6 +188,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     Ok(tids)
 }
 
+/// Get thread name and the index of the last character(including ')').
 fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     let start = stat.find('(');
     let end = stat.rfind(')');
@@ -200,7 +202,13 @@ fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     )))
 }
 
-// get thread name and the index of the last character(including ')').
+/// Sanitize thread name. Keep `a-zA-Z0-9_:`, replace `-` and ` ` to `_`, drop the others.
+/// Example:
+/// +   ok123   ->  ok123
+/// +   Az_1    ->  Az_1
+/// +   a-b     ->  a_b
+/// +   a b     ->  a_b
+/// +   @123    ->  123
 fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     let mut name = String::with_capacity(raw.len());
     // sanitize thread name.
@@ -256,7 +264,7 @@ impl Stat {
     }
 }
 
-// Extracted from `Stat::collect`, for test purpose.
+/// Extracted from `Stat::collect`, for test purpose.
 fn get_thread_stat_internal(stat: &str) -> Result<Stat> {
     let (name, end) = get_thread_name(stat)?;
 

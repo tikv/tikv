@@ -171,9 +171,9 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     }
 }
 
-// A helper function to parse SocketAddr for mio.
-// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
-// but it is just ok for "ip:port", not "host:port".
+/// A helper function to parse SocketAddr for mio.
+/// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
+/// but it is just ok for "ip:port", not "host:port".
 pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
     let addrs = addr.to_socket_addrs()?;
     Ok(addrs.collect::<Vec<SocketAddr>>()[0])
