@@ -3,6 +3,7 @@ name = "tikv"
 version = "3.0.0-alpha"
 keywords = ["KV", "distributed-systems", "raft"]
 publish = false
+edition = "2018"
 
 [features]
 default = []
