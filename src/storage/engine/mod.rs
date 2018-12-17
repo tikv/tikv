@@ -34,7 +34,7 @@ pub mod raftkv;
 mod rocksdb;
 
 pub use self::cursor_builder::CursorBuilder;
-pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant, WriteContextTracker};
 pub use self::rocksdb::{RocksEngine, RocksSnapshot};
 
 // only used for rocksdb without persistent.

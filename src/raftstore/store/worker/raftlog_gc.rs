@@ -14,6 +14,7 @@
 use raftstore::store::engine::Iterable;
 use raftstore::store::keys;
 use raftstore::store::util::MAX_DELETE_BATCH_SIZE;
+use storage::engine::WriteContextTracker;
 use util::worker::Runnable;
 
 use rocksdb::{Writable, WriteBatch, DB};
@@ -89,6 +90,7 @@ impl Runner {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
             if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+                let _tracker = WriteContextTracker::new("raftlog_gc");
                 // Avoid large write batch to reduce latency.
                 raft_engine.write(raft_wb).unwrap();
                 raft_wb = WriteBatch::new();

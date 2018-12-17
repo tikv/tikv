@@ -48,6 +48,7 @@ use raftstore::store::peer_storage::{
 use raftstore::store::util::check_region_epoch;
 use raftstore::store::{cmd_resp, keys, util, Engines, Store};
 use raftstore::{Error, Result};
+use storage::engine::WriteContextTracker;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::collections::HashMap;
 use util::time::{duration_to_sec, Instant, SlowTimer};
@@ -330,6 +331,7 @@ impl<'a> ApplyContextCore<'a> {
     /// Write all the changes into rocksdb.
     pub fn write_to_db(&mut self, engine: &DB) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+            let _tracker = WriteContextTracker::new("apply");
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
             engine

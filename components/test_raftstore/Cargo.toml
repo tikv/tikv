@@ -22,4 +22,5 @@ git = "https://github.com/pingcap/kvproto.git"
 branch="release-2.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/huachaohuang/rust-rocksdb.git"
+branch = "perf-context"

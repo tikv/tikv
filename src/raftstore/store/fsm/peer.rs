@@ -35,6 +35,7 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use pd::{PdClient, PdTask};
 use raftstore::{Error, Result};
+use storage::engine::WriteContextTracker;
 use storage::CF_RAFT;
 use util::escape;
 use util::time::{duration_to_sec, SlowTimer};
@@ -679,6 +680,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // but region state may not changed in disk.
         fail_point!("raft_before_save");
         if !kv_wb.is_empty() {
+            let _tracker = WriteContextTracker::new("append_state");
             // RegionLocalState, ApplyState
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
@@ -692,6 +694,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         fail_point!("raft_between_save");
 
         if !raft_wb.is_empty() {
+            let _tracker = WriteContextTracker::new("append_log");
             // RaftLocalState, Raft Log Entry
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log || sync_log);
