@@ -972,7 +972,7 @@ impl Snapshot for Snap {
             check_abort(&options.abort)?;
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
-                let mut file = box_try!(File::open(&cf_file.path));
+                let file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();

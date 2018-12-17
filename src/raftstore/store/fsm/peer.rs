@@ -709,7 +709,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut ready_results = Vec::with_capacity(append_res.len());
         for (mut ready, invoke_ctx) in append_res {
             let region_id = invoke_ctx.region_id;
-            let mut is_merging;
+            let is_merging;
             let res = {
                 let peer = self.region_peers.get_mut(&region_id).unwrap();
                 is_merging = peer.pending_merge_state.is_some();

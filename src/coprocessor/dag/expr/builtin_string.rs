@@ -1466,7 +1466,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
@@ -1521,7 +1521,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);

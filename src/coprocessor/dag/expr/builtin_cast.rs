@@ -869,7 +869,7 @@ mod tests {
         ];
         for (sig, tp, col, expect) in cases {
             let col_expr = col_expr(0, tp);
-            let mut exp = scalar_func_expr(sig, &[col_expr]);
+            let exp = scalar_func_expr(sig, &[col_expr]);
             let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_int(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
@@ -1900,7 +1900,7 @@ mod tests {
             ),
         ];
         for (flag, cols, exp) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::NewDecimal);
+            let col_expr = col_expr(0, FieldTypeTp::NewDecimal);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
             ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
@@ -1948,7 +1948,7 @@ mod tests {
         ];
 
         for (flag, cols, exp, warnings_cnt) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::String);
+            let col_expr = col_expr(0, FieldTypeTp::String);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
@@ -1974,7 +1974,7 @@ mod tests {
         ];
 
         for (cols, exp) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::String);
+            let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
