@@ -227,10 +227,6 @@ impl<C: Sender<Msg>> Runner<C> {
                         .map(|k| keys::origin_key(&k).to_vec())
                         .collect()
                 }
-                res.unwrap()
-                    .into_iter()
-                    .map(|k| keys::origin_key(&k).to_vec())
-                    .collect()
             }
         };
 

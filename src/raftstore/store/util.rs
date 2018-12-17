@@ -1747,7 +1747,6 @@ mod tests {
             let k = format!("key_{:03}", i).into_bytes();
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
             engine.put_cf(cf_handle, &k, &big_value).unwrap();
-            // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
         assert_eq!(
