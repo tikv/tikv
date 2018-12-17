@@ -21,12 +21,8 @@
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(duration_as_u128)]
-#![feature(entry_or_default)]
-#![feature(proc_macro_non_items)]
-#![feature(proc_macro_gen)]
-#![feature(ascii_ctype)]
+#![feature(proc_macro_hygiene)]
 #![feature(const_int_ops)]
-#![feature(use_extern_macros)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
