@@ -201,33 +201,33 @@ impl<C: Sender<Msg>> Runner<C> {
 
         let split_keys = match host.policy() {
             CheckPolicy::SCAN => {
-                let res = self.scan_split_keys(&mut host, region, &start_key, &end_key);
-                if let Err(e) = res {
-                    error!("[region {}] failed to scan split key: {}", region_id, e);
-                    return;
+                match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
+                    Ok(keys) => keys,
+                    Err(e) => {
+                        error!("[region {}] failed to scan split key: {}", region_id, e);
+                        return;
+                    }
                 }
-                res.unwrap()
             }
-            CheckPolicy::APPROXIMATE => {
-                let res = host.approximate_split_keys(region, &self.engine);
-                if let Err(e) = res {
+            CheckPolicy::APPROXIMATE => match host.approximate_split_keys(region, &self.engine) {
+                Ok(keys) => keys
+                    .into_iter()
+                    .map(|k| keys::origin_key(&k).to_vec())
+                    .collect(),
+                Err(e) => {
                     error!(
                         "[region {}] failed to get approxiamte split key: {}, try scan way",
                         region_id, e
                     );
-                    let res = self.scan_split_keys(&mut host, region, &start_key, &end_key);
-                    if let Err(e) = res {
-                        error!("[region {}] failed to scan split key: {}", region_id, e);
-                        return;
+                    match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
+                        Ok(keys) => keys,
+                        Err(e) => {
+                            error!("[region {}] failed to scan split key: {}", region_id, e);
+                            return;
+                        }
                     }
-                    res.unwrap()
-                } else {
-                    res.unwrap()
-                        .into_iter()
-                        .map(|k| keys::origin_key(&k).to_vec())
-                        .collect()
                 }
-            }
+            },
         };
 
         if !split_keys.is_empty() {
