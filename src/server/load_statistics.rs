@@ -13,7 +13,6 @@ use util::metrics::{get_thread_ids, Stat};
 //     heavy_load_threshold: usize,
 // }
 
-#[cfg(target_os = "linux")]
 pub(super) struct GrpcThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,
@@ -24,7 +23,6 @@ pub(super) struct GrpcThreadLoadStatistics {
     in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>,
 }
 
-#[cfg(target_os = "linux")]
 impl GrpcThreadLoadStatistics {
     pub(super) fn new(capacity: usize, in_heavy_load: Arc<(AtomicUsize, AtomicUsize)>) -> Self {
         let pid: pid_t = unsafe { getpid() };
