@@ -15,15 +15,7 @@
 mod jemalloc {
     use libc::{self, c_char, c_void};
     use std::{ptr, slice};
-
-    extern "C" {
-        #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
-        fn malloc_stats_print(
-            write_cb: extern "C" fn(*mut c_void, *const c_char),
-            cbopaque: *mut c_void,
-            opts: *const c_char,
-        );
-    }
+    use jemallocator::ffi::malloc_stats_print;
 
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         unsafe {
