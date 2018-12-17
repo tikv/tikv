@@ -23,9 +23,9 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
 use raft::SnapshotStatus;
-use raftstore::store::util::KeysInfoFormatter;
-use util::escape;
-use util::rocksdb::CompactedEvent;
+use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::util::escape;
+use crate::util::rocksdb::CompactedEvent;
 
 use super::{Peer, RegionSnapshot};
 
@@ -320,8 +320,8 @@ mod tests {
 
     use super::*;
     use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
-    use raftstore::Error;
-    use util::transport::SendCh;
+    use crate::raftstore::Error;
+    use crate::util::transport::SendCh;
 
     fn call_command(
         sendch: &SendCh<Msg>,

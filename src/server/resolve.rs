@@ -18,9 +18,9 @@ use std::time::Instant;
 
 use kvproto::metapb;
 
-use pd::PdClient;
-use util::collections::HashMap;
-use util::worker::{Runnable, Scheduler, Worker};
+use crate::pd::PdClient;
+use crate::util::collections::HashMap;
+use crate::util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
 use super::Result;
@@ -154,9 +154,9 @@ mod tests {
 
     use kvproto::metapb;
     use kvproto::pdpb;
-    use pd::{PdClient, PdFuture, RegionStat, Result};
-    use util;
-    use util::collections::HashMap;
+    use crate::pd::{PdClient, PdFuture, RegionStat, Result};
+    use crate::util;
+    use crate::util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

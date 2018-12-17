@@ -15,10 +15,10 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
+use crate::grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
 use kvproto::import_kvpb_grpc::create_import_kv;
 
-use config::TiKvConfig;
+use crate::config::TiKvConfig;
 
 use super::{ImportKVService, KVImporter};
 

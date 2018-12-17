@@ -20,12 +20,12 @@ use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::{cmp, i32, i64, mem, u32, u64};
 
-use coprocessor::codec::{convert, Error, Result, TEN_POW};
-use coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
+use crate::coprocessor::dag::expr::EvalContext;
 
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
-use util::escape;
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
+use crate::util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {

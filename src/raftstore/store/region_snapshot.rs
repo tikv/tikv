@@ -16,10 +16,10 @@ use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use std::cmp;
 use std::sync::Arc;
 
-use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
-use raftstore::store::{keys, util, PeerStorage};
-use raftstore::Result;
-use util::set_panic_mark;
+use crate::raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
+use crate::raftstore::store::{keys, util, PeerStorage};
+use crate::raftstore::Result;
+use crate::util::set_panic_mark;
 
 /// Snapshot of a region.
 ///
@@ -338,13 +338,13 @@ mod tests {
     use rocksdb::Writable;
     use tempdir::TempDir;
 
-    use raftstore::store::engine::*;
-    use raftstore::store::keys::*;
-    use raftstore::store::{CacheQueryStats, Engines, PeerStorage};
-    use raftstore::Result;
-    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
-    use util::rocksdb::compact_files_in_range;
-    use util::{escape, rocksdb, worker};
+    use crate::raftstore::store::engine::*;
+    use crate::raftstore::store::keys::*;
+    use crate::raftstore::store::{CacheQueryStats, Engines, PeerStorage};
+    use crate::raftstore::Result;
+    use crate::storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
+    use crate::util::rocksdb::compact_files_in_range;
+    use crate::util::{escape, rocksdb, worker};
 
     use super::*;
 

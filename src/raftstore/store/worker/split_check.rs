@@ -22,14 +22,14 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use rocksdb::{DBIterator, DB};
 
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::engine::{IterOption, Iterable};
-use raftstore::store::{keys, Callback, Msg};
-use raftstore::Result;
-use storage::{CfName, CF_WRITE, LARGE_CFS};
-use util::escape;
-use util::transport::{RetryableSendCh, Sender};
-use util::worker::Runnable;
+use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::raftstore::store::engine::{IterOption, Iterable};
+use crate::raftstore::store::{keys, Callback, Msg};
+use crate::raftstore::Result;
+use crate::storage::{CfName, CF_WRITE, LARGE_CFS};
+use crate::util::escape;
+use crate::util::transport::{RetryableSendCh, Sender};
+use crate::util::worker::Runnable;
 
 use super::metrics::*;
 

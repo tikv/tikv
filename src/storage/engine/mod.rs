@@ -20,10 +20,10 @@ use std::{error, result};
 
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
-use raftstore::store::engine::IterOption;
-use raftstore::store::{SeekRegionFilter, SeekRegionResult};
+use crate::raftstore::store::engine::IterOption;
+use crate::raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::TablePropertiesCollection;
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 mod btree_engine;
 mod cursor_builder;
@@ -674,9 +674,9 @@ pub mod tests {
     use super::SEEK_BOUND;
     use super::*;
     use kvproto::kvrpcpb::Context;
-    use storage::{CfName, Key, CF_DEFAULT};
-    use util::codec::bytes;
-    use util::escape;
+    use crate::storage::{CfName, Key, CF_DEFAULT};
+    use crate::util::codec::bytes;
+    use crate::util::escape;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {

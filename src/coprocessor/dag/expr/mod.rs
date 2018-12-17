@@ -21,10 +21,10 @@ use rand::XorShiftRng;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use cop_datatype::prelude::*;
-use coprocessor::codec::mysql::charset;
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use coprocessor::codec::{self, Datum};
-use util::codec::number;
+use crate::coprocessor::codec::mysql::charset;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use crate::coprocessor::codec::{self, Datum};
+use crate::util::codec::number;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -45,7 +45,7 @@ mod ctx;
 mod scalar_function;
 
 pub use self::ctx::*;
-pub use coprocessor::codec::{Error, Result};
+pub use crate::coprocessor::codec::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -321,11 +321,11 @@ mod tests {
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
     use super::{Error, EvalConfig, EvalContext, Expression};
-    use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
-    use coprocessor::codec::mysql::json::JsonEncoder;
-    use coprocessor::codec::mysql::{charset, Decimal, DecimalEncoder, Duration, Json, Time};
-    use coprocessor::codec::{mysql, Datum};
-    use util::codec::number::{self, NumberEncoder};
+    use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
+    use crate::coprocessor::codec::mysql::json::JsonEncoder;
+    use crate::coprocessor::codec::mysql::{charset, Decimal, DecimalEncoder, Duration, Json, Time};
+    use crate::coprocessor::codec::{mysql, Datum};
+    use crate::util::codec::number::{self, NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {

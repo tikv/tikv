@@ -23,9 +23,9 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use util;
-use util::collections::HashMap;
-use util::time::Instant;
+use crate::util;
+use crate::util::collections::HashMap;
+use crate::util::time::Instant;
 
 lazy_static! {
     pub static ref FUTUREPOOL_PENDING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(

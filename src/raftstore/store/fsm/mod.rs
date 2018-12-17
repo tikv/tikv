@@ -34,12 +34,12 @@ use time::Timespec;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RaftMessage;
 
-use pd::PdTask;
-use raftstore::coprocessor::CoprocessorHost;
-use util::collections::{HashMap, HashSet};
-use util::transport::SendCh;
-use util::worker::{FutureWorker, Worker};
-use util::RingQueue;
+use crate::pd::PdTask;
+use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::util::collections::{HashMap, HashSet};
+use crate::util::transport::SendCh;
+use crate::util::worker::{FutureWorker, Worker};
+use crate::util::RingQueue;
 
 use super::config::Config;
 use super::local_metrics::RaftMetrics;
@@ -50,7 +50,7 @@ use super::worker::{
     ReadTask, RegionTask, SplitCheckTask,
 };
 use super::{Engines, Msg, SignificantMsg, SnapManager};
-use import::SSTImporter;
+use crate::import::SSTImporter;
 
 type Key = Vec<u8>;
 

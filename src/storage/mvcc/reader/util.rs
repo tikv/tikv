@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::mvcc::{Error, Result};
-use storage::mvcc::{Lock, LockType, Write};
-use storage::{Cursor, Iterator, Key, Statistics, Value};
+use crate::storage::mvcc::{Error, Result};
+use crate::storage::mvcc::{Lock, LockType, Write};
+use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
 
 /// Representing check lock result.
 #[derive(Debug)]

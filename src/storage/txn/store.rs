@@ -13,11 +13,11 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::mvcc::{
+use crate::storage::mvcc::{
     BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
 };
-use storage::mvcc::{Error as MvccError, MvccReader};
-use storage::{Key, KvPair, Snapshot, Statistics, Value};
+use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
@@ -294,10 +294,10 @@ mod tests {
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{Engine, RocksEngine, RocksSnapshot};
-    use storage::mvcc::Error as MvccError;
-    use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, Statistics, TestEngineBuilder};
+    use crate::storage::engine::{Engine, RocksEngine, RocksSnapshot};
+    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::mvcc::MvccTxn;
+    use crate::storage::{Key, KvPair, Mutation, Options, Statistics, TestEngineBuilder};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -795,7 +795,7 @@ mod benches {
     use std::collections::BTreeMap;
 
     use super::{FixtureStore, Scanner, Store};
-    use storage::{Key, Statistics};
+    use crate::storage::{Key, Statistics};
 
     fn gen_payload(n: usize) -> Vec<u8> {
         let mut data = vec![0; n];

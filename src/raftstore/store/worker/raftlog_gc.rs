@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::engine::Iterable;
-use raftstore::store::keys;
-use raftstore::store::util::MAX_DELETE_BATCH_SIZE;
-use util::worker::Runnable;
+use crate::raftstore::store::engine::Iterable;
+use crate::raftstore::store::keys;
+use crate::raftstore::store::util::MAX_DELETE_BATCH_SIZE;
+use crate::util::worker::Runnable;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
@@ -142,9 +142,9 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
-    use storage::CF_DEFAULT;
+    use crate::storage::CF_DEFAULT;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
+    use crate::util::rocksdb::new_engine;
 
     #[test]
     fn test_gc_raft_log() {

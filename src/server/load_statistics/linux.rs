@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use libc::{getpid, pid_t};
 
-use server::load_statistics::ThreadLoad;
-use util::metrics::{get_thread_ids, Stat};
+use crate::server::load_statistics::ThreadLoad;
+use crate::util::metrics::{get_thread_ids, Stat};
 
 pub struct ThreadLoadStatistics {
     pid: pid_t,

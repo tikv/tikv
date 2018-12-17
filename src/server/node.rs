@@ -21,23 +21,23 @@ use mio::EventLoop;
 
 use super::transport::RaftStoreRouter;
 use super::Result;
-use import::SSTImporter;
+use crate::import::SSTImporter;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
+use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::{
+use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::store::{
     self, keys, Config as StoreConfig, Engines, Msg, Peekable, ReadTask, SignificantMsg,
     SnapManager, Store, StoreChannel, Transport,
 };
 use rocksdb::DB;
-use server::readpool::ReadPool;
-use server::Config as ServerConfig;
-use server::ServerRaftStoreRouter;
-use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::transport::SendCh;
-use util::worker::{FutureWorker, Worker};
+use crate::server::readpool::ReadPool;
+use crate::server::Config as ServerConfig;
+use crate::server::ServerRaftStoreRouter;
+use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
+use crate::util::transport::SendCh;
+use crate::util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -410,7 +410,7 @@ where
 mod tests {
     use super::check_region_epoch;
     use kvproto::metapb;
-    use raftstore::store::keys;
+    use crate::raftstore::store::keys;
 
     #[test]
     fn test_check_region_epoch() {

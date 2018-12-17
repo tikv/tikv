@@ -22,7 +22,7 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag};
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 use safemem;
 
 const SPACE: u8 = 0o40u8;
@@ -828,14 +828,14 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 mod tests {
     use super::{encoded_size, TrimDirection};
     use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
-    use coprocessor::codec::mysql::charset::CHARSET_BIN;
+    use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
     use tipb::expression::{Expr, ScalarFuncSig};
 
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
         col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
     };
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
     fn test_length() {

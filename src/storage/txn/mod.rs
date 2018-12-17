@@ -27,12 +27,12 @@ pub use self::store::{Scanner, SnapshotStore, Store, StoreScanner};
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Engine(err: ::storage::engine::Error) {
+        Engine(err: crate::storage::engine::Error) {
             from()
             cause(err)
             description(err.description())
         }
-        Codec(err: ::util::codec::Error) {
+        Codec(err: crate::util::codec::Error) {
             from()
             cause(err)
             description(err.description())
@@ -42,7 +42,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Mvcc(err: ::storage::mvcc::Error) {
+        Mvcc(err: crate::storage::mvcc::Error) {
             from()
             cause(err)
             description(err.description())

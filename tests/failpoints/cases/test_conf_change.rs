@@ -20,7 +20,7 @@ use tikv::pd::PdClient;
 
 #[test]
 fn test_destory_local_reader() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);

@@ -17,7 +17,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::Path;
 
 use chrono;
-use grpc;
+use crate::grpc;
 use log;
 use log::SetLoggerError;
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};

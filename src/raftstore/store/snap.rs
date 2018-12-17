@@ -26,26 +26,26 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 
-use raftstore::errors::Error as RaftStoreError;
-use raftstore::store::util::check_key_in_region;
-use raftstore::store::Msg;
-use raftstore::Result as RaftStoreResult;
-use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
-use util::collections::{HashMap, HashMapEntry as Entry};
-use util::io_limiter::{IOLimiter, LimitWriter};
-use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use util::transport::SendCh;
-use util::HandyRwLock;
+use crate::raftstore::errors::Error as RaftStoreError;
+use crate::raftstore::store::util::check_key_in_region;
+use crate::raftstore::store::Msg;
+use crate::raftstore::Result as RaftStoreResult;
+use crate::storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+use crate::util::collections::{HashMap, HashMapEntry as Entry};
+use crate::util::io_limiter::{IOLimiter, LimitWriter};
+use crate::util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use crate::util::transport::SendCh;
+use crate::util::HandyRwLock;
 
-use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
-use raftstore::store::keys::{self, enc_end_key, enc_start_key};
+use crate::raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
+use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 
-use raftstore::store::metrics::{
+use crate::raftstore::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
     SNAPSHOT_CF_SIZE,
 };
-use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
+use crate::raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
 pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
@@ -226,10 +226,10 @@ use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileW
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::time::Instant;
-use util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
-use util::rocksdb;
-use util::rocksdb::get_fastest_supported_compression_type;
-use util::time::duration_to_sec;
+use crate::util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
+use crate::util::rocksdb;
+use crate::util::rocksdb::get_fastest_supported_compression_type;
+use crate::util::time::duration_to_sec;
 
 pub const SNAPSHOT_VERSION: u64 = 2;
 const META_FILE_SUFFIX: &str = ".meta";
@@ -1470,12 +1470,12 @@ pub mod tests {
     use rocksdb::DB;
     use std::path::PathBuf;
 
-    use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-    use raftstore::store::keys;
-    use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-    use raftstore::Result;
-    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::rocksdb::{self, CFOptions};
+    use crate::raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use crate::raftstore::store::keys;
+    use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+    use crate::raftstore::Result;
+    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::rocksdb::{self, CFOptions};
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";

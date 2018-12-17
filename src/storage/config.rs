@@ -15,7 +15,7 @@ use std::error::Error;
 
 use sys_info;
 
-use util::config::{self, ReadableSize};
+use crate::util::config::{self, ReadableSize};
 
 pub const DEFAULT_DATA_DIR: &str = "";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";

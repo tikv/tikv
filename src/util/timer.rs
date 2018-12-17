@@ -17,7 +17,7 @@ use std::sync::mpsc;
 use std::thread::Builder;
 use std::time::Duration;
 use tokio_timer::{self, timer::Handle};
-use util::time::Instant;
+use crate::util::time::Instant;
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -113,7 +113,7 @@ mod tests {
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
-    use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
+    use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {

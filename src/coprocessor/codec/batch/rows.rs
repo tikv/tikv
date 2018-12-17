@@ -22,8 +22,8 @@ use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::schema::ColumnInfo;
 
 use super::BatchColumn;
-use coprocessor::codec::mysql::Tz;
-use coprocessor::codec::{datum, Error, Result};
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::{datum, Error, Result};
 
 pub struct BatchRows<E> {
     /// Multiple interested columns. Each column is either decoded, or not decoded.
@@ -341,7 +341,7 @@ impl LazyBatchColumn {
 mod tests {
     use super::*;
 
-    use coprocessor::codec::datum::{Datum, DatumEncoder};
+    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
     /// Helper method to generate raw row ([u8] vector) from datum vector.
     fn raw_row_from_datums(datums: impl AsRef<[Option<Datum>]>, comparable: bool) -> Vec<Vec<u8>> {
@@ -964,7 +964,7 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -995,7 +995,7 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -1027,7 +1027,7 @@ mod benches {
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 

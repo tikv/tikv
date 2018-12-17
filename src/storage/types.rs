@@ -18,11 +18,11 @@ use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
 
-use storage::mvcc::{Lock, Write};
-use util::codec::bytes;
-use util::codec::bytes::BytesEncoder;
-use util::codec::number::{self, NumberEncoder};
-use util::{codec, escape};
+use crate::storage::mvcc::{Lock, Write};
+use crate::util::codec::bytes;
+use crate::util::codec::bytes::BytesEncoder;
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::{codec, escape};
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 

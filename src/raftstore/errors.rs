@@ -19,13 +19,13 @@ use std::result;
 use protobuf::{ProtobufError, RepeatedField};
 
 use kvproto::{errorpb, metapb};
-use pd;
+use crate::pd;
 use raft;
-use util::codec;
+use crate::util::codec;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use util::{escape, transport};
+use crate::util::{escape, transport};
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 

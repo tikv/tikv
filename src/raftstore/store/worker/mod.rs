@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore;
-use raftstore::store::msg::Msg;
+use crate::raftstore;
+use crate::raftstore::store::msg::Msg;
 use std::sync::mpsc::Sender;
-use util::transport::SendCh;
+use crate::util::transport::SendCh;
 
 pub trait MsgSender {
     fn send(&self, msg: Msg) -> raftstore::Result<()>;

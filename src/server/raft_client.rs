@@ -18,14 +18,14 @@ use std::sync::Arc;
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
 use futures::{stream, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, WriteFlags};
+use crate::grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
 use super::metrics::*;
 use super::{Config, Error, Result};
-use util::collections::HashMap;
-use util::security::SecurityManager;
+use crate::util::collections::HashMap;
+use crate::util::security::SecurityManager;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;

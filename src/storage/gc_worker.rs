@@ -16,18 +16,18 @@ use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
-use raftstore::store::keys;
-use raftstore::store::msg::Msg as RaftStoreMsg;
-use raftstore::store::util::delete_all_in_range_cf;
+use crate::raftstore::store::keys;
+use crate::raftstore::store::msg::Msg as RaftStoreMsg;
+use crate::raftstore::store::util::delete_all_in_range_cf;
 use rocksdb::rocksdb::DB;
-use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use crate::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use util::rocksdb::get_cf_handle;
-use util::time::{duration_to_sec, SlowTimer};
-use util::worker::{self, Builder, Runnable, ScheduleError, Worker};
+use crate::util::rocksdb::get_cf_handle;
+use crate::util::time::{duration_to_sec, SlowTimer};
+use crate::util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -516,8 +516,8 @@ mod tests {
     use super::*;
     use futures::Future;
     use std::collections::BTreeMap;
-    use storage::{Mutation, Options, Storage};
-    use storage::{TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::{Mutation, Options, Storage};
+    use crate::storage::{TestEngineBuilder, TestStorageBuilder};
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.

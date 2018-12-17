@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use kvproto::import_sstpb::SSTMeta;
 
-use import::SSTImporter;
-use pd::PdClient;
-use raftstore::store::util::is_epoch_stale;
-use raftstore::store::Msg;
-use util::transport::SendCh;
-use util::worker::Runnable;
+use crate::import::SSTImporter;
+use crate::pd::PdClient;
+use crate::raftstore::store::util::is_epoch_stale;
+use crate::raftstore::store::Msg;
+use crate::util::transport::SendCh;
+use crate::util::worker::Runnable;
 
 pub enum Task {
     DeleteSST { ssts: Vec<SSTMeta> },

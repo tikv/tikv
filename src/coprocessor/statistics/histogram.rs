@@ -167,8 +167,8 @@ impl Histogram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::datum;
-    use coprocessor::codec::datum::Datum;
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
     use std::iter::repeat;
 
     #[test]

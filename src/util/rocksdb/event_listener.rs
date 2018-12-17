@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use rocksdb::{
     self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
 };
-use util::rocksdb::engine_metrics::*;
+use crate::util::rocksdb::engine_metrics::*;
 
 use super::properties::RangeProperties;
 

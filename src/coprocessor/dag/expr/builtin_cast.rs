@@ -19,10 +19,10 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
-use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
-use coprocessor::codec::{mysql, Datum};
+use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::mysql::decimal::RoundMode;
+use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
+use crate::coprocessor::codec::{mysql, Datum};
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -733,12 +733,12 @@ mod tests {
 
     use chrono::Utc;
 
-    use coprocessor::codec::error::*;
-    use coprocessor::codec::mysql::{self, charset, Decimal, Duration, Json, Time, TimeType, Tz};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
-    use coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::codec::error::*;
+    use crate::coprocessor::codec::mysql::{self, charset, Decimal, Duration, Json, Time, TimeType, Tz};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);

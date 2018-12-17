@@ -15,7 +15,7 @@
 mod imp {
     use libc::c_int;
 
-    use util::profiling;
+    use crate::util::profiling;
 
     use tikv::raftstore::store::Engines;
     use tikv::util::{metrics, rocksdb_stats};

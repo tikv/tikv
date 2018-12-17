@@ -30,36 +30,36 @@ use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 
-use pd::{PdClient, PdRunner, PdTask};
-use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use raftstore::store::util::{is_initial_msg, KeysInfoFormatter};
-use raftstore::Result;
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::collections::{HashMap, HashSet};
-use util::rocksdb::{CompactedEvent, CompactionListener};
-use util::time::{duration_to_sec, SlowTimer};
-use util::transport::SendCh;
-use util::worker::{FutureWorker, Scheduler, Worker};
-use util::{rocksdb, sys as util_sys, RingQueue};
+use crate::pd::{PdClient, PdRunner, PdTask};
+use crate::raftstore::coprocessor::split_observer::SplitObserver;
+use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::raftstore::store::util::{is_initial_msg, KeysInfoFormatter};
+use crate::raftstore::Result;
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::util::collections::{HashMap, HashSet};
+use crate::util::rocksdb::{CompactedEvent, CompactionListener};
+use crate::util::time::{duration_to_sec, SlowTimer};
+use crate::util::transport::SendCh;
+use crate::util::worker::{FutureWorker, Scheduler, Worker};
+use crate::util::{rocksdb, sys as util_sys, RingQueue};
 
-use import::SSTImporter;
-use raftstore::store::config::Config;
-use raftstore::store::engine::{Iterable, Mutable, Peekable};
-use raftstore::store::keys::{
+use crate::import::SSTImporter;
+use crate::raftstore::store::config::Config;
+use crate::raftstore::store::engine::{Iterable, Mutable, Peekable};
+use crate::raftstore::store::keys::{
     self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key, DATA_MAX_KEY,
 };
-use raftstore::store::local_metrics::RaftMetrics;
-use raftstore::store::metrics::*;
-use raftstore::store::peer::Peer;
-use raftstore::store::peer_storage::{self, CacheQueryStats};
-use raftstore::store::transport::Transport;
-use raftstore::store::worker::{
+use crate::raftstore::store::local_metrics::RaftMetrics;
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::peer::Peer;
+use crate::raftstore::store::peer_storage::{self, CacheQueryStats};
+use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::worker::{
     ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
     ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask,
     SplitCheckRunner,
 };
-use raftstore::store::{
+use crate::raftstore::store::{
     util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
     SnapManager, SnapshotDeleter, Store, Tick,
 };
@@ -1242,8 +1242,8 @@ mod tests {
     use std::collections::HashMap;
 
     use protobuf::RepeatedField;
-    use util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
-    use util::rocksdb::CompactedEvent;
+    use crate::util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
+    use crate::util::rocksdb::CompactedEvent;
 
     use super::*;
 

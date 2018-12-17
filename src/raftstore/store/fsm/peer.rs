@@ -33,30 +33,30 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::ConfChangeType;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use pd::{PdClient, PdTask};
-use raftstore::{Error, Result};
-use storage::CF_RAFT;
-use util::escape;
-use util::time::{duration_to_sec, SlowTimer};
-use util::worker::{FutureWorker, Stopped};
+use crate::pd::{PdClient, PdTask};
+use crate::raftstore::{Error, Result};
+use crate::storage::CF_RAFT;
+use crate::util::escape;
+use crate::util::time::{duration_to_sec, SlowTimer};
+use crate::util::worker::{FutureWorker, Stopped};
 
 use super::{store::register_timer, Key};
-use raftstore::coprocessor::RegionChangeEvent;
-use raftstore::store::cmd_resp::{bind_term, new_error};
-use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
-use raftstore::store::keys::{self, enc_end_key, enc_start_key};
-use raftstore::store::local_metrics::RaftMetrics;
-use raftstore::store::metrics::*;
-use raftstore::store::msg::Callback;
-use raftstore::store::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
-use raftstore::store::peer_storage::ApplySnapResult;
-use raftstore::store::transport::Transport;
-use raftstore::store::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
-use raftstore::store::worker::{
+use crate::raftstore::coprocessor::RegionChangeEvent;
+use crate::raftstore::store::cmd_resp::{bind_term, new_error};
+use crate::raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
+use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
+use crate::raftstore::store::local_metrics::RaftMetrics;
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
+use crate::raftstore::store::peer_storage::ApplySnapResult;
+use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
+use crate::raftstore::store::worker::{
     ApplyTask, ApplyTaskRes, CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask,
     SplitCheckTask,
 };
-use raftstore::store::{util, Msg, SignificantMsg, SnapKey, SnapshotDeleter, Store, Tick};
+use crate::raftstore::store::{util, Msg, SignificantMsg, SnapKey, SnapshotDeleter, Store, Tick};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,

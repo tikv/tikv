@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use super::{Json, Result};
-use coprocessor::codec::convert;
-use coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::codec::convert;
+use crate::coprocessor::dag::expr::EvalContext;
 
 impl Json {
     pub fn cast_to_int(&self) -> i64 {
@@ -44,7 +44,7 @@ impl Json {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
     use std::f64;
     use std::sync::Arc;
 

@@ -17,9 +17,9 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
 use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
 
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::*;
-use storage::{Snapshot, SnapshotStore};
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::*;
+use crate::storage::{Snapshot, SnapshotStore};
 
 use super::executor::{build_exec, Executor, ExecutorMetrics};
 

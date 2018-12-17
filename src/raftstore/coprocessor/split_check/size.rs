@@ -16,10 +16,10 @@ use std::mem;
 use super::super::error::Result;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use raftstore::store::util as raftstore_util;
-use raftstore::store::{keys, util, Msg};
+use crate::raftstore::store::util as raftstore_util;
+use crate::raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
-use util::transport::{RetryableSendCh, Sender};
+use crate::util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -212,14 +212,14 @@ pub mod tests {
     use tempdir::TempDir;
 
     use super::Checker;
-    use raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use raftstore::store::{keys, KeyEntry, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::{ALL_CFS, CF_WRITE};
-    use util::config::ReadableSize;
-    use util::properties::RangePropertiesCollectorFactory;
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::transport::RetryableSendCh;
-    use util::worker::Runnable;
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
+    use crate::raftstore::store::{keys, KeyEntry, Msg, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::{ALL_CFS, CF_WRITE};
+    use crate::util::config::ReadableSize;
+    use crate::util::properties::RangePropertiesCollectorFactory;
+    use crate::util::rocksdb::{new_engine_opt, CFOptions};
+    use crate::util::transport::RetryableSendCh;
+    use crate::util::worker::Runnable;
 
     pub fn must_split_at(
         rx: &mpsc::Receiver<Msg>,

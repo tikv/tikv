@@ -35,24 +35,24 @@ use kvproto::raft_serverpb::{
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
-use import::SSTImporter;
+use crate::import::SSTImporter;
 use raft::NO_LIMIT;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::metrics::*;
-use raftstore::store::msg::Callback;
-use raftstore::store::peer::Peer;
-use raftstore::store::peer_storage::{
+use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::peer::Peer;
+use crate::raftstore::store::peer_storage::{
     self, compact_raft_log, write_initial_apply_state, write_peer_state,
 };
-use raftstore::store::util::check_region_epoch;
-use raftstore::store::{cmd_resp, keys, util, Engines, Store};
-use raftstore::{Error, Result};
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::collections::HashMap;
-use util::time::{duration_to_sec, Instant, SlowTimer};
-use util::worker::Runnable;
-use util::{escape, rocksdb, MustConsumeVec};
+use crate::raftstore::store::util::check_region_epoch;
+use crate::raftstore::store::{cmd_resp, keys, util, Engines, Store};
+use crate::raftstore::{Error, Result};
+use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::util::collections::HashMap;
+use crate::util::time::{duration_to_sec, Instant, SlowTimer};
+use crate::util::worker::Runnable;
+use crate::util::{escape, rocksdb, MustConsumeVec};
 
 use super::metrics::*;
 
@@ -2229,16 +2229,16 @@ mod tests {
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
-    use raftstore::coprocessor::*;
-    use raftstore::store::msg::WriteResponse;
-    use raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
-    use raftstore::store::util::{new_learner_peer, new_peer};
+    use crate::raftstore::coprocessor::*;
+    use crate::raftstore::store::msg::WriteResponse;
+    use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
+    use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use rocksdb::{Writable, WriteBatch, DB};
     use tempdir::TempDir;
 
     use super::*;
-    use import::test_helpers::*;
-    use util::collections::HashMap;
+    use crate::import::test_helpers::*;
+    use crate::util::collections::HashMap;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();

@@ -31,22 +31,22 @@ use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
-use pd::{PdTask, INVALID_ID};
+use crate::pd::{PdTask, INVALID_ID};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
-use raftstore::store::worker::{
+use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
+use crate::raftstore::store::worker::{
     apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
 };
-use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
-use raftstore::{Error, Result};
-use util::collections::{HashMap, HashSet};
-use util::time::{duration_to_sec, monotonic_raw_now};
-use util::worker::{FutureWorker, Scheduler};
-use util::{escape, MustConsumeVec};
+use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
+use crate::raftstore::{Error, Result};
+use crate::util::collections::{HashMap, HashSet};
+use crate::util::time::{duration_to_sec, monotonic_raw_now};
+use crate::util::worker::{FutureWorker, Scheduler};
+use crate::util::{escape, MustConsumeVec};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};

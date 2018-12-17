@@ -25,8 +25,8 @@ use kvproto::metapb::*;
 use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use uuid::Uuid;
 
-use pd::RegionInfo;
-use raftstore::store::keys;
+use crate::pd::RegionInfo;
+use crate::raftstore::store::keys;
 
 use super::client::*;
 use super::common::*;

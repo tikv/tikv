@@ -15,8 +15,8 @@ use fail;
 use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
-use grpc::{Error as GrpcError, WriteFlags};
-use grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
+use crate::grpc::{Error as GrpcError, WriteFlags};
+use crate::grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::*;
 use kvproto::debugpb_grpc;
 use kvproto::raft_cmdpb::{
@@ -25,11 +25,11 @@ use kvproto::raft_cmdpb::{
 };
 use protobuf::text_format::print_to_string;
 
-use raftstore::store::msg::Callback;
-use raftstore::store::Engines;
-use server::debug::{Debugger, Error};
-use server::transport::RaftStoreRouter;
-use util::{jemalloc, metrics, rocksdb_stats};
+use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::Engines;
+use crate::server::debug::{Debugger, Error};
+use crate::server::transport::RaftStoreRouter;
+use crate::util::{jemalloc, metrics, rocksdb_stats};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {

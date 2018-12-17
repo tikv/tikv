@@ -132,7 +132,7 @@ pub mod raftstore;
 pub mod server;
 pub mod storage;
 
-pub use storage::Storage;
+pub use crate::storage::Storage;
 
 // As of now TiKV always turns on jemalloc on Unix, though libraries
 // generally shouldn't be opinionated about their allocators like

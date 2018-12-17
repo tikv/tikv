@@ -17,8 +17,8 @@ use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
 use time::{self, Tm};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -301,8 +301,8 @@ impl Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::mysql::MAX_FSP;
-    use util::escape;
+    use crate::coprocessor::codec::mysql::MAX_FSP;
+    use crate::util::escape;
 
     #[test]
     fn test_hours() {

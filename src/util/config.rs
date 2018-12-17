@@ -24,7 +24,7 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use util;
+use crate::util;
 
 quick_error! {
     #[derive(Debug)]
