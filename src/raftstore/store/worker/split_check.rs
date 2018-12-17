@@ -23,6 +23,7 @@ use kvproto::pdpb::CheckPolicy;
 use rocksdb::{DBIterator, DB};
 
 use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::SplitCheckerHost;
 use raftstore::store::engine::{IterOption, Iterable};
 use raftstore::store::{keys, Callback, Msg};
 use raftstore::Result;
@@ -200,28 +201,12 @@ impl<C: Sender<Msg>> Runner<C> {
 
         let split_keys = match host.policy() {
             CheckPolicy::SCAN => {
-                let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
-                let res = MergedIterator::new(
-                    self.engine.as_ref(),
-                    LARGE_CFS,
-                    &start_key,
-                    &end_key,
-                    false,
-                ).map(|mut iter| {
-                    while let Some(e) = iter.next() {
-                        if host.on_kv(region, &e) {
-                            break;
-                        }
-                    }
-                });
-                timer.observe_duration();
-
+                let res = self.scan_split_keys(&mut host, region, &start_key, &end_key);
                 if let Err(e) = res {
                     error!("[region {}] failed to scan split key: {}", region_id, e);
                     return;
                 }
-
-                host.split_keys()
+                res.unwrap()
             }
             CheckPolicy::APPROXIMATE => {
                 let res = host.approximate_split_keys(region, &self.engine);
@@ -230,7 +215,17 @@ impl<C: Sender<Msg>> Runner<C> {
                         "[region {}] failed to get approxiamte split key: {}",
                         region_id, e
                     );
-                    return;
+                    let res = self.scan_split_keys(&mut host, region, &start_key, &end_key);
+                    if let Err(e) = res {
+                        error!("[region {}] failed to scan split key: {}", region_id, e);
+                        return;
+                    }
+                    res.unwrap()
+                } else {
+                    res.unwrap()
+                        .into_iter()
+                        .map(|k| keys::origin_key(&k).to_vec())
+                        .collect()
                 }
                 res.unwrap()
                     .into_iter()
@@ -259,6 +254,28 @@ impl<C: Sender<Msg>> Runner<C> {
 
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
         }
+    }
+
+    fn scan_split_keys(
+        &mut self,
+        host: &mut SplitCheckerHost,
+        region: &Region,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<Vec<Vec<u8>>> {
+        let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
+        MergedIterator::new(self.engine.as_ref(), LARGE_CFS, start_key, end_key, false).map(
+            |mut iter| {
+                while let Some(e) = iter.next() {
+                    if host.on_kv(region, &e) {
+                        break;
+                    }
+                }
+            },
+        )?;
+        timer.observe_duration();
+
+        Ok(host.split_keys())
     }
 }
 
