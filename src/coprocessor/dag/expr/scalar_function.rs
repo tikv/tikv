@@ -294,6 +294,8 @@ impl ScalarFunc {
             | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::Substring3Args
             | ScalarFuncSig::SubstringBinary3Args
+            | ScalarFuncSig::Lpad
+            | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::Rpad
             | ScalarFuncSig::RpadBinary => (3, 3),
 
@@ -416,8 +418,6 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary2Args
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
-            | ScalarFuncSig::Lpad
-            | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
@@ -974,6 +974,8 @@ dispatch_call! {
         SubstringBinary2Args => substring_binary_2_args,
         SubstringBinary3Args => substring_binary_3_args,
         Space => space,
+        Lpad => lpad,
+        LpadBinary => lpad_binary,
         Rpad => rpad,
         RpadBinary => rpad_binary,
     }
@@ -1311,6 +1313,8 @@ mod tests {
                     ScalarFuncSig::SubstringIndex,
                     ScalarFuncSig::Substring3Args,
                     ScalarFuncSig::SubstringBinary3Args,
+                    ScalarFuncSig::Lpad,
+                    ScalarFuncSig::LpadBinary,
                     ScalarFuncSig::Rpad,
                     ScalarFuncSig::RpadBinary,
                 ],
@@ -1472,8 +1476,6 @@ mod tests {
             ScalarFuncSig::LocateBinary2Args,
             ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
-            ScalarFuncSig::Lpad,
-            ScalarFuncSig::LpadBinary,
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
