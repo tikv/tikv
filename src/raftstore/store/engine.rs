@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use byteorder::{BigEndian, ByteOrder};
 use protobuf;
-use rocksdb::rocksdb_options::UnsafeSnap;
-use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
+use ::rocksdb::rocksdb_options::UnsafeSnap;
+use ::rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
 use crate::util::rocksdb;
 
 use crate::raftstore::Error;
@@ -429,7 +429,7 @@ impl Mutable for WriteBatch {}
 mod tests {
     use super::*;
     use kvproto::metapb::Region;
-    use rocksdb::Writable;
+    use ::rocksdb::Writable;
     use std::sync::Arc;
     use tempdir::TempDir;
 

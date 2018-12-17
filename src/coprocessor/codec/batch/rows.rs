@@ -866,7 +866,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use ::test;
 
     use super::*;
 

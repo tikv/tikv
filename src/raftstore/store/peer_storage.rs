@@ -27,7 +27,7 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use rocksdb::{Writable, WriteBatch, DB};
+use ::rocksdb::{Writable, WriteBatch, DB};
 
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
@@ -1441,7 +1441,7 @@ mod tests {
     use crate::raftstore::store::util::Engines;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
-    use rocksdb::WriteBatch;
+    use ::rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;

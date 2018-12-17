@@ -23,7 +23,7 @@ use std::{thread, u64};
 use time;
 
 use mio::{self, EventLoop, EventLoopConfig, Sender};
-use rocksdb::{CompactionJobInfo, WriteBatch, DB};
+use ::rocksdb::{CompactionJobInfo, WriteBatch, DB};
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;

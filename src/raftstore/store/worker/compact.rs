@@ -17,7 +17,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use rocksdb::DB;
+use ::rocksdb::DB;
 use crate::storage::CF_WRITE;
 use crate::util::escape;
 use crate::util::rocksdb;

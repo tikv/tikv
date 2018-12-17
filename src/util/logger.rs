@@ -18,7 +18,7 @@ use std::path::Path;
 
 use chrono;
 use crate::grpc;
-use log;
+use crate::log;
 use log::SetLoggerError;
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_scope::{self, GlobalLoggerGuard};

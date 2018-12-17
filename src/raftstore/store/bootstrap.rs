@@ -18,7 +18,7 @@ use super::util::Engines;
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use crate::raftstore::Result;
-use rocksdb::{Writable, WriteBatch, DB};
+use ::rocksdb::{Writable, WriteBatch, DB};
 use crate::storage::{CF_DEFAULT, CF_RAFT};
 use crate::util::rocksdb;
 

@@ -20,7 +20,7 @@ use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
 use crate::raftstore::store::engine::{IterOption, Peekable};
-use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
+use ::rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
 use crate::util::escape;

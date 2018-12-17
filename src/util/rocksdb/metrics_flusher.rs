@@ -95,7 +95,7 @@ fn flush_metrics(db: &DB, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
+    use ::rocksdb::{ColumnFamilyOptions, DBOptions};
     use std::path::Path;
     use std::sync::Arc;
     use std::thread::sleep;
