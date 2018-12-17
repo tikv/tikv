@@ -212,7 +212,7 @@ impl<C: Sender<Msg>> Runner<C> {
                 let res = host.approximate_split_keys(region, &self.engine);
                 if let Err(e) = res {
                     error!(
-                        "[region {}] failed to get approxiamte split key: {}",
+                        "[region {}] failed to get approxiamte split key: {}, try scan way",
                         region_id, e
                     );
                     let res = self.scan_split_keys(&mut host, region, &start_key, &end_key);
