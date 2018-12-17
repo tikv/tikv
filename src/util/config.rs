@@ -1098,6 +1098,7 @@ mod test {
             (0, 1, "1ms"),
             (2, 0, "2s"),
             (24 * 3600, 0, "24h"),
+            (36 * 3600, 0, "36h"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
             (3600 + 2 * 60, 0, "1h2m"),
@@ -1114,7 +1115,12 @@ mod test {
             assert_eq!(res_dur.d.0, d.d.0);
         }
 
-        let decode_cases = vec![(" 0.5 h2m ", 3600 / 2 + 2 * 60, 0)];
+        let decode_cases = vec![
+            (" 0.5 h2m ", 3600 / 2 + 2 * 60, 0),
+            ("24h", 24 * 3600, 0),
+            ("1.5d", 36 * 3600, 0),
+            ("36h", 36 * 3600, 0),
+        ];
         for (src, secs, ms) in decode_cases {
             let src = format!("d = {:?}", src);
             let res: DurHolder = toml::from_str(&src).unwrap();
