@@ -28,6 +28,7 @@
 #![feature(use_extern_macros)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
+#![feature(alloc_error_hook)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]

@@ -19,7 +19,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{io, u64};
 use std::{slice, thread};
 
@@ -53,6 +53,9 @@ pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
+lazy_static! {
+    static ref LOG_GUARD: Mutex<Option<::slog_scope::GlobalLoggerGuard>> = Mutex::new(None);
+}
 
 pub fn set_panic_mark() {
     PANIC_MARK.store(true, Ordering::SeqCst);
@@ -449,16 +452,12 @@ impl<T> Drop for MustConsumeVec<T> {
     }
 }
 
-/// Exit the whole process when panic.
+/// Exit the whole process when panic or OOM.
 pub fn set_exit_hook(
     panic_abort: bool,
     guard: Option<::slog_scope::GlobalLoggerGuard>,
     data_dir: &str,
 ) {
-    use std::panic;
-    use std::process;
-    use std::sync::Mutex;
-
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
     // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
@@ -475,7 +474,16 @@ pub fn set_exit_hook(
         .unwrap();
 
     // Hold the guard.
-    let log_guard = Mutex::new(guard);
+    *LOG_GUARD.lock().unwrap() = guard;
+
+    set_panic_hook(panic_abort, data_dir);
+    set_oom_hook();
+}
+
+/// Collects the backtrace info when panics.
+fn set_panic_hook(panic_abort: bool, data_dir: &str) {
+    use std::panic;
+    use std::process;
 
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
@@ -506,7 +514,7 @@ pub fn set_exit_hook(
         }
 
         // To collect remaining logs, drop the guard before exit.
-        drop(log_guard.lock().unwrap().take());
+        drop(LOG_GUARD.lock().unwrap().take());
 
         // If PANIC_MARK is true, create panic mark file.
         if panic_mark_is_on() {
@@ -519,6 +527,34 @@ pub fn set_exit_hook(
             process::exit(1);
         }
     })
+}
+
+/// Collects the backtrace info when OOM.
+fn set_oom_hook() {
+    use std::alloc::{set_alloc_error_hook, take_alloc_error_hook, Layout};
+    use std::process;
+
+    fn hook(layout: Layout) {
+        let origin_alloc_error_hook = take_alloc_error_hook();
+        if log_enabled!(::log::LogLevel::Error) {
+            let thread = thread::current();
+            let name = thread.name().unwrap_or("<unnamed>");
+            let bt = ::backtrace::Backtrace::new();
+            error!(
+                "thread '{}' memory allocation of {} bytes failed. \n{:?}",
+                name,
+                layout.size(),
+                bt
+            );
+        } else {
+            origin_alloc_error_hook(layout)
+        }
+        // To collect remaining logs, drop the guard before exit.
+        drop(LOG_GUARD.lock().unwrap().take());
+        process::exit(1);
+    }
+
+    set_alloc_error_hook(hook);
 }
 
 #[cfg(test)]
