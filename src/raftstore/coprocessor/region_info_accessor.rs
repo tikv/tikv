@@ -14,7 +14,6 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
-use std::usize;
 
 use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
@@ -25,8 +24,6 @@ use raft::StateRole;
 use raftstore::store::keys::data_end_key;
 use util::collections::HashMap;
 use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
-
-const CHANNEL_BUFFER_SIZE: usize = usize::MAX; // Unbounded
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -136,7 +133,7 @@ fn register_region_event_listener(
 struct RegionCollection {
     // HashMap: region_id -> (Region, State)
     regions: RegionsMap,
-    // BTreeMap: 'z' + end_key -> region_id
+    // BTreeMap: data_end_key -> region_id
     region_ranges: RegionRangesMap,
 }
 
@@ -154,7 +151,7 @@ impl RegionCollection {
     /// operation is caused by a stale message. Then this function should fail (return false).
     ///
     /// Returns a bool value indicating whether checking succeeded.
-    fn check_exist(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
+    fn check_exist_and_clean(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
         if let Some(another_region_id) = self.region_ranges.get(end_key).cloned() {
             // There is already another region with the same end_key
             assert_ne!(another_region_id, region_id);
@@ -186,7 +183,8 @@ impl RegionCollection {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
-        if !self.check_exist(region_id, region.get_region_epoch().get_version(), &end_key) {
+        if !self.check_exist_and_clean(region_id, region.get_region_epoch().get_version(), &end_key)
+        {
             warn!(
                 "region_collection: creating region {} but it's end_key is the same as another \
                  newer region's end_key.",
@@ -252,7 +250,7 @@ impl RegionCollection {
             // However, if the new_end_key has already mapped to another region, we should only
             // keep the one with higher `version`.
             let end_key = data_end_key(region.get_end_key());
-            if !self.check_exist(
+            if !self.check_exist_and_clean(
                 region.get_id(),
                 region.get_region_epoch().get_version(),
                 &end_key,
@@ -374,9 +372,7 @@ impl RegionInfoAccessor {
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
     pub fn new(host: &mut CoprocessorHost) -> Self {
-        let worker = WorkerBuilder::new("region-collection-worker")
-            .pending_capacity(CHANNEL_BUFFER_SIZE)
-            .create();
+        let worker = WorkerBuilder::new("region-collection-worker").create();
         let scheduler = worker.scheduler();
 
         register_region_event_listener(host, scheduler.clone());
