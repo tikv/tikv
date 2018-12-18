@@ -463,6 +463,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
 
+        // When receiving message that has a merge target, it indicates that the source peer
+        // on this store is stale, the peers on other stores are already merged. The epoch
+        // in merge target is the state of target peer at the time when source peer is merged.
+        // So here we need to check the target peer on this store to decide whether the source
+        // to destory or wait target peer to catch up logs.
         if let Some(epoch) = self.pending_cross_snap.get(&target_region_id).or_else(|| {
             self.region_peers
                 .get(&target_region_id)
@@ -475,11 +480,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 epoch,
                 merge_target.get_region_epoch(),
             );
-            // So the target peer has moved on, we should let it go.
+            // The target peer will move on, namely, it will apply a snapshot generated after merge,
+            // so destroy source peer.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
-            // Wait till it catching up logs.
+            // Wait till the target peer has catched up logs and source peer will be destroyed at that time.
             return Ok(false);
         }
 
@@ -603,8 +609,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .map(|r| r.to_owned());
         if let Some(exist_region) = r {
             info!("region overlapped {:?}, {:?}", exist_region, snap_region);
-            self.pending_cross_snap
-                .insert(region_id, snap_region.get_region_epoch().to_owned());
+            let peer = &self.region_peers[&region_id];
+            // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
+            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
+            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
+            // `pending_cross_snap` here if peer is applying snapshot.
+            if !peer.is_applying_snapshot() && !peer.has_pending_snapshot() {
+                self.pending_cross_snap
+                    .insert(region_id, snap_region.get_region_epoch().to_owned());
+            }
             self.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(Some(key));
         }
@@ -642,6 +655,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     pub fn on_raft_ready(&mut self) {
+        // Only enable the fail point when the store id is equal to 3, which is
+        // the id of slow store in tests.
+        fail_point!("on_raft_ready", self.store.get_id() == 3, |_| {});
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
