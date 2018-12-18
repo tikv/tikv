@@ -63,17 +63,21 @@ pub trait FsmScheduler {
 
 /// A Fsm is a finite state machine. It should be able to be notified for
 /// updating internal state according to incomming messages.
-pub trait Fsm: Sized {
+pub trait Fsm {
     type Message;
 
     /// Notify the Fsm for readiness.
     fn notify(&self);
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>);
+    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
+    where
+        Self: Sized;
     /// Take the mailbox from Fsm. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
-    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>;
+    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
+    where
+        Self: Sized;
 }
 
 /// A basic mailbox.
