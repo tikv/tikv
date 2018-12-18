@@ -600,7 +600,7 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
                     if msg.get_message().get_msg_type() == MessageType::MsgSnapshot && !stale {
                         if last_msg.as_ref().map_or(false, |l| l != &msg) {
                             to_send.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
-                            *last_msg = Some(msg);
+                            to_send.push(StoreMsg::RaftMessage(msg));
                             stale = true;
                         } else {
                             self.dropped.store(true, Ordering::Relaxed);
