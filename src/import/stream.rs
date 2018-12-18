@@ -401,7 +401,7 @@ mod tests {
         let dir = TempDir::new("test_import_sst_file_stream").unwrap();
         let uuid = Uuid::new_v4();
         let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
+        let engine = Arc::new(Engine::new(dir.path(), uuid, opts, true).unwrap());
 
         for i in 0..16 {
             let k = Key::from_raw(&[i]).append_ts(0);

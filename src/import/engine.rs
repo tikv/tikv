@@ -324,7 +324,7 @@ mod tests {
         let dir = TempDir::new("test_import_engine").unwrap();
         let uuid = Uuid::new_v4();
         let opts = DbConfig::default();
-        let engine = Engine::new(dir.path(), uuid, opts).unwrap();
+        let engine = Engine::new(dir.path(), uuid, opts, false).unwrap();
         (dir, engine)
     }
 

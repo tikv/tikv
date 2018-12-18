@@ -290,7 +290,7 @@ mod tests {
         let dir = TempDir::new("test_import_prepare_job").unwrap();
         let uuid = Uuid::new_v4();
         let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
+        let engine = Arc::new(Engine::new(dir.path(), uuid, opts, false).unwrap());
 
         // Generate entries to prepare.
         let (n, m) = (4, 4);
