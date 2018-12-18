@@ -754,6 +754,12 @@ impl ScalarFunc {
         }
     }
 
+    // when target_len is 0, return Zero, means the pad function should return empty string
+    // currently there are three conditions it return Invalid, which means pad function should return Null
+    //   1. target_len is negative
+    //   2. the result string after apply padding is larger(in bytes) then MAX_BLOB_WIDTH
+    //   3. target_len is greater than length of input string, *and* pad string is empty
+    // otherwise return Len with usize type of target_len
     #[inline]
     fn valid_target_len_for_pad(
         &self,
