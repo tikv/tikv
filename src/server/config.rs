@@ -26,7 +26,7 @@ pub use storage::Config as StorageConfig;
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
-const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:9520";
+const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
@@ -166,6 +166,12 @@ impl Config {
         }
         if !self.status_addr.is_empty() {
             box_try!(config::check_addr(&self.status_addr));
+        }
+        if self.status_addr == self.advertise_addr {
+            return Err(box_err!(
+                "status-addr has already been used: {:?}",
+                self.advertise_addr
+            ));
         }
         let non_zero_entries = vec![
             (

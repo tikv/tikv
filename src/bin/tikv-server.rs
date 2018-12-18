@@ -251,7 +251,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
 
     let server_cfg = cfg.server.clone();
-    let mut status_enabled = !server_cfg.status_addr.is_empty();
+    let mut status_enabled = cfg.metric.address.is_empty() && !server_cfg.status_addr.is_empty();
 
     // Create an HTTP server.
     let mut http_server = HttpServer::new(server_cfg.status_thread_pool_size);
@@ -265,15 +265,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     signal_handler::handle_signal(Some(engines));
 
-    if status_enabled {
-        // Stop the HTTP server.
-        http_server.stop()
-    }
-
     // Stop.
     server
         .stop()
         .unwrap_or_else(|e| fatal!("failed to stop server: {:?}", e));
+
+    if status_enabled {
+        // Stop the HTTP server.
+        http_server.stop()
+    }
 
     metrics_flusher.stop();
 
