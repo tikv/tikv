@@ -238,7 +238,7 @@ impl<E: Engine> GCRunner<E> {
 
         let mut next_key = None;
         loop {
-            // Scan at most `GC_BATCH_SIZE` keys
+            // Scans at most `GC_BATCH_SIZE` keys
             let (keys, next) = self
                 .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {

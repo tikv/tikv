@@ -1013,7 +1013,7 @@ impl<E: Engine> Storage<E> {
     /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
     ///
     /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
-    /// whose start_ts is 100 was committed at with commit_ts be 101, and the transaction whose
+    /// whose start_ts is 100 was committed with commit_ts be 101, and the transaction whose
     /// start_ts is 102 was rolled back. If there are these keys in the db:
     ///
     /// ```
@@ -1046,7 +1046,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Do garbage collection, clean up old MVCC keys.
+    /// Does garbage collection, which means, cleans up old MVCC keys.
     /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
     /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
