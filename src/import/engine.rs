@@ -39,6 +39,7 @@ use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::common::*;
 use super::Result;
+use util::config::ReadableSize;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -49,9 +50,18 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new<P: AsRef<Path>>(path: P, uuid: Uuid, opts: DbConfig) -> Result<Engine> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        uuid: Uuid,
+        opts: DbConfig,
+        import: bool,
+    ) -> Result<Engine> {
         let db = {
-            let (db_opts, cf_opts) = tune_dboptions_for_bulk_load(&opts);
+            let (db_opts, cf_opts) = if !import {
+                tune_dboptions_for_bulk_load(&opts)
+            } else {
+                tune_dboptions_for_import(&opts)
+            };
             new_engine_opt(path.as_ref().to_str().unwrap(), db_opts, vec![cf_opts])?
         };
         Ok(Engine {
@@ -276,6 +286,22 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
     // Add size properties to get approximate ranges wihout scan.
     let f = Box::new(SizePropertiesCollectorFactory::default());
     cf_opts.add_table_properties_collector_factory("tikv.size-properties-collector", f);
+    (db_opts, CFOptions::new(CF_DEFAULT, cf_opts))
+}
+
+fn tune_dboptions_for_import(_: &DbConfig) -> (DBOptions, CFOptions) {
+    let mut db_opts = DBOptions::new();
+    db_opts.enable_statistics(false);
+    // We don't need any background threads to do compaction or flush job.
+    db_opts.set_max_background_jobs(0);
+
+    let mut cf_opts = ColumnFamilyOptions::new();
+    // We don't use memtable for import at all, so we can reduce write buffer
+    // size to save memory.
+    cf_opts.set_write_buffer_size(ReadableSize::mb(1).0 as u64);
+    cf_opts.set_max_write_buffer_number(1);
+    // Disable compaction and rate limit.
+    cf_opts.set_disable_auto_compactions(true);
     (db_opts, CFOptions::new(CF_DEFAULT, cf_opts))
 }
 

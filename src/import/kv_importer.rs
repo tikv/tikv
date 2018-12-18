@@ -230,7 +230,7 @@ impl EngineDir {
 
     fn import(&self, uuid: Uuid) -> Result<Engine> {
         let path = self.join(uuid);
-        Engine::new(&path.save, uuid, self.opts.clone())
+        Engine::new(&path.save, uuid, self.opts.clone(), true)
     }
 
     fn cleanup(&self, uuid: Uuid) -> Result<EnginePath> {
@@ -272,7 +272,7 @@ pub struct EngineFile {
 
 impl EngineFile {
     fn new(uuid: Uuid, path: EnginePath, opts: DbConfig) -> Result<EngineFile> {
-        let engine = Engine::new(&path.temp, uuid, opts)?;
+        let engine = Engine::new(&path.temp, uuid, opts, false)?;
         Ok(EngineFile {
             uuid,
             path,
@@ -286,7 +286,9 @@ impl EngineFile {
 
     /// Finish writing and move files from temp directory to save directory.
     fn close(&mut self) -> Result<()> {
-        self.engine.take().unwrap().flush(true)?;
+        {
+            self.engine.take().unwrap().flush(true)?;
+        }
         if self.path.save.exists() {
             return Err(Error::FileExists(self.path.save.clone()));
         }

@@ -51,7 +51,29 @@ impl ImportKVService {
     }
 }
 
+// ImportKV provides a service to import key-value pairs to TiKV.
+//
+// In order to import key-value pairs to TiKV, the user should:
+// 1. Open an engine identified by an UUID.
+// 2. Open write streams to write key-value batches to the opened engine.
+//    Different streams/clients can write to the same engine concurrently.
+// 3. Close the engine after all write batches have been finished. An
+//    engine can only be closed when all write streams are closed. An
+//    engine can only be closed once, and it can not be opened again
+//    once it is closed.
+// 4. Import the data in the engine to the target cluster. Note that
+//    the import process is not atomic, it requires the data to be
+//    idempotent on retry. An engine can only be imported after it is
+//    closed. An engine can be imported multiple times, but can not be
+//    imported concurrently.
+// 5. Clean up the engine after it has been imported. Delete all data
+//    in the engine. An engine can not be cleaned up when it is
+//    writing or importing.
 impl ImportKv for ImportKVService {
+    // Switch the target cluster to normal/import mode.
+    //
+
+    // Under import mode, cluster will stop automatic compaction and turn off write stall machanism.
     fn switch_mode(
         &mut self,
         ctx: RpcContext,
@@ -232,6 +254,8 @@ impl ImportKv for ImportKVService {
         )
     }
 
+    // It's recommended to call `compact_cluster` before reading from the database,
+    // because otherwise the read can be very slow.
     fn compact_cluster(
         &mut self,
         ctx: RpcContext,
