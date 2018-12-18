@@ -263,9 +263,25 @@ fn test_node_merge_recover_snapshot() {
     cluster.must_put(b"k40", b"v5");
 }
 
-// Test if a merge handled properly when there are two different snapshots of one region arrive in one raftstore tick.
+// Test if a merge handled properly when there are two different snapshots of one region arrive
+// in one raftstore tick.
 #[test]
-fn test_node_merge_multiple_snapshots() {
+fn test_node_merge_multiple_snapshots_together() {
+    test_node_merge_multiple_snapshots(true)
+}
+
+// To be fixed
+//
+// Test if a merge handled properly when there are two different snapshots of one region arrive
+// in different raftstore tick.
+// #[test]
+// fn test_node_merge_multiple_snapshots_not_together() {
+//     test_node_merge_multiple_snapshots(false)
+// }
+
+fn test_node_merge_multiple_snapshots(together: bool) {
+    use test_util;
+    let _guard = test_util::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -317,11 +333,10 @@ fn test_node_merge_multiple_snapshots() {
     ));
 
     // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
-    let _stale = Arc::new(AtomicBool::new(false));
-    cluster
-        .sim
-        .wl()
-        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(_stale));
+    cluster.sim.wl().add_recv_filter(
+        3,
+        box LeadingDuplicatedSnapshotFilter::new(Arc::new(AtomicBool::new(false)), together),
+    );
     // Write some data to trigger a snapshot of right region.
     for i in 200..210 {
         let key = format!("k{}", i);
