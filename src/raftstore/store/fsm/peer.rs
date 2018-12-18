@@ -481,17 +481,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 epoch,
                 merge_target.get_region_epoch(),
             );
-            let peer = self.region_peers.get(&target_region_id).unwrap();
             // The target peer will move on, namely, it will apply a snapshot generated after merge,
             // so destroy source peer.
-            if epoch.get_version() > merge_target.get_region_epoch().get_version()
-                && peer.get_store().applied_index() == peer.get_store().committed_index()
-            {
-                debug!(
-                    "applied_index {}, committed_index {}",
-                    peer.get_store().applied_index(),
-                    peer.get_store().committed_index()
-                );
+            if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
             // Wait till the target peer has catched up logs and source peer will be destroyed at that time.
