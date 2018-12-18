@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::mpsc;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread;
 use std::time::*;
@@ -317,11 +317,11 @@ fn test_node_merge_multiple_snapshots() {
     ));
 
     // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
-    let (tx, _rx) = mpsc::channel();
+    let _stale = Arc::new(AtomicBool::new(false));
     cluster
         .sim
         .wl()
-        .add_recv_filter(3, box CollectSnapshotFilter::new(tx));
+        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(_stale));
     // Write some data to trigger a snapshot of right region.
     for i in 200..210 {
         let key = format!("k{}", i);
