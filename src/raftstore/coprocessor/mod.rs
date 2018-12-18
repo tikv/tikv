@@ -108,7 +108,7 @@ pub trait SplitChecker {
     fn split_keys(&mut self) -> Vec<Vec<u8>>;
 
     /// Get approximate split keys without scan.
-    fn approximate_split_keys(&self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
         Ok(vec![])
     }
 
