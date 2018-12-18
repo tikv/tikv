@@ -84,7 +84,9 @@ impl<S: Snapshot> MvccReader<S> {
         self.key_only = key_only;
     }
 
+    /// Find data based on key and submission time ts
     pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+        // if key_only is true,there is a great possibility that the index is stored
         if self.key_only {
             return Ok(vec![]);
         }
@@ -111,6 +113,7 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(res)
     }
 
+    /// Find the lock by key
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, true);
@@ -148,10 +151,12 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    /// Find the lastest commit data of the key in the write column earlier than ts
     pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
         self.seek_write_impl(key, ts, false)
     }
 
+    /// Find the lastest commit data of the key in the write column
     pub fn reverse_seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
         self.seek_write_impl(key, ts, true)
     }
@@ -255,7 +260,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
         }
     }
-
+    
     pub fn get_txn_commit_info(
         &mut self,
         key: &Key,

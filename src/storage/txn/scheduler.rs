@@ -212,6 +212,7 @@ impl<E: Engine> Scheduler<E> {
         task
     }
 
+    /// The task is scheduling the wait queue, waiting to get the latches
     fn enqueue_task(&mut self, task: Task, callback: StorageCb) {
         let cid = task.cid;
 
@@ -302,7 +303,7 @@ impl<E: Engine> Scheduler<E> {
     }
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
-        // write flow control
+        // write flow control 
         if cmd.need_flow_control() && self.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC
                 .with_label_values(&[cmd.tag()])
@@ -476,6 +477,9 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
     }
 }
 
+/// Generate a Lock for each task.
+/// First, find all the keys involved in the task
+/// Then,the gen_lock method maps all key hashes to latches and sorts them in ascending order
 fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
     match *cmd {
         Command::Prewrite { ref mutations, .. } => {

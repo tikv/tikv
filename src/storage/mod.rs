@@ -611,6 +611,7 @@ impl<E: Engine> Storage<E> {
         self.engine.clone()
     }
 
+    /// Schedule command by util/worker, truly schedule in storage/txn/scheduler.rs
     #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
@@ -663,6 +664,7 @@ impl<E: Engine> Storage<E> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                     );
+                    // the get methoe in storage/mvcc/reader/mod.rs 
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
@@ -829,6 +831,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Put、delete、lock port, 
     pub fn async_prewrite(
         &self,
         ctx: Context,
@@ -838,6 +841,7 @@ impl<E: Engine> Storage<E> {
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
+        // Check the size of the key, the key is the metadata, too much overhead.
         for m in &mutations {
             let size = m.key().as_encoded().len();
             if size > self.max_key_size {
@@ -1127,6 +1131,8 @@ impl<E: Engine> Storage<E> {
             callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
             return Ok(());
         }
+        // The raw interface does not need to consider transaction consistency 
+        // and writes directly to the storage engine.
         self.engine.async_write(
             &ctx,
             vec![Modify::Put(
