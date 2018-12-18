@@ -483,7 +483,7 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
 
 /// Generate a Lock for each task.
 /// First, find all the keys involved in the task
-/// Then,the gen_lock method maps all key hashes to latches and sorts them in ascending order
+/// Then, the gen_lock method maps all key hashes to latches and sorts them in ascending order.
 fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
     match *cmd {
         Command::Prewrite { ref mutations, .. } => {

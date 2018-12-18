@@ -664,7 +664,7 @@ impl<E: Engine> Storage<E> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                     );
-                    // the get methoe in storage/mvcc/reader/mod.rs 
+                    // The get methoe in storage/mvcc/reader/mod.rs 
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
@@ -831,7 +831,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Put、delete、lock port, 
+    /// Put\delele\lock port, 
     pub fn async_prewrite(
         &self,
         ctx: Context,

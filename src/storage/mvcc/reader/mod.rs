@@ -86,7 +86,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     /// Find data based on key and submission time ts
     pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
-        // if key_only is true,there is a great possibility that the index is stored
+        // If key_only is true,there is a great possibility that the index is stored
         if self.key_only {
             return Ok(vec![]);
         }
