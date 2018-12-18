@@ -664,7 +664,7 @@ impl<E: Engine> Storage<E> {
                         ctx.get_isolation_level(),
                         !ctx.get_not_fill_cache(),
                     );
-                    // The get methoe in storage/mvcc/reader/mod.rs 
+                    // The get methoe in storage/mvcc/reader/mod 
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
@@ -830,8 +830,7 @@ impl<E: Engine> Storage<E> {
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         Ok(())
     }
-
-    /// Put\delele\lock port, 
+ 
     pub fn async_prewrite(
         &self,
         ctx: Context,
