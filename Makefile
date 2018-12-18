@@ -90,7 +90,7 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --features "${ENABLE_FEATURES}" --all --exclude tikv_fuzz ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
 	cargo test --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
@@ -99,7 +99,7 @@ test:
 	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
 bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --exclude tikv_fuzz --features "${ENABLE_FEATURES}" -- --nocapture
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --features "${ENABLE_FEATURES}" -- --nocapture
 
 unset-override:
 	@# unset first in case of any previous overrides

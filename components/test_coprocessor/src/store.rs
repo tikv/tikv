@@ -13,13 +13,14 @@
 
 use super::*;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use kvproto::kvrpcpb::Context;
 
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tikv::coprocessor::codec::{datum, table, Datum};
 use tikv::storage::{Engine, FixtureStore, Key, Mutation, RocksEngine, TestEngineBuilder};
+use tikv::util::collections::HashMap;
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,

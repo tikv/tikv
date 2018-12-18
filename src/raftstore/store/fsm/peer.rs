@@ -475,10 +475,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .map(|p| p.region().get_region_epoch())
         }) {
             info!(
-                "[region {}] checking target {} epoch: {:?}",
+                "[region {}] checking target {} epoch: {:?}, msg target epoch: {:?}",
                 msg.get_region_id(),
                 target_region_id,
-                epoch
+                epoch,
+                merge_target.get_region_epoch(),
             );
             // The target peer will move on, namely, it will apply a snapshot generated after merge,
             // so destroy source peer.
@@ -909,6 +910,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     if p.is_leader() {
                         p.peers_start_pending_time.push((id, now));
                     }
+                    p.recent_added_peer.update(id, now);
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
