@@ -27,6 +27,7 @@ use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
+use storage::engine::WriteContextTracker;
 use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use util::escape;
 use util::properties::RangeProperties;

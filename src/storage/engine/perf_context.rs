@@ -142,7 +142,7 @@ impl Drop for WriteContextTracker {
             warn!(
                 "[WriteContext] {} elapsed {} write_wal {} write_memtable {} \
                  write_delay {} write_scheduling_flushes_compactions {} \
-                 write_pre_and_post_process {} write_thread_wait_nanos {} \
+                 write_pre_and_post_process {} write_thread_wait {} \
                  db_mutex_lock {} db_condition_wait {} bytes_written {} \
                  open {} allocate {} write {} range_sync {} fsync {} \
                  prepare_write {} logger {}",

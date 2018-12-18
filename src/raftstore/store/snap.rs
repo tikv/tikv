@@ -30,6 +30,7 @@ use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::util::check_key_in_region;
 use raftstore::store::Msg;
 use raftstore::Result as RaftStoreResult;
+use storage::engine::WriteContextTracker;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};

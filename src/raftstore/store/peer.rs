@@ -43,6 +43,7 @@ use raftstore::store::worker::{
 };
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
+use storage::engine::WriteContextTracker;
 use util::collections::{HashMap, HashSet};
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::{FutureWorker, Scheduler};

@@ -33,6 +33,7 @@ use raftstore::store::util::Engines;
 use raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
+use storage::engine::WriteContextTracker;
 use storage::CF_RAFT;
 use util::rocksdb::get_cf_num_files_at_level;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
