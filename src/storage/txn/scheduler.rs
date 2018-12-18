@@ -206,13 +206,16 @@ impl<E: Engine> Scheduler<E> {
         self.id_alloc
     }
 
+    /// The task gets all the resources it needs, 
+    /// and it goes out of the queue for execution.
     fn dequeue_task(&mut self, cid: u64) -> Task {
         let task = self.pending_tasks.remove(&cid).unwrap();
         assert_eq!(task.cid, cid);
         task
     }
 
-    /// The task is scheduling the wait queue, waiting to get the latches
+    /// The task enters the scheduling wait queue 
+    /// Waiting to get related latches
     fn enqueue_task(&mut self, task: Task, callback: StorageCb) {
         let cid = task.cid;
 
@@ -244,6 +247,7 @@ impl<E: Engine> Scheduler<E> {
         tctx
     }
 
+    /// Enter different worker thread pools according to the priority of the task
     pub fn fetch_executor(&self, priority: CommandPri) -> Executor<E> {
         let pool = match priority {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
