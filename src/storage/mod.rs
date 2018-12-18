@@ -844,7 +844,7 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Latch the given keys for given duration, so other write operations that involves these keys
+    /// Latch the given keys for given duration, so other write operations that involve these keys
     /// will be blocked. Only used for tests purpose.
     pub fn async_pause(
         &self,
@@ -1007,10 +1007,10 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Resolve locks according to `txn_status`. This is used during GC to clean up all locks whose
+    /// Resolve locks according to `txn_status`. This is used during the GC operation to clean up all locks whose
     /// timestamp is before safe point.
     ///
-    /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it maps to 0.
+    /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
     ///
     /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
     /// whose start_ts is 100 was committed at with commit_ts be 101, and the transaction whose
@@ -1025,8 +1025,8 @@ impl<E: Engine> Storage<E> {
     ///
     /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
     /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
-    /// will be rolled back.  `"k3"` will not be affected, because it's lock_ts is not contained in
-    /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a not-committed
+    /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
+    /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
     /// version.
     pub fn async_resolve_lock(
         &self,
@@ -1047,8 +1047,8 @@ impl<E: Engine> Storage<E> {
     }
 
     /// Do garbage collection, clean up old MVCC keys.
-    /// It's guaranteed that all reads with timestamp > `safe_point` can be performed correctly
-    /// during and after GC.
+    /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
+    /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
         KV_COMMAND_COUNTER_VEC
@@ -1616,7 +1616,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Find the first key who has a version with its start_ts equals to given `start_ts`, and
+    /// Find the first key that has a version with its `start_ts` equal to the given `start_ts`, and
     /// return its MVCC info.
     pub fn async_mvcc_by_start_ts(
         &self,

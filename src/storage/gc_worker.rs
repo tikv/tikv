@@ -249,7 +249,7 @@ impl<E: Engine> GCRunner<E> {
                 break;
             }
 
-            // GC all scanned keys
+            // Does the GC operation on all scanned keys
             next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
                 warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
                 e
