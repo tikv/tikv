@@ -214,8 +214,8 @@ impl<E: Engine> Scheduler<E> {
         task
     }
 
-    /// The task enters the scheduling wait queue 
-    /// Waiting to get related latches
+    /// The task enters the scheduling wait queue.
+    /// Waiting to get related latches.
     fn enqueue_task(&mut self, task: Task, callback: StorageCb) {
         let cid = task.cid;
 
