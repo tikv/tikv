@@ -335,40 +335,18 @@ impl Debugger {
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = self.recover_region(db, region, read_only) {
+            if let Err(e) = recover_mvcc_for_range(
+                db,
+                region.get_start_key(),
+                region.get_end_key(),
+                read_only,
+                0,
+            ) {
                 errors.push((region_id, e));
             }
         }
 
         Ok(errors)
-    }
-
-    fn recover_region(&self, db: &Arc<DB>, region: Region, read_only: bool) -> Result<()> {
-        let wb = WriteBatch::new();
-
-        let mut mvcc_checker = box_try!(MvccChecker::new(
-            Arc::clone(db),
-            region.get_start_key(),
-            region.get_end_key()
-        ));
-        mvcc_checker.check_mvcc(&wb, None)?;
-
-        if read_only {
-            println!("Read-only mode: Skip writing {} keys", wb.count());
-        } else {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            box_try!(db.write_opt(wb, &write_opts));
-        }
-
-        println!(
-            "total fix default: {}, lock: {}, write: {}",
-            mvcc_checker.default_fix_count,
-            mvcc_checker.lock_fix_count,
-            mvcc_checker.write_fix_count
-        );
-
-        Ok(())
     }
 
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
@@ -406,39 +384,7 @@ impl Debugger {
                         escape(&end_key)
                     );
 
-                    let mut mvcc_checker =
-                        box_try!(MvccChecker::new(Arc::clone(&db), &start_key, &end_key));
-                    mvcc_checker.thread_index = thread_index;
-
-                    let wb_limit: usize = 10240;
-
-                    loop {
-                        let wb = WriteBatch::new();
-                        mvcc_checker.check_mvcc(&wb, Some(wb_limit))?;
-
-                        let batch_size = wb.count();
-
-                        if !read_only {
-                            let mut write_opts = WriteOptions::new();
-                            write_opts.set_sync(true);
-                            box_try!(db.write_opt(wb, &write_opts));
-                        } else {
-                            println!("thread {}: skip write {} rows", thread_index, batch_size);
-                        }
-
-                        println!(
-                            "thread {}: total fix default: {}, lock: {}, write: {}",
-                            thread_index,
-                            mvcc_checker.default_fix_count,
-                            mvcc_checker.lock_fix_count,
-                            mvcc_checker.write_fix_count
-                        );
-
-                        if batch_size < wb_limit {
-                            println!("thread {} has finished working.", thread_index);
-                            return Ok(());
-                        }
-                    }
+                    recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
                 })
                 .unwrap();
 
@@ -798,6 +744,47 @@ impl Debugger {
             escape(&middle_key),
         ));
         Ok(res)
+    }
+}
+
+fn recover_mvcc_for_range(
+    db: &Arc<DB>,
+    start_key: &[u8],
+    end_key: &[u8],
+    read_only: bool,
+    thread_index: usize,
+) -> Result<()> {
+    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(&db), &start_key, &end_key));
+    mvcc_checker.thread_index = thread_index;
+
+    let wb_limit: usize = 10240;
+
+    loop {
+        let wb = WriteBatch::new();
+        mvcc_checker.check_mvcc(&wb, Some(wb_limit))?;
+
+        let batch_size = wb.count();
+
+        if !read_only {
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            box_try!(db.write_opt(wb, &write_opts));
+        } else {
+            println!("thread {}: skip write {} rows", thread_index, batch_size);
+        }
+
+        println!(
+            "thread {}: total fix default: {}, lock: {}, write: {}",
+            thread_index,
+            mvcc_checker.default_fix_count,
+            mvcc_checker.lock_fix_count,
+            mvcc_checker.write_fix_count
+        );
+
+        if batch_size < wb_limit {
+            println!("thread {} has finished working.", thread_index);
+            return Ok(());
+        }
     }
 }
 
