@@ -493,24 +493,27 @@ impl<E: Engine> TestStorageBuilder<E> {
 /// is running, a `RaftKv` will be the underlying `Engine` of `Storage`. The other two types of
 /// engines are for test purpose.
 ///
-/// `Storage` is actually a reference to storage. It is cloneable, and a clone of a `Storage` is
-/// actually a reference to the same storage, and is equivalent to the original one. It will be
-/// automatically stopped and destroyed when it and all its clones are dropped.
+/// `Storage` is reference counted and cloning `Storage` will just increase the reference counter.
+/// Storage resources (i.e. threads, engine) will be released when all references are dropped.
 ///
-/// All read and write methods are performed on **a single region**, which is specified in the
-/// parameter `ctx`. However, `async_unsafe_destroy_range` is the only exception. It's performed on
-/// the whole TiKV.
+/// Notice that read and write methods may not be performed over full data in most cases, i.e. when
+/// underlying engine is `RaftKv`, which limits data access in the range of a single region
+/// according to specified `ctx` parameter. However, `async_unsafe_destroy_range` is the only
+/// exception. It's always performed on the whole TiKV.
 ///
-/// Also note that the concept of *region* only exists when `Storage` is running with `RaftKv`. When
-/// running other kinds of `Engine`, all requests are executed on the whole storage.
+/// Operations of `Storage` can be divided into two types: MVCC operations and raw operations.
+/// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
+/// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
+/// to it, so that multiple versions can be saved at the same time.
+/// Raw operations uses raw keys, which are saved directly to the engine without memcomparable-
+/// encoding and appending timestamp.
 pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    /// To schedule the execution of storage commands.
+    /// The worker to execute storage commands.
     worker: Arc<Mutex<Worker<Msg>>>,
-    /// `worker_scheduler` is used to schedule tasks to run in `worker`. It's actually the sender
-    /// that sends tasks to `worker`.
+    /// `worker_scheduler` is used to schedule tasks to run in `worker`.
     worker_scheduler: worker::Scheduler<Msg>,
 
     /// The thread pool used to run most read operations.
@@ -585,7 +588,7 @@ impl<E: Engine> Drop for Storage<E> {
 }
 
 impl<E: Engine> Storage<E> {
-    /// Create a `Storage` with given engine.
+    /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
         config: &Config,
@@ -1007,8 +1010,8 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Resolve locks according to `txn_status`. This is used during the GC operation to clean up all locks whose
-    /// timestamp is before safe point.
+    /// Resolve locks according to `txn_status`. During the GC operation, this will be called by
+    /// TiDB to clean up stale locks whose timestamp is before safe point.
     ///
     /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
     ///
@@ -1330,7 +1333,7 @@ impl<E: Engine> Storage<E> {
     /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is
     /// `None`, it means unbounded.
     ///
-    /// If `key_only` is true, the value corresponding to the key will not be read out. Only scanned
+    /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
     /// keys will be returned.
     fn raw_scan(
         snapshot: &E::Snap,
