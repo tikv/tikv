@@ -869,6 +869,13 @@ impl<E: Engine> Storage<E> {
         commit_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
+        if commit_ts <= lock_ts {
+            callback(Err(Error::InvalidTxnTso {
+                    start_ts: lock_ts,
+                    commit_ts,
+                }));
+            return Ok(());
+        }
         let cmd = Command::Commit {
             ctx,
             keys,
