@@ -52,7 +52,7 @@ impl<N> Drop for State<N> {
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
-    type Fsm;
+    type Fsm: Fsm;
 
     /// Schedule a Fsm for later handles.
     fn schedule(&self, fsm: Box<Self::Fsm>);
@@ -78,7 +78,7 @@ pub trait Fsm: Sized {
 
 /// A basic mailbox.
 ///
-/// Every mailbox should have one and only one an owner, who will receives all
+/// Every mailbox should have one and only one owner, who will receive all
 /// messages sent to this mailbox.
 ///
 /// When a message is sent to a mailbox, its owner will be checked whether it's
@@ -105,7 +105,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     }
 
     /// Take the owner if it's IDLE.
-    fn maybe_catch_fsm(&self) -> Option<Box<Owner>> {
+    fn take_fsm(&self) -> Option<Box<Owner>> {
         let previous_state = self.state.status.compare_and_swap(
             NOTIFYSTATE_IDLE,
             NOTIFYSTATE_NOTIFIED,
@@ -126,7 +126,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     /// Notify owner via a `FsmScheduler`.
     #[inline]
     fn notify<S: FsmScheduler<Fsm = Owner>>(&self, scheduler: &S) {
-        match self.maybe_catch_fsm() {
+        match self.take_fsm() {
             None => {}
             Some(mut n) => {
                 n.set_mailbox(Cow::Borrowed(self));
@@ -138,7 +138,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     /// Put the owner back to the state.
     ///
     /// It's not required that all messages should be consumed before
-    /// releasing a fsm. However, a fsm is guaranteed to be notify only
+    /// releasing a fsm. However, a fsm is guaranteed to be notified only
     /// when new messages arrives after it's released.
     #[inline]
     fn release(&self, fsm: Box<Owner>) {
@@ -163,7 +163,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         panic!("invalid release state: {:?} {}", previous, previous_status);
     }
 
-    /// Force sending a message dispite the capacity limit on channel.
+    /// Force sending a message despite the capacity limit on channel.
     #[inline]
     pub fn force_send<S: FsmScheduler<Fsm = Owner>>(
         &self,
@@ -245,14 +245,14 @@ impl<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> Mailbox<Owner, Scheduler>
 /// In our abstract model, every batch system has two different kind of
 /// fsms. First is normal fsm, which does the common work like peers in a
 /// raftstore model or apply delegate in apply model. Second is control fsm,
-/// which do some work that requires a global view of resources or creat
+/// which does some work that requires a global view of resources or creates
 /// missing fsm for specified address. Normal fsm and control fsm can have
 /// different scheduler, but this is not required.
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<HashMap<u64, BasicMailbox<N>>>>,
     caches: Cell<HashMap<u64, BasicMailbox<N>>>,
     control_box: BasicMailbox<C>,
-    // These two schedulers should be unified as single one. However
+    // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
     normal_scheduler: Ns,
