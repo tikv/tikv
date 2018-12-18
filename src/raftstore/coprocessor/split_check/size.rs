@@ -92,7 +92,7 @@ impl SplitChecker for Checker {
         self.policy
     }
 
-    fn approximate_split_keys(&self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(raftstore_util::get_region_approximate_split_keys(
             engine,
             region,
