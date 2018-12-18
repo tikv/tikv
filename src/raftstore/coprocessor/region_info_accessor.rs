@@ -43,8 +43,8 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
 enum RaftStoreEvent {
-    CreateRegion { region: Region },
-    UpdateRegion { region: Region },
+    CreateRegion { region: Region, role: StateRole },
+    UpdateRegion { region: Region, role: StateRole },
     DestroyRegion { region: Region },
     RoleChange { region: Region, role: StateRole },
 }
@@ -91,11 +91,16 @@ struct RegionEventListener {
 impl Coprocessor for RegionEventListener {}
 
 impl RegionChangeObserver for RegionEventListener {
-    fn on_region_changed(&self, context: &mut ObserverContext, event: RegionChangeEvent) {
+    fn on_region_changed(
+        &self,
+        context: &mut ObserverContext,
+        event: RegionChangeEvent,
+        role: StateRole,
+    ) {
         let region = context.region().clone();
         let event = match event {
-            RegionChangeEvent::Create => RaftStoreEvent::CreateRegion { region },
-            RegionChangeEvent::Update => RaftStoreEvent::UpdateRegion { region },
+            RegionChangeEvent::Create => RaftStoreEvent::CreateRegion { region, role },
+            RegionChangeEvent::Update => RaftStoreEvent::UpdateRegion { region, role },
             RegionChangeEvent::Destroy => RaftStoreEvent::DestroyRegion { region },
         };
         self.scheduler
@@ -179,7 +184,7 @@ impl RegionCollector {
         true
     }
 
-    fn create_region(&mut self, region: Region) {
+    fn create_region(&mut self, region: Region, role: StateRole) {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
 
@@ -199,10 +204,7 @@ impl RegionCollector {
         // TODO: Should we set it follower?
         assert!(
             self.regions
-                .insert(
-                    region.get_id(),
-                    RegionInfo::new(region, StateRole::Follower)
-                )
+                .insert(region.get_id(), RegionInfo::new(region, role))
                 .is_none(),
             "region_collector: trying to create new region {} but it already exists.",
             region_id
@@ -263,7 +265,7 @@ impl RegionCollector {
         }
     }
 
-    fn handle_create_region(&mut self, region: Region) {
+    fn handle_create_region(&mut self, region: Region, role: StateRole) {
         // During tests, we found that the `Create` event may arrive multiple times. And when we
         // receive an `Update` message, the region may have been deleted for some reason. So we
         // handle it according to whether the region exists in the collection.
@@ -271,16 +273,16 @@ impl RegionCollector {
             info!("region_collector: trying to create region {} but it already exists, try to update it", region.get_id());
             self.update_region(region);
         } else {
-            self.create_region(region);
+            self.create_region(region, role);
         }
     }
 
-    fn handle_update_region(&mut self, region: Region) {
+    fn handle_update_region(&mut self, region: Region, role: StateRole) {
         if self.regions.contains_key(&region.get_id()) {
             self.update_region(region);
         } else {
             info!("region_collector: trying to update region {} but it doesn't exist, try to create it", region.get_id());
-            self.create_region(region);
+            self.create_region(region, role);
         }
     }
 
@@ -320,21 +322,19 @@ impl RegionCollector {
         let region_id = region.get_id();
         if self.regions.get(&region_id).is_none() {
             warn!("region_collector: role change on region {} but the region doesn't exist. create it.", region_id);
-            self.create_region(region);
-        }
-
-        if let Some(r) = self.regions.get_mut(&region_id) {
+            self.create_region(region, new_role);
+        } else if let Some(r) = self.regions.get_mut(&region_id) {
             r.role = new_role;
         }
     }
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         match event {
-            RaftStoreEvent::CreateRegion { region } => {
-                self.handle_create_region(region);
+            RaftStoreEvent::CreateRegion { region, role } => {
+                self.handle_create_region(region, role);
             }
-            RaftStoreEvent::UpdateRegion { region } => {
-                self.handle_update_region(region);
+            RaftStoreEvent::UpdateRegion { region, role } => {
+                self.handle_update_region(region, role);
             }
             RaftStoreEvent::DestroyRegion { region } => {
                 self.handle_destroy_region(region);
@@ -468,7 +468,7 @@ mod tests {
         assert!(c.region_ranges.is_empty());
 
         for region in regions {
-            must_create_region(c, &region);
+            must_create_region(c, &region, StateRole::Follower);
         }
 
         let expected_regions: Vec<_> = regions
@@ -478,10 +478,10 @@ mod tests {
         check_collection(&c, &expected_regions);
     }
 
-    fn must_create_region(c: &mut RegionCollector, region: &Region) {
+    fn must_create_region(c: &mut RegionCollector, region: &Region, role: StateRole) {
         assert!(c.regions.get(&region.get_id()).is_none());
 
-        c.handle_create_region(region.clone());
+        c.handle_create_region(region.clone(), role);
 
         assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
@@ -490,13 +490,13 @@ mod tests {
         );
     }
 
-    fn must_update_region(c: &mut RegionCollector, region: &Region) {
+    fn must_update_region(c: &mut RegionCollector, region: &Region, role: StateRole) {
         let old_end_key = c
             .regions
             .get(&region.get_id())
             .map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_create_region(region.clone());
+        c.handle_update_region(region.clone(), role);
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.region, *region);
@@ -563,11 +563,15 @@ mod tests {
         must_load_regions(&mut c, init_regions);
 
         // end_key changed
-        must_update_region(&mut c, &new_region(2, b"k2", b"k8", 2));
+        must_update_region(&mut c, &new_region(2, b"k2", b"k8", 2), StateRole::Follower);
         // end_key changed (previous end_key is empty)
-        must_update_region(&mut c, &new_region(3, b"k9", b"k99", 2));
+        must_update_region(
+            &mut c,
+            &new_region(3, b"k9", b"k99", 2),
+            StateRole::Follower,
+        );
         // end_key not changed
-        must_update_region(&mut c, &new_region(1, b"k0", b"k1", 2));
+        must_update_region(&mut c, &new_region(1, b"k0", b"k1", 2), StateRole::Follower);
         check_collection(
             &c,
             &[
@@ -582,10 +586,10 @@ mod tests {
             &new_region(1, b"k0", b"k1", 2),
             StateRole::Candidate,
         );
-        must_create_region(&mut c, &new_region(5, b"k99", b"", 2));
+        must_create_region(&mut c, &new_region(5, b"k99", b"", 2), StateRole::Follower);
         must_change_role(&mut c, &new_region(2, b"k2", b"k8", 2), StateRole::Leader);
-        must_update_region(&mut c, &new_region(2, b"k3", b"k7", 3));
-        must_create_region(&mut c, &new_region(4, b"k1", b"k3", 3));
+        must_update_region(&mut c, &new_region(2, b"k3", b"k7", 3), StateRole::Leader);
+        must_create_region(&mut c, &new_region(4, b"k1", b"k3", 3), StateRole::Follower);
         check_collection(
             &c,
             &[
@@ -634,9 +638,9 @@ mod tests {
 
         for idx in seq {
             if *idx == derive_index {
-                must_update_region(&mut c, &final_regions[*idx]);
+                must_update_region(&mut c, &final_regions[*idx], StateRole::Follower);
             } else {
-                must_create_region(&mut c, &final_regions[*idx]);
+                must_create_region(&mut c, &final_regions[*idx], StateRole::Follower);
             }
         }
 
@@ -686,11 +690,11 @@ mod tests {
         updating_region.mut_region_epoch().set_version(2);
 
         if update_first {
-            must_update_region(&mut c, &updating_region);
+            must_update_region(&mut c, &updating_region, StateRole::Follower);
             must_destroy_region(&mut c, destroying_region);
         } else {
             must_destroy_region(&mut c, destroying_region);
-            must_update_region(&mut c, &updating_region);
+            must_update_region(&mut c, &updating_region, StateRole::Follower);
         }
 
         let final_regions = &[
@@ -721,10 +725,10 @@ mod tests {
 
         // While splitting, region 4 created but region 2 still has an `update` event which haven't
         // been handled.
-        must_create_region(&mut c, &new_region(4, b"k5", b"k9", 2));
-        must_update_region(&mut c, &new_region(2, b"k1", b"k9", 1));
+        must_create_region(&mut c, &new_region(4, b"k5", b"k9", 2), StateRole::Follower);
+        must_update_region(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Follower);
         must_change_role(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Leader);
-        must_update_region(&mut c, &new_region(2, b"k1", b"k5", 2));
+        must_update_region(&mut c, &new_region(2, b"k1", b"k5", 2), StateRole::Leader);
         // TODO: In fact, region 2's role should be follower. However because it's previous state was
         // removed while creating updating region 4, it can't be successfully updated. Fortunately
         // this case may hardly happen so it can be fixed later.
@@ -732,7 +736,7 @@ mod tests {
             &c,
             &[
                 (new_region(1, b"", b"k1", 1), StateRole::Follower),
-                (new_region(2, b"k1", b"k5", 2), StateRole::Follower),
+                (new_region(2, b"k1", b"k5", 2), StateRole::Leader),
                 (new_region(4, b"k5", b"k9", 2), StateRole::Follower),
                 (new_region(3, b"k9", b"", 1), StateRole::Follower),
             ],
@@ -740,15 +744,15 @@ mod tests {
 
         // While merging, region 2 expanded and covered region 4 (and their end key become the same)
         // but region 4 still has an `update` event which haven't been handled.
-        must_update_region(&mut c, &new_region(2, b"k1", b"k9", 3));
-        must_update_region(&mut c, &new_region(4, b"k5", b"k9", 2));
+        must_update_region(&mut c, &new_region(2, b"k1", b"k9", 3), StateRole::Leader);
+        must_update_region(&mut c, &new_region(4, b"k5", b"k9", 2), StateRole::Follower);
         must_change_role(&mut c, &new_region(4, b"k5", b"k9", 2), StateRole::Leader);
         must_destroy_region(&mut c, new_region(4, b"k5", b"k9", 2));
         check_collection(
             &c,
             &[
                 (new_region(1, b"", b"k1", 1), StateRole::Follower),
-                (new_region(2, b"k1", b"k9", 3), StateRole::Follower),
+                (new_region(2, b"k1", b"k9", 3), StateRole::Leader),
                 (new_region(3, b"k9", b"", 1), StateRole::Follower),
             ],
         );

@@ -428,8 +428,11 @@ impl Peer {
             .schedule(ReadTask::register(self))
             .unwrap();
 
-        self.coprocessor_host
-            .on_region_changed(self.region(), RegionChangeEvent::Create);
+        self.coprocessor_host.on_region_changed(
+            self.region(),
+            RegionChangeEvent::Create,
+            self.get_role(),
+        );
     }
 
     #[inline]
@@ -552,8 +555,11 @@ impl Peer {
         self.maybe_update_read_progress(progress);
 
         if !self.pending_remove {
-            self.coprocessor_host
-                .on_region_changed(self.region(), RegionChangeEvent::Update);
+            self.coprocessor_host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Update,
+                self.get_role(),
+            );
         }
     }
 
@@ -571,6 +577,10 @@ impl Peer {
 
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
+    }
+
+    pub fn get_role(&self) -> StateRole {
+        self.raft_group.raft.state
     }
 
     #[inline]
