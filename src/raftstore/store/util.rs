@@ -203,6 +203,7 @@ pub fn delete_all_in_range_cf(
         while it.valid() {
             wb.delete_cf(handle, it.key())?;
             if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+                let _tracker = WriteContextTracker::new("delete_all_in_range");
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
                 db.write(wb)?;
@@ -216,6 +217,7 @@ pub fn delete_all_in_range_cf(
     }
 
     if wb.count() > 0 {
+        let _tracker = WriteContextTracker::new("delete_all_in_range");
         db.write(wb)?;
     }
 

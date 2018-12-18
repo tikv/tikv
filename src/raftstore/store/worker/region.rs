@@ -328,9 +328,12 @@ impl SnapContext {
         let handle = box_try!(rocksdb::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(wb).unwrap_or_else(|e| {
-            panic!("{} failed to save apply_snap result: {:?}", region_id, e);
-        });
+        {
+            let _tracker = WriteContextTracker::new("apply_snap");
+            self.engines.kv.write(wb).unwrap_or_else(|e| {
+                panic!("{} failed to save apply_snap result: {:?}", region_id, e);
+            });
+        }
         info!(
             "[region {}] apply new data takes {:?}",
             region_id,

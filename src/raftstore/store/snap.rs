@@ -807,6 +807,7 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if batch_size > 0 {
+                let _tracker = WriteContextTracker::new("apply_plain_cf");
                 box_try!(options.db.write(wb));
             }
             break;
@@ -817,6 +818,7 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
         batch_size += value.len();
         box_try!(wb.put_cf(handle, &key, &value));
         if batch_size >= options.write_batch_size {
+            let _tracker = WriteContextTracker::new("apply_plain_cf");
             box_try!(options.db.write(wb));
             wb = WriteBatch::new();
             batch_size = 0;
