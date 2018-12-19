@@ -38,7 +38,7 @@ fn rotation_file_path_with_timestamp(
     ))
 }
 
-/// Open log file with append mode. Create if log file doesn't existed.
+/// Open log file with append mode. Create a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
     let parent = path
@@ -50,9 +50,9 @@ fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     OpenOptions::new().append(true).create(true).open(path)
 }
 
-/// This FileLogger will rotate logs according to a time span.
+/// This FileLogger rotates logs according to a time span.
 /// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}"
-/// Note: log file will *not* be compressed or any changed except its name.
+/// Note: log file will *not* be compressed or otherwise modified.
 pub struct RotatingFileLogger {
     rotation_timespan: Duration,
     next_rotation_time: DateTime<Utc>,
@@ -75,7 +75,7 @@ impl RotatingFileLogger {
         })
     }
 
-    /// Open log file with append mode. Create a new file if not existed.
+    /// Open log file with append mode. Create a new file if it doesn't exist.
     fn open(&mut self) -> io::Result<()> {
         self.file = open_log_file(&self.file_path)?;
         Ok(())
@@ -100,7 +100,7 @@ impl RotatingFileLogger {
         self.next_rotation_time = compute_rotation_time(&now, self.rotation_timespan);
     }
 
-    /// Flush and close log file.
+    /// Close log file.
     fn close(&mut self) -> io::Result<()> {
         self.file.flush()
     }

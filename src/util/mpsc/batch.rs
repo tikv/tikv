@@ -61,7 +61,7 @@ impl State {
 
     /// When the `Receiver` holds the `State` is running on an `Executor`, call this to yield from
     /// current `poll` context and put the current task handle to `recv_task` so that the `Sender`
-    /// respectively can notify it after send some messages into the channel.
+    /// respectively can notify it after sending some messages into the channel.
     #[inline]
     fn yield_poll(&self) -> bool {
         let t = Box::into_raw(box task::current());

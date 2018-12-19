@@ -27,8 +27,8 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
     path.exists() && path.is_file()
 }
 
-/// Delete given path from file system. Return `true` for success, `false` means there is no such
-/// file. Otherwise the raw error will be returned.
+/// Delete given path from file system. Return `true` on success, `false` if the file doesn't exist.
+/// Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     match fs::remove_file(&file) {
         Ok(_) => Ok(true),
@@ -37,8 +37,8 @@ pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     }
 }
 
-/// Delete given path from file system. Return `true` for success, `false` means there is no such
-/// directory. Otherwise the raw error will be returned.
+/// Delete given path from file system. Return `true` on success, `false` if the directory doesn't
+/// exist. Otherwise the raw error will be returned.
 pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::remove_dir_all(&dir) {
         Ok(_) => Ok(true),
@@ -47,8 +47,8 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Create a new, empty directory at the provided path. Return `true` for successfully creating,
-/// `false` means there is an exists directory already.
+/// Create a new, empty directory at the provided path. Return `true` on success,
+/// `false` if the directory already exists. Otherwise the raw error will be returned.
 pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::create_dir(&dir) {
         Ok(_) => Ok(true),
@@ -57,7 +57,7 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Copy the source file to a new created file.
+/// Copy the source file to a newly created file.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     if !from.as_ref().is_file() {
         return Err(io::Error::new(
@@ -76,7 +76,7 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
-/// Calculate the given file's sum32.
+/// Calculate the given file's CRC32 checksum.
 pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
     let mut f = OpenOptions::new().read(true).open(path)?;

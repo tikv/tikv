@@ -44,7 +44,10 @@ impl Default for SecurityConfig {
 }
 
 /// Check and open key file. Return `Ok(None)` if path is empty.
-/// `tag` only used in error message, likes "ca key", "cert key", "private key", etc.
+///
+///  # Arguments
+///
+///     -`tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
 fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<Error>> {
     if path.is_empty() {
         return Ok(None);

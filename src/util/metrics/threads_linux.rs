@@ -202,13 +202,18 @@ fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     )))
 }
 
-/// Sanitize thread name. Keep `a-zA-Z0-9_:`, replace `-` and ` ` to `_`, drop the others.
-/// Example:
-/// +   ok123   ->  ok123
-/// +   Az_1    ->  Az_1
-/// +   a-b     ->  a_b
-/// +   a b     ->  a_b
-/// +   @123    ->  123
+/// Sanitize thread name. Keep `a-zA-Z0-9_:`, replace `-` and ` ` with `_`, drop the others.
+///
+/// Examples:
+///
+/// ```no_run
+/// assert_eq!(sanitize_thread_name(0, "ok123"), "ok123");
+/// assert_eq!(sanitize_thread_name(0, "Az_1"), "Az_1");
+/// assert_eq!(sanitize_thread_name(0, "a-b"), "a_b");
+/// assert_eq!(sanitize_thread_name(0, "a b"), "a_b");
+/// assert_eq!(sanitize_thread_name(1, "@123"), "123");
+/// assert_eq!(sanitize_thread_name(1, "@@@@"), "1");
+/// ```
 fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     let mut name = String::with_capacity(raw.len());
     // sanitize thread name.

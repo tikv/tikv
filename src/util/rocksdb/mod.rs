@@ -247,7 +247,7 @@ pub fn db_exist(path: &str) -> bool {
 
 /// Get total used size of rocksdb engine, including:
 /// *  total size (bytes) of all SST files.
-/// *  total size(bytes) of active and unflushed immutable memtables.
+/// *  total size (bytes) of active and unflushed immutable memtables.
 ///
 pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
@@ -286,13 +286,13 @@ pub fn get_engine_compression_ratio_at_level(
     None
 }
 
-/// Get the number of files at given level of given cf.
+/// Get the number of files at given level of given column family.
 pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
     engine.get_property_int_cf(handle, &prop)
 }
 
-/// Check whether any column family set `disable_auto_compactions` to `True` or not.
+/// Check whether any column family sets `disable_auto_compactions` to `True` or not.
 pub fn auto_compactions_is_disabled(engine: &DB) -> bool {
     for cf_name in engine.cf_names() {
         let cf = engine.cf_handle(cf_name).unwrap();
@@ -370,6 +370,14 @@ impl SliceTransform for NoopSliceTransform {
 }
 
 /// Roughly delete files in multiple ranges.
+///
+/// Note:
+///    - After this operation, some keys in the range might still exist in the database.
+///    - After this operation, some keys in the range might be removed from existing snapshot,
+///      so you shouldn't expect to be able to read data from the range using existing snapshots
+///      any more.
+///
+/// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
 pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<(), String> {
     let mut delete_ranges = Vec::new();
     for &(ref start, ref end) in ranges {
