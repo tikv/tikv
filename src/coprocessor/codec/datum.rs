@@ -16,7 +16,6 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
-use std::mem;
 use std::str::FromStr;
 use std::{i64, str};
 
@@ -347,7 +346,7 @@ impl Datum {
         }
     }
 
-    /// `into_i64` converts self into f64.
+    /// `into_i64` converts self into i64.
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
         let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
@@ -394,7 +393,7 @@ impl Datum {
         match *self {
             Datum::I64(i) => i,
             Datum::U64(u) => u as i64,
-            Datum::F64(f) => unsafe { mem::transmute(f) },
+            Datum::F64(f) => f.to_bits() as i64,
             Datum::Dur(ref d) => d.to_nanos(),
             Datum::Time(_)
             | Datum::Bytes(_)

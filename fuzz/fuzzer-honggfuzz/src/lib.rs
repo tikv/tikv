@@ -11,4 +11,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod number_maker;
+//! Make cargo happy.
+//! Fuzzer binaries will be generated dynamically via `fuzz/cli.rs`.

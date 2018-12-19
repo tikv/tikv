@@ -28,11 +28,11 @@ Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 mod future;
 mod metrics;
 
+use crossbeam::channel::{RecvTimeoutError, TryRecvError, TrySendError};
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
