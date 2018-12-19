@@ -93,8 +93,10 @@ impl ExecutorPipelineBuilder {
         executor_descriptors: Vec<executor::Executor>,
         store: S,
         ranges: Vec<KeyRange>,
-        eval_ctx: Arc<EvalConfig>,
+        eval_config: EvalConfig,
     ) -> Result<Box<BatchExecutor>> {
+        // Shared in multiple executors, so wrap with Rc.
+        let eval_config = Arc::new(eval_config);
         let mut executor_descriptors = executor_descriptors.into_iter();
         let mut first_ed = executor_descriptors
             .next()
@@ -149,7 +151,7 @@ impl ExecutorPipelineBuilder {
                         executor_context.clone(),
                         executor,
                         ed.take_selection().take_conditions().into_vec(),
-                        Arc::clone(&eval_ctx),
+                        Arc::clone(&eval_config),
                     )?)
                 }
                 _ => {

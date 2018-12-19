@@ -67,7 +67,6 @@ impl DAGContext {
         let is_batch = enable_batch_if_possible
             && !is_streaming
             && super::pipeline::ExecutorPipelineBuilder::can_build_batch(req.get_executors());
-        let eval_ctx = Arc::new(eval_cfg);
         let executor_descriptors = req.take_executors().into_vec();
 
         let (normal_executor, batch_executor) = if is_batch {
@@ -77,7 +76,7 @@ impl DAGContext {
                     executor_descriptors,
                     store,
                     ranges,
-                    eval_ctx,
+                    eval_cfg,
                 )?),
             )
         } else {
@@ -86,7 +85,7 @@ impl DAGContext {
                     executor_descriptors,
                     store,
                     ranges,
-                    eval_ctx,
+                    Arc::new(eval_cfg),
                     req.get_collect_range_counts(),
                 )?),
                 None,

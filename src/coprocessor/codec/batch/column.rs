@@ -18,14 +18,8 @@ use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 use coprocessor::codec::datum;
 use coprocessor::codec::mysql::Tz;
 use coprocessor::codec::{Error, Result};
+use coprocessor::data_type::{Bytes, DateTime, Decimal, Duration, Int, Json, Real};
 use util::codec::{bytes, number};
-
-// TODO: Move these type alias and re-exports into cop_datatype.
-// These types are ensured to be cheap to move. However clone can be expensive.
-pub type Int = i64;
-pub type Real = f64;
-pub type Bytes = Vec<u8>;
-pub use coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 /// An array of datums in the same data type and is column oriented.
 ///
@@ -37,6 +31,7 @@ pub enum BatchColumn {
     Int(Vec<Option<Int>>),
     Real(Vec<Option<Real>>),
     Decimal(Vec<Option<Decimal>>),
+    // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
     Bytes(Vec<Option<Bytes>>),
     DateTime(Vec<Option<DateTime>>),
     Duration(Vec<Option<Duration>>),
@@ -59,6 +54,26 @@ macro_rules! match_self {
             BatchColumn::DateTime($($ref)+ $var) => $expr,
             BatchColumn::Duration($($ref)+ $var) => $expr,
             BatchColumn::Json($($ref)+ $var) => $expr,
+        }
+    }};
+}
+
+macro_rules! match_self_ref {
+    (ref $self:ident, $var:ident, $expr:expr) => {{
+        match_self_ref!(INTERNAL ref, $self, $var, $expr)
+    }};
+    (ref mut $self:ident, $var:ident, $expr:expr) => {{
+        match_self_ref!(INTERNAL ref|mut, $self, $var, $expr)
+    }};
+    (INTERNAL $($ref:tt)|+, $self:ident, $var:ident, $expr:expr) => {{
+        match $self {
+            BatchColumnRef::Int($($ref)+ $var) => $expr,
+            BatchColumnRef::Real($($ref)+ $var) => $expr,
+            BatchColumnRef::Decimal($($ref)+ $var) => $expr,
+            BatchColumnRef::Bytes($($ref)+ $var) => $expr,
+            BatchColumnRef::DateTime($($ref)+ $var) => $expr,
+            BatchColumnRef::Duration($($ref)+ $var) => $expr,
+            BatchColumnRef::Json($($ref)+ $var) => $expr,
         }
     }};
 }
@@ -165,6 +180,19 @@ impl BatchColumn {
                 r
             });
         });
+    }
+
+    #[inline]
+    pub fn borrow(&self) -> BatchColumnRef {
+        match self {
+            BatchColumn::Int(ref v) => BatchColumnRef::Int(v.as_slice()),
+            BatchColumn::Real(ref v) => BatchColumnRef::Real(v.as_slice()),
+            BatchColumn::Decimal(ref v) => BatchColumnRef::Decimal(v.as_slice()),
+            BatchColumn::Bytes(ref v) => BatchColumnRef::Bytes(v.as_slice()),
+            BatchColumn::DateTime(ref v) => BatchColumnRef::DateTime(v.as_slice()),
+            BatchColumn::Duration(ref v) => BatchColumnRef::Duration(v.as_slice()),
+            BatchColumn::Json(ref v) => BatchColumnRef::Json(v.as_slice()),
+        }
     }
 
     /// Moves all the elements of `other` into `Self`, leaving `other` empty.
@@ -293,6 +321,17 @@ impl BatchColumn {
                 ),
             },
         }
+    }
+
+    pub fn as_bools(&self, outputs: &mut [bool]) {
+        use coprocessor::data_type::AsBool;
+
+        assert!(outputs.len() >= self.len());
+        match_self!(ref self, v, {
+            for i in 0..self.len() {
+                outputs[i] = v[i].as_bool();
+            }
+        });
     }
 
     /// Takes first n elements and build a new instance.
@@ -682,7 +721,7 @@ impl BatchColumn {
             }
             BatchColumn::Duration(ref vec) => {
                 if let Some(val) = &vec[row_index] {
-                    datum::Datum::Dur(val.clone()) // TODO: don't clone?
+                    datum::Datum::Dur(*val)
                 } else {
                     datum::Datum::Null
                 }
@@ -695,6 +734,58 @@ impl BatchColumn {
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BatchColumnRef<'a> {
+    Int(&'a [Option<Int>]),
+    Real(&'a [Option<Real>]),
+    Decimal(&'a [Option<Decimal>]),
+    Bytes(&'a [Option<Bytes>]),
+    DateTime(&'a [Option<DateTime>]),
+    Duration(&'a [Option<Duration>]),
+    Json(&'a [Option<Json>]),
+}
+
+impl<'a> BatchColumnRef<'a> {
+    /// Returns the `EvalType` used to construct current column.
+    #[inline]
+    pub fn eval_type(&self) -> EvalType {
+        match self {
+            BatchColumnRef::Int(_) => EvalType::Int,
+            BatchColumnRef::Real(_) => EvalType::Real,
+            BatchColumnRef::Decimal(_) => EvalType::Decimal,
+            BatchColumnRef::Bytes(_) => EvalType::Bytes,
+            BatchColumnRef::DateTime(_) => EvalType::DateTime,
+            BatchColumnRef::Duration(_) => EvalType::Duration,
+            BatchColumnRef::Json(_) => EvalType::Json,
+        }
+    }
+
+    /// Returns the number of datums contained in this column.
+    #[inline]
+    pub fn len(&self) -> usize {
+        match_self_ref!(ref self, v, v.len())
+    }
+
+    /// Returns whether this column is empty.
+    ///
+    /// Equals to `len() == 0`.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn as_bools(&self, outputs: &mut [bool]) {
+        use coprocessor::data_type::AsBool;
+
+        assert!(outputs.len() >= self.len());
+        match_self_ref!(ref self, v, {
+            for i in 0..self.len() {
+                outputs[i] = v[i].as_bool();
+            }
+        });
     }
 }
 
@@ -751,6 +842,38 @@ macro_rules! impl_as_slice {
                 self.$mut_name()
             }
         }
+
+        //        impl<'a> BatchColumnRef<'a> {
+        //            /// Extracts a slice containing the entire values of the column
+        //            /// in specific type.
+        //            ///
+        //            /// # Panics
+        //            ///
+        //            /// Panics if current column is does not match the type.
+        //            #[inline]
+        //            pub fn $name(&'a self) -> &'a [Option<$ty>] {
+        //                match self {
+        //                    BatchColumnRef::$ty(ref slice) => slice,
+        //                    other => panic!(
+        //                        "Cannot call `{}` over a {} column",
+        //                        stringify!($name),
+        //                        other.eval_type()
+        //                    ),
+        //                }
+        //            }
+        //        }
+        //
+        //        impl<'a> AsRef<[Option<$ty>]> for BatchColumnRef<'a> {
+        //            fn as_ref<'b>(&'b self) -> &'b [Option<$ty>] {
+        //                self.$name()
+        //            }
+        //        }
+        //
+        //        //        impl<'a> Into<&'a [Option<$ty>]> for BatchColumnRef<'a> {
+        //        //            fn into(self) -> &'a [Option<$ty>] {
+        //        //                self.$name()
+        //        //            }
+        //        //        }
     };
 }
 
@@ -761,6 +884,54 @@ impl_as_slice! { Bytes, as_bytes_slice, as_mut_bytes_slice }
 impl_as_slice! { DateTime, as_date_time_slice, as_mut_date_time_slice }
 impl_as_slice! { Duration, as_duration_slice, as_mut_duration_slice }
 impl_as_slice! { Json, as_json_slice, as_mut_json_slice }
+
+macro_rules! impl_into_slice {
+    ($ty:tt, $name:ident) => {
+        impl<'a> BatchColumnRef<'a> {
+            /// Extracts a slice containing the entire values of the column
+            /// in specific type.
+            ///
+            /// # Panics
+            ///
+            /// Panics if current column is does not match the type.
+            #[inline]
+            pub fn $name(self) -> &'a [Option<$ty>] {
+                match self {
+                    BatchColumnRef::$ty(slice) => slice,
+                    other => panic!(
+                        "Cannot call `{}` over a {} column",
+                        stringify!($name),
+                        other.eval_type()
+                    ),
+                }
+            }
+        }
+
+        impl<'a> Into<&'a [Option<$ty>]> for BatchColumnRef<'a> {
+            #[inline]
+            fn into(self) -> &'a [Option<$ty>] {
+                self.$name()
+            }
+        }
+
+        // TODO: Implement From<[..]> for BatchColumnRef.
+        //
+        //        impl<'a> AsRef<[Option<$ty>]> for BatchColumnRef<'a> {
+        //            fn as_ref<'b>(&'b self) -> &'b [Option<$ty>] {
+        //                self.$name()
+        //            }
+        //        }
+        //
+    };
+}
+
+impl_into_slice! { Int, into_int_slice }
+impl_into_slice! { Real, into_real_slice }
+impl_into_slice! { Decimal, into_decimal_slice }
+impl_into_slice! { Bytes, into_bytes_slice }
+impl_into_slice! { DateTime, into_date_time_slice }
+impl_into_slice! { Duration, into_duration_slice }
+impl_into_slice! { Json, into_json_slice }
 
 macro_rules! impl_push {
     ($ty:tt, $name:ident) => {

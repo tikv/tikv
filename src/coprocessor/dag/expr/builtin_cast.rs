@@ -951,7 +951,7 @@ mod tests {
             (
                 ScalarFuncSig::CastDurationAsReal,
                 FieldTypeTp::Duration,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 cop_datatype::UNSPECIFIED_LENGTH,
                 120023f64,
@@ -1089,7 +1089,7 @@ mod tests {
             (
                 ScalarFuncSig::CastDurationAsDecimal,
                 FieldTypeTp::Duration,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(120023),
@@ -1240,7 +1240,7 @@ mod tests {
                 FieldTypeTp::Duration,
                 charset::CHARSET_UTF8,
                 None,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 dur_str.to_vec(),
             ),
@@ -1520,7 +1520,7 @@ mod tests {
         let str_cols = vec![Datum::Bytes(dur_str.as_bytes().to_vec())];
         let f64_cols = vec![Datum::F64(dur_int as f64)];
         let time_cols = vec![Datum::Time(dur_to_time)];
-        let duration_cols = vec![Datum::Dur(duration.clone())];
+        let duration_cols = vec![Datum::Dur(duration)];
         let dec_cols = vec![Datum::Dec(Decimal::from(dur_int))];
 
         let cases = vec![
@@ -1646,7 +1646,7 @@ mod tests {
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
-            let mut expt = exp.clone();
+            let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
                 expt.fsp = to_fsp as u8;
             }

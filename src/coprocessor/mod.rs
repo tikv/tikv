@@ -14,6 +14,7 @@
 mod checksum;
 pub mod codec;
 pub mod dag;
+pub mod data_type;
 mod endpoint;
 mod error;
 pub mod local_metrics;

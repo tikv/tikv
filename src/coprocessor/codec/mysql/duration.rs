@@ -48,7 +48,7 @@ fn tm_to_secs(t: Tm) -> u64 {
 }
 
 /// `Duration` is the type for `MySQL` time type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Duration {
     pub dur: StdDuration,
     // Fsp is short for Fractional Seconds Precision.

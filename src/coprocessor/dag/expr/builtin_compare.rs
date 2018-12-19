@@ -576,7 +576,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::CoalesceDuration,
-                vec![Datum::Null, Datum::Dur(dur.clone())],
+                vec![Datum::Null, Datum::Dur(dur)],
                 Datum::Dur(dur),
             ),
             (
@@ -675,16 +675,12 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InDuration,
-                vec![Datum::Dur(dur1.clone()), Datum::Dur(dur2.clone())],
+                vec![Datum::Dur(dur1), Datum::Dur(dur2)],
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::InDuration,
-                vec![
-                    Datum::Dur(dur1.clone()),
-                    Datum::Dur(dur2.clone()),
-                    Datum::Dur(dur1.clone()),
-                ],
+                vec![Datum::Dur(dur1), Datum::Dur(dur2), Datum::Dur(dur1)],
                 Datum::I64(1),
             ),
             (

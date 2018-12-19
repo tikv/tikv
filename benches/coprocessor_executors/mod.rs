@@ -15,6 +15,7 @@
 extern crate criterion;
 extern crate protobuf;
 
+extern crate cop_datatype;
 extern crate kvproto;
 extern crate test_coprocessor;
 extern crate tikv;
@@ -23,7 +24,8 @@ extern crate tipb;
 use criterion::{black_box, Bencher, Criterion};
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{Executor as PbExecutor, IndexScan, TableScan};
+use tipb::executor::{Executor as PbExecutor, IndexScan, Selection, TableScan};
+use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
@@ -983,6 +985,96 @@ fn bench_dag_table_scan_datum_all(c: &mut Criterion) {
     bench(c, "dag_batch_table_scan_datum_all", true);
 }
 
+// TODO: Remove this test.
+/// Integrate DAGContext + TableScan + Selection, scans a range with 1000 keys and retain 500 keys,
+/// 2 interested column, PK & the column to filter.
+fn bench_dag_table_scan_selection_primary_key(c: &mut Criterion) {
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tikv::util::codec::number::NumberEncoder;
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let id = ColumnBuilder::new()
+                .col_type(TYPE_LONG)
+                .primary_key(true)
+                .build();
+            let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            let table = TableBuilder::new()
+                .add_col(id.clone())
+                .add_col(foo.clone())
+                .build();
+
+            let mut store = Store::new();
+            for i in 0..1000 {
+                store.begin();
+                store
+                    .insert_into(&table)
+                    .set(&id, Datum::I64(i))
+                    .set(&foo, Datum::I64(1000 - i))
+                    .execute();
+                store.commit();
+            }
+
+            let mut table_exec = PbExecutor::new();
+            table_exec.set_tp(ExecType::TypeTableScan);
+            table_exec.set_tbl_scan({
+                let mut meta = TableScan::new();
+                meta.set_table_id(table.id);
+                meta.set_desc(false);
+                meta.mut_columns().push(id.get_column_info());
+                meta.mut_columns().push(foo.get_column_info());
+                meta
+            });
+
+            let mut selection_exec = PbExecutor::new();
+            selection_exec.set_tp(ExecType::TypeSelection);
+            selection_exec.set_selection({
+                let mut meta = Selection::new();
+                meta.mut_conditions().push({
+                    let mut expr = Expr::new();
+                    expr.set_tp(ExprType::ScalarFunc);
+                    expr.set_sig(ScalarFuncSig::GTInt);
+                    expr.mut_field_type()
+                        .as_mut_accessor()
+                        .set_tp(FieldTypeTp::LongLong);
+                    expr.mut_children().push({
+                        let mut lhs = Expr::new();
+                        lhs.mut_field_type()
+                            .as_mut_accessor()
+                            .set_tp(FieldTypeTp::LongLong);
+                        lhs.set_tp(ExprType::ColumnRef);
+                        lhs.mut_val().encode_i64(1).unwrap();
+                        lhs
+                    });
+                    expr.mut_children().push({
+                        let mut rhs = Expr::new();
+                        rhs.mut_field_type()
+                            .as_mut_accessor()
+                            .set_tp(FieldTypeTp::LongLong);
+                        rhs.set_tp(ExprType::Uint64);
+                        rhs.mut_val().encode_u64(500).unwrap();
+                        rhs
+                    });
+                    expr
+                });
+                meta
+            });
+
+            bench_dag_handle(
+                b,
+                &[table_exec, selection_exec],
+                &[table.get_select_range()],
+                &store,
+                batch,
+            );
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_selection_primary_key", false);
+    bench(c, "dag_batch_table_scan_selection_primary_key", true);
+}
+
 criterion_group!(
     benches,
     bench_table_scan_primary_key,
@@ -1005,5 +1097,6 @@ criterion_group!(
     bench_dag_table_scan_primary_key,
     bench_dag_table_scan_datum_front,
     bench_dag_table_scan_datum_all,
+    bench_dag_table_scan_selection_primary_key,
 );
 criterion_main!(benches);

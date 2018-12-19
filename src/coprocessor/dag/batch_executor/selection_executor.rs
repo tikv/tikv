@@ -20,14 +20,15 @@ use tipb::expression::Expr;
 use super::interface::*;
 use coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use coprocessor::dag::executor::ExprColumnRefVisitor;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+use coprocessor::dag::expr::EvalConfig;
+use coprocessor::dag::rpn_expr::{RpnExpressionEvalContext, RpnExpressionNodeVec};
 use coprocessor::*;
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: ExecutorContext,
     src: Src,
-    eval_context: EvalContext,
-    conditions: Vec<Expression>,
+    eval_context: RpnExpressionEvalContext,
+    conditions: Vec<RpnExpressionNodeVec>,
 
     /// The index (in `context.columns_info`) of referred columns in expression.
     referred_columns: Vec<usize>,
@@ -75,8 +76,11 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             LazyBatchColumnVec::from(columns)
         };
 
-        let eval_context = EvalContext::new(eval_config);
-        let conditions = Expression::batch_build(&eval_context, conditions)?;
+        let eval_context = RpnExpressionEvalContext::new(eval_config);
+        let conditions = conditions
+            .into_iter()
+            .map(|def| RpnExpressionNodeVec::build_from_def(def, eval_context.config.tz))
+            .collect();
 
         Ok(Self {
             context,
@@ -92,13 +96,41 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         })
     }
 
-    fn filter_rows(&mut self, data: &LazyBatchColumnVec, retain_map: &mut [bool]) -> Result<()> {
-        use coprocessor::codec::datum;
+    fn filter_rows(
+        &mut self,
+        data: &LazyBatchColumnVec,
+        base_retain_map: &mut [bool],
+    ) -> Result<()> {
+        // use coprocessor::codec::datum;
+
+        let rows_len = data.rows_len();
 
         // For each row, calculate a remain map.
+
+        // We use 2 retain map, base and head. For each expression, its values are batch
+        // evaluated as bools in head. Then head is merged into base. Finally, we use base as the
+        // final retain map.
+
+        // FIXME: Not all rows needs to be evaluated (if head[x] == false).
+        // FIXME: Avoid head_retain_map being re-allocated across different filter_rows function calls.
+        assert!(base_retain_map.len() >= rows_len);
+        let mut head_retain_map = vec![false; rows_len];
+
+        for condition in &self.conditions {
+            condition.eval_as_bools(
+                &mut self.eval_context,
+                rows_len,
+                data,
+                head_retain_map.as_mut_slice(),
+            );
+            for i in 0..rows_len {
+                base_retain_map[i] &= head_retain_map[i];
+            }
+        }
+
+        /*
         // FIXME: We are still evaluating row by row here.
         let cols_len = self.context.columns_info.len();
-        let rows_len = data.rows_len();
 
         // `cols` only contains referred columns.
         let mut cols = vec![datum::Datum::Null; cols_len];
@@ -125,6 +157,8 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
                 cols[i] = datum::Datum::Null;
             }
         }
+        */
+
         Ok(())
     }
 
@@ -140,13 +174,14 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         for idx in &self.referred_columns {
             result.data.ensure_column_decoded(
                 *idx,
-                self.eval_context.cfg.tz,
+                self.eval_context.config.tz,
                 &self.context.columns_info[*idx],
             );
             // TODO: what if ensure_column_decoded failed?
+            // FIXME: We should not fail due to errors from unneeded rows.
         }
         // Filter fetched rows. If there are errors, less rows will be retained.
-        let mut retain_map = vec![false; result.data.rows_len()];
+        let mut retain_map = vec![true; result.data.rows_len()];
         let filter_result = self.filter_rows(&result.data, &mut retain_map);
 
         // Append by retain map.
