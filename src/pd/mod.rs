@@ -69,7 +69,7 @@ impl Deref for RegionInfo {
 
 pub const INVALID_ID: u64 = 0;
 
-// Client to communicate with placement driver (pd) for special cluster.
+// PdClient communicates with placement driver (pd) for special cluster.
 // Because now one pd only supports one cluster, so it is no need to pass
 // cluster id in trait interface every time, so passing the cluster id when
 // creating the PdClient is enough and the PdClient will use this cluster id
@@ -89,21 +89,21 @@ pub trait PdClient: Send + Sync {
     fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()>;
 
     // Return whether the cluster is bootstrapped or not.
-    // We must use the cluster after bootstrapped, so when the
-    // node starts, it must check it with is_cluster_bootstrapped,
-    // and panic if not bootstrapped.
+    //
+    // Cluster must be bootstrapped when we use it, so when the
+    // node starts, `is_cluster_bootstrapped` must be called,
+    // and panics if cluster was not bootstrapped.
     fn is_cluster_bootstrapped(&self) -> Result<bool>;
 
     // Allocate a unique positive id.
     fn alloc_id(&self) -> Result<u64>;
 
-    // When the store starts, or some store information changed, it
-    // uses put_store to inform pd.
+    // Informs pd when the store starts, or some store information changed.
     fn put_store(&self, store: metapb::Store) -> Result<()>;
 
     // We don't need to support region and peer put/delete,
     // because pd knows all region and peers itself.
-    // When bootstrapping, pd knows first region with bootstrap_cluster.
+    // When bootstrapping, pd knows first region with `bootstrap_cluster`.
     // When changing peer, pd determines where to add a new peer in some store
     // for this region.
     // When region splitting, pd determines the new region id and peer id for the
