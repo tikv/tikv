@@ -31,7 +31,6 @@ pub struct IOLimiter {
 }
 
 impl IOLimiter {
-
     /// # Arguments
     ///
     /// - `bytes_per_sec`: controls the total write rate of compaction and flush in bytes per second.
