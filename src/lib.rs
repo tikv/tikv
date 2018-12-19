@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(label_break_value)]
 #![feature(try_from)]
 #![feature(fnbox)]
 #![feature(alloc)]

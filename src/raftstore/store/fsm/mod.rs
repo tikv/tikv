@@ -16,6 +16,7 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 mod peer;
+mod router;
 mod store;
 
 pub use self::peer::DestroyPeerJob;
