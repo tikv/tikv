@@ -407,6 +407,28 @@ mod tests {
     /// reallocation these values are copied.
     #[test]
     fn test_vec_reallocate() {
+        // FIXME: This test, and presumably the WriteBuffer API, relies on
+        // unspecified behavior of Vec::reserve (that it copies bytes
+        // beyond the length of the vector). It also depends on behavior
+        // specific to the malloc implementation (that calling `reserve`
+        // with a certain size _always_ reallocates).
+        //
+        // On at least one tested platform (WSL) the expected `reserve` behavior
+        // of always reallocating does not hold - malloc is free to realloc in
+        // place - so this test is "fuzzy" about exactly what it expects from
+        // the allocator; and it generates allocation "noise" to disrupt any
+        // predictive analysis in malloc.
+        //
+        // Note that the test harness for this crate uses the system
+        // allocator, not jemalloc.
+        //
+        // Both of these observations together add up to a bad smell for this
+        // API, and it might want to be reexamined. Fortunately it looks like
+        // this module is not actually used anywhere in the codebase.
+
+        let mut in_place_reallocs = 0;
+        const MAX_IN_PLACE_REALLOCS: usize = 16;
+
         for payload_len in 1..1024 {
             let mut payload: Vec<u8> = Vec::with_capacity(payload_len);
             for _ in 0..payload_len {
@@ -421,15 +443,30 @@ mod tests {
                 slice[..payload_len].clone_from_slice(payload.as_slice());
             }
 
+            // These are trying to defeat optimizations in malloc that might
+            // cause realloc to not actually create a new allocation. See
+            // the FIXME above.
+            let _alloc_noise: Vec<u8> = Vec::with_capacity(payload_len);
+            let _alloc_noise: Vec<u8> = Vec::with_capacity(1);
+
             // Re-allocate the vector space and ensure that the address is changed.
             vec.reserve(::std::cmp::max(payload_len * 3, 32));
-            assert_ne!(vec_ptr, vec.as_ptr());
+
+            //assert_ne!(vec_ptr, vec.as_ptr());
+            if vec_ptr == vec.as_ptr() {
+                in_place_reallocs += 1;
+                println!("didn't realloc at payload_len: {}", payload_len);
+            }
 
             // Move len() forward and check whether our previous written data exists.
             unsafe {
                 vec.advance_mut(payload_len);
             }
             assert_eq!(vec.as_slice(), payload.as_slice());
+        }
+
+        if in_place_reallocs > MAX_IN_PLACE_REALLOCS {
+            panic!("realloc test realloc enough");
         }
     }
 }
