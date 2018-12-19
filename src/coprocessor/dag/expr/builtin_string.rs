@@ -24,6 +24,7 @@ use cop_datatype::{self, FieldTypeFlag};
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use safemem;
+use tipb::expression::FieldType;
 
 const SPACE: u8 = 0o40u8;
 
@@ -40,12 +41,6 @@ enum TrimDirection {
     Both = 1,
     Leading,
     Trailing,
-}
-
-enum TargetLen {
-    Invalid,
-    Zero,
-    Len(usize),
 }
 
 impl TrimDirection {
@@ -657,10 +652,16 @@ impl ScalarFunc {
         let pad = try_opt!(self.children[2].eval_string_and_decode(ctx, row));
         let input_len = input.chars().count();
 
-        match self.valid_target_len_for_pad(target_len, 4, input_len, pad.is_empty()) {
-            TargetLen::Zero => Ok(Some(Cow::Borrowed(b""))),
-            TargetLen::Invalid => Ok(None),
-            TargetLen::Len(target_len) => {
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input_len,
+            4,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => empty_str(),
+            Some(target_len) => {
                 let r = input
                     .chars()
                     .chain(pad.chars().cycle())
@@ -681,10 +682,16 @@ impl ScalarFunc {
         let target_len = try_opt!(self.children[1].eval_int(ctx, row));
         let pad = try_opt!(self.children[2].eval_string(ctx, row));
 
-        match self.valid_target_len_for_pad(target_len, 1, input.len(), pad.is_empty()) {
-            TargetLen::Zero => Ok(Some(Cow::Borrowed(b""))),
-            TargetLen::Invalid => Ok(None),
-            TargetLen::Len(target_len) => {
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input.len(),
+            1,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => empty_str(),
+            Some(target_len) => {
                 let r = input
                     .iter()
                     .chain(pad.iter().cycle())
@@ -707,10 +714,16 @@ impl ScalarFunc {
         let pad = try_opt!(self.children[2].eval_string_and_decode(ctx, row));
         let input_len = input.chars().count();
 
-        match self.valid_target_len_for_pad(target_len, 4, input_len, pad.is_empty()) {
-            TargetLen::Zero => Ok(Some(Cow::Borrowed(b""))),
-            TargetLen::Invalid => Ok(None),
-            TargetLen::Len(target_len) => {
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input_len,
+            4,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => empty_str(),
+            Some(target_len) => {
                 let r = if let Some(remain) = target_len.checked_sub(input_len) {
                     pad.chars()
                         .cycle()
@@ -735,10 +748,16 @@ impl ScalarFunc {
         let target_len = try_opt!(self.children[1].eval_int(ctx, row));
         let pad = try_opt!(self.children[2].eval_string(ctx, row));
 
-        match self.valid_target_len_for_pad(target_len, 1, input.len(), pad.is_empty()) {
-            TargetLen::Zero => Ok(Some(Cow::Borrowed(b""))),
-            TargetLen::Invalid => Ok(None),
-            TargetLen::Len(target_len) => {
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input.len(),
+            1,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => empty_str(),
+            Some(target_len) => {
                 let r = if let Some(remain) = target_len.checked_sub(input.len()) {
                     pad.iter()
                         .cycle()
@@ -753,37 +772,38 @@ impl ScalarFunc {
             }
         }
     }
+}
 
-    // when target_len is 0, return Zero, means the pad function should return empty string
-    // currently there are three conditions it return Invalid, which means pad function should return Null
-    //   1. target_len is negative
-    //   2. the result string after apply padding is larger(in bytes) then MAX_BLOB_WIDTH
-    //   3. target_len is greater than length of input string, *and* pad string is empty
-    // otherwise return Len with usize type of target_len
-    #[inline]
-    fn valid_target_len_for_pad(
-        &self,
-        target_len: i64,
-        size_of_type: usize,
-        input_len: usize,
-        pad_empty: bool,
-    ) -> TargetLen {
-        if target_len == 0 {
-            return TargetLen::Zero;
-        }
-        let len_unsigned = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
-        let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
-        if !target_len_positive
-            || target_len.saturating_mul(size_of_type) > cop_datatype::MAX_BLOB_WIDTH as usize
-            || (pad_empty && input_len < target_len)
-        {
-            return TargetLen::Invalid;
-        }
-        TargetLen::Len(target_len)
+fn empty_str() -> Result<Option<Cow<'static, [u8]>>> {
+    Ok(Some(Cow::Borrowed(b"")))
+}
+
+// when target_len is 0, return Some(0), means the pad function should return empty string
+// currently there are three conditions it return None, which means pad function should return Null
+//   1. target_len is negative
+//   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
+//   3. target_len is greater than length of input string, *and* pad string is empty
+// otherwise return Some(target_len)
+#[inline]
+fn validate_target_len_for_pad(
+    ft: &FieldType,
+    target_len: i64,
+    input_len: usize,
+    size_of_type: usize,
+    pad_empty: bool,
+) -> Option<usize> {
+    if target_len == 0 {
+        return Some(0);
     }
+    let len_unsigned = ft.flag().contains(FieldTypeFlag::UNSIGNED);
+    let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
+    if !target_len_positive
+        || target_len.saturating_mul(size_of_type) > cop_datatype::MAX_BLOB_WIDTH as usize
+        || (pad_empty && input_len < target_len)
+    {
+        return None;
+    }
+    Some(target_len)
 }
 
 // Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
@@ -2364,6 +2384,41 @@ mod tests {
         for (left, right, exp) in tests {
             let got = eval_func(ScalarFuncSig::Strcmp, &[left, right]).unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_validate_target_len_for_pad() {
+        use cop_datatype::FieldTypeAccessor;
+        use tipb::expression::FieldType;
+        let cases = vec![
+            // target_len, input_len, size_of_type, pad_empty, result
+            (0, 10, 1, false, Some(0)),
+            (-1, 10, 1, false, None),
+            (12, 10, 1, true, None),
+            (i64::from(MAX_BLOB_WIDTH) + 1, 10, 1, false, None),
+            (i64::from(MAX_BLOB_WIDTH) / 4 + 1, 10, 4, false, None),
+            (12, 10, 1, false, Some(12)),
+        ];
+        for case in cases {
+            let ft = FieldType::default();
+            let got = super::validate_target_len_for_pad(&ft, case.0, case.1, case.2, case.3);
+            assert_eq!(got, case.4);
+        }
+
+        let unsigned_cases = vec![
+            (u64::max_value(), 10, 1, false, None),
+            (u64::max_value(), 10, 4, false, None),
+            (u64::max_value(), 10, 1, true, None),
+            (u64::max_value(), 10, 4, true, None),
+            (12u64, 10, 4, false, Some(12)),
+        ];
+        for case in unsigned_cases {
+            let mut ft = FieldType::default();
+            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
+            let got =
+                super::validate_target_len_for_pad(&ft, case.0 as i64, case.1, case.2, case.3);
+            assert_eq!(got, case.4);
         }
     }
 
