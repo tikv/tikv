@@ -13,11 +13,11 @@
 
 use super::{EvalContext, Result, ScalarFunc};
 use chrono::offset::TimeZone;
-use chrono::Datelike;
+use chrono::{Datelike, Duration};
 use coprocessor::codec::error::Error;
 use coprocessor::codec::mysql::time::extension::DateTimeExtension;
 use coprocessor::codec::mysql::time::weekmode::WeekMode;
-use coprocessor::codec::mysql::{Time, TimeType};
+use coprocessor::codec::mysql::{self, Duration as MyDuration, Time, TimeType};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
@@ -238,6 +238,111 @@ impl ScalarFunc {
         let week = t.get_time().iso_week().week();
         Ok(Some(i64::from(week)))
     }
+
+    #[inline]
+    pub fn year_week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.is_zero() {
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
+        }
+        let mode = match self.children[1].eval_int(ctx, row) {
+            Err(e) => return Err(e),
+            Ok(None) => 0,
+            Ok(Some(num)) => num,
+        };
+        let (year, week) = t
+            .get_time()
+            .year_week(WeekMode::from_bits_truncate(mode as u32));
+        let mut result = i64::from(week + year * 100);
+        if result < 0 {
+            result = i64::from(u32::max_value());
+        }
+        Ok(Some(result))
+    }
+
+    #[inline]
+    pub fn year_week_without_mode(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<i64>> {
+        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.is_zero() {
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
+        }
+        let (year, week) = t.get_time().year_week(WeekMode::from_bits_truncate(0u32));
+        let mut result = i64::from(week + year * 100);
+        if result < 0 {
+            result = i64::from(u32::max_value());
+        }
+        Ok(Some(result))
+    }
+
+    #[inline]
+    pub fn add_datetime_and_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let mut t: Cow<'a, Time> = try_opt_or!(
+            self.children[0].eval_time(ctx, row),
+            Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
+        );
+        let d: Cow<'a, MyDuration> = try_opt_or!(
+            self.children[1].eval_duration(ctx, row),
+            Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
+        );
+        let add = match t
+            .get_time()
+            .checked_add_signed(Duration::nanoseconds(d.to_nanos()))
+        {
+            Some(result) => result,
+            None => return Err(box_err!("parse from duration {} overflows", d)),
+        };
+        let mut res = t.to_mut().clone();
+        res.set_time(add);
+        Ok(Some(Cow::Owned(res)))
+    }
+
+    #[inline]
+    pub fn add_datetime_and_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let mut t: Cow<'a, Time> = try_opt_or!(
+            self.children[0].eval_time(ctx, row),
+            Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
+        );
+        let cow_s: Cow<'a, [u8]> = try_opt_or!(
+            self.children[1].eval_string(ctx, row),
+            Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
+        );
+        let s = box_try!(::std::str::from_utf8(cow_s.as_ref()));
+        let d = match MyDuration::parse(s.as_bytes(), Time::parse_fsp(s)) {
+            Ok(res) => res,
+            Err(_) => return Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))),
+        };
+        let add = match t
+            .get_time()
+            .checked_add_signed(Duration::nanoseconds(d.to_nanos()))
+        {
+            Some(result) => result,
+            None => return Err(box_err!("parse from duration {} overflows", d)),
+        };
+        let mut res = t.to_mut().clone();
+        res.set_time(add);
+        Ok(Some(Cow::Owned(res)))
+    }
+
+    #[inline]
+    pub fn add_time_datetime_null<'a>(
+        &self,
+        ctx: &mut EvalContext,
+        _row: &[Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz))))
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +359,13 @@ mod tests {
         let f = scalar_func_expr(sig, children);
         let op = Expression::build(ctx, f).unwrap();
         op.eval(ctx, &[])
+    }
+
+    fn test_ok_case_zero_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, exp: Datum) {
+        match expr_build(ctx, sig, &[]) {
+            Ok(got) => assert_eq!(got, exp),
+            Err(_) => assert!(false, "eval failed"),
+        }
     }
 
     fn test_ok_case_one_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, arg: Datum, exp: Datum) {
@@ -817,5 +929,194 @@ mod tests {
         }
         // test NULL case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::WeekOfYear, Datum::Null);
+    }
+
+    #[test]
+    fn test_year_week_with_mode() {
+        let cases = vec![
+            ("1987-01-01", 0, 198652),
+            ("2000-01-01", 0, 199952),
+            ("0000-01-01", 0, 1),
+            ("0000-01-01", 1, 4294967295),
+            ("0000-01-01", 2, 1),
+            ("0000-01-01", 3, 4294967295),
+            ("0000-01-01", 4, 1),
+            ("0000-01-01", 5, 4294967295),
+            ("0000-01-01", 6, 1),
+            ("0000-01-01", 7, 4294967295),
+            ("0000-01-01", 15, 4294967295),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::YearWeekWithMode,
+                Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()),
+                Datum::I64(arg2),
+                Datum::I64(exp),
+            );
+        }
+
+        // test NULL case
+        test_err_case_two_arg(
+            &mut ctx,
+            ScalarFuncSig::YearWeekWithMode,
+            Datum::Null,
+            Datum::Null,
+        );
+
+        // test ZERO case
+        test_err_case_two_arg(
+            &mut ctx,
+            ScalarFuncSig::YearWeekWithMode,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+            Datum::I64(0),
+        );
+    }
+
+    #[test]
+    fn test_year_week_without_mode() {
+        let cases = vec![
+            ("1987-01-01", 198652),
+            ("2000-01-01", 199952),
+            ("0000-01-01", 1),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::YearWeekWithoutMode,
+                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::YearWeekWithoutMode, Datum::Null);
+
+        // test ZERO case
+        test_err_case_one_arg(
+            &mut ctx,
+            ScalarFuncSig::YearWeekWithoutMode,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+        );
+    }
+
+    #[test]
+    fn test_add_datetime_and_duration() {
+        let cases = vec![
+            (
+                "2018-01-01",
+                "11:30:45.123456",
+                "2018-01-01 11:30:45.123456",
+            ),
+            (
+                "2018-02-28 23:00:00",
+                "01:30:30.123456",
+                "2018-03-01 00:30:30.123456",
+            ),
+            ("2016-02-28 23:00:00", "01:30:30", "2016-02-29 00:30:30"),
+            ("2018-12-31 23:00:00", "01:30:30", "2019-01-01 00:30:30"),
+            ("2018-12-31 23:00:00", "1 01:30:30", "2019-01-02 00:30:30"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::AddDatetimeAndDuration,
+                Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()),
+                Datum::Dur(Duration::parse(arg2.as_ref(), 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap()),
+            );
+        }
+
+        let zero_datetime =
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00.000000", 6).unwrap());
+        let cases = vec![
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-01-01", 6).unwrap()),
+                Datum::Null,
+                zero_datetime.clone(),
+            ),
+            (
+                Datum::Null,
+                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
+                zero_datetime.clone(),
+            ),
+            (Datum::Null, Datum::Null, zero_datetime),
+        ];
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::AddDatetimeAndDuration,
+                arg1,
+                arg2,
+                exp,
+            );
+        }
+    }
+
+    #[test]
+    fn test_add_datetime_and_string() {
+        let cases = vec![
+            (
+                "2018-01-01",
+                "11:30:45.123456",
+                "2018-01-01 11:30:45.123456",
+            ),
+            (
+                "2018-02-28 23:00:00",
+                "01:30:30.123456",
+                "2018-03-01 00:30:30.123456",
+            ),
+            ("2016-02-28 23:00:00", "01:30:30", "2016-02-29 00:30:30"),
+            ("2018-12-31 23:00:00", "01:30:30", "2019-01-01 00:30:30"),
+            ("2018-12-31 23:00:00", "1 01:30:30", "2019-01-02 00:30:30"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::AddDatetimeAndString,
+                Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()),
+                Datum::Bytes(arg2.as_bytes().to_vec()),
+                Datum::Time(Time::parse_utc_datetime(exp, 6).unwrap()),
+            );
+        }
+
+        let zero_datetime =
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00.000000", 6).unwrap());
+        let cases = vec![
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-01-01", 6).unwrap()),
+                Datum::Null,
+                zero_datetime.clone(),
+            ),
+            (
+                Datum::Null,
+                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
+                zero_datetime.clone(),
+            ),
+            (Datum::Null, Datum::Null, zero_datetime),
+        ];
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::AddDatetimeAndString,
+                arg1,
+                arg2,
+                exp,
+            );
+        }
+    }
+
+    #[test]
+    fn test_add_time_datetime_null() {
+        let mut ctx = EvalContext::default();
+        test_ok_case_zero_arg(
+            &mut ctx,
+            ScalarFuncSig::AddTimeDateTimeNull,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00.000000", 6).unwrap()),
+        );
     }
 }
