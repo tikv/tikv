@@ -206,7 +206,7 @@ fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
 ///
 /// Examples:
 ///
-/// ```no_run
+/// ```ignore
 /// assert_eq!(sanitize_thread_name(0, "ok123"), "ok123");
 /// assert_eq!(sanitize_thread_name(0, "Az_1"), "Az_1");
 /// assert_eq!(sanitize_thread_name(0, "a-b"), "a_b");
