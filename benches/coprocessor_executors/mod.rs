@@ -985,10 +985,56 @@ fn bench_dag_table_scan_datum_all(c: &mut Criterion) {
     bench(c, "dag_batch_table_scan_datum_all", true);
 }
 
+/// Integrate DAGContext + TableScan, scans a range with 1000 keys, 2 interested column: PK & front
+/// column.
+fn bench_dag_table_scan_pk_front(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let id = ColumnBuilder::new()
+                .col_type(TYPE_LONG)
+                .primary_key(true)
+                .build();
+            let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            let table = TableBuilder::new()
+                .add_col(id.clone())
+                .add_col(foo.clone())
+                .build();
+
+            let mut store = Store::new();
+            for i in 0..1000 {
+                store.begin();
+                store
+                    .insert_into(&table)
+                    .set(&id, Datum::I64(i))
+                    .set(&foo, Datum::I64(0xDEADBEEF))
+                    .execute();
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            meta.mut_columns().push(id.get_column_info());
+            meta.mut_columns().push(foo.get_column_info());
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_select_range()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_pk_front", false);
+    bench(c, "dag_batch_table_scan_pk_front", true);
+}
+
 // TODO: Remove this test.
 /// Integrate DAGContext + TableScan + Selection, scans a range with 1000 keys and retain 500 keys,
 /// 2 interested column, PK & the column to filter.
-fn bench_dag_table_scan_selection_primary_key(c: &mut Criterion) {
+fn bench_dag_table_scan_selection_pk_front(c: &mut Criterion) {
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tikv::util::codec::number::NumberEncoder;
     use tipb::executor::ExecType;
@@ -1071,8 +1117,8 @@ fn bench_dag_table_scan_selection_primary_key(c: &mut Criterion) {
         });
     }
 
-    bench(c, "dag_normal_table_scan_selection_primary_key", false);
-    bench(c, "dag_batch_table_scan_selection_primary_key", true);
+    bench(c, "dag_normal_table_scan_selection_pk_front", false);
+    bench(c, "dag_batch_table_scan_selection_pk_front", true);
 }
 
 criterion_group!(
@@ -1097,6 +1143,7 @@ criterion_group!(
     bench_dag_table_scan_primary_key,
     bench_dag_table_scan_datum_front,
     bench_dag_table_scan_datum_all,
-    bench_dag_table_scan_selection_primary_key,
+    bench_dag_table_scan_pk_front,
+    bench_dag_table_scan_selection_pk_front,
 );
 criterion_main!(benches);
