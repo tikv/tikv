@@ -1336,8 +1336,12 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
     keys.sort();
 
     // step = ceiling(keys.len() / parts)
-    let step = (keys.len() - 1) / parts + 1;
-    Ok(keys.into_iter().step_by(step).skip(1).collect())
+    let mut res = Vec::with_capacity(parts - 1);
+    let section_len = (keys.len() as f64) / (parts as f64);
+    for i in 1..parts {
+        res.push(keys[(section_len * (i as f64)) as usize].clone())
+    }
+    Ok(res)
 }
 
 #[cfg(test)]
