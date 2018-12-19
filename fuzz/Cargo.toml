@@ -2,6 +2,7 @@
 name = "fuzz"
 version = "0.0.1"
 publish = false
+edition = "2018"
 
 [[bin]]
 name = "fuzz"
