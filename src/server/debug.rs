@@ -751,7 +751,7 @@ fn recover_mvcc_for_range(
     read_only: bool,
     thread_index: usize,
 ) -> Result<()> {
-    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(&db), &start_key, &end_key));
+    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(&db), start_key, end_key));
     mvcc_checker.thread_index = thread_index;
 
     let wb_limit: usize = 10240;
