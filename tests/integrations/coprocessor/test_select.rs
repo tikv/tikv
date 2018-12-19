@@ -1347,7 +1347,7 @@ fn test_handle_truncate() {
         let req = DAGSelect::from(&product.table)
             .where_expr(cond.clone())
             .build();
-        let mut resp = handle_select(&endpoint, req);
+        let resp = handle_select(&endpoint, req);
         assert!(resp.has_error());
         assert!(resp.get_warnings().is_empty());
     }
