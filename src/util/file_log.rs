@@ -51,13 +51,13 @@ pub struct RotatingFileLogger {
     rotation_timespan: Duration,
     next_rotation_time: DateTime<Utc>,
     file_path: PathBuf,
-    file: File,
+    file: Option<File>,
 }
 
 impl RotatingFileLogger {
     pub fn new(file_path: impl AsRef<Path>, rotation_timespan: Duration) -> io::Result<Self> {
         let file_path = file_path.as_ref().to_path_buf();
-        let file = open_log_file(&file_path)?;
+        let file = Some(open_log_file(&file_path)?);
         let file_attr = fs::metadata(&file_path)?;
         let file_modified_time = file_attr.modified().unwrap().into();
         let next_rotation_time = compute_rotation_time(&file_modified_time, rotation_timespan);
@@ -70,7 +70,7 @@ impl RotatingFileLogger {
     }
 
     fn open(&mut self) -> io::Result<()> {
-        self.file = open_log_file(&self.file_path)?;
+        self.file = Some(open_log_file(&self.file_path)?);
         Ok(())
     }
 
@@ -91,21 +91,24 @@ impl RotatingFileLogger {
         self.next_rotation_time = compute_rotation_time(&now, self.rotation_timespan);
     }
 
+    /// Flushes and closes log file, without rotation.
     fn close(&mut self) -> io::Result<()> {
-        self.file.flush()
+        self.file.as_mut().unwrap().flush()?;
+        self.file = None;
+        Ok(())
     }
 }
 
 impl Write for RotatingFileLogger {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.file.write(bytes)
+        self.file.as_mut().unwrap().write(bytes)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         if self.should_rotate() {
             self.rotate()?;
         };
-        self.file.flush()
+        self.file.as_mut().unwrap().flush()
     }
 }
 
