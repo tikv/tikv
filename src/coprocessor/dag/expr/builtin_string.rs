@@ -660,7 +660,7 @@ impl ScalarFunc {
             pad.is_empty(),
         ) {
             None => Ok(None),
-            Some(0) => empty_str(),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
             Some(target_len) => {
                 let r = input
                     .chars()
@@ -690,7 +690,7 @@ impl ScalarFunc {
             pad.is_empty(),
         ) {
             None => Ok(None),
-            Some(0) => empty_str(),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
             Some(target_len) => {
                 let r = input
                     .iter()
@@ -722,7 +722,7 @@ impl ScalarFunc {
             pad.is_empty(),
         ) {
             None => Ok(None),
-            Some(0) => empty_str(),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
             Some(target_len) => {
                 let r = if let Some(remain) = target_len.checked_sub(input_len) {
                     pad.chars()
@@ -756,7 +756,7 @@ impl ScalarFunc {
             pad.is_empty(),
         ) {
             None => Ok(None),
-            Some(0) => empty_str(),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
             Some(target_len) => {
                 let r = if let Some(remain) = target_len.checked_sub(input.len()) {
                     pad.iter()
@@ -772,10 +772,6 @@ impl ScalarFunc {
             }
         }
     }
-}
-
-fn empty_str() -> Result<Option<Cow<'static, [u8]>>> {
-    Ok(Some(Cow::Borrowed(b"")))
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
