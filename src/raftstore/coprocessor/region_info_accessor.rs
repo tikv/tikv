@@ -28,11 +28,11 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
 /// raftstore, which is named `RegionEventListener`. When the events that we are interested in
-/// happens (such as creating and deleting regions), `RegionEventListener` simply send the events
+/// happen (such as creating and deleting regions), `RegionEventListener` simply sends the events
 /// through a channel.
-/// In the mean time, `RegionCollector` keeps fetching messages from the channel, and mutate
+/// In the mean time, `RegionCollector` keeps fetching messages from the channel, and mutates
 /// the collection according to the messages. When an accessor method of `RegionInfoAccessor` is
-/// called, it also simply send a message to `RegionCollector`, and the result will be send
+/// called, it also simply sends a message to `RegionCollector`, and the result will be sent
 /// back through as soon as it's finished.
 /// In fact, the channel mentioned above is actually a `util::worker::Worker`.
 ///
