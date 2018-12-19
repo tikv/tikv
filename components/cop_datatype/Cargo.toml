@@ -3,6 +3,7 @@ name = "cop_datatype"
 version = "0.0.1"
 publish = false
 description = "TiKV Coprocessor data types"
+edition = "2018"
 
 [dependencies]
 tipb = { git = "https://github.com/pingcap/tipb.git" }

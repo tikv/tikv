@@ -2,6 +2,7 @@
 name = "test_coprocessor"
 version = "0.0.1"
 publish = false
+edition = "2018"
 
 [dependencies]
 tikv = { path = "../../" }

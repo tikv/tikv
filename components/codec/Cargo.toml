@@ -2,6 +2,7 @@
 name = "codec"
 version = "0.0.1"
 publish = false
+edition = "2018"
 
 [dependencies]
 quick-error = "1.2"

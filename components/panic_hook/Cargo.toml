@@ -2,3 +2,4 @@
 name = "panic_hook"
 version = "0.0.1"
 publish = false
+edition = "2018"

@@ -17,7 +17,7 @@ use std::time::*;
 use std::{result, thread};
 
 use futures::Future;
-use rocksdb::DB;
+use ::rocksdb::DB;
 use tempdir::TempDir;
 
 use kvproto::errorpb::Error as PbError;
@@ -52,7 +52,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        Option<Engines>,
+        engines: Option<Engines>,
     ) -> (u64, Engines, Option<TempDir>);
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;

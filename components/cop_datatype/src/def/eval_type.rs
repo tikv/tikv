@@ -13,6 +13,8 @@
 
 use std::fmt;
 
+use crate::{FieldTypeTp, DataTypeError};
+
 /// Function implementations' parameter data types.
 ///
 /// It is similar to the `EvalType` in TiDB, but doesn't provide type `Timestamp`, which is
@@ -35,34 +37,34 @@ impl fmt::Display for EvalType {
     }
 }
 
-impl ::std::convert::TryFrom<::FieldTypeTp> for EvalType {
-    type Error = ::DataTypeError;
+impl ::std::convert::TryFrom<FieldTypeTp> for EvalType {
+    type Error = DataTypeError;
 
-    fn try_from(tp: ::FieldTypeTp) -> Result<Self, ::DataTypeError> {
+    fn try_from(tp: FieldTypeTp) -> Result<Self, DataTypeError> {
         let eval_type = match tp {
-            ::FieldTypeTp::Tiny
-            | ::FieldTypeTp::Short
-            | ::FieldTypeTp::Int24
-            | ::FieldTypeTp::Long
-            | ::FieldTypeTp::LongLong
-            | ::FieldTypeTp::Year => EvalType::Int,
-            ::FieldTypeTp::Float | ::FieldTypeTp::Double => EvalType::Real,
-            ::FieldTypeTp::NewDecimal => EvalType::Decimal,
-            ::FieldTypeTp::Timestamp | ::FieldTypeTp::Date | ::FieldTypeTp::DateTime => {
+            FieldTypeTp::Tiny
+            | FieldTypeTp::Short
+            | FieldTypeTp::Int24
+            | FieldTypeTp::Long
+            | FieldTypeTp::LongLong
+            | FieldTypeTp::Year => EvalType::Int,
+            FieldTypeTp::Float | FieldTypeTp::Double => EvalType::Real,
+            FieldTypeTp::NewDecimal => EvalType::Decimal,
+            FieldTypeTp::Timestamp | FieldTypeTp::Date | FieldTypeTp::DateTime => {
                 EvalType::DateTime
             }
-            ::FieldTypeTp::Duration => EvalType::Duration,
-            ::FieldTypeTp::JSON => EvalType::Json,
-            ::FieldTypeTp::VarChar
-            | ::FieldTypeTp::TinyBlob
-            | ::FieldTypeTp::MediumBlob
-            | ::FieldTypeTp::LongBlob
-            | ::FieldTypeTp::Blob
-            | ::FieldTypeTp::VarString
-            | ::FieldTypeTp::String => EvalType::Bytes,
+            FieldTypeTp::Duration => EvalType::Duration,
+            FieldTypeTp::JSON => EvalType::Json,
+            FieldTypeTp::VarChar
+            | FieldTypeTp::TinyBlob
+            | FieldTypeTp::MediumBlob
+            | FieldTypeTp::LongBlob
+            | FieldTypeTp::Blob
+            | FieldTypeTp::VarString
+            | FieldTypeTp::String => EvalType::Bytes,
             _ => {
                 // Note: In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
-                return Err(::DataTypeError::UnsupportedType {
+                return Err(DataTypeError::UnsupportedType {
                     name: tp.to_string(),
                 });
             }
