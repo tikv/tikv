@@ -392,9 +392,6 @@ impl Debugger {
             let db = Arc::clone(db);
             let start_key = range_borders[thread_index].clone();
             let end_key = range_borders[thread_index + 1].clone();
-            if start_key == end_key {
-                continue;
-            }
 
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
@@ -1300,13 +1297,13 @@ fn divide_db(db: &DB, parts: usize) -> ::raftstore::Result<Vec<Vec<u8>>> {
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
 
-    let middle_by_cf = if default_cf_size >= write_cf_size {
+    let cf = if default_cf_size >= write_cf_size {
         CF_DEFAULT
     } else {
         CF_WRITE
     };
 
-    divide_db_cf(db, parts, middle_by_cf)
+    divide_db_cf(db, parts, cf)
 }
 
 fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<u8>>> {
@@ -1342,6 +1339,8 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
         return Ok(vec![]);
     }
 
+    // If there are too many keys, reduce its amount before sorting, or it may take too much
+    // time to sort the keys.
     if keys.len() > 20000 {
         let len = keys.len();
         keys = keys.into_iter().step_by(len / 10000).collect();
@@ -1349,6 +1348,7 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
 
     keys.sort();
 
+    // Then divide it into parts, and return a vec of the dividing keys.
     Ok(sample(keys, parts - 1))
 }
 
@@ -1362,6 +1362,11 @@ fn sample<T>(data: Vec<T>, samples: usize) -> Vec<T> {
     }
 
     let len = data.len();
+    // Divides the vec to `samples + 1` parts and pick the elements at the dividing points, then we
+    // need to collect all elements that are the last element of a part but not the last element of
+    // the whole vec.
+    // The value of `i * (samples + 1) / len` shows which part the i-th belongs to. So if an element
+    // is the last element of a part, its next element should belong to a different part.
     data.into_iter()
         .enumerate()
         .filter(|(i, _)| i + 1 != len && i * (samples + 1) / len != (i + 1) * (samples + 1) / len)
