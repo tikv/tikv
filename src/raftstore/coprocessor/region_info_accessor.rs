@@ -37,8 +37,8 @@ use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 /// In fact, the channel mentioned above is actually a `util::worker::Worker`.
 ///
 /// **Caution**: Note that the information in `RegionInfoAccessor` is not perfectly precise. Some
-/// regions may be absent while merging or splitting is in progress. Also, `RegionInfoAccessor` may
-/// slightly lag actual regions on the TiKV.
+/// regions may be temporarily absent while merging or splitting is in progress. Also,
+/// `RegionInfoAccessor`'s information may slightly lag the actual regions on the TiKV.
 
 /// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
 #[derive(Debug)]
@@ -68,7 +68,7 @@ type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 /// thread.
 enum RegionCollectorMsg {
     RaftStoreEvent(RaftStoreEvent),
-    /// Get all contents from the collection. Only used for testing.
+    /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
 
@@ -119,7 +119,7 @@ impl RoleObserver for RegionEventListener {
     }
 }
 
-/// Create an `RegionEventListener` and register it to given coprocessor host.
+/// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
     host: &mut CoprocessorHost,
     scheduler: Scheduler<RegionCollectorMsg>,
@@ -150,7 +150,7 @@ impl RegionCollector {
         }
     }
 
-    /// Check if the end_key is the same with another region's (suppose the region is `R`). If so,
+    /// Checks if the end_key is the same with another region's (suppose the region is `R`). If so,
     /// try to clean it.
     /// If `R` has a greater version or conf_ver than the current one, it means that the current
     /// operation is caused by a stale message. Then this function should fail (return false).
@@ -368,7 +368,7 @@ pub struct RegionInfoAccessor {
 }
 
 impl RegionInfoAccessor {
-    /// Create a new `RegionInfoAccessor` and register to `host`.
+    /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
     pub fn new(host: &mut CoprocessorHost) -> Self {
@@ -383,7 +383,7 @@ impl RegionInfoAccessor {
         }
     }
 
-    /// Start the `RegionInfoAccessor`. It should be started before raftstore.
+    /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
     pub fn start(&self) {
         self.worker
             .lock()
@@ -392,12 +392,12 @@ impl RegionInfoAccessor {
             .unwrap();
     }
 
-    /// Stop the `RegionInfoAccessor`. It should be stopped after raftstore.
+    /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.
     pub fn stop(&self) {
         self.worker.lock().unwrap().stop().unwrap().join().unwrap();
     }
 
-    /// Get all content from the collection. Only used for testing.
+    /// Gets all content from the collection. Only used for testing.
     pub fn debug_dump(&self) -> (RegionsMap, RegionRangesMap) {
         let (tx, rx) = mpsc::channel();
         self.scheduler
@@ -462,7 +462,7 @@ mod tests {
         }
     }
 
-    /// Add a set of regions to an empty collection and check if it's successfully loaded.
+    /// Adds a set of regions to an empty collection and check if it's successfully loaded.
     fn must_load_regions(c: &mut RegionCollector, regions: &[Region]) {
         assert!(c.regions.is_empty());
         assert!(c.region_ranges.is_empty());
@@ -613,7 +613,7 @@ mod tests {
         );
     }
 
-    /// Simulate splitting a region into 3 regions, and the region with old id will be the
+    /// Simulates splitting a region into 3 regions, and the region with old id will be the
     /// `derive_index`-th region of them. The events are triggered in order indicated by `seq`.
     /// This is to ensure the collection is correct, no matter what the events' order to happen is.
     /// Values in `seq` and of `derive_index` start from 1.
