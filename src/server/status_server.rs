@@ -24,27 +24,27 @@ use std::str::FromStr;
 use super::Result;
 use util::metrics::dump;
 
-pub struct HttpServer {
+pub struct StatusServer {
     thread_pool: ThreadPool,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
 }
 
-impl HttpServer {
-    pub fn new(http_thread_pool_size: usize) -> Self {
+impl StatusServer {
+    pub fn new(status_thread_pool_size: usize) -> Self {
         let thread_pool = Builder::new()
-            .pool_size(http_thread_pool_size)
-            .name_prefix("http-server-")
+            .pool_size(status_thread_pool_size)
+            .name_prefix("status-server-")
             .after_start(|| {
-                info!("HTTP server started");
+                info!("Status server started");
             })
             .before_stop(|| {
-                info!("stopping HTTP server");
+                info!("stopping status server");
             })
             .build();
         let (tx, rx) = futures::sync::oneshot::channel::<()>();
-        HttpServer {
+        StatusServer {
             thread_pool,
             tx,
             rx: Some(rx),
@@ -52,13 +52,13 @@ impl HttpServer {
         }
     }
 
-    pub fn start(&mut self, http_addr: String) -> Result<()> {
-        let addr = SocketAddr::from_str(&http_addr)?;
+    pub fn start(&mut self, status_addr: String) -> Result<()> {
+        let addr = SocketAddr::from_str(&status_addr)?;
 
-        // TODO: support TLS for HTTP server.
+        // TODO: support TLS for the status server.
         let builder = Server::try_bind(&addr)?;
 
-        // Create an HTTP service.
+        // Create a status service.
         let service = |req: Request<Body>| -> FutureResult<Response<Body>, hyper::Error> {
             let mut response = Response::new(Body::empty());
 
@@ -86,7 +86,7 @@ impl HttpServer {
         self.addr = Some(server.local_addr());
         let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
-            .map_err(|e| error!("HTTP server error: {:?}", e));
+            .map_err(|e| error!("Status server error: {:?}", e));
         self.thread_pool.spawn(graceful);
         Ok(())
     }
@@ -96,7 +96,7 @@ impl HttpServer {
         self.thread_pool
             .shutdown_now()
             .wait()
-            .unwrap_or_else(|e| error!("failed to stop HTTP server, error: {:?}", e));
+            .unwrap_or_else(|e| error!("failed to stop the status server, error: {:?}", e));
     }
 
     // Return listening address, this may only be used for outer test
@@ -111,21 +111,21 @@ impl HttpServer {
 mod tests {
     use futures::future::{lazy, Future};
     use hyper::{Client, StatusCode, Uri};
-    use server::http_server::HttpServer;
+    use server::status_server::StatusServer;
 
     #[test]
-    fn test_http_service() {
-        let mut http_server = HttpServer::new(1);
-        let _ = http_server.start("127.0.0.1:0".to_string());
+    fn test_status_service() {
+        let mut status_server = StatusServer::new(1);
+        let _ = status_server.start("127.0.0.1:0".to_string());
         let client = Client::new();
         let uri = Uri::builder()
             .scheme("http")
-            .authority(http_server.listening_addr().to_string().as_str())
+            .authority(status_server.listening_addr().to_string().as_str())
             .path_and_query("/metrics")
             .build()
             .unwrap();
 
-        let handle = http_server.thread_pool.spawn_handle(lazy(move || {
+        let handle = status_server.thread_pool.spawn_handle(lazy(move || {
             client
                 .get(uri)
                 .map(|res| {
@@ -136,6 +136,6 @@ mod tests {
                 })
         }));
         handle.wait().unwrap();
-        http_server.stop();
+        status_server.stop();
     }
 }

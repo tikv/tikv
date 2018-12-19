@@ -62,9 +62,9 @@ use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
-use tikv::server::http_server::HttpServer;
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
+use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
@@ -253,12 +253,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let server_cfg = cfg.server.clone();
     let mut status_enabled = cfg.metric.address.is_empty() && !server_cfg.status_addr.is_empty();
 
-    // Create an HTTP server.
-    let mut http_server = HttpServer::new(server_cfg.status_thread_pool_size);
+    // Create a status server.
+    let mut status_server = StatusServer::new(server_cfg.status_thread_pool_size);
     if status_enabled {
-        // Start the HTTP server.
-        if let Err(e) = http_server.start(server_cfg.status_addr) {
-            error!("failed to bind addr, error: {:?}", e);
+        // Start the status server.
+        if let Err(e) = status_server.start(server_cfg.status_addr) {
+            error!("failed to bind addr for status service, error: {:?}", e);
             status_enabled = false;
         }
     }
@@ -271,8 +271,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to stop server: {:?}", e));
 
     if status_enabled {
-        // Stop the HTTP server.
-        http_server.stop()
+        // Stop the status server.
+        status_server.stop()
     }
 
     metrics_flusher.stop();
@@ -317,7 +317,7 @@ fn main() {
                 .long("status-addr")
                 .takes_value(true)
                 .value_name("IP:PORT")
-                .help("Sets status report HTTP service address"),
+                .help("Sets HTTP listening address for the status report service"),
         )
         .arg(
             Arg::with_name("log-level")
