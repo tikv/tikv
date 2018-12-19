@@ -70,7 +70,7 @@ pub enum Modify {
     DeleteRange(CfName, Key, Key),
 }
 
-pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
+pub trait Engine: Send + Display + Debug + Clone + 'static {
     type Iter: Iterator;
     type Snap: Snapshot<Iter = Self::Iter>;
 
@@ -110,7 +110,7 @@ pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
     }
 }
 
-pub trait Snapshot: Send + Debug + Clone + Sized {
+pub trait Snapshot: Send + Debug + Clone {
     type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
@@ -130,7 +130,7 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
     }
 }
 
-pub trait Iterator: Send + Sized {
+pub trait Iterator: Send {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -147,7 +147,7 @@ pub trait Iterator: Send + Sized {
     fn value(&self) -> &[u8];
 }
 
-pub trait RegionInfoProvider: Send + Sized + Clone + 'static {
+pub trait RegionInfoProvider: Send + Clone + 'static {
     /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
     /// this TiKV satisfies `filter(peer)` returns true.
     fn seek_region(
