@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use ::rocksdb::DB;
 use tempdir::TempDir;
-use ::test;
+use test;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;
@@ -185,6 +185,7 @@ fn bench_async_write(b: &mut test::Bencher) {
                 Key::from_encoded(b"fooo".to_vec()),
             )],
             on_finished,
-        ).unwrap();
+        )
+        .unwrap();
     });
 }

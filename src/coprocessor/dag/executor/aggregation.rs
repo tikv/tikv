@@ -527,7 +527,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 0;
         let mut row_data = Vec::with_capacity(1);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -557,7 +558,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 1;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -605,7 +607,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation,
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -753,7 +756,8 @@ mod tests {
             aggregation,
             Arc::new(EvalConfig::default()),
             Box::new(ts_ect),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {

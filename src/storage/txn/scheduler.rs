@@ -498,11 +498,11 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kvproto::kvrpcpb::Context;
     use crate::storage::mvcc;
     use crate::storage::txn::latch::*;
     use crate::storage::{Command, Key, Mutation, Options};
     use crate::util::collections::HashMap;
+    use kvproto::kvrpcpb::Context;
 
     #[test]
     fn test_command_latches() {

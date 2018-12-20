@@ -15,19 +15,19 @@ use super::engine::{Engine, Error as EngineError, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::Context;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::Msg as RaftStoreMsg;
 use crate::raftstore::store::util::delete_all_in_range_cf;
-use rocksdb::rocksdb::DB;
 use crate::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use crate::util::rocksdb::get_cf_handle;
+use crate::util::time::{duration_to_sec, SlowTimer};
+use crate::util::worker::{self, Builder, Runnable, ScheduleError, Worker};
+use kvproto::kvrpcpb::Context;
+use rocksdb::rocksdb::DB;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use crate::util::rocksdb::get_cf_handle;
-use crate::util::time::{duration_to_sec, SlowTimer};
-use crate::util::worker::{self, Builder, Runnable, ScheduleError, Worker};
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -136,7 +136,8 @@ impl<E: Engine> GCRunner<E> {
             }
             Some((_, Err(e))) => Err(e),
             None => Err(EngineError::Timeout(timeout)),
-        }.map_err(Error::from)
+        }
+        .map_err(Error::from)
     }
 
     /// Scan keys in the region. Returns scanned keys if any, and a key indicating scan progress
@@ -514,10 +515,10 @@ impl<E: Engine> GCWorker<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::Future;
-    use std::collections::BTreeMap;
     use crate::storage::{Mutation, Options, Storage};
     use crate::storage::{TestEngineBuilder, TestStorageBuilder};
+    use futures::Future;
+    use std::collections::BTreeMap;
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
@@ -587,8 +588,9 @@ mod tests {
             start_ts,
             Options::default(),
             cb
-        )).unwrap()
-            .unwrap();
+        ))
+        .unwrap()
+        .unwrap();
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
@@ -614,8 +616,9 @@ mod tests {
             start_key,
             end_key,
             cb
-        )).unwrap()
-            .unwrap();
+        ))
+        .unwrap()
+        .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
@@ -637,7 +640,8 @@ mod tests {
             10,
             b"key2",
             b"key4",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[b"key1".to_vec(), b"key9".to_vec()],
@@ -645,7 +649,8 @@ mod tests {
             10,
             b"key3",
             b"key7",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -659,7 +664,8 @@ mod tests {
             10,
             b"key1",
             b"key9",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -673,7 +679,8 @@ mod tests {
             10,
             b"key2\x00",
             b"key4",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -686,7 +693,8 @@ mod tests {
             10,
             b"key1\x00",
             b"key1\x00\x00",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -699,6 +707,7 @@ mod tests {
             10,
             b"key1\x00",
             b"key1\x00",
-        ).unwrap();
+        )
+        .unwrap();
     }
 }

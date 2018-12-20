@@ -16,9 +16,9 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
+use ::rocksdb::{CompactionJobInfo, DB};
 use protobuf;
 use rand::Rng;
-use ::rocksdb::{CompactionJobInfo, DB};
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -468,7 +468,8 @@ pub fn create_test_engine(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
-                ).unwrap(),
+                )
+                .unwrap(),
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(

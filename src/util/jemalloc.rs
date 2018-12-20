@@ -13,9 +13,9 @@
 
 #[cfg(unix)]
 mod jemalloc {
+    use jemallocator::ffi::malloc_stats_print;
     use libc::{self, c_char, c_void};
     use std::{ptr, slice};
-    use jemallocator::ffi::malloc_stats_print;
 
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         unsafe {

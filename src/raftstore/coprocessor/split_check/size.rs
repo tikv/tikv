@@ -14,12 +14,12 @@
 use std::mem;
 
 use super::super::error::Result;
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
 use crate::raftstore::store::util as raftstore_util;
 use crate::raftstore::store::{keys, util, Msg};
-use rocksdb::DB;
 use crate::util::transport::{RetryableSendCh, Sender};
+use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+use rocksdb::DB;
 
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};

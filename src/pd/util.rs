@@ -11,21 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
-use crate::util::collections::HashSet;
 
-use futures::future::{loop_fn, ok, Loop};
-use futures::sync::mpsc::UnboundedSender;
-use futures::task::Task;
-use futures::{task, Async, Future, Poll, Stream};
 use crate::grpc::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };
+use futures::future::{loop_fn, ok, Loop};
+use futures::sync::mpsc::UnboundedSender;
+use futures::task::Task;
+use futures::{task, Async, Future, Poll, Stream};
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,
@@ -133,7 +133,8 @@ impl LeaderClient {
             recv.for_each(move |resp| {
                 f(resp);
                 Ok(())
-            }).map_err(|e| panic!("unexpected error: {:?}", e)),
+            })
+            .map_err(|e| panic!("unexpected error: {:?}", e)),
         )
     }
 
@@ -315,7 +316,8 @@ where
                 ctx.reconnect_if_needed()
                     .and_then(Self::send_and_receive)
                     .then(Self::break_or_continue)
-            }).then(Self::post_loop),
+            })
+            .then(Self::post_loop),
         )
     }
 }

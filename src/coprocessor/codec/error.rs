@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::util;
 use regex::Error as RegexpError;
 use std::error::Error as StdError;
 use std::io;
@@ -20,7 +21,6 @@ use std::string::FromUtf8Error;
 use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
-use crate::util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_REGEXP: i32 = 1139;

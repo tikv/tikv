@@ -17,13 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use ::rocksdb::DB;
 use crate::storage::CF_WRITE;
 use crate::util::escape;
 use crate::util::rocksdb;
 use crate::util::rocksdb::compact_range;
 use crate::util::rocksdb::stats::get_range_entries_and_versions;
 use crate::util::worker::Runnable;
+use ::rocksdb::DB;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -160,20 +160,22 @@ impl Runnable<Task> for Runner {
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
             ) {
-                Ok(mut ranges) => for (start, end) in ranges.drain(..) {
-                    for cf in &cf_names {
-                        if let Err(e) = self.compact_range_cf(
-                            cf.clone(),
-                            Some(start.clone()),
-                            Some(end.clone()),
-                        ) {
-                            error!(
-                                "compact range ({:?}, {:?}) for cf {:?} failed, error {:?}",
-                                start, end, cf, e
-                            );
+                Ok(mut ranges) => {
+                    for (start, end) in ranges.drain(..) {
+                        for cf in &cf_names {
+                            if let Err(e) = self.compact_range_cf(
+                                cf.clone(),
+                                Some(start.clone()),
+                                Some(end.clone()),
+                            ) {
+                                error!(
+                                    "compact range ({:?}, {:?}) for cf {:?} failed, error {:?}",
+                                    start, end, cf, e
+                                );
+                            }
                         }
                     }
-                },
+                }
                 Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
             },
         }
@@ -254,7 +256,6 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys::data_key;
-    use rocksdb::{self, Writable, WriteBatch, DB};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
     use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -262,6 +263,7 @@ mod tests {
     use crate::util::rocksdb::new_engine;
     use crate::util::rocksdb::stats::get_range_entries_and_versions;
     use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+    use rocksdb::{self, Writable, WriteBatch, DB};
 
     use super::*;
 
@@ -387,7 +389,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
@@ -410,7 +413,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));

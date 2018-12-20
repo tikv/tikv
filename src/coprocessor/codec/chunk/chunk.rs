@@ -14,10 +14,10 @@
 use super::column::{Column, ColumnEncoder};
 use super::Result;
 use crate::coprocessor::codec::Datum;
-use std::io::Write;
-use tipb::expression::FieldType;
 #[cfg(test)]
 use crate::util::codec::BytesSlice;
+use std::io::Write;
+use tipb::expression::FieldType;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.
 /// See https://arrow.apache.org/docs/memory_layout.html

@@ -37,9 +37,9 @@ use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResp
 use crate::raftstore::store::{
     Msg as StoreMsg, RegionIterator, RegionSnapshot, SeekRegionFilter, SeekRegionResult,
 };
-use rocksdb::TablePropertiesCollection;
 use crate::server::transport::RaftStoreRouter;
 use crate::storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
+use rocksdb::TablePropertiesCollection;
 
 quick_error! {
     #[derive(Debug)]
@@ -328,7 +328,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
-        }).map_err(|e| {
+        })
+        .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             e.into()
@@ -358,7 +359,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
-        }).map_err(|e| {
+        })
+        .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()

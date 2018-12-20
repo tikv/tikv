@@ -16,11 +16,11 @@ use std::ops::Deref;
 use std::option::Option;
 use std::sync::Arc;
 
-use byteorder::{BigEndian, ByteOrder};
-use protobuf;
+use crate::util::rocksdb;
 use ::rocksdb::rocksdb_options::UnsafeSnap;
 use ::rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
-use crate::util::rocksdb;
+use byteorder::{BigEndian, ByteOrder};
+use protobuf;
 
 use crate::raftstore::Error;
 use crate::raftstore::Result;
@@ -428,8 +428,8 @@ impl Mutable for WriteBatch {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kvproto::metapb::Region;
     use ::rocksdb::Writable;
+    use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempdir::TempDir;
 
@@ -573,7 +573,8 @@ mod tests {
         snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(data.len(), 2);
     }

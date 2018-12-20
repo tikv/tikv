@@ -152,11 +152,11 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use kvproto::metapb;
-    use kvproto::pdpb;
     use crate::pd::{PdClient, PdFuture, RegionStat, Result};
     use crate::util;
     use crate::util::collections::HashMap;
+    use kvproto::metapb;
+    use kvproto::pdpb;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

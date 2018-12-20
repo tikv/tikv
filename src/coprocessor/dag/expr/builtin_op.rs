@@ -204,7 +204,9 @@ impl ScalarFunc {
 mod tests {
     use crate::coprocessor::codec::mysql::Duration;
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{check_overflow, datum_expr, scalar_func_expr, str2dec};
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, datum_expr, scalar_func_expr, str2dec,
+    };
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;
@@ -538,7 +540,8 @@ mod tests {
             let op = Expression::build(
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]),
-            ).unwrap();
+            )
+            .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -565,7 +568,8 @@ mod tests {
             let op = Expression::build(
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::RightShift, &[lhs, rhs]),
-            ).unwrap();
+            )
+            .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

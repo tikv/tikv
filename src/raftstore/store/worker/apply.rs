@@ -19,9 +19,9 @@ use std::rc::Rc;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use protobuf::RepeatedField;
 use ::rocksdb::rocksdb_options::WriteOptions;
 use ::rocksdb::{Writable, WriteBatch, DB};
+use protobuf::RepeatedField;
 use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
@@ -36,7 +36,6 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
 use crate::import::SSTImporter;
-use raft::NO_LIMIT;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use crate::raftstore::store::metrics::*;
@@ -53,6 +52,7 @@ use crate::util::collections::HashMap;
 use crate::util::time::{duration_to_sec, Instant, SlowTimer};
 use crate::util::worker::Runnable;
 use crate::util::{escape, rocksdb, MustConsumeVec};
+use raft::NO_LIMIT;
 
 use super::metrics::*;
 
@@ -1208,15 +1208,16 @@ impl ApplyDelegate {
                 &new_region,
                 PeerState::Normal,
                 None,
-            ).and_then(|_| {
+            )
+            .and_then(|_| {
                 write_initial_apply_state(&self.engines.kv, ctx.wb_mut(), new_region.get_id())
             })
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} fails to save split region {:?}: {:?}",
-                        self.tag, new_region, e
-                    )
-                });
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} fails to save split region {:?}: {:?}",
+                    self.tag, new_region, e
+                )
+            });
             regions.push(new_region);
         }
         if right_derive {
@@ -1229,7 +1230,8 @@ impl ApplyDelegate {
             &derived,
             PeerState::Normal,
             None,
-        ).unwrap_or_else(|e| panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e));
+        )
+        .unwrap_or_else(|e| panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e));
         let mut resp = AdminResponse::new();
         resp.mut_splits()
             .set_regions(RepeatedField::from_slice(&regions));
@@ -1281,7 +1283,8 @@ impl ApplyDelegate {
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
-        ).unwrap_or_else(|e| {
+        )
+        .unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
                 self.tag, merging_state, region, e
@@ -1324,7 +1327,8 @@ impl ApplyDelegate {
             exist_first_index,
             NO_LIMIT,
             &mut entries,
-        ).unwrap_or_else(|e| {
+        )
+        .unwrap_or_else(|e| {
             panic!(
                 "{} failed to load entries [{}:{}) from region {}: {:?}",
                 self.tag,
@@ -2226,14 +2230,14 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use kvproto::metapb::{self, RegionEpoch};
-    use kvproto::raft_cmdpb::*;
-    use protobuf::Message;
     use crate::raftstore::coprocessor::*;
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use ::rocksdb::{Writable, WriteBatch, DB};
+    use kvproto::metapb::{self, RegionEpoch};
+    use kvproto::raft_cmdpb::*;
+    use protobuf::Message;
     use tempdir::TempDir;
 
     use super::*;

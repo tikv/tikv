@@ -150,7 +150,8 @@ impl<E: Engine> SyncTestStorage<E> {
             start_ts,
             Options::default(),
             cb
-        )).unwrap()
+        ))
+        .unwrap()
     }
 
     pub fn commit(
@@ -181,7 +182,7 @@ impl<E: Engine> SyncTestStorage<E> {
         wait_op!(|cb| self
             .store
             .async_scan_locks(ctx, max_ts, start_key, limit, cb))
-            .unwrap()
+        .unwrap()
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {

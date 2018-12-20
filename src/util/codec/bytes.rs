@@ -15,8 +15,8 @@ use byteorder::ReadBytesExt;
 use std::io::{BufRead, Write};
 
 use super::{BytesSlice, Error, Result};
-use std::ptr;
 use crate::util::codec::number::{self, NumberEncoder};
+use std::ptr;
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -282,8 +282,8 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cmp::Ordering;
     use crate::util::codec::{bytes, number};
+    use std::cmp::Ordering;
 
     #[test]
     fn test_enc_dec_bytes() {

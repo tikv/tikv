@@ -13,10 +13,10 @@
 
 use std::mem;
 
-use kvproto::pdpb::CheckPolicy;
 use crate::raftstore::store::{keys, util, Msg};
-use rocksdb::DB;
 use crate::util::transport::{RetryableSendCh, Sender};
+use kvproto::pdpb::CheckPolicy;
+use rocksdb::DB;
 
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -208,7 +208,8 @@ mod tests {
             Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec()))
         } else {
             Write::new(WriteType::Put, 0, None)
-        }.to_bytes();
+        }
+        .to_bytes();
 
         while start_idx < end_idx {
             let batch_idx = cmp::min(start_idx + 20, end_idx);

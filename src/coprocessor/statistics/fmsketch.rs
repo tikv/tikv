@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::collections::HashSet;
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
 use tipb::analyze;
-use crate::util::collections::HashSet;
 
 /// `FMSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -71,8 +71,8 @@ mod tests {
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
     use crate::coprocessor::codec::Result;
-    use std::iter::repeat;
     use crate::util::as_slice;
+    use std::iter::repeat;
 
     struct TestData {
         samples: Vec<Datum>,

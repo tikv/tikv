@@ -47,12 +47,11 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let parser = JsonFuncArgsParser::new(row);
-        let elems = try_opt!(
-            self.children
-                .iter()
-                .map(|e| parser.get_json(ctx, e))
-                .collect()
-        );
+        let elems = try_opt!(self
+            .children
+            .iter()
+            .map(|e| parser.get_json(ctx, e))
+            .collect());
         Ok(Some(Cow::Owned(Json::Array(elems))))
     }
 
@@ -256,11 +255,13 @@ mod tests {
         for (input, parse, exp) in cases {
             let input = match input {
                 None => Datum::Null,
-                Some(s) => if parse {
-                    Datum::Json(s.parse().unwrap())
-                } else {
-                    Datum::Json(Json::String(s.to_owned()))
-                },
+                Some(s) => {
+                    if parse {
+                        Datum::Json(s.parse().unwrap())
+                    } else {
+                        Datum::Json(Json::String(s.to_owned()))
+                    }
+                }
             };
             let exp = match exp {
                 None => Datum::Null,

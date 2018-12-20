@@ -207,7 +207,8 @@ impl<C: Sender<Msg>> Runner<C> {
                     &start_key,
                     &end_key,
                     false,
-                ).map(|mut iter| {
+                )
+                .map(|mut iter| {
                     while let Some(e) = iter.next() {
                         if host.on_kv(region, &e) {
                             break;

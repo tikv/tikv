@@ -14,10 +14,10 @@
 use std::cmp;
 use std::collections::HashSet;
 
+use crate::util::rocksdb::engine_metrics::*;
 use rocksdb::{
     self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
 };
-use crate::util::rocksdb::engine_metrics::*;
 
 use super::properties::RangeProperties;
 

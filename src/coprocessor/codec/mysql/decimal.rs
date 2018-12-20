@@ -581,11 +581,9 @@ fn do_div_mod(
         let frac_cnt = cmp::max(lhs.frac_cnt, rhs.frac_cnt);
         Res::Ok(Decimal::new(0, frac_cnt, lhs.negative))
     } else {
-        frac_word_to = word_cnt!(
-            l_frac_cnt
-                .saturating_add(r_frac_cnt)
-                .saturating_add(frac_incr)
-        );
+        frac_word_to = word_cnt!(l_frac_cnt
+            .saturating_add(r_frac_cnt)
+            .saturating_add(frac_incr));
         let res = fix_word_cnt_err(int_word_to, frac_word_to, WORD_BUF_LEN);
         int_word_to = res.0;
         frac_word_to = res.1;
@@ -605,12 +603,11 @@ fn do_div_mod(
     let i = word_cnt!(l_prec as usize, usize);
     let l_len = cmp::max(
         3,
-        i + word_cnt!(
-            r_frac_cnt
-                .saturating_mul(2)
-                .saturating_add(frac_incr)
-                .saturating_add(1)
-        ) as usize + 1,
+        i + word_cnt!(r_frac_cnt
+            .saturating_mul(2)
+            .saturating_add(frac_incr)
+            .saturating_add(1)) as usize
+            + 1,
     );
     let mut buf = vec![0; l_len];
     (&mut buf[0..i]).copy_from_slice(&lhs.word_buf[l_idx..l_idx + i]);
@@ -1401,7 +1398,8 @@ impl Decimal {
                     end as i8 - point as i8,
                     word_buf_len,
                     RoundMode::HalfEven,
-                ).unwrap(),
+                )
+                .unwrap(),
             )
         } else {
             Res::Ok(self)
@@ -1671,11 +1669,13 @@ impl Decimal {
                         WORD_BUF_LEN * DIGITS_PER_WORD,
                         0,
                     )),
-                    Res::Ok(v) => if is_truncated {
-                        Res::Truncated(v)
-                    } else {
-                        Res::Ok(v)
-                    },
+                    Res::Ok(v) => {
+                        if is_truncated {
+                            Res::Truncated(v)
+                        } else {
+                            Res::Ok(v)
+                        }
+                    }
                     res => res,
                 };
             }

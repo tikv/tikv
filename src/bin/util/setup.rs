@@ -51,9 +51,9 @@ macro_rules! fatal {
 
 #[allow(dead_code)]
 pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
-    let log_rotation_timespan = chrono::Duration::from_std(
-        config.log_rotation_timespan.clone().into(),
-    ).expect("config.log_rotation_timespan is an invalid duration.");
+    let log_rotation_timespan =
+        chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
+            .expect("config.log_rotation_timespan is an invalid duration.");
     let guard = if config.log_file.is_empty() {
         let decorator = TermDecorator::new().build();
         let drain = logger::TikvFormat::new(decorator).fuse();

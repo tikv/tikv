@@ -140,11 +140,11 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::CF_DEFAULT;
+    use crate::util::rocksdb::new_engine;
     use std::sync::mpsc;
     use std::time::Duration;
-    use crate::storage::CF_DEFAULT;
     use tempdir::TempDir;
-    use crate::util::rocksdb::new_engine;
 
     #[test]
     fn test_gc_raft_log() {

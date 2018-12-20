@@ -94,10 +94,11 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
                 DEFAULT_KEY_LENGTH,
                 config.value_length,
                 DEFAULT_KV_GENERATOR_SEED,
-            ).generate(config.put_count)
-                .iter()
-                .map(|(key, value)| (Key::from_raw(&key), value.clone()))
-                .collect();
+            )
+            .generate(config.put_count)
+            .iter()
+            .map(|(key, value)| (Key::from_raw(&key), value.clone()))
+            .collect();
             (test_kvs, &ctx)
         },
         |(test_kvs, ctx)| {
@@ -141,10 +142,11 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(bencher: &mut Bencher, confi
         DEFAULT_KEY_LENGTH,
         config.value_length,
         DEFAULT_KV_GENERATOR_SEED,
-    ).generate(config.get_count)
-        .iter()
-        .map(|(key, _)| Key::from_raw(&key))
-        .collect();
+    )
+    .generate(config.get_count)
+    .iter()
+    .map(|(key, _)| Key::from_raw(&key))
+    .collect();
 
     bencher.iter_with_setup(
         || {

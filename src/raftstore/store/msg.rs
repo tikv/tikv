@@ -22,10 +22,10 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
-use raft::SnapshotStatus;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::util::escape;
 use crate::util::rocksdb::CompactedEvent;
+use raft::SnapshotStatus;
 
 use super::{Peer, RegionSnapshot};
 
@@ -319,9 +319,9 @@ mod tests {
     use mio::{EventLoop, Handler};
 
     use super::*;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
     use crate::raftstore::Error;
     use crate::util::transport::SendCh;
+    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusRequest};
 
     fn call_command(
         sendch: &SendCh<Msg>,
@@ -336,7 +336,8 @@ mod tests {
                 sendch.try_send(Msg::new_raft_cmd(request, callback))
             },
             timeout
-        ).ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
+        )
+        .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     struct TestHandler;

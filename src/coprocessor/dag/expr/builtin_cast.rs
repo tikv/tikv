@@ -90,12 +90,14 @@ impl ScalarFunc {
 
         match res {
             Ok(v) => Ok(Some(v)),
-            Err(e) => if e.is_overflow() {
-                ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
-                    .map(Some)
-            } else {
-                Err(e)
-            },
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
+                        .map(Some)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
@@ -451,12 +453,14 @@ impl ScalarFunc {
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
-            Err(e) => if e.is_overflow() {
-                ctx.handle_overflow(e)?;
-                Ok(None)
-            } else {
-                Err(e)
-            },
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.handle_overflow(e)?;
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
@@ -626,7 +630,9 @@ impl ScalarFunc {
         if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(val);
         }
-        let res = val.into_owned().convert_to(ctx, flen as u8, decimal as u8)?;
+        let res = val
+            .into_owned()
+            .convert_to(ctx, flen as u8, decimal as u8)?;
         Ok(Cow::Owned(res))
     }
 
@@ -734,7 +740,9 @@ mod tests {
     use chrono::Utc;
 
     use crate::coprocessor::codec::error::*;
-    use crate::coprocessor::codec::mysql::{self, charset, Decimal, Duration, Json, Time, TimeType, Tz};
+    use crate::coprocessor::codec::mysql::{
+        self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
+    };
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
     use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};

@@ -16,8 +16,8 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
-use futures::Canceled;
 use crate::grpc::Error as GrpcError;
+use futures::Canceled;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
@@ -28,7 +28,7 @@ use crate::storage::Error as StorageError;
 use crate::util::codec::Error as CodecError;
 use crate::util::worker::ScheduleError;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Other(err: Box<error::Error + Sync + Send>) {

@@ -19,9 +19,9 @@ use crate::util::config::ReadableSize;
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use crate::raftstore::store::util as raftstore_util;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use crate::raftstore::store::util as raftstore_util;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -66,10 +66,10 @@ impl SplitChecker for Checker {
     }
 
     fn approximate_split_keys(&self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
-        Ok(box_try!(
-            raftstore_util::get_region_approximate_middle(engine, region)
-                .map(|keys| keys.map_or(vec![], |key| vec![key]))
-        ))
+        Ok(box_try!(raftstore_util::get_region_approximate_middle(
+            engine, region
+        )
+        .map(|keys| keys.map_or(vec![], |key| vec![key]))))
     }
 
     fn policy(&self) -> CheckPolicy {

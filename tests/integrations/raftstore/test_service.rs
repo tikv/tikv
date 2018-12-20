@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 
-use futures::{future, Future, Stream};
 use crate::grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use futures::{future, Future, Stream};
 use rocksdb::Writable;
 
 use kvproto::coprocessor::*;

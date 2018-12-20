@@ -13,10 +13,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
-use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;

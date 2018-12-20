@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
 use time::{self, Tm};
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -443,9 +443,11 @@ mod tests {
                         panic!("expect parse {} to {}, got {}", escape(input), exp, s);
                     }
                 }
-                None => if !d.is_err() {
-                    panic!("{} should not be passed, got {:?}", escape(input), d);
-                },
+                None => {
+                    if !d.is_err() {
+                        panic!("{} should not be passed, got {:?}", escape(input), d);
+                    }
+                }
             }
         }
     }

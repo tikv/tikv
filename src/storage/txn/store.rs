@@ -293,11 +293,11 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use crate::storage::engine::{Engine, RocksEngine, RocksSnapshot};
     use crate::storage::mvcc::Error as MvccError;
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::{Key, KvPair, Mutation, Options, Statistics, TestEngineBuilder};
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -342,7 +342,8 @@ mod tests {
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &Options::default(),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
@@ -789,7 +790,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use ::test;
+    use test;
 
     use rand::{self, Rng};
     use std::collections::BTreeMap;

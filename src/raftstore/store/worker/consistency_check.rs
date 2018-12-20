@@ -16,11 +16,11 @@ use std::fmt::{self, Display, Formatter};
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 
-use kvproto::metapb::Region;
 use crate::raftstore::store::engine::{Iterable, Peekable, Snapshot};
 use crate::raftstore::store::{keys, Msg};
 use crate::storage::CF_RAFT;
 use crate::util::worker::Runnable;
+use kvproto::metapb::Region;
 
 use super::metrics::*;
 use super::MsgSender;
@@ -138,18 +138,18 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raftstore::store::engine::Snapshot;
+    use crate::raftstore::store::{keys, Msg};
+    use crate::storage::{CF_DEFAULT, CF_RAFT};
+    use crate::util::rocksdb::new_engine;
+    use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
-    use crate::raftstore::store::engine::Snapshot;
-    use crate::raftstore::store::{keys, Msg};
     use rocksdb::Writable;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
-    use crate::storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use crate::util::rocksdb::new_engine;
-    use crate::util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {

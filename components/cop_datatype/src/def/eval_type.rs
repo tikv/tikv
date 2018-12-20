@@ -13,7 +13,7 @@
 
 use std::fmt;
 
-use crate::{FieldTypeTp, DataTypeError};
+use crate::{DataTypeError, FieldTypeTp};
 
 /// Function implementations' parameter data types.
 ///

@@ -16,9 +16,9 @@ use std::io::{self, Write};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::Path;
 
-use chrono;
 use crate::grpc;
 use crate::log;
+use chrono;
 use log::SetLoggerError;
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_scope::{self, GlobalLoggerGuard};

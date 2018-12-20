@@ -19,13 +19,13 @@ use std::ops::{Deref, DerefMut};
 use std::u64;
 
 use crate::raftstore::store::keys;
-use rocksdb::{
-    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
-};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use crate::util::codec::number::{self, NumberEncoder};
 use crate::util::codec::{Error, Result};
+use rocksdb::{
+    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
+};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -657,9 +657,9 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
 mod tests {
     use super::*;
     use crate::raftstore::store::keys;
-    use rocksdb::{DBEntryType, TablePropertiesCollector};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
+    use rocksdb::{DBEntryType, TablePropertiesCollector};
     use test::Bencher;
 
     #[test]

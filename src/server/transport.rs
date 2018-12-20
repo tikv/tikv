@@ -20,7 +20,6 @@ use std::sync::{Arc, RwLock};
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
-use raft::SnapshotStatus;
 use crate::raftstore::store::{Callback, Msg as StoreMsg, ReadTask, SignificantMsg, Transport};
 use crate::raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
 use crate::server::raft_client::RaftClient;
@@ -29,6 +28,7 @@ use crate::util::collections::HashSet;
 use crate::util::transport::SendCh;
 use crate::util::worker::Scheduler;
 use crate::util::HandyRwLock;
+use raft::SnapshotStatus;
 
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.

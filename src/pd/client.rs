@@ -15,9 +15,9 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use crate::grpc::{CallOption, EnvBuilder, WriteFlags};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
-use crate::grpc::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use protobuf::RepeatedField;

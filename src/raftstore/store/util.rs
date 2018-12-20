@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use crate::raftstore::store::keys;
+use crate::raftstore::{Error, Result};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use crate::raftstore::store::keys;
-use crate::raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
@@ -391,9 +391,11 @@ pub fn get_region_approximate_size_cf(
 pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
     // try to get from RangeProperties first.
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
-        Ok(v) => if v > 0 {
-            return Ok(v);
-        },
+        Ok(v) => {
+            if v > 0 {
+                return Ok(v);
+            }
+        }
         Err(e) => debug!(
             "old_version:get keys from RangeProperties failed with err:{:?}",
             e
@@ -681,9 +683,11 @@ impl Lease {
         let bound = self.next_expired_time(send_ts);
         match self.bound {
             // Longer than suspect ts or longer than valid ts.
-            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
-                self.bound = Some(Either::Right(bound));
-            },
+            Some(Either::Left(ts)) | Some(Either::Right(ts)) => {
+                if ts <= bound {
+                    self.bound = Some(Either::Right(bound));
+                }
+            }
             // Or an empty lease
             None => {
                 self.bound = Some(Either::Right(bound));
@@ -711,11 +715,13 @@ impl Lease {
     pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
         match self.bound {
             Some(Either::Left(_)) => LeaseState::Suspect,
-            Some(Either::Right(bound)) => if ts.unwrap_or_else(monotonic_raw_now) < bound {
-                LeaseState::Valid
-            } else {
-                LeaseState::Expired
-            },
+            Some(Either::Right(bound)) => {
+                if ts.unwrap_or_else(monotonic_raw_now) < bound {
+                    LeaseState::Valid
+                } else {
+                    LeaseState::Expired
+                }
+            }
             None => LeaseState::Expired,
         }
     }
@@ -954,7 +960,9 @@ mod tests {
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
     use crate::util::escape;
-    use crate::util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
+    use crate::util::properties::{
+        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    };
     use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::util::time::{monotonic_now, monotonic_raw_now};
 
@@ -1380,7 +1388,8 @@ mod tests {
             start.as_encoded().as_slice(),
             end.as_encoded().as_slice(),
             use_delete_range,
-        ).unwrap();
+        )
+        .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 

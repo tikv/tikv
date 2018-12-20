@@ -44,7 +44,8 @@ fn bench_table_scan_next(
                 ranges.to_vec(),
                 store.to_fixture_store(),
                 false,
-            ).unwrap();
+            )
+            .unwrap();
             // There is a step of building scanner in the first `next()` which cost time,
             // so we next() before hand.
             executor.next().unwrap().unwrap();
@@ -494,7 +495,8 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
                     vec![table.get_select_range()],
                     store.to_fixture_store(),
                     false,
-                ).unwrap();
+                )
+                .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next().unwrap().unwrap();
@@ -527,7 +529,8 @@ fn bench_index_scan_next(
                 store.to_fixture_store(),
                 unique,
                 false,
-            ).unwrap();
+            )
+            .unwrap();
             // There is a step of building scanner in the first `next()` which cost time,
             // so we next() before hand.
             executor.next().unwrap().unwrap();

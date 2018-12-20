@@ -22,8 +22,8 @@ use std::time::Instant;
 use std::{thread, u64};
 use time;
 
-use mio::{self, EventLoop, EventLoopConfig, Sender};
 use ::rocksdb::{CompactionJobInfo, WriteBatch, DB};
+use mio::{self, EventLoop, EventLoopConfig, Sender};
 
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb;
@@ -441,10 +441,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.pd_worker.start(pd_runner));
 
         let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
-        box_try!(
-            self.consistency_check_worker
-                .start(consistency_check_runner)
-        );
+        box_try!(self
+            .consistency_check_worker
+            .start(consistency_check_runner));
 
         let cleanup_sst_runner = CleanupSSTRunner::new(
             self.store_id(),
@@ -1038,9 +1037,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
-            Msg::RaftMessage(data) => if let Err(e) = self.on_raft_message(data) {
-                error!("{} handle raft message err: {:?}", self.tag, e);
-            },
+            Msg::RaftMessage(data) => {
+                if let Err(e) = self.on_raft_message(data) {
+                    error!("{} handle raft message err: {:?}", self.tag, e);
+                }
+            }
             Msg::RaftCmd {
                 send_time,
                 request,
@@ -1241,9 +1242,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
 
-    use protobuf::RepeatedField;
     use crate::util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::util::rocksdb::CompactedEvent;
+    use protobuf::RepeatedField;
 
     use super::*;
 

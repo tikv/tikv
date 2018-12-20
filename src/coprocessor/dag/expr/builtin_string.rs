@@ -827,8 +827,8 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
-    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
+    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use tipb::expression::{Expr, ScalarFuncSig};
 
     use crate::coprocessor::codec::Datum;

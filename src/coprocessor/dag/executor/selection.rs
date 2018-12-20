@@ -216,7 +216,8 @@ mod tests {
             selection,
             Arc::new(EvalConfig::default()),
             Box::new(inner_table_scan),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
@@ -269,7 +270,8 @@ mod tests {
             selection,
             Arc::new(EvalConfig::default()),
             Box::new(inner_table_scan),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {

@@ -32,10 +32,6 @@ use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
 use crate::pd::{PdTask, INVALID_ID};
-use raft::{
-    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
-};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::worker::{
@@ -47,6 +43,10 @@ use crate::util::collections::{HashMap, HashSet};
 use crate::util::time::{duration_to_sec, monotonic_raw_now};
 use crate::util::worker::{FutureWorker, Scheduler};
 use crate::util::{escape, MustConsumeVec};
+use raft::{
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftMetrics, RaftProposeMetrics, RaftReadyMetrics};
@@ -319,7 +319,7 @@ impl Peer {
                     "find no peer for store {} in region {:?}",
                     store_id,
                     region
-                ))
+                ));
             }
             Some(peer) => peer.clone(),
         };
@@ -1314,7 +1314,7 @@ impl Peer {
             Ok(RequestPolicy::ReadIndex) => return self.read_index(req, err_resp, cb, metrics),
             Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
-                return self.propose_transfer_leader(req, cb, metrics)
+                return self.propose_transfer_leader(req, cb, metrics);
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 is_conf_change = true;
@@ -1543,13 +1543,14 @@ impl Peer {
     }
 
     fn pre_read_index(&self) -> Result<()> {
-        fail_point!("before_propose_readindex", |s| {
-            if s.map_or(true, |s| s.parse().unwrap_or(true)) {
+        fail_point!(
+            "before_propose_readindex",
+            |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
                 Err(box_err!("can not read due to injected failure"))
             }
-        });
+        );
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
@@ -1842,7 +1843,8 @@ impl Peer {
             self.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
-        ).execute(&req, self.region());
+        )
+        .execute(&req, self.region());
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -1915,7 +1917,7 @@ impl Peer {
                     "failed to look up recipient peer {} in region {}",
                     msg.get_to(),
                     self.region_id
-                ))
+                ));
             }
         };
 

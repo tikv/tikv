@@ -84,9 +84,11 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
         let next_char = loop {
             match pcs.next().cloned() {
                 Some(b'%') => {}
-                Some(b'_') => if tcs.next().is_none() {
-                    return Ok(false);
-                },
+                Some(b'_') => {
+                    if tcs.next().is_none() {
+                        return Ok(false);
+                    }
+                }
                 // So the pattern should be some thing like 'xxx%'
                 None => return Ok(true),
                 Some(c) => {

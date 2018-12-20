@@ -18,12 +18,12 @@ use std::fmt::{Debug, Display};
 use std::time::Duration;
 use std::{error, result};
 
-use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 use crate::raftstore::store::engine::IterOption;
 use crate::raftstore::store::{SeekRegionFilter, SeekRegionResult};
-use ::rocksdb::TablePropertiesCollection;
 use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use ::rocksdb::TablePropertiesCollection;
+use kvproto::errorpb::Error as ErrorHeader;
+use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 
 mod btree_engine;
 mod cursor_builder;
@@ -673,10 +673,10 @@ pub mod tests {
     use super::super::super::raftstore::store::engine::IterOption;
     use super::SEEK_BOUND;
     use super::*;
-    use kvproto::kvrpcpb::Context;
     use crate::storage::{CfName, Key, CF_DEFAULT};
     use crate::util::codec::bytes;
     use crate::util::escape;
+    use kvproto::kvrpcpb::Context;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
@@ -835,16 +835,12 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(
-            !iter
-                .seek(&Key::from_raw(b"z\x00"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!iter
+            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap());
+        assert!(!iter
+            .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
@@ -863,11 +859,9 @@ pub mod tests {
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
@@ -894,36 +888,24 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"z"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"w"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"z"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"w"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"z"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"w"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"z"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"w"), &mut statistics)
+            .unwrap());
     }
 
     macro_rules! assert_seek {

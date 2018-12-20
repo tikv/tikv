@@ -13,8 +13,8 @@
 
 use crate::raftstore;
 use crate::raftstore::store::msg::Msg;
-use std::sync::mpsc::Sender;
 use crate::util::transport::SendCh;
+use std::sync::mpsc::Sender;
 
 pub trait MsgSender {
     fn send(&self, msg: Msg) -> raftstore::Result<()>;

@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::{Future, Sink, Stream};
 use crate::grpc::{
     ClientStreamingSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     ServerStreamingSink, UnarySink, WriteFlags,
 };
+use futures::{Future, Sink, Stream};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb;

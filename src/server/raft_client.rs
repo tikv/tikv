@@ -15,10 +15,10 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
+use crate::grpc::{ChannelBuilder, Environment, WriteFlags};
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
 use futures::{stream, Future, Sink, Stream};
-use crate::grpc::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 

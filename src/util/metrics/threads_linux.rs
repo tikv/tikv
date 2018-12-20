@@ -49,14 +49,17 @@ impl ThreadsCollector {
                 "thread_cpu_seconds_total",
                 "Total user and system CPU time spent in \
                  seconds by threads.",
-            ).namespace(ns.clone()),
+            )
+            .namespace(ns.clone()),
             &["name", "tid"],
-        ).unwrap();
+        )
+        .unwrap();
         descs.extend(cpu_totals.desc().into_iter().cloned());
         let threads_state = IntGaugeVec::new(
             Opts::new("threads_state", "Number of threads in each state.").namespace(ns.clone()),
             &["state"],
-        ).unwrap();
+        )
+        .unwrap();
         descs.extend(threads_state.desc().into_iter().cloned());
         let io_totals = CounterVec::new(
             Opts::new(

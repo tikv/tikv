@@ -76,7 +76,8 @@ lazy_static! {
             "tikv_storage_engine_async_request_total",
             "Total number of engine asynchronous requests",
             &["type", "status"]
-        ).unwrap()
+        )
+        .unwrap()
     };
     pub static ref ASYNC_REQUESTS_DURATIONS_VEC: AsyncRequestsDurationVec = {
         register_static_histogram_vec!(
@@ -85,6 +86,7 @@ lazy_static! {
             "Bucketed histogram of processing successful asynchronous requests.",
             &["type"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap()
+        )
+        .unwrap()
     };
 }

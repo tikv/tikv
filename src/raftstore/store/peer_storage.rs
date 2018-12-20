@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use ::rocksdb::{Writable, WriteBatch, DB};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -27,7 +28,6 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use ::rocksdb::{Writable, WriteBatch, DB};
 
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
@@ -449,7 +449,7 @@ fn init_last_term(
                 "[region {}] entry at {} doesn't exist, may lose data.",
                 region.get_id(),
                 last_idx
-            ))
+            ));
         }
         Some(e) => e.get_term(),
     })
@@ -903,10 +903,9 @@ impl PeerStorage {
     pub fn clear_data(&self) -> Result<()> {
         let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
-        box_try!(
-            self.region_sched
-                .schedule(RegionTask::destroy(region_id, start_key, end_key))
-        );
+        box_try!(self
+            .region_sched
+            .schedule(RegionTask::destroy(region_id, start_key, end_key)));
         Ok(())
     }
 
@@ -982,23 +981,25 @@ impl PeerStorage {
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_cancelled = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => if status.compare_and_swap(
-                JOB_STATUS_PENDING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_PENDING
-            {
-                true
-            } else if status.compare_and_swap(
-                JOB_STATUS_RUNNING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_RUNNING
-            {
-                return false;
-            } else {
-                false
-            },
+            SnapState::Applying(ref status) => {
+                if status.compare_and_swap(
+                    JOB_STATUS_PENDING,
+                    JOB_STATUS_CANCELLING,
+                    Ordering::SeqCst,
+                ) == JOB_STATUS_PENDING
+                {
+                    true
+                } else if status.compare_and_swap(
+                    JOB_STATUS_RUNNING,
+                    JOB_STATUS_CANCELLING,
+                    Ordering::SeqCst,
+                ) == JOB_STATUS_RUNNING
+                {
+                    return false;
+                } else {
+                    false
+                }
+            }
             _ => return false,
         };
         if is_cancelled {
@@ -1277,7 +1278,7 @@ pub fn do_snapshot(
                 return Err(storage_error(format!(
                     "could not load raft state of region {}",
                     region_id
-                )))
+                )));
             }
             Some(state) => state,
         };
@@ -1291,7 +1292,7 @@ pub fn do_snapshot(
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
                     idx, region_id
-                )))
+                )));
             }
             Some(entry) => entry.get_term(),
         }
@@ -1431,27 +1432,27 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::raft_serverpb::RaftSnapshotData;
-    use protobuf;
-    use raft::eraftpb::HardState;
-    use raft::eraftpb::{ConfState, Entry};
-    use raft::{Error as RaftError, StorageError};
     use crate::raftstore::store::bootstrap;
     use crate::raftstore::store::local_metrics::RaftMetrics;
     use crate::raftstore::store::util::Engines;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
+    use crate::storage::{ALL_CFS, CF_DEFAULT};
+    use crate::util::rocksdb::new_engine;
+    use crate::util::worker::{Scheduler, Worker};
     use ::rocksdb::WriteBatch;
+    use kvproto::raft_serverpb::RaftSnapshotData;
+    use protobuf;
+    use raft::eraftpb::HardState;
+    use raft::eraftpb::{ConfState, Entry};
+    use raft::{Error as RaftError, StorageError};
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
-    use crate::storage::{ALL_CFS, CF_DEFAULT};
     use tempdir::*;
-    use crate::util::rocksdb::new_engine;
-    use crate::util::worker::{Scheduler, Worker};
 
     use super::*;
 
@@ -1771,7 +1772,8 @@ mod tests {
             &mut ctx,
             &[new_entry(6, 5), new_entry(7, 5)],
             &mut ready_ctx,
-        ).unwrap();
+        )
+        .unwrap();
         let mut hs = HardState::new();
         hs.set_commit(7);
         hs.set_term(5);

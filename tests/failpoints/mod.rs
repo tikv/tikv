@@ -61,7 +61,8 @@ fn test_setup() {
         panic_hook::mute();
         let _g = setup();
         panic!("Poison!");
-    }).join();
+    })
+    .join();
 
     let _g = setup();
 }

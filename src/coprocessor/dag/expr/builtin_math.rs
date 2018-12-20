@@ -602,7 +602,9 @@ mod tests {
     use tipb::expression::ScalarFuncSig;
 
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, eval_func, eval_func_with, str2dec,
+    };
 
     #[test]
     fn test_abs() {
@@ -630,7 +632,8 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -710,7 +713,8 @@ mod tests {
                         .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                         .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -783,7 +787,8 @@ mod tests {
                         .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                         .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -1374,7 +1379,8 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }

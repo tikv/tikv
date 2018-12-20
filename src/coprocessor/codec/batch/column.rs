@@ -342,7 +342,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Int column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Real(ref mut vec) => match flag {
@@ -359,7 +359,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Real column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Decimal(ref mut vec) => match flag {
@@ -370,7 +370,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Decimal column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Bytes(ref mut vec) => match flag {
@@ -383,7 +383,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Bytes column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::DateTime(ref mut vec) => match flag {
@@ -404,7 +404,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for DateTime column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Duration(ref mut vec) => match flag {
@@ -425,7 +425,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Duration column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Json(ref mut vec) => match flag {
@@ -436,7 +436,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Json column",
                         flag
-                    )))
+                    )));
                 }
             },
         }
@@ -818,7 +818,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use ::test;
+    use test;
 
     use super::*;
 
@@ -856,10 +856,10 @@ mod benches {
     /// Bench performance of naively decoding multiple datums (without pushing into a vector).
     #[bench]
     fn bench_batch_decode(b: &mut test::Bencher) {
-        use cop_datatype::FieldTypeTp;
         use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use crate::coprocessor::codec::table;
         use crate::coprocessor::dag::expr::EvalContext;
+        use cop_datatype::FieldTypeTp;
 
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
@@ -878,7 +878,8 @@ mod benches {
                     &mut raw,
                     test::black_box(&eval_ctx),
                     test::black_box(&col_info),
-                ).unwrap();
+                )
+                .unwrap();
                 match datum {
                     Datum::I64(v) => {
                         test::black_box(v);

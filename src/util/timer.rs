@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::time::Instant;
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::sync::mpsc;
 use std::thread::Builder;
 use std::time::Duration;
 use tokio_timer::{self, timer::Handle};
-use crate::util::time::Instant;
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -110,10 +110,10 @@ fn start_global_timer() -> Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
-    use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {

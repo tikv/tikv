@@ -18,10 +18,10 @@ use std::result;
 
 use protobuf::{ProtobufError, RepeatedField};
 
-use kvproto::{errorpb, metapb};
 use crate::pd;
-use raft;
 use crate::util::codec;
+use kvproto::{errorpb, metapb};
+use raft;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
@@ -29,7 +29,7 @@ use crate::util::{escape, transport};
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {
