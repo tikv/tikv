@@ -54,7 +54,7 @@ extern crate grpcio as grpc;
 extern crate hashbrown;
 extern crate hex;
 extern crate indexmap;
-#[cfg(unix)]
+#[cfg(all(unix, not(fuzzing)))]
 extern crate jemallocator;
 extern crate kvproto;
 
@@ -143,6 +143,8 @@ pub use storage::Storage;
 // generally shouldn't be opinionated about their allocators like
 // this. It's easier to do this in one place than to have all our bins
 // turn it on themselves.
-#[cfg(unix)]
+//
+// cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs`
+#[cfg(all(unix, not(fuzzing)))]
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(unix)]
+#[cfg(all(unix, not(fuzzing)))]
 mod jemalloc {
     use libc::{self, c_char, c_void};
     use std::{ptr, slice};
@@ -48,10 +48,8 @@ mod jemalloc {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(all(unix, not(fuzzing))))]
 mod jemalloc {
-    use tikv::raftstore::store::Engines;
-
     pub fn dump_stats() -> String {
         String::default()
     }
