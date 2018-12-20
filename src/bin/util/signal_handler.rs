@@ -33,7 +33,7 @@ mod imp {
                 }
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
-                    info!("{}", metrics::dump().unwrap());
+                    info!("{}", metrics::dump());
                     if let Some(ref engines) = engines {
                         info!("{:?}", rocksdb_stats::dump(&engines.kv));
                         info!("{:?}", rocksdb_stats::dump(&engines.raft));

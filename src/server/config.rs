@@ -290,6 +290,11 @@ mod tests {
         invalid_cfg.validate().unwrap();
 
         let mut invalid_cfg = cfg.clone();
+        invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
+        invalid_cfg.status_addr = "127.0.0.1:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
         invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
         assert!(invalid_cfg.validate().is_err());
 
