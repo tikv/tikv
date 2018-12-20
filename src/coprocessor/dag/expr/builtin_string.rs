@@ -24,6 +24,7 @@ use cop_datatype::{self, FieldTypeFlag};
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use safemem;
+use tipb::expression::FieldType;
 
 const SPACE: u8 = 0o40u8;
 
@@ -650,28 +651,25 @@ impl ScalarFunc {
         let target_len = try_opt!(self.children[1].eval_int(ctx, row));
         let pad = try_opt!(self.children[2].eval_string_and_decode(ctx, row));
         let input_len = input.chars().count();
-        let len_unsigned = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
-        let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
-        if target_len == 0 {
-            return Ok(Some(Cow::Borrowed(b"")));
-        }
-        // check max_allowed_packet when it's pushed down, add warning if needed
-        if !target_len_positive
-            || target_len.saturating_mul(4) > cop_datatype::MAX_BLOB_WIDTH as usize
-            || (pad.is_empty() && input_len < target_len)
-        {
-            return Ok(None);
-        }
 
-        let r = input
-            .chars()
-            .chain(pad.chars().cycle())
-            .take(target_len)
-            .collect::<String>();
-        Ok(Some(Cow::Owned(r.into_bytes())))
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input_len,
+            4,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = input
+                    .chars()
+                    .chain(pad.chars().cycle())
+                    .take(target_len)
+                    .collect::<String>();
+                Ok(Some(Cow::Owned(r.into_bytes())))
+            }
+        }
     }
 
     #[inline]
@@ -683,30 +681,125 @@ impl ScalarFunc {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         let target_len = try_opt!(self.children[1].eval_int(ctx, row));
         let pad = try_opt!(self.children[2].eval_string(ctx, row));
-        let len_unsigned = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
-        let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
-        if target_len == 0 {
-            return Ok(Some(Cow::Borrowed(b"")));
-        }
-        // check max_allowed_packet when it's pushed down, add warning if needed
-        if !target_len_positive
-            || target_len > cop_datatype::MAX_BLOB_WIDTH as usize
-            || (pad.is_empty() && input.len() < target_len)
-        {
-            return Ok(None);
-        }
 
-        let r = input
-            .iter()
-            .chain(pad.iter().cycle())
-            .cloned()
-            .take(target_len)
-            .collect::<Vec<_>>();
-        Ok(Some(Cow::Owned(r)))
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input.len(),
+            1,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = input
+                    .iter()
+                    .chain(pad.iter().cycle())
+                    .cloned()
+                    .take(target_len)
+                    .collect::<Vec<_>>();
+                Ok(Some(Cow::Owned(r)))
+            }
+        }
     }
+
+    #[inline]
+    pub fn lpad<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string_and_decode(ctx, row));
+        let input_len = input.chars().count();
+
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input_len,
+            4,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = if let Some(remain) = target_len.checked_sub(input_len) {
+                    pad.chars()
+                        .cycle()
+                        .take(remain)
+                        .chain(input.chars())
+                        .collect::<String>()
+                } else {
+                    input.chars().take(target_len).collect::<String>()
+                };
+                Ok(Some(Cow::Owned(r.into_bytes())))
+            }
+        }
+    }
+
+    #[inline]
+    pub fn lpad_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string(ctx, row));
+
+        match validate_target_len_for_pad(
+            self.children[1].field_type(),
+            target_len,
+            input.len(),
+            1,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = if let Some(remain) = target_len.checked_sub(input.len()) {
+                    pad.iter()
+                        .cycle()
+                        .take(remain)
+                        .chain(input.iter())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    input[..target_len].to_vec()
+                };
+                Ok(Some(Cow::Owned(r)))
+            }
+        }
+    }
+}
+
+// when target_len is 0, return Some(0), means the pad function should return empty string
+// currently there are three conditions it return None, which means pad function should return Null
+//   1. target_len is negative
+//   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
+//   3. target_len is greater than length of input string, *and* pad string is empty
+// otherwise return Some(target_len)
+#[inline]
+fn validate_target_len_for_pad(
+    ft: &FieldType,
+    target_len: i64,
+    input_len: usize,
+    size_of_type: usize,
+    pad_empty: bool,
+) -> Option<usize> {
+    if target_len == 0 {
+        return Some(0);
+    }
+    let len_unsigned = ft.flag().contains(FieldTypeFlag::UNSIGNED);
+    let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
+    if !target_len_positive
+        || target_len.saturating_mul(size_of_type) > cop_datatype::MAX_BLOB_WIDTH as usize
+        || (pad_empty && input_len < target_len)
+    {
+        return None;
+    }
+    Some(target_len)
 }
 
 // Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
@@ -2290,6 +2383,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_validate_target_len_for_pad() {
+        use cop_datatype::FieldTypeAccessor;
+        use tipb::expression::FieldType;
+        let cases = vec![
+            // target_len, input_len, size_of_type, pad_empty, result
+            (0, 10, 1, false, Some(0)),
+            (-1, 10, 1, false, None),
+            (12, 10, 1, true, None),
+            (i64::from(MAX_BLOB_WIDTH) + 1, 10, 1, false, None),
+            (i64::from(MAX_BLOB_WIDTH) / 4 + 1, 10, 4, false, None),
+            (12, 10, 1, false, Some(12)),
+        ];
+        for case in cases {
+            let ft = FieldType::default();
+            let got = super::validate_target_len_for_pad(&ft, case.0, case.1, case.2, case.3);
+            assert_eq!(got, case.4);
+        }
+
+        let unsigned_cases = vec![
+            (u64::max_value(), 10, 1, false, None),
+            (u64::max_value(), 10, 4, false, None),
+            (u64::max_value(), 10, 1, true, None),
+            (u64::max_value(), 10, 4, true, None),
+            (12u64, 10, 4, false, Some(12)),
+        ];
+        for case in unsigned_cases {
+            let mut ft = FieldType::default();
+            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
+            let got =
+                super::validate_target_len_for_pad(&ft, case.0 as i64, case.1, case.2, case.3);
+            assert_eq!(got, case.4);
+        }
+    }
+
     fn common_rpad_cases() -> Vec<(Datum, Datum, Datum, Datum)> {
         vec![
             (
@@ -2429,6 +2557,143 @@ mod tests {
 
         for (s, len, pad, exp) in cases {
             let got = eval_func(ScalarFuncSig::RpadBinary, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    fn common_lpad_cases() -> Vec<(Datum, Datum, Datum, Datum)> {
+        vec![
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"???hi".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"abahi".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(6),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"ababhi".to_vec()),
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_lpad() {
+        let mut cases = vec![
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(4),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(5),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(6),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测试a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(7),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测试测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) / 4 + 1),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Null,
+            ),
+        ];
+        cases.append(&mut common_lpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::Lpad, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_lpad_binary() {
+        let mut cases = vec![
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x35\x35\x61\x76\x5e".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(2),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x61\x76".to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(13),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1),
+                Datum::Bytes(b"aa".to_vec()),
+                Datum::Null,
+            ),
+        ];
+        cases.append(&mut common_lpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::LpadBinary, &[s, len, pad]).unwrap();
             assert_eq!(got, exp);
         }
     }
