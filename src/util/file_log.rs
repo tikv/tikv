@@ -93,8 +93,9 @@ impl RotatingFileLogger {
 
     /// Flushes and closes log file, without rotation.
     fn close(&mut self) -> io::Result<()> {
-        self.file.as_mut().unwrap().flush()?;
-        self.file = None;
+        if let Some(mut file) = self.file.take(){
+            return file.flush()
+        }
         Ok(())
     }
 }
