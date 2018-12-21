@@ -101,6 +101,9 @@ safemem = "0.3"
 cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+more-asserts = "0.1"
+hyper = "0.12"
+tokio-threadpool = "0.1"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
