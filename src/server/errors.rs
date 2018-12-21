@@ -18,6 +18,7 @@ use std::result;
 
 use futures::Canceled;
 use grpc::Error as GrpcError;
+use hyper::Error as HttpError;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
@@ -99,6 +100,12 @@ quick_error!{
             description("failed to poll from mpsc receiver")
         }
         Canceled(err: Canceled) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
+        Http(err: HttpError) {
             from()
             cause(err)
             display("{:?}", err)
