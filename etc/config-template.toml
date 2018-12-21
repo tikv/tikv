@@ -64,6 +64,14 @@
 ## If not set, `addr` will be used.
 # advertise-addr = ""
 
+## Status address.
+## This is used for reporting the status of TiKV directly through the HTTP address.
+## Empty string means disabling it.
+# status-addr = "127.0.0.1:20180"
+
+## Set the maximum number of worker threads for the status report HTTP service.
+# status-thread-pool-size = 1
+
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"
 
@@ -129,19 +137,6 @@
 [pd]
 ## PD endpoints.
 # endpoints = []
-
-[metric]
-## Prometheus client push interval.
-## Setting the value to 0s stops Prometheus client from pushing.
-# interval = "15s"
-
-## Prometheus PushGateway address.
-## Leaving it empty stops Prometheus client from pushing.
-# address = ""
-
-## Prometheus client push job name.
-## Note: A node id will automatically append, e.g., "tikv_1".
-# job = "tikv"
 
 [raftstore]
 ## Whether to force to flush logs.
