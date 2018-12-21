@@ -1334,8 +1334,14 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
     }
 
     keys.sort();
+    keys.dedup();
 
-    // step = ceiling(keys.len() / parts)
+    // If the keys are too few, return them directly.
+    if keys.len() < parts {
+        return Ok(keys);
+    }
+
+    // Find `parts - 1` keys which divides the whole range into `parts` parts evenly.
     let mut res = Vec::with_capacity(parts - 1);
     let section_len = (keys.len() as f64) / (parts as f64);
     for i in 1..parts {
