@@ -65,7 +65,7 @@ impl SplitChecker for Checker {
         }
     }
 
-    fn approximate_split_keys(&self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
         Ok(box_try!(
             raftstore_util::get_region_approximate_middle(engine, region)
                 .map(|keys| keys.map_or(vec![], |key| vec![key]))

@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(label_break_value)]
 #![feature(try_from)]
 #![feature(fnbox)]
 #![feature(alloc)]
@@ -102,6 +103,7 @@ extern crate tempdir;
 extern crate test;
 extern crate time;
 extern crate tipb;
+extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_timer;
 #[cfg(test)]
@@ -113,15 +115,16 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
-extern crate safemem;
-extern crate smallvec;
 #[macro_use]
 extern crate more_asserts;
 extern crate base64;
-
 extern crate cop_datatype;
 extern crate flate2;
+extern crate hyper;
 extern crate panic_hook;
+extern crate safemem;
+extern crate smallvec;
+extern crate tokio_threadpool;
 
 #[macro_use]
 pub mod util;

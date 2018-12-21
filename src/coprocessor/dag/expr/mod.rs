@@ -219,7 +219,7 @@ impl Expression {
         }
     }
 
-    pub fn batch_build(ctx: &mut EvalContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
+    pub fn batch_build(ctx: &EvalContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
         let mut data = Vec::with_capacity(exprs.len());
         for expr in exprs {
             let ex = Expression::build(ctx, expr)?;
@@ -228,7 +228,7 @@ impl Expression {
         Ok(data)
     }
 
-    pub fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<Self> {
+    pub fn build(ctx: &EvalContext, mut expr: Expr) -> Result<Self> {
         debug!("build expr:{:?}", expr);
         let field_type = expr.take_field_type();
         match expr.get_tp() {
@@ -505,7 +505,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let args: Vec<Expr> = args.iter().map(|arg| datum_expr(arg.clone())).collect();
         let expr = scalar_func_expr(sig, &args);
-        let mut op = Expression::build(&mut ctx, expr).unwrap();
+        let mut op = Expression::build(&ctx, expr).unwrap();
         f(&mut op, &args);
         op.eval(&mut ctx, &[])
     }
@@ -555,7 +555,7 @@ mod tests {
                 .as_mut_accessor()
                 .set_decimal(cop_datatype::UNSPECIFIED_LENGTH)
                 .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();
             if let Datum::F64(_) = exp {
                 assert_eq!(format!("{}", res), format!("{}", exp));
@@ -581,7 +581,7 @@ mod tests {
                     .as_mut_accessor()
                     .set_flag(flag.unwrap());
             }
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval(&mut ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }
