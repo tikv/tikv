@@ -1019,12 +1019,10 @@ impl<E: Engine> Storage<E> {
     /// whose start_ts is 100 was committed with commit_ts be 101, and the transaction whose
     /// start_ts is 102 was rolled back. If there are these keys in the db:
     ///
-    /// ```
-    /// "k1", lock_ts = 100
-    /// "k2", lock_ts = 102
-    /// "k3", lock_ts = 104
-    /// "k4", no lock
-    /// ```
+    /// * "k1", lock_ts = 100
+    /// * "k2", lock_ts = 102
+    /// * "k3", lock_ts = 104
+    /// * "k4", no lock
     ///
     /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
     /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
