@@ -25,7 +25,7 @@ pub fn decode_comparable_u64_to_i64(u: u64) -> i64 {
 
 #[inline]
 pub fn encode_f64_to_comparable_u64(v: f64) -> u64 {
-    let u: u64 = unsafe { ::std::mem::transmute(v) };
+    let u: u64 = v.to_bits();
     if v.is_sign_positive() {
         u | SIGN_MARK
     } else {

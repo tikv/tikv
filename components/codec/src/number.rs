@@ -361,7 +361,7 @@ impl NumberCodec {
     }
 
     /// Encodes an unsigned 64 bit integer `v` to `buf` in VarInt encoding,
-    /// which is not memory-comparable. Returns thenumber of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that encoded.
     ///
     /// Note: VarInt encoding is slow, try avoid using it.
     ///
@@ -440,7 +440,7 @@ impl NumberCodec {
     }
 
     /// Encodes a signed 64 bit integer `v` to `buf` in VarInt encoding,
-    /// which is not memory-comparable. Returns thenumber of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that encoded.
     ///
     /// Note: VarInt encoding is slow, try avoid using it.
     ///
@@ -877,7 +877,7 @@ pub trait BufferNumberEncoder: BufferWriter {
     }
 
     /// Writes an unsigned 64 bit integer `v` in VarInt encoding,
-    /// which is not memory-comparable. Returns thenumber of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that encoded.
     ///
     /// Note:
     /// - VarInt encoding is slow, try avoid using it.
@@ -936,16 +936,16 @@ mod tests {
     fn get_u16_samples() -> Vec<u16> {
         vec![
             (::std::i16::MIN as u16),
-            (::std::i16::MIN as u16).overflowing_add(1).0,
+            (::std::i16::MIN as u16).wrapping_add(1),
             (::std::i16::MIN as u16).overflowing_sub(1).0,
             (::std::i16::MAX as u16),
-            (::std::i16::MAX as u16).overflowing_add(1).0,
+            (::std::i16::MAX as u16).wrapping_add(1),
             (::std::i16::MAX as u16).overflowing_sub(1).0,
             (::std::u16::MIN as u16),
-            (::std::u16::MIN as u16).overflowing_add(1).0,
+            (::std::u16::MIN as u16).wrapping_add(1),
             (::std::u16::MIN as u16).overflowing_sub(1).0,
             (::std::u16::MAX as u16),
-            (::std::u16::MAX as u16).overflowing_add(1).0,
+            (::std::u16::MAX as u16).wrapping_add(1),
             (::std::u16::MAX as u16).overflowing_sub(1).0,
             0,
             1,
@@ -977,16 +977,16 @@ mod tests {
     fn get_u32_samples() -> Vec<u32> {
         let mut samples = vec![
             (::std::i32::MIN as u32),
-            (::std::i32::MIN as u32).overflowing_add(1).0,
+            (::std::i32::MIN as u32).wrapping_add(1),
             (::std::i32::MIN as u32).overflowing_sub(1).0,
             (::std::i32::MAX as u32),
-            (::std::i32::MAX as u32).overflowing_add(1).0,
+            (::std::i32::MAX as u32).wrapping_add(1),
             (::std::i32::MAX as u32).overflowing_sub(1).0,
             (::std::u32::MIN as u32),
-            (::std::u32::MIN as u32).overflowing_add(1).0,
+            (::std::u32::MIN as u32).wrapping_add(1),
             (::std::u32::MIN as u32).overflowing_sub(1).0,
             (::std::u32::MAX as u32),
-            (::std::u32::MAX as u32).overflowing_add(1).0,
+            (::std::u32::MAX as u32).wrapping_add(1),
             (::std::u32::MAX as u32).overflowing_sub(1).0,
         ];
         samples.extend(get_u16_samples().into_iter().map(|v| v as u32));
@@ -1001,16 +1001,16 @@ mod tests {
     fn get_u64_samples() -> Vec<u64> {
         let mut samples = vec![
             (::std::i64::MIN as u64),
-            (::std::i64::MIN as u64).overflowing_add(1).0,
+            (::std::i64::MIN as u64).wrapping_add(1),
             (::std::i64::MIN as u64).overflowing_sub(1).0,
             (::std::i64::MAX as u64),
-            (::std::i64::MAX as u64).overflowing_add(1).0,
+            (::std::i64::MAX as u64).wrapping_add(1),
             (::std::i64::MAX as u64).overflowing_sub(1).0,
             (::std::u64::MIN as u64),
-            (::std::u64::MIN as u64).overflowing_add(1).0,
+            (::std::u64::MIN as u64).wrapping_add(1),
             (::std::u64::MIN as u64).overflowing_sub(1).0,
             (::std::u64::MAX as u64),
-            (::std::u64::MAX as u64).overflowing_add(1).0,
+            (::std::u64::MAX as u64).wrapping_add(1),
             (::std::u64::MAX as u64).overflowing_sub(1).0,
         ];
         samples.extend(get_u32_samples().into_iter().map(|v| v as u64));
