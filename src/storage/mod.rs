@@ -486,14 +486,16 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 }
 
+use self::txn::scheduler1;
+
 pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    /// To schedule the execution of storage commands
-    worker: Arc<Mutex<Worker<Msg>>>,
-    worker_scheduler: worker::Scheduler<Msg>,
-
+    sched: scheduler1::Scheduler<E>,
+    // /// To schedule the execution of storage commands
+    // worker: Arc<Mutex<Worker<Msg>>>,
+    // worker_scheduler: worker::Scheduler<Msg>,
     read_pool: ReadPool<ReadPoolContext>,
     gc_worker: GCWorker<E>,
 
@@ -517,8 +519,7 @@ impl<E: Engine> Clone for Storage<E> {
 
         Self {
             engine: self.engine.clone(),
-            worker: self.worker.clone(),
-            worker_scheduler: self.worker_scheduler.clone(),
+            sched: self.sched.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
@@ -541,15 +542,7 @@ impl<E: Engine> Drop for Storage<E> {
             return;
         }
 
-        let mut worker = self.worker.lock().unwrap();
-        if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit: {:?}", e);
-        }
-
-        let h = worker.stop().unwrap();
-        if let Err(e) = h.join() {
-            error!("Failed to join sched_handle: {:?}", e);
-        }
+        self.sched.shutdown();
 
         let r = self.gc_worker.stop();
         if let Err(e) = r {
@@ -568,16 +561,8 @@ impl<E: Engine> Storage<E> {
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
     ) -> Result<Self> {
-        let worker = Arc::new(Mutex::new(
-            Builder::new("storage-scheduler")
-                .batch_size(CMD_BATCH_SIZE)
-                .pending_capacity(config.scheduler_notify_capacity)
-                .create(),
-        ));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
-        let runner = Scheduler::new(
+        let sched = scheduler1::Scheduler::new(
             engine.clone(),
-            worker_scheduler.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -589,15 +574,13 @@ impl<E: Engine> Storage<E> {
             config.gc_ratio_threshold,
         );
 
-        worker.lock().unwrap().start(runner)?;
         gc_worker.start()?;
 
         info!("Storage ({} engine) started.", engine);
 
         Ok(Storage {
             engine,
-            worker,
-            worker_scheduler,
+            sched: sched,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -612,11 +595,8 @@ impl<E: Engine> Storage<E> {
     #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {
-            Ok(()) => Ok(()),
-            Err(ScheduleError::Full(_)) => Err(Error::SchedTooBusy),
-            Err(ScheduleError::Stopped(_)) => Err(Error::Closed),
-        }
+        self.sched.run_cmd(cmd, cb);
+        Ok(())
     }
 
     fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {

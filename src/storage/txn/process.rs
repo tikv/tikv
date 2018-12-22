@@ -118,25 +118,32 @@ impl Task {
     }
 }
 
-pub struct Executor<E: Engine> {
+pub trait MsgScheduler: Clone + Send + 'static {
+    fn on_msg(&self, task: Msg) -> ::std::result::Result<(), ScheduleError<Msg>>;
+}
+
+impl MsgScheduler for worker::Scheduler<Msg> {
+    fn on_msg(&self, task: Msg) -> ::std::result::Result<(), ScheduleError<Msg>> {
+        self.schedule(task)
+    }
+}
+
+pub struct Executor<E: Engine, S: MsgScheduler> {
     // We put time consuming tasks to the thread pool.
     pool: Option<threadpool::Scheduler<SchedContext<E>>>,
     // And the tasks completes we post a completion to the `Scheduler`.
-    scheduler: Option<worker::Scheduler<Msg>>,
+    scheduler: Option<S>,
 }
 
-impl<E: Engine> Executor<E> {
-    pub fn new(
-        scheduler: worker::Scheduler<Msg>,
-        pool: threadpool::Scheduler<SchedContext<E>>,
-    ) -> Self {
+impl<E: Engine, S: MsgScheduler> Executor<E, S> {
+    pub fn new(scheduler: S, pool: threadpool::Scheduler<SchedContext<E>>) -> Self {
         Executor {
             scheduler: Some(scheduler),
             pool: Some(pool),
         }
     }
 
-    fn take_scheduler(&mut self) -> worker::Scheduler<Msg> {
+    fn take_scheduler(&mut self) -> S {
         self.scheduler.take().unwrap()
     }
 
@@ -601,8 +608,8 @@ fn process_write_impl<S: Snapshot>(
     Ok((ctx, pr, modifies, rows))
 }
 
-fn notify_scheduler(scheduler: worker::Scheduler<Msg>, msg: Msg) -> bool {
-    match scheduler.schedule(msg) {
+fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) -> bool {
+    match scheduler.on_msg(msg) {
         Ok(_) => true,
         e @ Err(ScheduleError::Stopped(_)) => {
             info!("scheduler stopped, {:?}", e);

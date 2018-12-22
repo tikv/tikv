@@ -243,7 +243,7 @@ impl<E: Engine> Scheduler<E> {
         tctx
     }
 
-    pub fn fetch_executor(&self, priority: CommandPri) -> Executor<E> {
+    pub fn fetch_executor(&self, priority: CommandPri) -> Executor<E, worker::Scheduler<Msg>> {
         let pool = match priority {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
             CommandPri::High => &self.high_priority_pool,

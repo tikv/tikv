@@ -159,6 +159,147 @@ impl Latches {
     }
 }
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+struct MutexLatch {
+    // store waiting commands
+    pub waiting: VecDeque<u64>,
+}
+
+impl MutexLatch {
+    /// Creates a latch with an empty waiting queue.
+    pub fn new() -> MutexLatch {
+        MutexLatch {
+            waiting: VecDeque::new(),
+        }
+    }
+}
+
+/// Lock required for a command.
+pub struct MutexLock {
+    /// The slot IDs of the latches that a command must acquire before being able to be processed.
+    pub required_slots: Vec<usize>,
+
+    /// The number of latches that the command has acquired.
+    pub owned_count: AtomicUsize,
+}
+
+impl MutexLock {
+    /// Creates a lock.
+    pub fn new(required_slots: Vec<usize>) -> MutexLock {
+        MutexLock {
+            required_slots,
+            owned_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// Returns true if all the required latches have be acquired, false otherwise.
+    pub fn acquired(&self) -> bool {
+        self.required_slots.len() == self.owned_count.load(Ordering::Acquire)
+    }
+
+    pub fn is_write_lock(&self) -> bool {
+        !self.required_slots.is_empty()
+    }
+}
+
+/// Latches which are used for concurrency control in the scheduler.
+///
+/// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangeably, but
+/// conceptually a latch is a queue, and a slot is an index to the queue.
+pub struct MutexLatches {
+    slots: Vec<Mutex<MutexLatch>>,
+    size: usize,
+}
+
+impl MutexLatches {
+    /// Creates latches.
+    ///
+    /// The size will be rounded up to the power of 2.
+    pub fn new(size: usize) -> MutexLatches {
+        let power_of_two_size = usize::next_power_of_two(size);
+        let mut slots = Vec::with_capacity(power_of_two_size);
+        for _ in 0..power_of_two_size {
+            slots.push(Mutex::new(MutexLatch::new()));
+        }
+        MutexLatches {
+            slots: slots,
+            size: power_of_two_size,
+        }
+    }
+
+    /// Creates a lock which specifies all the required latches for a command.
+    pub fn gen_lock<H>(&self, keys: &[H]) -> MutexLock
+    where
+        H: Hash,
+    {
+        // prevent from deadlock, so we sort and deduplicate the index
+        let mut slots: Vec<usize> = keys.iter().map(|x| self.calc_slot(x)).collect();
+        slots.sort();
+        slots.dedup();
+        MutexLock::new(slots)
+    }
+
+    /// Tries to acquire the latches specified by the `lock` for command with ID `who`.
+    ///
+    /// This method will enqueue the command ID into the waiting queues of the latches. A latch is
+    /// considered acquired if the command ID is at the front of the queue. Returns true if all the
+    /// Latches are acquired, false otherwise.
+    pub fn acquire(&self, lock: &mut MutexLock, who: u64) -> bool {
+        let mut acquired_count: usize = 0;
+        let owned_count = lock.owned_count.load(Ordering::Acquire);
+        for i in &lock.required_slots[owned_count..] {
+            let mut latch = self.slots[*i].lock().unwrap();
+
+            let front = latch.waiting.front().cloned();
+            match front {
+                Some(cid) => if cid == who {
+                    acquired_count += 1;
+                } else {
+                    latch.waiting.push_back(who);
+                    break;
+                },
+                None => {
+                    latch.waiting.push_back(who);
+                    acquired_count += 1;
+                }
+            }
+        }
+
+        lock.owned_count.fetch_add(acquired_count, Ordering::AcqRel);
+        lock.acquired()
+    }
+
+    /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.
+    ///
+    /// Preconditions: the caller must ensure the command is at the front of the latches.
+    pub fn release(&self, lock: &MutexLock, who: u64) -> Vec<u64> {
+        let mut wakeup_list: Vec<u64> = vec![];
+        let owned_count = lock.owned_count.load(Ordering::Acquire);
+        for i in &lock.required_slots[..owned_count] {
+            let mut latch = self.slots[*i].lock().unwrap();
+            let front = latch.waiting.pop_front().unwrap();
+            assert_eq!(front, who);
+
+            if let Some(wakeup) = latch.waiting.front() {
+                wakeup_list.push(*wakeup);
+            }
+        }
+        wakeup_list
+    }
+
+    /// Calculates the slot ID by hashing the `key`.
+    fn calc_slot<H>(&self, key: &H) -> usize
+    where
+        H: Hash,
+    {
+        let mut s = DefaultHasher::new();
+        key.hash(&mut s);
+        (s.finish() as usize) & (self.size - 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Latches, Lock};
