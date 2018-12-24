@@ -70,8 +70,7 @@ pub enum Modify {
 }
 
 pub trait Engine: Send + Clone + 'static {
-    type Iter: Iterator;
-    type Snap: Snapshot<Iter = Self::Iter>;
+    type Snap: Snapshot;
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;

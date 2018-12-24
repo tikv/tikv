@@ -78,7 +78,6 @@ impl Default for BTreeEngine {
 }
 
 impl Engine for BTreeEngine {
-    type Iter = BTreeEngineIterator;
     type Snap = BTreeEngineSnapshot;
 
     fn async_write(
