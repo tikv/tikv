@@ -10,6 +10,7 @@ portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator/profiling"]
 no-fail = ["fail/no_fail"]
+cpu-profiling = []
 
 [lib]
 name = "tikv"
@@ -101,15 +102,16 @@ num = "0.2"
 num-traits = "0.2"
 hex = "0.3"
 rust-crypto = "^0.2"
-panic_hook = { path = "components/panic_hook" }
 base64 = "0.10"
 safemem = "0.3"
-cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = "0.12"
 tokio-threadpool = "0.1"
+cop_datatype = { path = "components/cop_datatype" }
+panic_hook = { path = "components/panic_hook" }
+cpu_profiler = { path = "components/cpu_profiler" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
