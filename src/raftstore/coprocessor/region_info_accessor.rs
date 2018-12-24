@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -21,7 +22,7 @@ use super::{
 };
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::store::keys::data_end_key;
+use raftstore::store::keys::{data_end_key, data_key};
 use util::collections::HashMap;
 use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
@@ -47,6 +48,17 @@ enum RaftStoreEvent {
     UpdateRegion { region: Region, role: StateRole },
     DestroyRegion { region: Region },
     RoleChange { region: Region, role: StateRole },
+}
+
+impl RaftStoreEvent {
+    pub fn get_region(&self) -> &Region {
+        match self {
+            RaftStoreEvent::CreateRegion { region, .. }
+            | RaftStoreEvent::UpdateRegion { region, .. }
+            | RaftStoreEvent::DestroyRegion { region, .. }
+            | RaftStoreEvent::RoleChange { region, .. } => region,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -150,53 +162,9 @@ impl RegionCollector {
         }
     }
 
-    /// Checks if the end_key is the same with another region's (suppose the region is `R`). If so,
-    /// try to clean it.
-    /// If `R` has a greater version or conf_ver than the current one, it means that the current
-    /// operation is caused by a stale message. Then this function should fail (return false).
-    ///
-    /// Returns a bool value indicating whether checking succeeded.
-    fn check_exist_and_clean(&mut self, region_id: u64, version: u64, end_key: &[u8]) -> bool {
-        if let Some(another_region_id) = self.region_ranges.get(end_key).cloned() {
-            // There is already another region with the same end_key
-            assert_ne!(another_region_id, region_id);
-
-            let another_region_version = self.regions[&another_region_id]
-                .region
-                .get_region_epoch()
-                .get_version();
-            if version < another_region_version {
-                // Another region is the actual new region. Now we are trying to create a region
-                // because of an old message, ignore it.
-                return false;
-            }
-            // Another region is older. Remove it.
-            info!(
-                "region_collector: remove region {} because its end_key is the same with newer \
-                 region {}",
-                another_region_id, region_id
-            );
-            self.regions.remove(&another_region_id);
-        }
-
-        self.region_ranges.remove(end_key);
-
-        true
-    }
-
     fn create_region(&mut self, region: Region, role: StateRole) {
         let end_key = data_end_key(region.get_end_key());
         let region_id = region.get_id();
-
-        if !self.check_exist_and_clean(region_id, region.get_region_epoch().get_version(), &end_key)
-        {
-            warn!(
-                "region_collector: creating region {} but it's end_key is the same as another \
-                 newer region's end_key.",
-                region.get_id()
-            );
-            return;
-        }
 
         // Create new region
         self.region_ranges.insert(end_key, region.get_id());
@@ -212,57 +180,31 @@ impl RegionCollector {
     }
 
     fn update_region(&mut self, region: Region) {
-        let mut end_key_updated = false;
+        let existing_region_info = self.regions.get_mut(&region.get_id()).unwrap();
 
-        {
-            let existing_region_info = self.regions.get_mut(&region.get_id()).unwrap();
-            // Ignore stale messages or messages with nothing updating
-            {
-                let epoch = region.get_region_epoch();
-                let existing_epoch = existing_region_info.region.get_region_epoch();
-                if epoch.get_version() <= existing_epoch.get_version()
-                    && epoch.get_conf_ver() <= existing_epoch.get_conf_ver()
-                {
-                    return;
-                }
-            }
+        let old_region = &mut existing_region_info.region;
+        assert_eq!(old_region.get_id(), region.get_id());
 
-            let old_region = &mut existing_region_info.region;
-            assert_eq!(old_region.get_id(), region.get_id());
+        // If the end_key changed, the old entry in `region_ranges` should be removed.
+        if old_region.get_end_key() != region.get_end_key() {
+            // The region's end_key has changed.
+            // Remove the old entry in `self.region_ranges`.
+            let old_end_key = data_end_key(old_region.get_end_key());
 
-            // If the end_key changed, the old item in `region_ranges` should be removed.
-            if old_region.get_end_key() != region.get_end_key() {
-                end_key_updated = true;
-                // The region's end_key has changed.
-                // Remove the old entry in `self.region_ranges`.
-                let old_end_key = data_end_key(old_region.get_end_key());
+            let old_id = self.region_ranges.remove(&old_end_key).unwrap();
+            assert_eq!(old_id, region.get_id());
 
-                let old_id = self.region_ranges.remove(&old_end_key).unwrap();
-                assert_eq!(old_id, region.get_id());
-            }
-
-            // If the region already exists, update it and keep the original role.
-            *old_region = region.clone();
-        }
-
-        // The new region info has a different end_key, so we need to update it in the
-        // `region_ranges` map.
-        if end_key_updated {
-            // If the region already exists, then `region_ranges` need to be updated.
-            // However, if the new_end_key has already mapped to another region, we should only
-            // keep the one with higher `version`.
-            let end_key = data_end_key(region.get_end_key());
-            if !self.check_exist_and_clean(
-                region.get_id(),
-                region.get_region_epoch().get_version(),
-                &end_key,
-            ) {
-                self.regions.remove(&region.get_id());
-                return;
-            }
             // Insert new entry to `region_ranges`.
-            self.region_ranges.insert(end_key, region.get_id());
+            let end_key = data_end_key(region.get_end_key());
+            assert!(
+                self.region_ranges
+                    .insert(end_key, region.get_id())
+                    .is_none()
+            );
         }
+
+        // If the region already exists, update it and keep the original role.
+        *old_region = region.clone();
     }
 
     fn handle_create_region(&mut self, region: Region, role: StateRole) {
@@ -287,23 +229,10 @@ impl RegionCollector {
     }
 
     fn handle_destroy_region(&mut self, region: Region) {
-        if let Some(mut removed_region_info) = self.regions.remove(&region.get_id()) {
+        if let Some(removed_region_info) = self.regions.remove(&region.get_id()) {
             let removed_region = removed_region_info.region;
             assert_eq!(removed_region.get_id(), region.get_id());
 
-            // Ignore if it's a stale message
-            let removed_version = removed_region.get_region_epoch().get_version();
-            let removed_conf = removed_region.get_region_epoch().get_conf_ver();
-            if removed_version > region.get_region_epoch().get_version()
-                || removed_conf > region.get_region_epoch().get_conf_ver()
-            {
-                // It shouldn't be deleted because the message is stale. Put it back.
-                removed_region_info.region = removed_region;
-                self.regions.insert(region.get_id(), removed_region_info);
-                return;
-            }
-
-            assert_eq!(removed_region.get_id(), region.get_id());
             let end_key = data_end_key(removed_region.get_end_key());
 
             let removed_id = self.region_ranges.remove(&end_key).unwrap();
@@ -328,7 +257,93 @@ impl RegionCollector {
         }
     }
 
+    /// Determines whether `region_to_check`'s epoch is stale compared to `current`'s epoch
+    #[inline]
+    fn is_region_epoch_stale(&self, region_to_check: &Region, current: &Region) -> bool {
+        let epoch = region_to_check.get_region_epoch();
+        let current_epoch = current.get_region_epoch();
+
+        epoch.get_version() < current_epoch.get_version()
+            || epoch.get_conf_ver() < current_epoch.get_conf_ver()
+    }
+
+    /// For all regions whose range overlaps with given `regions` or region_id is the same as
+    /// `region`'s, checks whether the given `region`'s epoch is not older than theirs.
+    /// Returns false if given `region` is stale, which means, at least one region above has newer
+    /// epoch. Returns true otherwise.
+    fn is_region_info_stale(&self, region: &Region) -> bool {
+        if let Some(region_with_same_id) = self.regions.get(&region.get_id()) {
+            if self.is_region_epoch_stale(region, &region_with_same_id.region) {
+                return true;
+            }
+        }
+
+        let regions_in_range = self
+            .region_ranges
+            .range((Excluded(data_key(region.get_start_key())), Unbounded));
+        for (_, id) in regions_in_range {
+            if *id == region.get_id() {
+                continue;
+            }
+
+            let current_region = &self.regions[id].region;
+            if !region.get_end_key().is_empty()
+                && current_region.get_start_key() >= region.get_end_key()
+            {
+                // This and following regions are not overlapping with `region`.
+                break;
+            }
+
+            if self.is_region_epoch_stale(region, current_region) {
+                return true;
+            }
+            // They are impossible to equal, or they cannot overlap.
+            assert_ne!(
+                region.get_region_epoch().get_version(),
+                current_region.get_region_epoch().get_version()
+            );
+        }
+
+        false
+    }
+
+    /// Clears all other regions that has range overlapping with `region`, but keeps the region with
+    /// the same id with `region`(if there exists such a region).
+    fn clear_overlapped_regions(&mut self, region: &Region) {
+        let mut regions_to_remove = vec![];
+        for (key, id) in self
+            .region_ranges
+            .range((Excluded(data_key(region.get_start_key())), Unbounded))
+        {
+            let current_region = &self.regions[id].region;
+            if !region.get_end_key().is_empty()
+                && current_region.get_start_key() >= region.get_end_key()
+            {
+                // This and following regions are not overlapping with `region`.
+                break;
+            }
+
+            // Remove other regions but keep `region`.
+            if *id != region.get_id() {
+                regions_to_remove.push((key.clone(), *id));
+            }
+        }
+        for (key, id) in regions_to_remove {
+            self.regions.remove(&id).unwrap();
+            self.region_ranges.remove(&key).unwrap();
+        }
+    }
+
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
+        {
+            let region = event.get_region();
+            if self.is_region_info_stale(region) {
+                debug!("region_collector: Received stale event: {:?}", event);
+                return;
+            }
+            self.clear_overlapped_regions(region);
+        }
+
         match event {
             RaftStoreEvent::CreateRegion { region, role } => {
                 self.handle_create_region(region, role);
@@ -420,6 +435,18 @@ mod tests {
         region
     }
 
+    fn new_region_with_conf(
+        id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        version: u64,
+        conf_ver: u64,
+    ) -> Region {
+        let mut region = new_region(id, start_key, end_key, version);
+        region.mut_region_epoch().set_conf_ver(conf_ver);
+        region
+    }
+
     fn check_collection(c: &RegionCollector, regions: &[(Region, StateRole)]) {
         let region_ranges: Vec<_> = regions
             .iter()
@@ -481,7 +508,10 @@ mod tests {
     fn must_create_region(c: &mut RegionCollector, region: &Region, role: StateRole) {
         assert!(c.regions.get(&region.get_id()).is_none());
 
-        c.handle_create_region(region.clone(), role);
+        c.handle_raftstore_event(RaftStoreEvent::CreateRegion {
+            region: region.clone(),
+            role,
+        });
 
         assert_eq!(&c.regions[&region.get_id()].region, region);
         assert_eq!(
@@ -496,7 +526,10 @@ mod tests {
             .get(&region.get_id())
             .map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_update_region(region.clone(), role);
+        c.handle_raftstore_event(RaftStoreEvent::UpdateRegion {
+            region: region.clone(),
+            role,
+        });
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.region, *region);
@@ -529,7 +562,7 @@ mod tests {
         let id = region.get_id();
         let end_key = c.regions.get(&id).map(|r| r.region.get_end_key().to_vec());
 
-        c.handle_destroy_region(region);
+        c.handle_raftstore_event(RaftStoreEvent::DestroyRegion { region });
 
         assert!(c.regions.get(&id).is_none());
         // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
@@ -544,11 +577,136 @@ mod tests {
     }
 
     fn must_change_role(c: &mut RegionCollector, region: &Region, role: StateRole) {
-        c.handle_role_change(region.clone(), role);
+        c.handle_raftstore_event(RaftStoreEvent::RoleChange {
+            region: region.clone(),
+            role,
+        });
 
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.role, role);
         }
+    }
+
+    #[test]
+    fn test_epoch_stale_check() {
+        let regions = &[
+            new_region_with_conf(1, b"", b"k1", 10, 10),
+            new_region_with_conf(2, b"k1", b"k2", 20, 10),
+            new_region_with_conf(3, b"k3", b"k4", 10, 20),
+            new_region_with_conf(4, b"k4", b"k5", 20, 20),
+            new_region_with_conf(5, b"k6", b"k7", 10, 20),
+            new_region_with_conf(6, b"k7", b"", 20, 10),
+        ];
+
+        let mut c = RegionCollector::new();
+        must_load_regions(&mut c, regions);
+
+        assert!(!c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 10, 10)));
+        assert!(!c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 12, 10)));
+        assert!(!c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 10, 12)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 8, 10)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 10, 8)));
+
+        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k3", b"k4", 12, 20)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(3, b"k3", b"k4", 8, 20)));
+
+        assert!(!c.is_region_info_stale(&new_region_with_conf(6, b"k7", b"", 20, 12)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(6, b"k7", b"", 20, 8)));
+
+        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"k7", b"", 15, 10)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"", b"", 19, 10)));
+
+        assert!(!c.is_region_info_stale(&new_region_with_conf(7, b"k2", b"k3", 1, 1)));
+
+        must_update_region(
+            &mut c,
+            &new_region_with_conf(1, b"", b"k1", 100, 100),
+            StateRole::Follower,
+        );
+        must_update_region(
+            &mut c,
+            &new_region_with_conf(6, b"k7", b"", 100, 100),
+            StateRole::Follower,
+        );
+        assert!(!c.is_region_info_stale(&new_region_with_conf(2, b"k1", b"k7", 30, 30)));
+        assert!(!c.is_region_info_stale(&new_region_with_conf(2, b"k11", b"k61", 30, 30)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(2, b"k0", b"k7", 30, 30)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(2, b"k1", b"k8", 30, 30)));
+
+        must_update_region(
+            &mut c,
+            &new_region_with_conf(2, b"k1", b"k2", 100, 100),
+            StateRole::Follower,
+        );
+        must_update_region(
+            &mut c,
+            &new_region_with_conf(5, b"k6", b"k7", 100, 100),
+            StateRole::Follower,
+        );
+        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k2", b"k6", 30, 30)));
+        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k21", b"k51", 30, 30)));
+        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k3", b"k5", 30, 30)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(3, b"k11", b"k6", 30, 30)));
+        assert!(c.is_region_info_stale(&new_region_with_conf(3, b"k2", b"k61", 30, 30)));
+    }
+
+    #[test]
+    fn test_clear_overlapped_regions() {
+        let init_regions = vec![
+            new_region(1, b"", b"k1", 1),
+            new_region(2, b"k1", b"k2", 1),
+            new_region(3, b"k3", b"k4", 1),
+            new_region(4, b"k4", b"k5", 1),
+            new_region(5, b"k6", b"k7", 1),
+            new_region(6, b"k7", b"", 1),
+        ];
+
+        let mut c = RegionCollector::new();
+        must_load_regions(&mut c, &init_regions);
+        let mut regions: Vec<_> = init_regions
+            .iter()
+            .map(|region| (region.clone(), StateRole::Follower))
+            .collect();
+
+        c.clear_overlapped_regions(&new_region(7, b"k2", b"k3", 2));
+        check_collection(&c, &regions);
+
+        c.clear_overlapped_regions(&new_region(7, b"k31", b"k32", 2));
+        // Remove region 3
+        regions.remove(2);
+        check_collection(&c, &regions);
+
+        c.clear_overlapped_regions(&new_region(7, b"k3", b"k5", 2));
+        // Remove region 4
+        regions.remove(2);
+        check_collection(&c, &regions);
+
+        c.clear_overlapped_regions(&new_region(7, b"k11", b"k61", 2));
+        // Remove region 2 and region 5
+        regions.remove(1);
+        regions.remove(1);
+        check_collection(&c, &regions);
+
+        c.clear_overlapped_regions(&new_region(7, b"", b"", 2));
+        // Remove all
+        check_collection(&c, &[]);
+
+        // Test that the region with the same id will be kept in the collection
+        c = RegionCollector::new();
+        must_load_regions(&mut c, &init_regions);
+
+        c.clear_overlapped_regions(&new_region(3, b"k1", b"k7", 2));
+        check_collection(
+            &c,
+            &[
+                (init_regions[0].clone(), StateRole::Follower),
+                (init_regions[2].clone(), StateRole::Follower),
+                (init_regions[5].clone(), StateRole::Follower),
+            ],
+        );
+
+        c.clear_overlapped_regions(&new_region(1, b"", b"", 2));
+        check_collection(&c, &[(init_regions[0].clone(), StateRole::Follower)]);
     }
 
     #[test]
