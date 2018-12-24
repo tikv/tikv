@@ -505,7 +505,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 /// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
 /// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
 /// to it, so that multiple versions can be saved at the same time.
-/// Raw operations uses raw keys, which are saved directly to the engine without memcomparable-
+/// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
 pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
@@ -1016,7 +1016,7 @@ impl<E: Engine> Storage<E> {
     /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
     ///
     /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
-    /// whose start_ts is 100 was committed with commit_ts be 101, and the transaction whose
+    /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
     /// start_ts is 102 was rolled back. If there are these keys in the db:
     ///
     /// * "k1", lock_ts = 100
@@ -1047,7 +1047,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    /// Does garbage collection, which means, cleans up old MVCC keys.
+    /// Does garbage collection, which means cleaning up old MVCC keys.
     /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
     /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
