@@ -572,6 +572,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    // Return None if the `msg` doesn't contain a snapshot or it contains a snapshot which doesn't
+    // conflict with any other snapshots or regions. Otherwise a `SnapKey` is returned.
     fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Option<SnapKey>> {
         if !msg.get_message().has_snapshot() {
             return Ok(None);
@@ -655,6 +657,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(None)
     }
 
+    /// For all raft groups with new appended raft logs, collect and send raft message for them.
+    /// And then update `RaftLocalState` and `SnapshotRaftState` (if need) into engines.
     pub fn on_raft_ready(&mut self) {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
