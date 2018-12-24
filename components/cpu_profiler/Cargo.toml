@@ -1,7 +1,0 @@
-[package]
-name = "cpu_profiler"
-version = "0.0.1"
-publish = false
-
-[target.'cfg(target_os = "linux")'.dependencies]
-cpuprofiler = "0.0.3"

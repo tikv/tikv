@@ -10,7 +10,7 @@ portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["jemallocator/profiling"]
 no-fail = ["fail/no_fail"]
-cpu-profiling = []
+profiling = ["profiler/profiling"]
 
 [lib]
 name = "tikv"
@@ -111,7 +111,7 @@ hyper = "0.12"
 tokio-threadpool = "0.1"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
-cpu_profiler = { path = "components/cpu_profiler" }
+profiler = { path = "components/profiler" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"

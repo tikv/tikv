@@ -12,16 +12,11 @@
 // limitations under the License.
 
 #[inline]
-pub fn start(_fname: impl Into<Vec<u8>>) {
+pub fn start(_name: impl AsRef<str>) {
     // Do nothing
 }
 
 #[inline]
 pub fn stop() {
     // Do nothing
-}
-
-#[inline]
-pub fn is_enabled() -> bool {
-    false
 }

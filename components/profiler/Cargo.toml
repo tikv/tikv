@@ -1,0 +1,13 @@
+[package]
+name = "profiler"
+version = "0.0.1"
+publish = false
+
+[features]
+profiling = []
+
+[dependencies]
+lazy_static = "1.2.0"
+cpuprofiler = "0.0.3"
+callgrind = "1.1.0"
+valgrind_request = "1.1.0"
