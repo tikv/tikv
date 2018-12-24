@@ -534,8 +534,8 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage ({} engine) referenced (reference count before operation: {})",
-            self.engine, refs
+            "Storage referenced (reference count before operation: {})",
+            refs
         );
 
         Self {
@@ -556,8 +556,8 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage ({} engine) de-referenced (reference count before operation: {})",
-            self.engine, refs
+            "Storage de-referenced (reference count before operation: {})",
+            refs
         );
 
         if refs != 1 {
@@ -581,7 +581,7 @@ impl<E: Engine> Drop for Storage<E> {
             error!("Failed to stop gc_worker: {:?}", e);
         }
 
-        info!("Storage ({} engine) stopped.", self.engine);
+        info!("Storage stopped.");
     }
 }
 
@@ -618,7 +618,7 @@ impl<E: Engine> Storage<E> {
         worker.lock().unwrap().start(runner)?;
         gc_worker.start()?;
 
-        info!("Storage ({} engine) started.", engine);
+        info!("Storage started.");
 
         Ok(Storage {
             engine,
