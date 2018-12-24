@@ -118,6 +118,8 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundWithFracInt
             | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::DateFormatSig
+            | ScalarFuncSig::AddDatetimeAndDuration
+            | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::WeekWithMode
@@ -293,7 +295,11 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::Substring3Args
-            | ScalarFuncSig::SubstringBinary3Args => (3, 3),
+            | ScalarFuncSig::SubstringBinary3Args
+            | ScalarFuncSig::Lpad
+            | ScalarFuncSig::LpadBinary
+            | ScalarFuncSig::Rpad
+            | ScalarFuncSig::RpadBinary => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -342,7 +348,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonInsertSig
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
 
-            ScalarFuncSig::PI => (0, 0),
+            ScalarFuncSig::AddTimeDateTimeNull | ScalarFuncSig::PI => (0, 0),
 
             // unimplement signature
             ScalarFuncSig::AddDateAndDuration
@@ -354,13 +360,10 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringDecimal
             | ScalarFuncSig::AddDateStringInt
             | ScalarFuncSig::AddDateStringString
-            | ScalarFuncSig::AddDatetimeAndDuration
-            | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
-            | ScalarFuncSig::AddTimeDateTimeNull
             | ScalarFuncSig::AddTimeDurationNull
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
@@ -414,8 +417,6 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary2Args
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
-            | ScalarFuncSig::Lpad
-            | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
@@ -438,8 +439,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
-            | ScalarFuncSig::Rpad
-            | ScalarFuncSig::RpadBinary
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
@@ -974,6 +973,10 @@ dispatch_call! {
         SubstringBinary2Args => substring_binary_2_args,
         SubstringBinary3Args => substring_binary_3_args,
         Space => space,
+        Lpad => lpad,
+        LpadBinary => lpad_binary,
+        Rpad => rpad,
+        RpadBinary => rpad_binary,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -986,6 +989,9 @@ dispatch_call! {
 
         Date => date,
         LastDay => last_day,
+        AddDatetimeAndDuration => add_datetime_and_duration,
+        AddDatetimeAndString => add_datetime_and_string,
+        AddTimeDateTimeNull => add_time_datetime_null,
 
         IfNullTime => if_null_time,
         IfTime => if_time,
@@ -1127,6 +1133,8 @@ mod tests {
                     ScalarFuncSig::BitOrSig,
                     ScalarFuncSig::BitXorSig,
                     ScalarFuncSig::DateFormatSig,
+                    ScalarFuncSig::AddDatetimeAndDuration,
+                    ScalarFuncSig::AddDatetimeAndString,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
@@ -1309,6 +1317,10 @@ mod tests {
                     ScalarFuncSig::SubstringIndex,
                     ScalarFuncSig::Substring3Args,
                     ScalarFuncSig::SubstringBinary3Args,
+                    ScalarFuncSig::Lpad,
+                    ScalarFuncSig::LpadBinary,
+                    ScalarFuncSig::Rpad,
+                    ScalarFuncSig::RpadBinary,
                 ],
                 3,
                 3,
@@ -1378,7 +1390,11 @@ mod tests {
                 3,
                 usize::MAX,
             ),
-            (vec![ScalarFuncSig::PI], 0, 0),
+            (
+                vec![ScalarFuncSig::AddTimeDateTimeNull, ScalarFuncSig::PI],
+                0,
+                0,
+            ),
         ];
         for (sigs, min, max) in cases {
             for sig in sigs {
@@ -1408,13 +1424,10 @@ mod tests {
             ScalarFuncSig::AddDateStringDecimal,
             ScalarFuncSig::AddDateStringInt,
             ScalarFuncSig::AddDateStringString,
-            ScalarFuncSig::AddDatetimeAndDuration,
-            ScalarFuncSig::AddDatetimeAndString,
             ScalarFuncSig::AddDurationAndDuration,
             ScalarFuncSig::AddDurationAndString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
-            ScalarFuncSig::AddTimeDateTimeNull,
             ScalarFuncSig::AddTimeDurationNull,
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
@@ -1468,8 +1481,6 @@ mod tests {
             ScalarFuncSig::LocateBinary2Args,
             ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
-            ScalarFuncSig::Lpad,
-            ScalarFuncSig::LpadBinary,
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
@@ -1492,8 +1503,6 @@ mod tests {
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
-            ScalarFuncSig::Rpad,
-            ScalarFuncSig::RpadBinary,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,

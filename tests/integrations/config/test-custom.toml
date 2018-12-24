@@ -22,6 +22,8 @@ stack-size = "12MB"
 [server]
 addr = "example.com:443"
 advertise-addr = "example.com:443"
+status-addr = "example.com:443"
+status-thread-pool-size = 1
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
