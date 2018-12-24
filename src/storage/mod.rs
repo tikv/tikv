@@ -97,8 +97,6 @@ impl Mutation {
 pub enum StorageCb {
     Boolean(Callback<()>),
     Booleans(Callback<Vec<Result<()>>>),
-    SingleValue(Callback<Option<Value>>),
-    KvPairs(Callback<Vec<Result<KvPair>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
