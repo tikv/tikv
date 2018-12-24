@@ -15,8 +15,8 @@ use callgrind::CallgrindClientRequest;
 use cpuprofiler;
 use valgrind_request;
 
-use std::sync::Mutex;
 use std::env;
+use std::sync::Mutex;
 
 #[derive(Debug, PartialEq)]
 enum Profiler {
@@ -51,7 +51,7 @@ pub fn start(name: impl AsRef<str>) {
         let var = env::var("TIKV_PROFILE").ok();
         match var {
             None => false,
-            Some(s) => s == "1"
+            Some(s) => s == "1",
         }
     };
 
@@ -63,7 +63,11 @@ pub fn start(name: impl AsRef<str>) {
             CallgrindClientRequest::start();
         } else {
             *profiler = Profiler::GPerfTools;
-            cpuprofiler::PROFILER.lock().unwrap().start(name.as_ref()).unwrap();
+            cpuprofiler::PROFILER
+                .lock()
+                .unwrap()
+                .start(name.as_ref())
+                .unwrap();
         }
     }
 }
@@ -76,11 +80,11 @@ pub fn start(name: impl AsRef<str>) {
 pub fn stop() {
     let mut profiler = ACTIVE_PROFILER.lock().unwrap();
     match *profiler {
-        Profiler::None => {},
+        Profiler::None => {}
         Profiler::CallGrind => {
             CallgrindClientRequest::stop(None);
             *profiler = Profiler::None;
-        },
+        }
         Profiler::GPerfTools => {
             cpuprofiler::PROFILER.lock().unwrap().stop().unwrap();
             *profiler = Profiler::None;

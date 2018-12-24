@@ -43,11 +43,7 @@ extern crate profiler;
 fn is_prime_number(v: usize, prime_numbers: &[usize]) -> bool {
     if v < 10000 {
         let r = prime_numbers.binary_search(&v);
-        if let Ok(_) = r {
-            return true;
-        } else {
-            return false;
-        }
+        return r.is_ok();
     }
 
     for n in prime_numbers {
@@ -56,7 +52,7 @@ fn is_prime_number(v: usize, prime_numbers: &[usize]) -> bool {
         }
     }
 
-    return true;
+    true
 }
 
 #[inline(never)]
