@@ -654,7 +654,11 @@ impl Snap {
                 }
             }
             let size = get_file_size(&cf_file.tmp_path)?;
-            if size > 0 {
+            // The size of a sst file is larger than 0 doesn't mean it contains some key value pairs.
+            // For example, if we provide a encrypted env to the SstFileWriter, RocksDB will append
+            // some meta data to the header. So here we should use the kv count instead of the file size
+            // to indicate if the sst file is empty.
+            if cf_file.kv_count > 0 {
                 fs::rename(&cf_file.tmp_path, &cf_file.path)?;
                 cf_file.size = size;
                 // add size
