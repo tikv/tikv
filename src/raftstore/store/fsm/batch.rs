@@ -232,7 +232,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 /// A handler that poll all FSM in ready.
 ///
 /// A General process works like following:
-/// ```
+/// ```text
 /// loop {
 ///     begin
 ///     if control is ready:
