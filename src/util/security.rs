@@ -150,7 +150,18 @@ impl SecurityManager {
 pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(path: P) -> Result<Arc<Env>, String> {
     let cipher_hex = match file::read_all(path) {
         Err(e) => return Err(format!("failed to load cipher file: {:?}", e)),
-        Ok(content) => content,
+        Ok(content) => {
+            // Trim head and tail space
+            match String::from_utf8(content) {
+                Err(e) => {
+                    return Err(format!(
+                        "failed to convert file content to string, error: {:?}",
+                        e
+                    ))
+                }
+                Ok(s) => s.trim().as_bytes().to_vec(),
+            }
+        }
     };
     let cipher_text = match hex::decode(cipher_hex) {
         Err(e) => return Err(format!("cipher file should be hex type, error: {:?}", e)),
