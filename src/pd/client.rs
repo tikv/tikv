@@ -72,7 +72,7 @@ impl RpcClient {
         CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
     }
 
-    /// Gets given key's region and leader from PD.
+    /// Gets given key's Region and Region's leader from PD.
     fn get_region_and_leader(&self, key: &[u8]) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
