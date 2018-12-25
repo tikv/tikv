@@ -18,13 +18,12 @@ use std::i64;
 
 use hex::{self, FromHex};
 
+use cop_datatype;
 use cop_datatype::prelude::*;
-use cop_datatype::{self, FieldTypeFlag};
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use safemem;
-use tipb::expression::FieldType;
 
 const SPACE: u8 = 0o40u8;
 
@@ -414,13 +413,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
-        let (count, is_positive) = i64_to_usize(
-            count,
-            self.children[2]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (count, is_positive) = i64_to_usize(count, self.children[2].is_unsigned());
 
         let r = if is_positive {
             substring_index_positive(&s, delim.as_ref(), count)
@@ -444,13 +437,7 @@ impl ScalarFunc {
 
         // we need to check the unsigned_flag , othewise a input larger than
         // i64::max_value() will overflow to a negative number
-        let (pos, positive_search) = i64_to_usize(
-            pos,
-            self.children[1]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (pos, positive_search) = i64_to_usize(pos, self.children[1].is_unsigned());
 
         let start = if positive_search {
             s.char_indices()
@@ -482,20 +469,8 @@ impl ScalarFunc {
         let pos = try_opt!(self.children[1].eval_int(ctx, row));
         let len = try_opt!(self.children[2].eval_int(ctx, row));
 
-        let (pos, positive_search) = i64_to_usize(
-            pos,
-            self.children[1]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
-        let (len, len_positive) = i64_to_usize(
-            len,
-            self.children[2]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (pos, positive_search) = i64_to_usize(pos, self.children[1].is_unsigned());
+        let (len, len_positive) = i64_to_usize(len, self.children[2].is_unsigned());
 
         if pos == 0 || len == 0 || !len_positive {
             return Ok(Some(Cow::Borrowed(b"")));
@@ -570,13 +545,7 @@ impl ScalarFunc {
         let pos = try_opt!(self.children[1].eval_int(ctx, row));
         let (len, len_positive) = if with_len {
             let len = try_opt!(self.children[2].eval_int(ctx, row));
-            i64_to_usize(
-                len,
-                self.children[2]
-                    .field_type()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED),
-            )
+            i64_to_usize(len, self.children[2].is_unsigned())
         } else {
             (s.len(), true)
         };
@@ -585,13 +554,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
-        let (pos, positive_search) = i64_to_usize(
-            pos,
-            self.children[1]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (pos, positive_search) = i64_to_usize(pos, self.children[1].is_unsigned());
 
         let start = if positive_search {
             (pos - 1).min(s.len())
@@ -610,10 +573,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let len = try_opt!(self.children[0].eval_int(ctx, row));
-        let unsigned = self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let unsigned = self.children[0].is_unsigned();
         let len = if unsigned {
             len as u64 as usize
         } else if len <= 0 {
@@ -653,7 +613,7 @@ impl ScalarFunc {
         let input_len = input.chars().count();
 
         match validate_target_len_for_pad(
-            self.children[1].field_type(),
+            self.children[1].is_unsigned(),
             target_len,
             input_len,
             4,
@@ -683,7 +643,7 @@ impl ScalarFunc {
         let pad = try_opt!(self.children[2].eval_string(ctx, row));
 
         match validate_target_len_for_pad(
-            self.children[1].field_type(),
+            self.children[1].is_unsigned(),
             target_len,
             input.len(),
             1,
@@ -715,7 +675,7 @@ impl ScalarFunc {
         let input_len = input.chars().count();
 
         match validate_target_len_for_pad(
-            self.children[1].field_type(),
+            self.children[1].is_unsigned(),
             target_len,
             input_len,
             4,
@@ -749,7 +709,7 @@ impl ScalarFunc {
         let pad = try_opt!(self.children[2].eval_string(ctx, row));
 
         match validate_target_len_for_pad(
-            self.children[1].field_type(),
+            self.children[1].is_unsigned(),
             target_len,
             input.len(),
             1,
@@ -782,7 +742,7 @@ impl ScalarFunc {
 // otherwise return Some(target_len)
 #[inline]
 fn validate_target_len_for_pad(
-    ft: &FieldType,
+    len_unsigned: bool,
     target_len: i64,
     input_len: usize,
     size_of_type: usize,
@@ -791,7 +751,6 @@ fn validate_target_len_for_pad(
     if target_len == 0 {
         return Some(0);
     }
-    let len_unsigned = ft.flag().contains(FieldTypeFlag::UNSIGNED);
     let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
     if !target_len_positive
         || target_len.saturating_mul(size_of_type) > cop_datatype::MAX_BLOB_WIDTH as usize
@@ -2385,8 +2344,6 @@ mod tests {
 
     #[test]
     fn test_validate_target_len_for_pad() {
-        use cop_datatype::FieldTypeAccessor;
-        use tipb::expression::FieldType;
         let cases = vec![
             // target_len, input_len, size_of_type, pad_empty, result
             (0, 10, 1, false, Some(0)),
@@ -2397,8 +2354,7 @@ mod tests {
             (12, 10, 1, false, Some(12)),
         ];
         for case in cases {
-            let ft = FieldType::default();
-            let got = super::validate_target_len_for_pad(&ft, case.0, case.1, case.2, case.3);
+            let got = super::validate_target_len_for_pad(false, case.0, case.1, case.2, case.3);
             assert_eq!(got, case.4);
         }
 
@@ -2410,10 +2366,8 @@ mod tests {
             (12u64, 10, 4, false, Some(12)),
         ];
         for case in unsigned_cases {
-            let mut ft = FieldType::default();
-            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
             let got =
-                super::validate_target_len_for_pad(&ft, case.0 as i64, case.1, case.2, case.3);
+                super::validate_target_len_for_pad(true, case.0 as i64, case.1, case.2, case.3);
             assert_eq!(got, case.4);
         }
     }
