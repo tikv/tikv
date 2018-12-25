@@ -30,7 +30,7 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```ignore
 //! profiler::start("./app.profile");
 //! some_complex_code();
 //! profiler::stop();
