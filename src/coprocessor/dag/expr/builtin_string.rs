@@ -732,6 +732,40 @@ impl ScalarFunc {
             }
         }
     }
+
+    #[inline]
+    pub fn left_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let length = try_opt!(self.children[1].eval_int(ctx, row));
+        let (length, length_positive) = i64_to_usize(length, self.children[1].is_unsigned());
+        if length_positive {
+            let end = length.min(input.len());
+            Ok(Some(Cow::Owned(input[..end].to_vec())))
+        } else {
+            Ok(Some(Cow::Borrowed(b"")))
+        }
+    }
+
+    #[inline]
+    pub fn right_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let length = try_opt!(self.children[1].eval_int(ctx, row));
+        let (length, length_positive) = i64_to_usize(length, self.children[1].is_unsigned());
+        if length_positive {
+            let start = input.len().saturating_sub(length);
+            Ok(Some(Cow::Owned(input[start..].to_vec())))
+        } else {
+            Ok(Some(Cow::Borrowed(b"")))
+        }
+    }
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -2648,6 +2682,98 @@ mod tests {
 
         for (s, len, pad, exp) in cases {
             let got = eval_func(ScalarFuncSig::LpadBinary, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_left_binary() {
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(6),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::U64(u64::max_value()),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"\x61".to_vec()),
+            ),
+        ];
+
+        for (input, length, exp) in cases {
+            let got = eval_func(ScalarFuncSig::LeftBinary, &[input, length]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_right_binary() {
+        let cases = vec![
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"o".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(6),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::U64(u64::max_value()),
+                Datum::Bytes(b"hello".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"\x5e".to_vec()),
+            ),
+        ];
+
+        for (input, length, exp) in cases {
+            let got = eval_func(ScalarFuncSig::RightBinary, &[input, length]).unwrap();
             assert_eq!(got, exp);
         }
     }
