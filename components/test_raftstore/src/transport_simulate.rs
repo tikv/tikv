@@ -571,14 +571,17 @@ pub struct LeadingDuplicatedSnapshotFilter {
     dropped: AtomicBool,
     stale: Arc<AtomicBool>,
     last_msg: Mutex<Option<RaftMessage>>,
+    // whether the two different snapshots will send together
+    together: bool,
 }
 
 impl LeadingDuplicatedSnapshotFilter {
-    pub fn new(stale: Arc<AtomicBool>) -> LeadingDuplicatedSnapshotFilter {
+    pub fn new(stale: Arc<AtomicBool>, together: bool) -> LeadingDuplicatedSnapshotFilter {
         LeadingDuplicatedSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale,
             last_msg: Mutex::new(None),
+            together,
         }
     }
 }
@@ -600,7 +603,11 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
                     if msg.get_message().get_msg_type() == MessageType::MsgSnapshot && !stale {
                         if last_msg.as_ref().map_or(false, |l| l != &msg) {
                             to_send.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
-                            *last_msg = Some(msg);
+                            if self.together {
+                                to_send.push(StoreMsg::RaftMessage(msg));
+                            } else {
+                                *last_msg = Some(msg);
+                            }
                             stale = true;
                         } else {
                             self.dropped.store(true, Ordering::Relaxed);
