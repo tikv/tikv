@@ -27,7 +27,7 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
     path.exists() && path.is_file()
 }
 
-/// Delete given path from file system. Return `true` on success, `false` if the file doesn't exist.
+/// Deletes given path from file system. Return `true` on success, `false` if the file doesn't exist.
 /// Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     match fs::remove_file(&file) {
@@ -37,7 +37,7 @@ pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     }
 }
 
-/// Delete given path from file system. Return `true` on success, `false` if the directory doesn't
+/// Deletes given path from file system. Return `true` on success, `false` if the directory doesn't
 /// exist. Otherwise the raw error will be returned.
 pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::remove_dir_all(&dir) {
@@ -47,7 +47,7 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Create a new, empty directory at the provided path. Return `true` on success,
+/// Creates a new, empty directory at the provided path. Return `true` on success,
 /// `false` if the directory already exists. Otherwise the raw error will be returned.
 pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::create_dir(&dir) {
@@ -57,7 +57,7 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Copy the source file to a newly created file.
+/// Copies the source file to a newly created file.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     if !from.as_ref().is_file() {
         return Err(io::Error::new(
@@ -76,7 +76,7 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
-/// Calculate the given file's CRC32 checksum.
+/// Calculates the given file's CRC32 checksum.
 pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
     let mut digest = Digest::new(crc32::IEEE);
     let mut f = OpenOptions::new().read(true).open(path)?;

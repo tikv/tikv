@@ -19,7 +19,7 @@ use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
 
-/// monitor current process's threads.
+/// Monitors current process's threads.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = ThreadsCollector::new(pid, namespace);
@@ -156,7 +156,7 @@ impl Collector for ThreadsCollector {
     }
 }
 
-/// Get thread ids of the given process id.
+/// Gets thread ids of the given process id.
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     let mut tids = Vec::new();
     let dirs = fs::read_dir(format!("/proc/{}/task", pid))?;
@@ -188,7 +188,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     Ok(tids)
 }
 
-/// Get thread name and the index of the last character(including ')').
+/// Gets thread name and the index of the last character(including ')').
 fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     let start = stat.find('(');
     let end = stat.rfind(')');
@@ -202,7 +202,7 @@ fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     )))
 }
 
-/// Sanitize thread name. Keep `a-zA-Z0-9_:`, replace `-` and ` ` with `_`, drop the others.
+/// Sanitizes thread name. Keep `a-zA-Z0-9_:`, replace `-` and ` ` with `_`, drop the others.
 ///
 /// Examples:
 ///
@@ -247,10 +247,10 @@ pub struct Stat {
 }
 
 impl Stat {
-    /// See more man proc.
-    /// Index of utime and stime.
+    /// See more `man proc`.
+    /// Index of `utime` and `stime`.
     const CPU_INDEX: [usize; 2] = [14 - 1, 15 - 1];
-    /// Index of state.
+    /// Index of `state`.
     const PROCESS_STATE_INDEX: usize = 3 - 1;
 
     pub fn collect(pid: pid_t, tid: pid_t) -> Result<Stat> {
@@ -296,7 +296,7 @@ fn get_thread_stat_internal(stat: &str) -> Result<Stat> {
     })
 }
 
-// I/O statistics for threads.
+/// I/O statistics for threads.
 struct Io {
     // Attempt to count the number of bytes which this process really did cause
     // to be fetched from the storage layer.  This is accurate for block-backed

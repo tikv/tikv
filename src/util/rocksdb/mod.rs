@@ -102,8 +102,8 @@ pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Res
     new_engine_opt(path, db_opts, cf_opts)
 }
 
-// Turn "dynamic level size" off for existing column family which was off before.
-// column families are small, HashMap isn't necessary
+/// Turn "dynamic level size" off for existing column family which was off before.
+/// column families are small, HashMap isn't necessary
 fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: &mut CFOptions) {
     if let Some(ref cf_desc) = cf_descs
         .iter()
@@ -135,7 +135,7 @@ fn check_and_open(
     mut db_opt: DBOptions,
     cfs_opts: Vec<CFOptions>,
 ) -> Result<DB, String> {
-    // If db not exist, create it.
+    // Creates a new db if it doesn't exist.
     if !db_exist(path) {
         db_opt.create_if_missing(true);
 
@@ -158,7 +158,7 @@ fn check_and_open(
 
     db_opt.create_if_missing(false);
 
-    // List all column families in current db.
+    // Lists all column families in current db.
     let cfs_list = DB::list_column_families(&db_opt, path)?;
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
@@ -173,7 +173,7 @@ fn check_and_open(
         vec![]
     };
 
-    // If all column families are exist, just open db.
+    // If all column families exist, just open db.
     if existed == needed {
         let mut cfs_v = vec![];
         let mut cfs_opts_v = vec![];
@@ -186,7 +186,7 @@ fn check_and_open(
         return DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect());
     }
 
-    // Open db.
+    // Opens db.
     let mut cfs_v: Vec<&str> = Vec::new();
     let mut cfs_opts_v: Vec<ColumnFamilyOptions> = Vec::new();
     for cf in &existed {
@@ -205,7 +205,7 @@ fn check_and_open(
     let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
     let mut db = DB::open_cf(db_opt, path, cfds).unwrap();
 
-    // Drop discarded column families.
+    // Drops discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
     for cf in cfs_diff(&existed, &needed) {
         // Never drop default column families.
@@ -214,7 +214,7 @@ fn check_and_open(
         }
     }
 
-    // Create needed column families not existed yet.
+    // Creates needed column families if they don't exist.
     for cf in cfs_diff(&needed, &existed) {
         db.create_cf((
             cf,
@@ -240,12 +240,12 @@ pub fn db_exist(path: &str) -> bool {
     }
 
     // If path is not an empty directory, we say db exists. If path is not an empty directory
-    // but db has not been created, DB::list_column_families will failed and we can cleanup
+    // but db has not been created, `DB::list_column_families` fails and we can cleanup
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
-/// Get total used size of rocksdb engine, including:
+/// Gets total used size of rocksdb engine, including:
 /// *  total size (bytes) of all SST files.
 /// *  total size (bytes) of active and unflushed immutable memtables.
 ///
@@ -268,7 +268,7 @@ pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     used_size
 }
 
-/// Get engine's compression ratio at given level.
+/// Gets engine's compression ratio at given level.
 pub fn get_engine_compression_ratio_at_level(
     engine: &DB,
     handle: &CFHandle,
@@ -286,13 +286,13 @@ pub fn get_engine_compression_ratio_at_level(
     None
 }
 
-/// Get the number of files at given level of given column family.
+/// Gets the number of files at given level of given column family.
 pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
     engine.get_property_int_cf(handle, &prop)
 }
 
-/// Check whether any column family sets `disable_auto_compactions` to `True` or not.
+/// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
 pub fn auto_compactions_is_disabled(engine: &DB) -> bool {
     for cf_name in engine.cf_names() {
         let cf = engine.cf_handle(cf_name).unwrap();
@@ -369,7 +369,7 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
-/// Roughly delete files in multiple ranges.
+/// Roughly deletes files in multiple ranges.
 ///
 /// Note:
 ///    - After this operation, some keys in the range might still exist in the database.
@@ -399,7 +399,7 @@ pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<
     Ok(())
 }
 
-/// Compact the cf in the specified range by manual or not.
+/// Compacts the cf in the specified range by manual or not.
 pub fn compact_range(
     db: &DB,
     handle: &CFHandle,
@@ -416,9 +416,9 @@ pub fn compact_range(
     db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
 }
 
-/// Compact files in the range and above the output level.
-/// Compact all files if the range is not specified.
-/// Compact all files to the bottommost level if the output level is not specified.
+/// Compacts files in the range and above the output level.
+/// Compacts all files if the range is not specified.
+/// Compacts all files to the bottommost level if the output level is not specified.
 pub fn compact_files_in_range(
     db: &DB,
     start: Option<&[u8]>,
@@ -431,8 +431,8 @@ pub fn compact_files_in_range(
     Ok(())
 }
 
-/// Compact files in the range and above the output level of the given column family.
-/// Compact all files to the bottommost level if the output level is not specified.
+/// Compacts files in the range and above the output level of the given column family.
+/// Compacts all files to the bottommost level if the output level is not specified.
 pub fn compact_files_in_range_cf(
     db: &DB,
     cf_name: &str,
@@ -481,7 +481,7 @@ pub fn compact_files_in_range_cf(
     Ok(())
 }
 
-/// Prepare the SST file for ingestion.
+/// Prepares the SST file for ingestion.
 /// The purpose is to make the ingestion retryable when using the `move_files` option.
 /// Things we need to consider here:
 /// 1. We need to access the original file on retry, so we should make a clone

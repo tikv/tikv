@@ -23,7 +23,7 @@ const ENC_MARKER: u8 = b'\xff';
 const ENC_ASC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 const ENC_DESC_PADDING: [u8; ENC_GROUP_SIZE] = [!0; ENC_GROUP_SIZE];
 
-// returns the maximum encoded bytes size.
+/// Returns the maximum encoded bytes size.
 pub fn max_encoded_bytes_size(n: usize) -> usize {
     (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1)
 }
@@ -62,7 +62,7 @@ pub trait BytesEncoder: NumberEncoder {
         Ok(())
     }
 
-    /// `encode_compact_bytes` joins bytes with its length into a byte slice. It is more
+    /// Joins bytes with its length into a byte slice. It is more
     /// efficient in both space and time compare to `encode_bytes`. Note that the encoded
     /// result is not memcomparable.
     fn encode_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
@@ -101,7 +101,7 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     encoded
 }
 
-/// Get the first compactly encoded bytes's length in encoded.
+/// Gets the first compactly encoded bytes's length in encoded.
 ///
 /// Please note that, this function won't check the whether the bytes
 /// is encoded correctly.
@@ -119,7 +119,7 @@ pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
 }
 
 pub trait CompactBytesFromFileDecoder: BufRead {
-    /// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
+    /// Decodes bytes which is encoded by `encode_compact_bytes` before.
     fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
         let mut var_data = Vec::with_capacity(number::MAX_VAR_I64_LEN);
         while var_data.len() < number::MAX_VAR_U64_LEN {
@@ -138,7 +138,7 @@ pub trait CompactBytesFromFileDecoder: BufRead {
 
 impl<T: BufRead> CompactBytesFromFileDecoder for T {}
 
-/// Get the first encoded bytes's length in encoded.
+/// Gets the first encoded bytes's length in encoded.
 ///
 /// Please note that, this function won't check the whether the bytes
 /// is encoded correctly.
@@ -156,7 +156,7 @@ pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
     }
 }
 
-/// `decode_compact_bytes` decodes bytes which is encoded by `encode_compact_bytes` before.
+/// Decodes bytes which is encoded by `encode_compact_bytes` before.
 pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
     let vn = number::decode_var_i64(data)? as usize;
     if data.len() >= vn {
@@ -167,7 +167,7 @@ pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
     Err(Error::unexpected_eof())
 }
 
-/// `decode_bytes` decodes bytes which is encoded by `encode_bytes` before.
+/// Decodes bytes which is encoded by `encode_bytes` before.
 ///
 /// Please note that, data is a mut reference to slice. After calling this the
 /// slice that data point to would change.
@@ -219,7 +219,7 @@ pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
     }
 }
 
-/// `decode_bytes_in_place` decodes bytes which is encoded by `encode_bytes` before just in place without malloc.
+/// Decodes bytes which is encoded by `encode_bytes` before just in place without malloc.
 /// Please use this instead of `decode_bytes` if possible.
 pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     let mut write_offset = 0;

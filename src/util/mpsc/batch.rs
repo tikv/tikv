@@ -163,7 +163,7 @@ impl<T> Receiver<T> {
     }
 }
 
-/// Create a unbounded channel with a given `notify_size`, which means if there are more pending
+/// Creates a unbounded channel with a given `notify_size`, which means if there are more pending
 /// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
 ///
 /// # Panics
@@ -182,7 +182,7 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     )
 }
 
-/// Create a bounded channel with a given `notify_size`, which means if there are more pending
+/// Creates a bounded channel with a given `notify_size`, which means if there are more pending
 /// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
 ///
 /// # Panics
@@ -229,7 +229,7 @@ pub struct BatchReceiver<T, E, I: Fn() -> E, C: Fn(&mut E, T)> {
 }
 
 impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> BatchReceiver<T, E, I, C> {
-    /// Create a new `BatchReceiver` with given `initializer` and `collector`. `initializer` is
+    /// Creates a new `BatchReceiver` with given `initializer` and `collector`. `initializer` is
     /// used to generate a initial value, and `collector` will collect every (at most
     /// `max_batch_size`) raw items into the batched value.
     pub fn new(rx: Receiver<T>, max_batch_size: usize, initializer: I, collector: C) -> Self {

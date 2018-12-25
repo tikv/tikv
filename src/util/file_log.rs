@@ -16,12 +16,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// Add `Duration` to the initial date and time.
+/// Adds `Duration` to the initial date and time.
 fn compute_rotation_time(initial: &DateTime<Utc>, timespan: Duration) -> DateTime<Utc> {
     *initial + timespan
 }
 
-/// Rotate file path with given timestamp.
+/// Rotates file path with given timestamp.
 fn rotation_file_path_with_timestamp(
     file_path: impl AsRef<Path>,
     timestamp: &DateTime<Utc>,
@@ -38,7 +38,7 @@ fn rotation_file_path_with_timestamp(
     ))
 }
 
-/// Open log file with append mode. Create a new log file if it doesn't exist.
+/// Opens log file with append mode. Create a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
     let parent = path
@@ -75,7 +75,7 @@ impl RotatingFileLogger {
         })
     }
 
-    /// Open log file with append mode. Create a new file if it doesn't exist.
+    /// Opens log file with append mode. Create a new file if it doesn't exist.
     fn open(&mut self) -> io::Result<()> {
         self.file = open_log_file(&self.file_path)?;
         Ok(())
@@ -85,7 +85,7 @@ impl RotatingFileLogger {
         Utc::now() > self.next_rotation_time
     }
 
-    /// Rotate the current file and update next rotation time.
+    /// Rotates the current file and update next rotation time.
     fn rotate(&mut self) -> io::Result<()> {
         self.close()?;
         let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
@@ -94,13 +94,13 @@ impl RotatingFileLogger {
         self.open()
     }
 
-    /// Update the next rotation time.
+    /// Updates the next rotation time.
     fn update_rotation_time(&mut self) {
         let now = Utc::now();
         self.next_rotation_time = compute_rotation_time(&now, self.rotation_timespan);
     }
 
-    /// Close log file.
+    /// Closes log file.
     fn close(&mut self) -> io::Result<()> {
         self.file.flush()
     }
