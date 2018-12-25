@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
 use tikv::pd::PdClient;
@@ -262,6 +263,83 @@ fn test_node_check_merged_message() {
     must_get_equal(&engine3, b"k4", b"v4");
     must_get_none(&engine3, b"k3");
     must_get_none(&engine3, b"v5");
+}
+
+#[test]
+fn test_node_merge_slow_split_right() {
+    test_node_merge_slow_split(true);
+}
+
+#[test]
+fn test_node_merge_slow_split_left() {
+    test_node_merge_slow_split(false);
+}
+
+// Test if a merge handled properly when there is a unfinishing slow split before merge.
+fn test_node_merge_slow_split(is_right_derive: bool) {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.cfg.raft_store.right_derive_when_split = is_right_derive;
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    let target_leader = right
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 1)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(right.get_id(), target_leader);
+    let target_leader = left
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == 2)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(left.get_id(), target_leader);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+
+    // So cluster becomes:
+    //  left region: 1         2(leader) I 3
+    // right region: 1(leader) 2         I 3
+    // I means isolation.(here just means 3 can not receive append log)
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(right.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.must_split(&right, b"k3");
+
+    // left region and right region on store 3 fall behind
+    // so after split, the new generated region is not on store 3 now
+    let right1 = pd_client.get_region(b"k2").unwrap();
+    let right2 = pd_client.get_region(b"k3").unwrap();
+    assert_ne!(right1.get_id(), right2.get_id());
+    pd_client.must_merge(left.get_id(), right1.get_id());
+    // after merge, the left region still exists on store 3
+
+    cluster.must_put(b"k0", b"v0");
+    cluster.clear_send_filters();
+    // once store 3 is not isolated anymore
+    // the message from other peer of new generated region may update `pending_cross_snap` epoch improperly,
+    // and left region will get a message with merge target then check `pengding_cross_snap` and may destory itself.
+    // And now, the right1 region has catched up logs and to merge already destroyed left region which causes a panic.
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 }
 
 /// Test various cases that a store is isolated during merge.

@@ -60,7 +60,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let stale = Arc::new(AtomicBool::new(false));
     cluster.sim.wl().add_recv_filter(
         3,
-        box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale)),
+        box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale), false),
     );
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
