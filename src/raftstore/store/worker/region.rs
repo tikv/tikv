@@ -36,7 +36,7 @@ use raftstore::store::{
 use storage::CF_RAFT;
 use util::rocksdb::get_cf_num_files_at_level;
 use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use util::time;
+use util::time::{self, SlowTimer};
 use util::timer::Timer;
 use util::worker::{Runnable, RunnableWithTimer};
 use util::{escape, rocksdb};
@@ -265,6 +265,9 @@ impl SnapContext {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
+
+        let t = SlowTimer::from(Duration::from_millis(100));
+
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
             match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
@@ -276,6 +279,7 @@ impl SnapContext {
                     ))
                 }
             };
+        slow_log!(t, "[sysbench] region {} get local state", region_id);
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -290,6 +294,7 @@ impl SnapContext {
             self.use_delete_range
         ));
         check_abort(&abort)?;
+        slow_log!(t, "[sysbench] region {} delete range", region_id);
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
@@ -302,6 +307,8 @@ impl SnapContext {
                     ))
                 }
             };
+        slow_log!(t, "[sysbench] region {} get apply state", region_id);
+
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -309,11 +316,15 @@ impl SnapContext {
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
+        slow_log!(t, "[sysbench] region {} register", region_id);
+
         let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
         check_abort(&abort)?;
+        slow_log!(t, "[sysbench] region {} get snapshot", region_id);
+
         let timer = Instant::now();
         let options = ApplyOptions {
             db: Arc::clone(&self.engines.kv),
@@ -322,6 +333,7 @@ impl SnapContext {
             write_batch_size: self.batch_size,
         };
         s.apply(options)?;
+        slow_log!(t, "[sysbench] region {} apply snapshot", region_id);
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
@@ -331,6 +343,7 @@ impl SnapContext {
         self.engines.kv.write(wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
+        slow_log!(t, "[sysbench] region {} write raft state", region_id);
         info!(
             "[region {}] apply new data takes {:?}",
             region_id,
