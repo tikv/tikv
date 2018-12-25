@@ -244,14 +244,3 @@ impl<T: Stream> Stream for Reusable<T> {
         t.poll().map_err(|_| GrpcError::RpcFinished(None))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use kvproto::tikvpb_grpc::Tikv;
-
-    use server::tests::MockKvService;
-
-    struct MockKvForBatchRaft;
-    impl Tikv for MockKvForBatchRaft {}
-    impl MockKvService for MockKvForBatchRaft {}
-}
