@@ -37,7 +37,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
         |(mutations, option)| {
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = MvccTxn::new(snapshot, 1, false).unwrap();
+                let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
                 txn.prewrite(mutation, &primary, option).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
@@ -53,7 +53,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
     b.iter_with_setup(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut txn = MvccTxn::new(snapshot, 1, false).unwrap();
+            let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
             let kvs = KvGenerator::new(config.key_length, config.value_length)
                 .generate(DEFAULT_ITERATIONS);
             for (k, v) in &kvs {
@@ -71,7 +71,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = MvccTxn::new(snapshot, 1, false).unwrap();
+                let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
                 txn.commit(key, 2).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
