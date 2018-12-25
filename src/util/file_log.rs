@@ -93,15 +93,14 @@ impl RotatingFileLogger {
 
     /// Flushes and closes log file, without rotation.
     fn close(&mut self) -> io::Result<()> {
-        if let Some(mut file) = self.file.take(){
-            return file.flush()
-        }
-        Ok(())
+        assert!(self.file.is_some());
+        self.file.take().unwrap().flush()
     }
 }
 
 impl Write for RotatingFileLogger {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        assert!(self.file.is_some());
         self.file.as_mut().unwrap().write(bytes)
     }
 
@@ -109,6 +108,7 @@ impl Write for RotatingFileLogger {
         if self.should_rotate() {
             self.rotate()?;
         };
+        assert!(self.file.is_some());
         self.file.as_mut().unwrap().flush()
     }
 }
@@ -167,5 +167,28 @@ mod tests {
         let rotated_file = rotation_file_path_with_timestamp(&log_file, &now);
         assert!(file_exists(&rotated_file));
         assert!(!logger.should_rotate());
+    }
+
+    #[test]
+    fn test_close_file_logger() {
+        let tmp_dir = TempDir::new("").unwrap();
+        let log_file = tmp_dir
+            .path()
+            .join("test_close_file_logger.log")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let one_day = Duration::days(1);
+
+        let mut logger = RotatingFileLogger::new(&log_file, one_day).unwrap();
+        logger.write(b"write before close").unwrap();
+        logger.flush().unwrap();
+        logger.close().unwrap();
+        assert!(::panic_hook::recover_safe(|| logger.write(b"write after close")).is_err());
+        assert!(::panic_hook::recover_safe(|| logger.flush()).is_err());
+        assert!(::panic_hook::recover_safe(|| logger.close()).is_err());
+        // Reopens file, otherwise `close()` fails in assertion when `drop()`.
+        logger.open().unwrap();
+        drop(logger);
     }
 }
