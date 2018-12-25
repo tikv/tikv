@@ -11,19 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(unix)]
+#[cfg(all(unix, not(fuzzing)))]
 mod jemalloc {
+    use jemallocator::ffi::malloc_stats_print;
     use libc::{self, c_char, c_void};
     use std::{ptr, slice};
-
-    extern "C" {
-        #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
-        fn malloc_stats_print(
-            write_cb: extern "C" fn(*mut c_void, *const c_char),
-            cbopaque: *mut c_void,
-            opts: *const c_char,
-        );
-    }
 
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         unsafe {
@@ -56,10 +48,8 @@ mod jemalloc {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(all(unix, not(fuzzing))))]
 mod jemalloc {
-    use tikv::raftstore::store::Engines;
-
     pub fn dump_stats() -> String {
         String::default()
     }

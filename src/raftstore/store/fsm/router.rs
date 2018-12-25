@@ -520,7 +520,9 @@ mod tests {
         }
 
         fn shutdown(&self) {
-            self.sender.send(None).unwrap();
+            // Note that CounterScheduler is used as both normal scheduler
+            // and control scheduler, so this method can be called twice.
+            let _ = self.sender.send(None);
         }
     }
 
