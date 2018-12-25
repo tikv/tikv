@@ -13,22 +13,24 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::Bound::Excluded;
 use std::iter::FromIterator;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
 use protobuf::{self, Message, RepeatedField};
 
 use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use rocksdb::{
-    CompactOptions, DBBottommostLevelCompaction, Kv, SeekKey, Writable, WriteBatch, WriteOptions,
-    DB,
+    CompactOptions, DBBottommostLevelCompaction, Kv, Range, SeekKey, Writable, WriteBatch,
+    WriteOptions, DB,
 };
 
 use raft::{self, RawNode};
@@ -48,6 +50,7 @@ use util::config::ReadableSize;
 use util::escape;
 use util::properties::MvccProperties;
 use util::rocksdb::get_cf_handle;
+use util::rocksdb::properties::RangeProperties;
 use util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -322,13 +325,23 @@ impl Debugger {
         Ok(errors)
     }
 
-    pub fn recover_regions(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
+    pub fn recover_regions(
+        &self,
+        regions: Vec<Region>,
+        read_only: bool,
+    ) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv;
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = self.recover_region(db, region) {
+            if let Err(e) = recover_mvcc_for_range(
+                db,
+                region.get_start_key(),
+                region.get_end_key(),
+                read_only,
+                0,
+            ) {
                 errors.push((region_id, e));
             }
         }
@@ -336,28 +349,60 @@ impl Debugger {
         Ok(errors)
     }
 
-    fn recover_region(&self, db: &Arc<DB>, region: Region) -> Result<()> {
-        let wb = WriteBatch::new();
+    pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
+        let db = &self.engines.kv;
 
-        let mut mvcc_checker = box_try!(MvccChecker::new(
-            Arc::clone(db),
-            region.get_start_key(),
-            region.get_end_key()
-        ));
-        mvcc_checker.check_mvcc(&wb)?;
+        println!("Calculating split keys...");
+        let split_keys = divide_db(db, threads).unwrap().into_iter().map(|k| {
+            let k = Key::from_encoded(keys::origin_key(&k).to_vec())
+                .truncate_ts()
+                .unwrap();
+            k.as_encoded().clone()
+        });
 
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        box_try!(db.write_opt(wb, &write_opts));
+        let mut range_borders = vec![b"".to_vec()];
+        range_borders.extend(split_keys);
+        range_borders.push(b"".to_vec());
 
-        warn!(
-            "total fix default: {}, lock: {}, write: {}",
-            mvcc_checker.default_fix_count,
-            mvcc_checker.lock_fix_count,
-            mvcc_checker.write_fix_count
-        );
+        let mut handles = Vec::new();
 
-        Ok(())
+        for thread_index in 0..range_borders.len() - 1 {
+            let db = Arc::clone(db);
+            let start_key = range_borders[thread_index].clone();
+            let end_key = range_borders[thread_index + 1].clone();
+
+            let thread = ThreadBuilder::new()
+                .name(format!("mvcc-recover-thread-{}", thread_index))
+                .spawn(move || {
+                    println!(
+                        "thread {}: started on range [\"{}\", \"{}\")",
+                        thread_index,
+                        escape(&start_key),
+                        escape(&end_key)
+                    );
+
+                    recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
+                })
+                .unwrap();
+
+            handles.push(thread);
+        }
+
+        let res = handles
+            .into_iter()
+            .map(|h: JoinHandle<Result<()>>| h.join())
+            .map(|r| {
+                if let Err(e) = &r {
+                    eprintln!("{:?}", e);
+                }
+                r
+            })
+            .all(|r| r.is_ok());
+        if res {
+            Ok(())
+        } else {
+            Err(box_err!("Not all threads finished successfully."))
+        }
     }
 
     pub fn bad_regions(&self) -> Result<Vec<(u64, Error)>> {
@@ -699,14 +744,57 @@ impl Debugger {
     }
 }
 
+fn recover_mvcc_for_range(
+    db: &Arc<DB>,
+    start_key: &[u8],
+    end_key: &[u8],
+    read_only: bool,
+    thread_index: usize,
+) -> Result<()> {
+    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(&db), start_key, end_key));
+    mvcc_checker.thread_index = thread_index;
+
+    let wb_limit: usize = 10240;
+
+    loop {
+        let wb = WriteBatch::new();
+        mvcc_checker.check_mvcc(&wb, Some(wb_limit))?;
+
+        let batch_size = wb.count();
+
+        if !read_only {
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            box_try!(db.write_opt(wb, &write_opts));
+        } else {
+            println!("thread {}: skip write {} rows", thread_index, batch_size);
+        }
+
+        println!(
+            "thread {}: total fix default: {}, lock: {}, write: {}",
+            thread_index,
+            mvcc_checker.default_fix_count,
+            mvcc_checker.lock_fix_count,
+            mvcc_checker.write_fix_count
+        );
+
+        if batch_size < wb_limit {
+            println!("thread {} has finished working.", thread_index);
+            return Ok(());
+        }
+    }
+}
+
 pub struct MvccChecker {
     db: Arc<DB>,
     lock_iter: DBIterator,
     default_iter: DBIterator,
     write_iter: DBIterator,
+    scan_count: usize,
     lock_fix_count: usize,
     default_fix_count: usize,
     write_fix_count: usize,
+    pub thread_index: usize,
 }
 
 impl MvccChecker {
@@ -728,9 +816,11 @@ impl MvccChecker {
             write_iter: gen_iter(CF_WRITE)?,
             lock_iter: gen_iter(CF_LOCK)?,
             default_iter: gen_iter(CF_DEFAULT)?,
+            scan_count: 0,
             lock_fix_count: 0,
             default_fix_count: 0,
             write_fix_count: 0,
+            thread_index: 0,
         })
     }
 
@@ -752,7 +842,7 @@ impl MvccChecker {
         }
     }
 
-    pub fn check_mvcc(&mut self, wb: &WriteBatch) -> Result<()> {
+    pub fn check_mvcc(&mut self, wb: &WriteBatch, limit: Option<usize>) -> Result<()> {
         loop {
             // Find min key in the 3 CFs.
             let mut key = MvccChecker::min_key(None, &self.default_iter, |k| {
@@ -765,10 +855,24 @@ impl MvccChecker {
                 Some(key) => self.check_mvcc_key(wb, key.as_ref())?,
                 None => return Ok(()),
             }
+
+            if let Some(limit) = limit {
+                if wb.count() >= limit {
+                    return Ok(());
+                }
+            }
         }
     }
 
     fn check_mvcc_key(&mut self, wb: &WriteBatch, key: &[u8]) -> Result<()> {
+        self.scan_count += 1;
+        if self.scan_count % 1_000_000 == 0 {
+            println!(
+                "thread {}: scan {} rows",
+                self.thread_index, self.scan_count
+            );
+        }
+
         let (mut default, mut write, mut lock) = (None, None, None);
         let (mut next_default, mut next_write, mut next_lock) = (true, true, true);
         loop {
@@ -791,8 +895,9 @@ impl MvccChecker {
                 // All write records' ts should be less than lock's ts.
                 if let Some((commit_ts, _)) = write {
                     if l.ts <= commit_ts {
-                        warn!(
-                            "LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
+                        println!(
+                            "thread {}: LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
+                            self.thread_index,
                             escape(key),
                             l.ts,
                             commit_ts
@@ -812,8 +917,9 @@ impl MvccChecker {
                             next_default = true;
                         }
                         _ => {
-                            warn!(
-                                "no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
+                            println!(
+                                "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
+                                self.thread_index,
                                 escape(key),
                                 l.ts
                             );
@@ -851,8 +957,9 @@ impl MvccChecker {
             }
 
             if next_default {
-                warn!(
-                    "orphan DEFAULT record, key: {}, start_ts: {}",
+                println!(
+                    "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
+                    self.thread_index,
                     escape(key),
                     default.unwrap()
                 );
@@ -862,8 +969,9 @@ impl MvccChecker {
 
             if next_write {
                 if let Some((commit_ts, ref w)) = write {
-                    warn!(
-                        "no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
+                    println!(
+                        "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
+                        self.thread_index,
                         escape(key),
                         w.start_ts,
                         commit_ts
@@ -1163,6 +1271,83 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
         None
     ));
     Ok(())
+}
+
+fn divide_db(db: &DB, parts: usize) -> ::raftstore::Result<Vec<Vec<u8>>> {
+    let mut fake_region = Region::default();
+    fake_region.set_start_key(vec![]);
+    fake_region.set_end_key(vec![]);
+    fake_region.mut_peers().push(Peer::default());
+    let get_cf_size =
+        |cf: &str| raftstore_util::get_region_approximate_size_cf(db, cf, &fake_region);
+
+    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+    let cf = if default_cf_size >= write_cf_size {
+        CF_DEFAULT
+    } else {
+        CF_WRITE
+    };
+
+    divide_db_cf(db, parts, cf)
+}
+
+fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<u8>>> {
+    let cf = get_cf_handle(db, cf)?;
+    let start = keys::data_key(b"");
+    let end = keys::data_end_key(b"");
+    let range = Range::new(&start, &end);
+    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+
+    let mut keys = Vec::new();
+    let mut found_keys_count = 0;
+    for (_, v) in &*collection {
+        let props = RangeProperties::decode(v.user_collected_properties())?;
+        keys.extend(
+            props
+                .offsets
+                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .filter(|_| {
+                    found_keys_count += 1;
+                    found_keys_count % 100 == 0
+                })
+                .map(|(k, _)| k.to_owned()),
+        );
+    }
+
+    println!(
+        "({} points found, {} points selected for dividing)",
+        found_keys_count,
+        keys.len()
+    );
+
+    if keys.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // If there are too many keys, reduce its amount before sorting, or it may take too much
+    // time to sort the keys.
+    if keys.len() > 20000 {
+        let len = keys.len();
+        keys = keys.into_iter().step_by(len / 10000).collect();
+    }
+
+    keys.sort();
+    keys.dedup();
+
+    // If the keys are too few, return them directly.
+    if keys.len() < parts {
+        return Ok(keys);
+    }
+
+    // Find `parts - 1` keys which divides the whole range into `parts` parts evenly.
+    let mut res = Vec::with_capacity(parts - 1);
+    let section_len = (keys.len() as f64) / (parts as f64);
+    for i in 1..parts {
+        res.push(keys[(section_len * (i as f64)) as usize].clone())
+    }
+    Ok(res)
 }
 
 #[cfg(test)]
@@ -1849,7 +2034,7 @@ mod tests {
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
         let wb = WriteBatch::new();
-        checker.check_mvcc(&wb).unwrap();
+        checker.check_mvcc(&wb, None).unwrap();
         db.write(wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
