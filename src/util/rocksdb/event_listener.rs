@@ -12,12 +12,14 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::HashSet;
 
-use rocksdb::{self, CompactionJobInfo, FlushJobInfo, IngestionInfo};
+use rocksdb::{
+    self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
+};
+
+use util::collections::HashSet;
+use util::properties::RangeProperties;
 use util::rocksdb::engine_metrics::*;
-
-use super::properties::RangeProperties;
 
 pub struct EventListener {
     db_name: String,
@@ -31,11 +33,26 @@ impl EventListener {
     }
 }
 
+#[inline]
+fn tag_write_stall_condition(e: WriteStallCondition) -> &'static str {
+    match e {
+        WriteStallCondition::Normal => "normal",
+        WriteStallCondition::Delayed => "delayed",
+        WriteStallCondition::Stopped => "stopped",
+    }
+}
+
 impl rocksdb::EventListener for EventListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "flush"])
             .inc();
+        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
+            .with_label_values(&[&self.db_name, info.cf_name(), "triggered_writes_slowdown"])
+            .set(info.triggered_writes_slowdown() as i64);
+        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
+            .with_label_values(&[&self.db_name, info.cf_name(), "triggered_writes_stop"])
+            .set(info.triggered_writes_stop() as i64);
     }
 
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
@@ -48,12 +65,40 @@ impl rocksdb::EventListener for EventListener {
         STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC
             .with_label_values(&[&self.db_name, info.cf_name()])
             .inc_by(info.num_corrupt_keys() as i64);
+        STORE_ENGINE_COMPACTION_REASON_VEC
+            .with_label_values(&[
+                &self.db_name,
+                info.cf_name(),
+                &info.compaction_reason().to_string(),
+            ])
+            .inc();
     }
 
     fn on_external_file_ingested(&self, info: &IngestionInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "ingestion"])
             .inc();
+    }
+
+    fn on_stall_conditions_changed(&self, info: &WriteStallInfo) {
+        STORE_ENGINE_EVENT_COUNTER_VEC
+            .with_label_values(&[&self.db_name, info.cf_name(), "stall_conditions_changed"])
+            .inc();
+
+        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
+            .with_label_values(&[
+                &self.db_name,
+                info.cf_name(),
+                tag_write_stall_condition(info.cur()),
+            ])
+            .set(1);
+        STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC
+            .with_label_values(&[
+                &self.db_name,
+                info.cf_name(),
+                tag_write_stall_condition(info.prev()),
+            ])
+            .set(0);
     }
 }
 

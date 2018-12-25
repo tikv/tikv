@@ -19,7 +19,7 @@ use prometheus::{self, Encoder, TextEncoder};
 #[cfg(target_os = "linux")]
 mod threads_linux;
 #[cfg(target_os = "linux")]
-pub use self::threads_linux::monitor_threads;
+pub use self::threads_linux::{get_thread_ids, monitor_threads, Stat};
 
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
@@ -66,7 +66,7 @@ pub fn dump() -> String {
     let metric_familys = prometheus::gather();
     for mf in metric_familys {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-            warn!("ignore prometheus encoding error: {:?}", e);
+            warn!("prometheus encoding error: {:?}", e);
         }
     }
     String::from_utf8(buffer).unwrap()

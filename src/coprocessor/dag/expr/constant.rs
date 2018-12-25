@@ -125,10 +125,10 @@ impl Constant {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::datum_expr;
+    use coprocessor::dag::expr::tests::datum_expr;
     use coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
 
@@ -171,7 +171,7 @@ mod test {
 
         let mut ctx = EvalContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
-            let e = Expression::build(&mut ctx, case).unwrap();
+            let e = Expression::build(&ctx, case).unwrap();
 
             let i = e.eval_int(&mut ctx, &[]).unwrap_or(None);
             let r = e.eval_real(&mut ctx, &[]).unwrap_or(None);

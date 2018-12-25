@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use fxhash::FxHashMap as HashMap;
-pub use fxhash::FxHashSet as HashSet;
-pub use std::collections::hash_map::Entry as HashMapEntry;
+pub type HashMap<K, V> = ::hashbrown::HashMap<K, V, ::hashbrown::hash_map::DefaultHashBuilder>;
+pub type HashSet<T> = ::hashbrown::HashSet<T, ::hashbrown::hash_map::DefaultHashBuilder>;
+pub use hashbrown::hash_map::Entry as HashMapEntry;
 
 pub use indexmap::map::Entry as OrderMapEntry;
 pub use indexmap::IndexMap as OrderMap;

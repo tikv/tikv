@@ -33,7 +33,7 @@ fn order_decode_i64(u: u64) -> i64 {
 }
 
 fn order_encode_f64(v: f64) -> u64 {
-    let u: u64 = unsafe { mem::transmute(v) };
+    let u = v.to_bits();
     if v.is_sign_positive() {
         u | SIGN_MARK
     } else {
@@ -318,7 +318,7 @@ pub fn read_u8(data: &mut BytesSlice) -> Result<u8> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use util::codec::Error;
 

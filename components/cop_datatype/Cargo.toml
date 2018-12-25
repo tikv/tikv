@@ -1,0 +1,12 @@
+[package]
+name = "cop_datatype"
+version = "0.0.1"
+publish = false
+description = "TiKV Coprocessor data types"
+
+[dependencies]
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+bitflags = "1.0"
+enum-primitive-derive = "0.1"
+num-traits = "0.2"
+failure = "0.1"

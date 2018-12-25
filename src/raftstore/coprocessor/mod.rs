@@ -108,7 +108,7 @@ pub trait SplitChecker {
     fn split_keys(&mut self) -> Vec<Vec<u8>>;
 
     /// Get approximate split keys without scan.
-    fn approximate_split_keys(&self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
         Ok(vec![])
     }
 
@@ -134,4 +134,16 @@ pub trait RoleObserver: Coprocessor {
     /// situation that the hook is not called yet, however the role of some peers
     /// have changed.
     fn on_role_change(&self, _: &mut ObserverContext, _: StateRole) {}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RegionChangeEvent {
+    Create,
+    Update,
+    Destroy,
+}
+
+pub trait RegionChangeObserver: Coprocessor {
+    /// Hook to call when a region changed on this TiKV
+    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent) {}
 }

@@ -49,6 +49,7 @@ macro_rules! fatal {
     })
 }
 
+#[allow(dead_code)]
 pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
     let log_rotation_timespan = chrono::Duration::from_std(
         config.log_rotation_timespan.clone().into(),
@@ -79,6 +80,8 @@ pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
         let decorator = PlainDecorator::new(logger);
         let drain = logger::TikvFormat::new(decorator).fuse();
         let drain = Async::new(drain)
+            .chan_size(SLOG_CHANNEL_SIZE)
+            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("file-slogger"))
             .build()
             .fuse();
@@ -91,7 +94,11 @@ pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
     guard
 }
 
+#[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+    util::metrics::monitor_threads("tikv")
+        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
+
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
     }
@@ -102,13 +109,10 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     }
 
     info!("start prometheus client");
-
-    util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
-
     util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
+#[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
     if let Some(level) = matches.value_of("log-level") {
         config.log_level = logger::get_level_by_string(level).unwrap();
@@ -124,6 +128,10 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(advertise_addr) = matches.value_of("advertise-addr") {
         config.server.advertise_addr = advertise_addr.to_owned();
+    }
+
+    if let Some(status_addr) = matches.value_of("status-addr") {
+        config.server.status_addr = status_addr.to_owned();
     }
 
     if let Some(data_dir) = matches.value_of("data-dir") {
@@ -166,6 +174,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 }
 
 /// Check environment variables that affect TiKV.
+#[allow(dead_code)]
 pub fn check_environment_variables() {
     if cfg!(unix) && env::var("TZ").is_err() {
         env::set_var("TZ", ":/etc/localtime");

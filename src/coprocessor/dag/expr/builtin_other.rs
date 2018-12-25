@@ -36,11 +36,11 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::mysql::Decimal;
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
-    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
     use std::sync::Arc;
@@ -67,7 +67,7 @@ mod test {
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let op = scalar_func_expr(ScalarFuncSig::BitCount, args);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -101,7 +101,7 @@ mod test {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastStringAsInt, args);
             let op = scalar_func_expr(ScalarFuncSig::BitCount, &[child]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -133,7 +133,7 @@ mod test {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, args);
             let op = scalar_func_expr(ScalarFuncSig::BitCount, &[child]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

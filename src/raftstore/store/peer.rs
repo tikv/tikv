@@ -36,7 +36,7 @@ use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::worker::{
     apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
@@ -215,6 +215,32 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
+pub struct RecentAddedPeer {
+    pub reject_duration_as_secs: u64,
+    pub id: u64,
+    pub added_time: Instant,
+}
+
+impl RecentAddedPeer {
+    pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeer {
+        RecentAddedPeer {
+            reject_duration_as_secs,
+            id: Default::default(),
+            added_time: Instant::now(),
+        }
+    }
+
+    pub fn update(&mut self, id: u64, now: Instant) {
+        self.id = id;
+        self.added_time = now;
+    }
+
+    pub fn contains(&self, id: u64) -> bool {
+        self.id == id
+            && duration_to_sec(self.added_time.elapsed()) < self.reject_duration_as_secs as f64
+    }
+}
+
 pub struct Peer {
     engines: Engines,
     cfg: Rc<Config>,
@@ -231,6 +257,7 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
+    pub recent_added_peer: RecentAddedPeer,
 
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
@@ -379,6 +406,9 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
+            recent_added_peer: RecentAddedPeer::new(
+                cfg.raft_reject_transfer_leader_duration.as_secs(),
+            ),
             coprocessor_host: Arc::clone(&store.coprocessor_host),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -418,13 +448,18 @@ impl Peer {
         Ok(peer)
     }
 
-    pub fn register_delegates(&self) {
+    /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
+    /// Also trigger `RegionChangeEvent::Create` here.
+    pub fn activate(&self) {
         self.apply_scheduler
             .schedule(ApplyTask::register(self))
             .unwrap();
         self.read_scheduler
             .schedule(ReadTask::register(self))
             .unwrap();
+
+        self.coprocessor_host
+            .on_region_changed(self.region(), RegionChangeEvent::Create);
     }
 
     #[inline]
@@ -545,6 +580,11 @@ impl Peer {
         // Always update read delegate's region to avoid stale region info after a follower
         // becomeing a leader.
         self.maybe_update_read_progress(progress);
+
+        if !self.pending_remove {
+            self.coprocessor_host
+                .on_region_changed(self.region(), RegionChangeEvent::Update);
+        }
     }
 
     pub fn peer_id(&self) -> u64 {
@@ -998,7 +1038,7 @@ impl Peer {
         }
 
         if apply_snap_result.is_some() {
-            self.register_delegates();
+            self.activate();
         }
 
         apply_snap_result
@@ -1472,7 +1512,7 @@ impl Peer {
         self.raft_group.transfer_leader(peer.get_id());
     }
 
-    fn is_transfer_leader_allowed(&self, peer: &metapb::Peer) -> bool {
+    fn ready_to_transfer_leader(&self, peer: &metapb::Peer) -> bool {
         let peer_id = peer.get_id();
         let status = self.raft_group.status();
 
@@ -1484,6 +1524,13 @@ impl Peer {
             if progress.state == ProgressState::Snapshot {
                 return false;
             }
+        }
+        if self.recent_added_peer.contains(peer_id) {
+            debug!(
+                "{} reject transfer leader to {:?} due to the peer was added recently",
+                self.tag, peer
+            );
+            return false;
         }
 
         let last_index = self.get_store().last_index();
@@ -1544,7 +1591,8 @@ impl Peer {
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = self.pending_reads.next_id();
-        let ctx: [u8; 8] = unsafe { mem::transmute(id) };
+        let ctx = id.to_bytes();
+        // TODO: Replace with to_ne_bytes() here if we upgrade rustc to 1.30 or above
         self.raft_group.read_index(ctx.to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
@@ -1722,7 +1770,7 @@ impl Peer {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transferred = if self.is_transfer_leader_allowed(peer) {
+        let transferred = if self.ready_to_transfer_leader(peer) {
             self.transfer_leader(peer);
             true
         } else {

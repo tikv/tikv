@@ -13,7 +13,7 @@
 
 use std::borrow::Cow;
 
-use super::{EvalContext, Result, ScalarFunc};
+use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
 use crypto::{
     digest::Digest,
@@ -21,6 +21,10 @@ use crypto::{
     sha1::Sha1,
     sha2::{Sha224, Sha256, Sha384, Sha512},
 };
+use flate2::read::{ZlibDecoder, ZlibEncoder};
+use flate2::Compression;
+use hex;
+use std::io::prelude::*;
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;
@@ -36,8 +40,10 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         let mut hasher = Md5::new();
+        let mut buff: [u8; 16] = [0; 16];
         hasher.input(input.as_ref());
-        let md5 = hasher.result_str().into_bytes();
+        hasher.result(&mut buff);
+        let md5 = hex::encode(buff).into_bytes();
         Ok(Some(Cow::Owned(md5)))
     }
 
@@ -48,8 +54,10 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         let mut hasher = Sha1::new();
+        let mut buff: [u8; 20] = [0; 20];
         hasher.input(input.as_ref());
-        let sha1 = hasher.result_str().into_bytes();
+        hasher.result(&mut buff);
+        let sha1 = hex::encode(buff).into_bytes();
         Ok(Some(Cow::Owned(sha1)))
     }
 
@@ -86,13 +94,95 @@ impl ScalarFunc {
         };
         Ok(Some(Cow::Owned(sha2)))
     }
+
+    #[inline]
+    pub fn compress<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        use byteorder::{ByteOrder, LittleEndian};
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+
+        // according to MySQL doc: Empty strings are stored as empty strings.
+        if input.is_empty() {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        let mut e = ZlibEncoder::new(input.as_ref(), Compression::default());
+        // prefered capacity is input length plus four bytes length header and one extra end "."
+        // max capacity is isize::max_value(), or will panic with "capacity overflow"
+        let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
+        vec.resize(4, 0);
+        LittleEndian::write_u32(&mut vec, input.len() as u32);
+        match e.read_to_end(&mut vec) {
+            Ok(_) => {
+                // according to MySQL doc: append "." if ends with space
+                if vec[vec.len() - 1] == 32 {
+                    vec.push(b'.');
+                }
+                Ok(Some(Cow::Owned(vec)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    #[inline]
+    pub fn uncompress<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        use byteorder::{ByteOrder, LittleEndian};
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        if input.is_empty() {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        if input.len() <= 4 {
+            ctx.warnings.append_warning(Error::zlib_data_corrupted());
+            return Ok(None);
+        }
+
+        let len = LittleEndian::read_u32(&input[0..4]) as usize;
+        let mut decoder = ZlibDecoder::new(&input[4..]);
+        let mut vec = Vec::with_capacity(len);
+        // if the length of uncompressed string is greater than the length we read from the first
+        //     four bytes, return null and generate a length corrupted warning.
+        // if the length of uncompressed string is zero or uncompress fail, return null and generate
+        //     a data corrupted warning
+        match decoder.read_to_end(&mut vec) {
+            Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => Ok(Some(Cow::Owned(vec))),
+            Ok(decoded_len) if len < decoded_len => {
+                ctx.warnings.append_warning(Error::zlib_length_corrupted());
+                Ok(None)
+            }
+            _ => {
+                ctx.warnings.append_warning(Error::zlib_data_corrupted());
+                Ok(None)
+            }
+        }
+    }
+
+    #[inline]
+    pub fn uncompressed_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        use byteorder::{ByteOrder, LittleEndian};
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        if input.is_empty() {
+            return Ok(Some(0));
+        }
+        if input.len() <= 4 {
+            ctx.warnings.append_warning(Error::zlib_data_corrupted());
+            return Ok(Some(0));
+        }
+        Ok(Some(i64::from(LittleEndian::read_u32(&input[0..4]))))
+    }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{datum_expr, scalar_func_expr};
+    use coprocessor::dag::expr::tests::{datum_expr, eval_func, scalar_func_expr};
     use coprocessor::dag::expr::{EvalContext, Expression};
+    use hex;
     use tipb::expression::ScalarFuncSig;
 
     #[test]
@@ -109,7 +199,7 @@ mod test {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::MD5, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "md5('{:?}')", input_str);
@@ -118,7 +208,7 @@ mod test {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::MD5, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "md5(NULL)");
@@ -138,7 +228,7 @@ mod test {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::SHA1, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha1('{:?}')", input_str);
@@ -147,7 +237,7 @@ mod test {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::SHA1, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "sha1(NULL)");
@@ -175,7 +265,7 @@ mod test {
             let hash_length = datum_expr(Datum::I64(hash_length_i64));
 
             let op = scalar_func_expr(ScalarFuncSig::SHA2, &[input, hash_length]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input_str, hash_length_i64);
@@ -197,9 +287,87 @@ mod test {
                 ScalarFuncSig::SHA2,
                 &[datum_expr(input.clone()), datum_expr(hash_length.clone())],
             );
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input, hash_length);
+        }
+    }
+
+    #[test]
+    fn test_compress() {
+        let cases = vec![
+            (
+                "hello world",
+                "0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+            ),
+            ("", ""),
+            // compressed string ends with space
+            (
+                "hello wor012",
+                "0C000000789CCB48CDC9C95728CF2F32303402001D8004202E",
+            ),
+        ];
+        for (s, exp) in cases {
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Compress, &[s]).unwrap();
+            assert_eq!(
+                got,
+                Datum::Bytes(hex::decode(exp.as_bytes().to_vec()).unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn test_uncompress() {
+        let cases = vec![
+            ("", Datum::Bytes(b"".to_vec())),
+            (
+                "0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+                Datum::Bytes(b"hello world".to_vec()),
+            ),
+            (
+                "0C000000789CCB48CDC9C95728CF2F32303402001D8004202E",
+                Datum::Bytes(b"hello wor012".to_vec()),
+            ),
+            // length is greater than the string
+            (
+                "12000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+                Datum::Bytes(b"hello world".to_vec()),
+            ),
+            ("010203", Datum::Null),
+            ("01020304", Datum::Null),
+            ("020000000000", Datum::Null),
+            // ZlibDecoder#read_to_end return 0
+            ("0000000001", Datum::Null),
+            // length is less than the string
+            (
+                "02000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+                Datum::Null,
+            ),
+        ];
+        for (s, exp) in cases {
+            let s = Datum::Bytes(hex::decode(s.as_bytes().to_vec()).unwrap());
+            let got = eval_func(ScalarFuncSig::Uncompress, &[s]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_uncompressed_length() {
+        let cases = vec![
+            ("", 0),
+            ("0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D", 11),
+            ("0C000000789CCB48CDC9C95728CF2F32303402001D8004202E", 12),
+            ("020000000000", 2),
+            ("0000000001", 0),
+            ("02000000789CCB48CDC9C95728CF2FCA4901001A0B045D", 2),
+            ("010203", 0),
+            ("01020304", 0),
+        ];
+        for (s, exp) in cases {
+            let s = Datum::Bytes(hex::decode(s.as_bytes().to_vec()).unwrap());
+            let got = eval_func(ScalarFuncSig::UncompressedLength, &[s]).unwrap();
+            assert_eq!(got, Datum::I64(exp));
         }
     }
 }

@@ -14,11 +14,13 @@
 use std::borrow::Cow;
 use std::usize;
 
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 use tipb::expression::ScalarFuncSig;
 
 use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{self, Decimal, Duration, Json, Time};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use coprocessor::codec::Datum;
 
 impl ScalarFunc {
@@ -91,6 +93,7 @@ impl ScalarFunc {
             | ScalarFuncSig::IfNullDuration
             | ScalarFuncSig::IfNullJson
             | ScalarFuncSig::Left
+            | ScalarFuncSig::Right
             | ScalarFuncSig::LogicalAnd
             | ScalarFuncSig::LogicalOr
             | ScalarFuncSig::LogicalXor
@@ -115,9 +118,18 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundWithFracInt
             | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::DateFormatSig
-            | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::AddDatetimeAndDuration
+            | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::SHA2
-            | ScalarFuncSig::TruncateReal => (2, 2),
+            | ScalarFuncSig::TruncateInt
+            | ScalarFuncSig::WeekWithMode
+            | ScalarFuncSig::YearWeekWithMode
+            | ScalarFuncSig::TruncateReal
+            | ScalarFuncSig::TruncateDecimal
+            | ScalarFuncSig::Trim2Args
+            | ScalarFuncSig::Substring2Args
+            | ScalarFuncSig::SubstringBinary2Args
+            | ScalarFuncSig::Strcmp => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -170,7 +182,18 @@ impl ScalarFunc {
             | ScalarFuncSig::CastJsonAsJson
             | ScalarFuncSig::Date
             | ScalarFuncSig::LastDay
+            | ScalarFuncSig::Hour
+            | ScalarFuncSig::Minute
+            | ScalarFuncSig::Second
+            | ScalarFuncSig::MicroSecond
             | ScalarFuncSig::Month
+            | ScalarFuncSig::MonthName
+            | ScalarFuncSig::DayName
+            | ScalarFuncSig::DayOfMonth
+            | ScalarFuncSig::DayOfWeek
+            | ScalarFuncSig::DayOfYear
+            | ScalarFuncSig::WeekDay
+            | ScalarFuncSig::WeekOfYear
             | ScalarFuncSig::Year
             | ScalarFuncSig::UnaryNot
             | ScalarFuncSig::UnaryMinusInt
@@ -228,16 +251,19 @@ impl ScalarFunc {
             | ScalarFuncSig::Length
             | ScalarFuncSig::Bin
             | ScalarFuncSig::OctInt
+            | ScalarFuncSig::OctString
             | ScalarFuncSig::LTrim
             | ScalarFuncSig::RTrim
             | ScalarFuncSig::BitCount
             | ScalarFuncSig::BitLength
-            | ScalarFuncSig::RouldReal
+            | ScalarFuncSig::RoundReal
             | ScalarFuncSig::RoundDec
             | ScalarFuncSig::RoundInt
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
             | ScalarFuncSig::IsIPv6
+            | ScalarFuncSig::InetAton
+            | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Inet6Aton
             | ScalarFuncSig::Inet6Ntoa
             | ScalarFuncSig::HexIntArg
@@ -246,7 +272,18 @@ impl ScalarFunc {
             | ScalarFuncSig::Cot
             | ScalarFuncSig::Degrees
             | ScalarFuncSig::SHA1
-            | ScalarFuncSig::MD5 => (1, 1),
+            | ScalarFuncSig::MD5
+            | ScalarFuncSig::Radians
+            | ScalarFuncSig::Exp
+            | ScalarFuncSig::Trim1Arg
+            | ScalarFuncSig::FromBase64
+            | ScalarFuncSig::ToBase64
+            | ScalarFuncSig::WeekWithoutMode
+            | ScalarFuncSig::YearWeekWithoutMode
+            | ScalarFuncSig::Space
+            | ScalarFuncSig::Compress
+            | ScalarFuncSig::Uncompress
+            | ScalarFuncSig::UncompressedLength => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -255,7 +292,16 @@ impl ScalarFunc {
             | ScalarFuncSig::IfTime
             | ScalarFuncSig::IfDuration
             | ScalarFuncSig::IfJson
-            | ScalarFuncSig::LikeSig => (3, 3),
+            | ScalarFuncSig::LikeSig
+            | ScalarFuncSig::Conv
+            | ScalarFuncSig::Trim3Args
+            | ScalarFuncSig::SubstringIndex
+            | ScalarFuncSig::Substring3Args
+            | ScalarFuncSig::SubstringBinary3Args
+            | ScalarFuncSig::Lpad
+            | ScalarFuncSig::LpadBinary
+            | ScalarFuncSig::Rpad
+            | ScalarFuncSig::RpadBinary => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -272,6 +318,8 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenJson
             | ScalarFuncSig::CaseWhenReal
             | ScalarFuncSig::CaseWhenString
+            | ScalarFuncSig::Concat
+            | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
@@ -302,7 +350,7 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonInsertSig
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
 
-            ScalarFuncSig::PI => (0, 0),
+            ScalarFuncSig::AddTimeDateTimeNull | ScalarFuncSig::PI => (0, 0),
 
             // unimplement signature
             ScalarFuncSig::AddDateAndDuration
@@ -314,23 +362,16 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringDecimal
             | ScalarFuncSig::AddDateStringInt
             | ScalarFuncSig::AddDateStringString
-            | ScalarFuncSig::AddDatetimeAndDuration
-            | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
-            | ScalarFuncSig::AddTimeDateTimeNull
             | ScalarFuncSig::AddTimeDurationNull
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
-            | ScalarFuncSig::Compress
-            | ScalarFuncSig::Concat
-            | ScalarFuncSig::ConcatWS
             | ScalarFuncSig::ConnectionID
-            | ScalarFuncSig::Conv
             | ScalarFuncSig::Convert
             | ScalarFuncSig::ConvertTz
             | ScalarFuncSig::CurrentDate
@@ -340,15 +381,10 @@ impl ScalarFunc {
             | ScalarFuncSig::Database
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::DateLiteral
-            | ScalarFuncSig::DayName
-            | ScalarFuncSig::DayOfMonth
-            | ScalarFuncSig::DayOfWeek
-            | ScalarFuncSig::DayOfYear
             | ScalarFuncSig::DecimalAnyValue
             | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
-            | ScalarFuncSig::Exp
             | ScalarFuncSig::ExportSet3Arg
             | ScalarFuncSig::ExportSet4Arg
             | ScalarFuncSig::ExportSet5Arg
@@ -361,16 +397,12 @@ impl ScalarFunc {
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
             | ScalarFuncSig::FoundRows
-            | ScalarFuncSig::FromBase64
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::FromUnixTime1Arg
             | ScalarFuncSig::FromUnixTime2Arg
             | ScalarFuncSig::GetFormat
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
-            | ScalarFuncSig::Hour
-            | ScalarFuncSig::InetAton
-            | ScalarFuncSig::InetNtoa
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::Instr
@@ -387,42 +419,29 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary2Args
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
-            | ScalarFuncSig::Lpad
-            | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
             | ScalarFuncSig::MakeTime
-            | ScalarFuncSig::MicroSecond
-            | ScalarFuncSig::Minute
-            | ScalarFuncSig::MonthName
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
-            | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
-            | ScalarFuncSig::Radians
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::Replace
-            | ScalarFuncSig::Right
             | ScalarFuncSig::RightBinary
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
-            | ScalarFuncSig::Rpad
-            | ScalarFuncSig::RpadBinary
-            | ScalarFuncSig::Second
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
-            | ScalarFuncSig::Space
-            | ScalarFuncSig::Strcmp
             | ScalarFuncSig::StringAnyValue
             | ScalarFuncSig::StringDurationTimeDiff
             | ScalarFuncSig::StringStringTimeDiff
@@ -443,13 +462,8 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::SubDurationAndString
-            | ScalarFuncSig::Substring2Args
-            | ScalarFuncSig::Substring3Args
             | ScalarFuncSig::SubStringAndDuration
             | ScalarFuncSig::SubStringAndString
-            | ScalarFuncSig::SubstringBinary2Args
-            | ScalarFuncSig::SubstringBinary3Args
-            | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::SubTimeStringNull
@@ -468,15 +482,8 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeStringTimeDiff
             | ScalarFuncSig::TimeTimeTimeDiff
             | ScalarFuncSig::TimeToSec
-            | ScalarFuncSig::ToBase64
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
-            | ScalarFuncSig::Trim1Arg
-            | ScalarFuncSig::Trim2Args
-            | ScalarFuncSig::Trim3Args
-            | ScalarFuncSig::TruncateDecimal
-            | ScalarFuncSig::Uncompress
-            | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -495,12 +502,22 @@ impl ScalarFunc {
             | ScalarFuncSig::ValuesString
             | ScalarFuncSig::ValuesTime
             | ScalarFuncSig::Version
-            | ScalarFuncSig::WeekDay
-            | ScalarFuncSig::WeekOfYear
-            | ScalarFuncSig::WeekWithMode
-            | ScalarFuncSig::WeekWithoutMode
-            | ScalarFuncSig::YearWeekWithMode
-            | ScalarFuncSig::YearWeekWithoutMode => return Err(Error::UnknownSignature(sig)),
+            | ScalarFuncSig::JsonArrayAppendSig
+            | ScalarFuncSig::JsonArrayInsertSig
+            | ScalarFuncSig::JsonMergePatchSig
+            | ScalarFuncSig::JsonMergePreserveSig
+            | ScalarFuncSig::JsonContainsPathSig
+            | ScalarFuncSig::JsonPrettySig
+            | ScalarFuncSig::JsonQuoteSig
+            | ScalarFuncSig::JsonSearchSig
+            | ScalarFuncSig::JsonStorageSizeSig
+            | ScalarFuncSig::JsonDepthSig
+            | ScalarFuncSig::JsonKeysSig
+            | ScalarFuncSig::JsonLengthSig
+            | ScalarFuncSig::JsonValidJsonSig
+            | ScalarFuncSig::JsonContainsSig
+            | ScalarFuncSig::JsonKeys2ArgsSig
+            | ScalarFuncSig::JsonValidStringSig => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
             return Err(box_err!(
@@ -611,7 +628,7 @@ macro_rules! dispatch_call {
                     $(ScalarFuncSig::$i_sig => {
                         match self.$i_func(ctx, row, $($i_arg)*) {
                             Ok(Some(i)) => {
-                                if mysql::has_unsigned_flag(u64::from(self.tp.get_flag())) {
+                                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                                     Ok(Datum::U64(i as u64))
                                 } else {
                                     Ok(Datum::I64(i))
@@ -730,7 +747,20 @@ dispatch_call! {
         IntDivideDecimal => int_divide_decimal,
         ModInt => mod_int,
 
+        Hour => hour,
+        Minute => minute,
+        Second => second,
+        MicroSecond => micro_second,
         Month => month,
+        DayOfMonth => day_of_month,
+        DayOfWeek => day_of_week,
+        DayOfYear => day_of_year,
+        WeekWithMode => week_with_mode,
+        WeekWithoutMode => week_without_mode,
+        YearWeekWithMode => year_week_with_mode,
+        YearWeekWithoutMode => year_week_without_mode,
+        WeekDay => week_day,
+        WeekOfYear => week_of_year,
         Year => year,
 
         LogicalAnd => logical_and,
@@ -793,6 +823,10 @@ dispatch_call! {
         ASCII => ascii,
         IsIPv4 => is_ipv4,
         IsIPv6 => is_ipv6,
+        InetAton => inet_aton,
+
+        UncompressedLength => uncompressed_length,
+        Strcmp => strcmp,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -813,12 +847,14 @@ dispatch_call! {
         AbsReal => abs_real,
         CeilReal => ceil_real,
         FloorReal => floor_real,
-        RouldReal => round_real,
+        RoundReal => round_real,
         RoundWithFracReal => round_with_frac_real,
         PI => pi,
         Rand => rand,
         RandWithSeed => rand_with_seed,
         TruncateReal => truncate_real,
+        Radians => radians,
+        Exp => exp,
 
         IfNullReal => if_null_real,
         IfReal => if_real,
@@ -867,6 +903,8 @@ dispatch_call! {
         RoundDec => round_dec,
         RoundWithFracDec => round_with_frac_dec,
 
+        TruncateDecimal => truncate_decimal,
+
         IfNullDecimal => if_null_decimal,
         IfDecimal => if_decimal,
 
@@ -897,11 +935,17 @@ dispatch_call! {
         JsonUnquoteSig => json_unquote,
 
         Left => left,
+        Right => right,
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
+        MonthName => month_name,
+        DayName => day_name,
         Bin => bin,
         OctInt => oct_int,
+        OctString => oct_string,
+        Concat => concat,
+        ConcatWS => concat_ws,
         LTrim => ltrim,
         RTrim => rtrim,
         Reverse => reverse,
@@ -909,12 +953,32 @@ dispatch_call! {
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
         UnHex => un_hex,
+        InetNtoa => inet_ntoa,
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         MD5 => md5,
         SHA1 => sha1,
         SHA2 => sha2,
         Elt => elt,
+        FromBase64 => from_base64,
+        ToBase64 => to_base64,
+        Compress => compress,
+        Uncompress => uncompress,
+
+        Conv => conv,
+        Trim1Arg => trim_1_arg,
+        Trim2Args => trim_2_args,
+        Trim3Args => trim_3_args,
+        SubstringIndex => substring_index,
+        Substring2Args => substring_2_args,
+        Substring3Args => substring_3_args,
+        SubstringBinary2Args => substring_binary_2_args,
+        SubstringBinary3Args => substring_binary_3_args,
+        Space => space,
+        Lpad => lpad,
+        LpadBinary => lpad_binary,
+        Rpad => rpad,
+        RpadBinary => rpad_binary,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -927,6 +991,9 @@ dispatch_call! {
 
         Date => date,
         LastDay => last_day,
+        AddDatetimeAndDuration => add_datetime_and_duration,
+        AddDatetimeAndString => add_datetime_and_string,
+        AddTimeDateTimeNull => add_time_datetime_null,
 
         IfNullTime => if_null_time,
         IfTime => if_time,
@@ -976,7 +1043,7 @@ dispatch_call! {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use coprocessor::dag::expr::{Error, ScalarFunc};
     use std::usize;
     use tipb::expression::ScalarFuncSig;
@@ -1053,6 +1120,7 @@ mod test {
                     ScalarFuncSig::IfNullDuration,
                     ScalarFuncSig::IfNullJson,
                     ScalarFuncSig::Left,
+                    ScalarFuncSig::Right,
                     ScalarFuncSig::LogicalAnd,
                     ScalarFuncSig::LogicalOr,
                     ScalarFuncSig::LogicalXor,
@@ -1067,16 +1135,23 @@ mod test {
                     ScalarFuncSig::BitOrSig,
                     ScalarFuncSig::BitXorSig,
                     ScalarFuncSig::DateFormatSig,
+                    ScalarFuncSig::AddDatetimeAndDuration,
+                    ScalarFuncSig::AddDatetimeAndString,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
                     ScalarFuncSig::TruncateInt,
                     ScalarFuncSig::TruncateReal,
+                    ScalarFuncSig::TruncateDecimal,
                     ScalarFuncSig::Atan2Args,
                     ScalarFuncSig::Log2Args,
                     ScalarFuncSig::RoundWithFracDec,
                     ScalarFuncSig::RoundWithFracInt,
                     ScalarFuncSig::RoundWithFracReal,
+                    ScalarFuncSig::Trim2Args,
+                    ScalarFuncSig::Substring2Args,
+                    ScalarFuncSig::SubstringBinary2Args,
+                    ScalarFuncSig::Strcmp,
                 ],
                 2,
                 2,
@@ -1134,7 +1209,18 @@ mod test {
                     ScalarFuncSig::CastJsonAsJson,
                     ScalarFuncSig::Date,
                     ScalarFuncSig::LastDay,
+                    ScalarFuncSig::Hour,
+                    ScalarFuncSig::Minute,
+                    ScalarFuncSig::Second,
+                    ScalarFuncSig::MicroSecond,
                     ScalarFuncSig::Month,
+                    ScalarFuncSig::MonthName,
+                    ScalarFuncSig::DayName,
+                    ScalarFuncSig::DayOfMonth,
+                    ScalarFuncSig::DayOfWeek,
+                    ScalarFuncSig::DayOfYear,
+                    ScalarFuncSig::WeekDay,
+                    ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
                     ScalarFuncSig::UnaryNot,
                     ScalarFuncSig::UnaryMinusInt,
@@ -1167,7 +1253,7 @@ mod test {
                     ScalarFuncSig::FloorIntToDec,
                     ScalarFuncSig::FloorDecToDec,
                     ScalarFuncSig::FloorDecToInt,
-                    ScalarFuncSig::RouldReal,
+                    ScalarFuncSig::RoundReal,
                     ScalarFuncSig::RoundDec,
                     ScalarFuncSig::RoundInt,
                     ScalarFuncSig::Rand,
@@ -1186,6 +1272,7 @@ mod test {
                     ScalarFuncSig::ASCII,
                     ScalarFuncSig::Bin,
                     ScalarFuncSig::OctInt,
+                    ScalarFuncSig::OctString,
                     ScalarFuncSig::Log10,
                     ScalarFuncSig::Log1Arg,
                     ScalarFuncSig::Log2,
@@ -1206,6 +1293,15 @@ mod test {
                     ScalarFuncSig::SHA1,
                     ScalarFuncSig::Cot,
                     ScalarFuncSig::Degrees,
+                    ScalarFuncSig::Radians,
+                    ScalarFuncSig::Exp,
+                    ScalarFuncSig::Trim1Arg,
+                    ScalarFuncSig::FromBase64,
+                    ScalarFuncSig::ToBase64,
+                    ScalarFuncSig::Space,
+                    ScalarFuncSig::Compress,
+                    ScalarFuncSig::Uncompress,
+                    ScalarFuncSig::UncompressedLength,
                 ],
                 1,
                 1,
@@ -1220,6 +1316,15 @@ mod test {
                     ScalarFuncSig::IfDuration,
                     ScalarFuncSig::IfJson,
                     ScalarFuncSig::LikeSig,
+                    ScalarFuncSig::Conv,
+                    ScalarFuncSig::Trim3Args,
+                    ScalarFuncSig::SubstringIndex,
+                    ScalarFuncSig::Substring3Args,
+                    ScalarFuncSig::SubstringBinary3Args,
+                    ScalarFuncSig::Lpad,
+                    ScalarFuncSig::LpadBinary,
+                    ScalarFuncSig::Rpad,
+                    ScalarFuncSig::RpadBinary,
                 ],
                 3,
                 3,
@@ -1245,6 +1350,8 @@ mod test {
                     ScalarFuncSig::CaseWhenReal,
                     ScalarFuncSig::CaseWhenString,
                     ScalarFuncSig::CaseWhenTime,
+                    ScalarFuncSig::Concat,
+                    ScalarFuncSig::ConcatWS,
                 ],
                 1,
                 usize::MAX,
@@ -1287,7 +1394,11 @@ mod test {
                 3,
                 usize::MAX,
             ),
-            (vec![ScalarFuncSig::PI], 0, 0),
+            (
+                vec![ScalarFuncSig::AddTimeDateTimeNull, ScalarFuncSig::PI],
+                0,
+                0,
+            ),
         ];
         for (sigs, min, max) in cases {
             for sig in sigs {
@@ -1317,23 +1428,16 @@ mod test {
             ScalarFuncSig::AddDateStringDecimal,
             ScalarFuncSig::AddDateStringInt,
             ScalarFuncSig::AddDateStringString,
-            ScalarFuncSig::AddDatetimeAndDuration,
-            ScalarFuncSig::AddDatetimeAndString,
             ScalarFuncSig::AddDurationAndDuration,
             ScalarFuncSig::AddDurationAndString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
-            ScalarFuncSig::AddTimeDateTimeNull,
             ScalarFuncSig::AddTimeDurationNull,
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,
-            ScalarFuncSig::Compress,
-            ScalarFuncSig::Concat,
-            ScalarFuncSig::ConcatWS,
             ScalarFuncSig::ConnectionID,
-            ScalarFuncSig::Conv,
             ScalarFuncSig::Convert,
             ScalarFuncSig::ConvertTz,
             ScalarFuncSig::CurrentDate,
@@ -1343,15 +1447,10 @@ mod test {
             ScalarFuncSig::Database,
             ScalarFuncSig::DateDiff,
             ScalarFuncSig::DateLiteral,
-            ScalarFuncSig::DayName,
-            ScalarFuncSig::DayOfMonth,
-            ScalarFuncSig::DayOfWeek,
-            ScalarFuncSig::DayOfYear,
             ScalarFuncSig::DecimalAnyValue,
             ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
-            ScalarFuncSig::Exp,
             ScalarFuncSig::ExportSet3Arg,
             ScalarFuncSig::ExportSet4Arg,
             ScalarFuncSig::ExportSet5Arg,
@@ -1364,16 +1463,12 @@ mod test {
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
             ScalarFuncSig::FoundRows,
-            ScalarFuncSig::FromBase64,
             ScalarFuncSig::FromDays,
             ScalarFuncSig::FromUnixTime1Arg,
             ScalarFuncSig::FromUnixTime2Arg,
             ScalarFuncSig::GetFormat,
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
-            ScalarFuncSig::Hour,
-            ScalarFuncSig::InetAton,
-            ScalarFuncSig::InetNtoa,
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
             ScalarFuncSig::Instr,
@@ -1390,42 +1485,29 @@ mod test {
             ScalarFuncSig::LocateBinary2Args,
             ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
-            ScalarFuncSig::Lpad,
-            ScalarFuncSig::LpadBinary,
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
             ScalarFuncSig::MakeTime,
-            ScalarFuncSig::MicroSecond,
-            ScalarFuncSig::Minute,
-            ScalarFuncSig::MonthName,
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
-            ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
             ScalarFuncSig::PeriodAdd,
             ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
-            ScalarFuncSig::Radians,
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::Replace,
-            ScalarFuncSig::Right,
             ScalarFuncSig::RightBinary,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
-            ScalarFuncSig::Rpad,
-            ScalarFuncSig::RpadBinary,
-            ScalarFuncSig::Second,
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
-            ScalarFuncSig::Space,
-            ScalarFuncSig::Strcmp,
             ScalarFuncSig::StringAnyValue,
             ScalarFuncSig::StringDurationTimeDiff,
             ScalarFuncSig::StringStringTimeDiff,
@@ -1446,13 +1528,8 @@ mod test {
             ScalarFuncSig::SubDatetimeAndString,
             ScalarFuncSig::SubDurationAndDuration,
             ScalarFuncSig::SubDurationAndString,
-            ScalarFuncSig::Substring2Args,
-            ScalarFuncSig::Substring3Args,
             ScalarFuncSig::SubStringAndDuration,
             ScalarFuncSig::SubStringAndString,
-            ScalarFuncSig::SubstringBinary2Args,
-            ScalarFuncSig::SubstringBinary3Args,
-            ScalarFuncSig::SubstringIndex,
             ScalarFuncSig::SubTimeDateTimeNull,
             ScalarFuncSig::SubTimeDurationNull,
             ScalarFuncSig::SubTimeStringNull,
@@ -1471,15 +1548,8 @@ mod test {
             ScalarFuncSig::TimeStringTimeDiff,
             ScalarFuncSig::TimeTimeTimeDiff,
             ScalarFuncSig::TimeToSec,
-            ScalarFuncSig::ToBase64,
             ScalarFuncSig::ToDays,
             ScalarFuncSig::ToSeconds,
-            ScalarFuncSig::Trim1Arg,
-            ScalarFuncSig::Trim2Args,
-            ScalarFuncSig::Trim3Args,
-            ScalarFuncSig::TruncateDecimal,
-            ScalarFuncSig::Uncompress,
-            ScalarFuncSig::UncompressedLength,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
@@ -1498,12 +1568,6 @@ mod test {
             ScalarFuncSig::ValuesString,
             ScalarFuncSig::ValuesTime,
             ScalarFuncSig::Version,
-            ScalarFuncSig::WeekDay,
-            ScalarFuncSig::WeekOfYear,
-            ScalarFuncSig::WeekWithMode,
-            ScalarFuncSig::WeekWithoutMode,
-            ScalarFuncSig::YearWeekWithMode,
-            ScalarFuncSig::YearWeekWithoutMode,
         ];
 
         for sig in cases {

@@ -2,6 +2,75 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.2]
+- Support the configuration format in the unit of `DAY` (`d`) and fix the configuration compatibility issue [#3931](https://github.com/tikv/tikv/pull/3931)
+- Fix the possible panic issue caused by `Approximate Size Split` [#3942](https://github.com/tikv/tikv/pull/3942)
+- Fix two issues about Region merge [#3822](https://github.com/tikv/tikv/pull/3822), [#3873](https://github.com/tikv/tikv/pull/3873)
+
+## [2.1.1]
+- Avoid transferring the leader to a newly created peer, to optimize the possible delay [#3878](https://github.com/tikv/tikv/pull/3878)
+
+## [2.1.0]
++ Coprocessor
+    - Add more built-in functions
+    - [Add Coprocessor `ReadPool` to improve the concurrency in processing the requests](https://github.com/tikv/rfcs/blob/master/text/2017-12-22-read-pool.md)
+    - Fix the time function parsing issue and the time zone related issues
+    - Optimize the memory usage for pushdown aggregation computing
+
++ Transaction
+    - Optimize the read logic and memory usage of MVCC to improve the performance of the scan operation and the performance of full table scan is 1 time better than that in TiDB 2.0
+    - Fold the continuous Rollback records to ensure the read performance
+    - [Add the `UnsafeDestroyRange` API to support to collecting space for the dropping table/index](https://github.com/tikv/rfcs/blob/master/text/2018-08-29-unsafe-destroy-range.md)
+    - Separate the GC module to reduce the impact on write
+    - Add the`upper bound` support in the `kv_scan` command
+
++ Raftstore
+    - Improve the snapshot writing process to avoid RocksDB stall
+    - [Add the `LocalReader` thread to process read requests and reduce the delay for read requests](https://github.com/tikv/rfcs/pull/17)
+    - [Support `BatchSplit` to avoid large Region brought by large amounts of write](https://github.com/tikv/rfcs/pull/6)
+    - Support `Region Split` according to statistics to reduce the I/O overhead
+    - Support `Region Split` according to the number of keys to improve the concurrency of index scan
+    - Improve the Raft message process to avoid unnecessary delay brought by `Region Split`
+    - Enable the `PreVote` feature by default to reduce the impact of network isolation on services
+
++ Storage Engine
+    - Fix the `CompactFiles` bug in RocksDB and reduce the impact on importing data using Lightning
+    - Upgrade RocksDB to v5.15 to fix the possible issue of snapshot file corruption
+    - Improve `IngestExternalFile` to avoid the issue that flush could block write
+
++ tikv-ctl
+    - [Add the `ldb` command to diagnose RocksDB related issues](https://github.com/tikv/tikv/blob/master/docs/tools/tikv-control.md#ldb-command)
+    - The `compact` command supports specifying whether to compact data in the bottommost level
+
++ Tools
+    - Fast full import of large amounts of data: [TiDB-Lightning](https://pingcap.com/docs/tools/lightning/overview-architecture/)
+    - Support new [TiDB-Binlog](https://pingcap.com/docs/tools/tidb-binlog-cluster/)
+
+## [2.1.0-rc.5]
+- Improve the error message of `WriteConflict` [#3750](https://github.com/tikv/tikv/pull/3750)
+- Add the panic mark file [#3746](https://github.com/tikv/tikv/pull/3746)
+- Downgrade grpcio to avoid the segment fault issue caused by the new version of gRPC [#3650](https://github.com/tikv/tikv/pull/3650)
+- Add the upper limit to the `kv_scan` interface [#3749](https://github.com/tikv/tikv/pull/3749)
+
+## [2.1.0-rc.4]
+- Optimize the RocksDB Write stall issue caused by applying snapshots [#3606](https://github.com/tikv/tikv/pull/3606)
+- Add raftstore `tick` metrics [#3657](https://github.com/tikv/tikv/pull/3657)
+- Upgrade RocksDB and fix the Write block issue and that the source file might be damaged by the Write operation when performing `IngestExternalFile` [#3661](https://github.com/tikv/tikv/pull/3661)
+- Upgrade grpcio and fix the issue that “too many pings” is wrongly reported [#3650](https://github.com/tikv/tikv/pull/3650)
+
+## [2.1.0-rc.3]
+### Performance
+- Optimize the concurrency for coprocessor requests [#3515](https://github.com/tikv/tikv/pull/3515)
+### New features
+- Add the support for Log functions [#3603](https://github.com/tikv/tikv/pull/3603)
+- Add the support for the `sha1` function [#3612](https://github.com/tikv/tikv/pull/3612)
+- Add the support for the `truncate_int` function [#3532](https://github.com/tikv/tikv/pull/3532)
+- Add the support for the `year` function [#3622](https://github.com/tikv/tikv/pull/3622)
+- Add the support for the `truncate_real` function [#3633](https://github.com/tikv/tikv/pull/3633)
+### Bug fixes
+- Fix the reporting error behavior related to time functions [#3487](https://github.com/tikv/tikv/pull/3487), [#3615](https://github.com/tikv/tikv/pull/3615)
+- Fix the issue that the time parsed from string is inconsistent with that in TiDB [#3589](https://github.com/tikv/tikv/pull/3589)
+
 ## [2.1.0-rc.2]
 ### Performance
 * Support splitting Regions based on statistics estimation to reduce the I/O cost [#3511](https://github.com/tikv/tikv/pull/3511)

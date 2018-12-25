@@ -228,13 +228,13 @@ impl ScalarFunc {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use coprocessor::codec::mysql::{Duration, Json, Time};
     use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::test::{col_expr, datum_expr, scalar_func_expr, str2dec};
+    use coprocessor::dag::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
     use coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
@@ -329,8 +329,7 @@ mod test {
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let op =
-                Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1, arg2])).unwrap();
+            let op = Expression::build(&ctx, scalar_func_expr(operator, &[arg1, arg2])).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -464,9 +463,9 @@ mod test {
             let arg1 = datum_expr(cond);
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
-            let expected = Expression::build(&mut ctx, datum_expr(exp)).unwrap();
-            let op = Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1, arg2, arg3]))
-                .unwrap();
+            let expected = Expression::build(&ctx, datum_expr(exp)).unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(operator, &[arg1, arg2, arg3])).unwrap();
             let lhs = op.eval(&mut ctx, &[]).unwrap();
             let rhs = expected.eval(&mut ctx, &[]).unwrap();
             assert_eq!(lhs, rhs);
@@ -539,7 +538,7 @@ mod test {
             expr.set_sig(sig);
 
             expr.set_children(RepeatedField::from_vec(children));
-            let e = Expression::build(&mut ctx, expr).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
         }
