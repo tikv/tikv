@@ -267,8 +267,8 @@ impl RegionCollector {
             || epoch.get_conf_ver() < current_epoch.get_conf_ver()
     }
 
-    /// For all regions whose range overlaps with given `regions` or region_id is the same as
-    /// `region`'s, checks whether the given `region`'s epoch is not older than theirs.
+    /// For all regions whose range overlaps with the given `regions` or region_id is the same as
+    /// `region`'s, checks whether the given `region`'s epoch is older than theirs.
     /// Returns false if given `region` is stale, which means, at least one region above has newer
     /// epoch. Returns true otherwise.
     fn is_region_info_stale(&self, region: &Region) -> bool {
@@ -307,7 +307,7 @@ impl RegionCollector {
         false
     }
 
-    /// Clears all other regions that has range overlapping with `region`, but keeps the region with
+    /// Clears all other regions that has range overlapping with `region` except the region with
     /// the same id with `region`(if there exists such a region).
     fn clear_overlapped_regions(&mut self, region: &Region) {
         let mut regions_to_remove = vec![];
@@ -319,7 +319,7 @@ impl RegionCollector {
             if !region.get_end_key().is_empty()
                 && current_region.get_start_key() >= region.get_end_key()
             {
-                // This and following regions are not overlapping with `region`.
+                // This and following regions don't overlap with `region`.
                 break;
             }
 
