@@ -69,7 +69,9 @@ mod imp {
     mod tests {
         use std::fs;
 
-        use tempdir::TempDir;
+        extern crate tempdir;
+
+        use self::tempdir::TempDir;
 
         // Only trigger this test with prof set to true.
         #[test]
