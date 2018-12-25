@@ -181,13 +181,14 @@ mod tests {
         let one_day = Duration::days(1);
 
         let mut logger = RotatingFileLogger::new(&log_file, one_day).unwrap();
-        logger.write(b"write before close").unwrap();
+        // Handles written amount returned.
+        let _ = logger.write(b"write before close").unwrap();
         logger.flush().unwrap();
         logger.close().unwrap();
         assert!(::panic_hook::recover_safe(|| logger.write(b"write after close")).is_err());
         assert!(::panic_hook::recover_safe(|| logger.flush()).is_err());
         assert!(::panic_hook::recover_safe(|| logger.close()).is_err());
-        // Reopens file, otherwise `close()` fails in assertion when `drop()`.
+        // Reopens file, otherwise `close()` will fail in assertion when `drop()`.
         logger.open().unwrap();
         drop(logger);
     }
