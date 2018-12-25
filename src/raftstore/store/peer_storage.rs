@@ -291,7 +291,8 @@ pub struct ApplySnapResult {
     pub region: metapb::Region,
 }
 
-/// `InvokeContext` is returned by `PeerStorage::handle_raft_ready`.
+/// Returned by `PeerStorage::handle_raft_ready`, used for recording changed status of
+/// `RaftLocalState` and `RaftApplyState`.
 pub struct InvokeContext {
     pub region_id: u64,
     /// Changed RaftLocalState is stored into `raft_state`.

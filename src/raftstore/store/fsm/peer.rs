@@ -572,8 +572,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    // Return None if the `msg` doesn't contain a snapshot or it contains a snapshot which doesn't
-    // conflict with any other snapshots or regions. Otherwise a `SnapKey` is returned.
+    // Return `None` if the `msg` doesn't contain a snapshot or it contains a snapshot which
+    // doesn't conflict with any other snapshots or regions. Otherwise a `SnapKey` is returned.
     fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Option<SnapKey>> {
         if !msg.get_message().has_snapshot() {
             return Ok(None);

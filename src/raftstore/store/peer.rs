@@ -636,7 +636,7 @@ impl Peer {
         self.get_store().is_applying_snapshot()
     }
 
-    /// Return true if the raft group has replicated a snapshot message but not committed it yet.
+    /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
         self.raft_group.get_snap().is_some()
@@ -1586,8 +1586,8 @@ impl Peer {
         Ok(())
     }
 
-    // `read_index` returns a boolean to indicate the `read` is proposed or not.
-    // For the cases it won't be proposed:
+    // Returns a boolean to indicate the `read` is proposed or not.
+    // For these cases it won't be proposed:
     // 1. the region is in merging or splitting;
     // 2. the message is stale and dropped by raft group internally;
     // 3. there is already a read request proposed in the current lease;
@@ -1818,7 +1818,7 @@ impl Peer {
         transferred
     }
 
-    // `propose_conf_change` fails in such cases:
+    // Fails in such cases:
     // 1. there is already a pending conf change not applied;
     // 2. remove leader but the configuration doesn't allow;
     // 3. The conf change makes the raft group not healthy;
