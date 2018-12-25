@@ -146,7 +146,8 @@ impl Default for Config {
             // 100 means gRPC threads are under heavy load if their total CPU usage
             // is greater than 100%.
             heavy_load_threshold: 100,
-            heavy_load_wait_duration: ReadableDuration::millis(2),
+            // Resolution of timer in tokio is 1ms.
+            heavy_load_wait_duration: ReadableDuration::millis(1),
         }
     }
 }
