@@ -67,7 +67,7 @@ struct ReadIndexRequest {
 }
 
 impl ReadIndexRequest {
-    // transmute `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
+    // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
         unsafe {
             let id = &self.id as *const u64 as *const u8;

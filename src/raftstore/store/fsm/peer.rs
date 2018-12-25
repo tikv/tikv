@@ -657,7 +657,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(None)
     }
 
-    /// For all raft groups with new appended raft logs, collect and send raft message for them.
+    /// For all raft groups with new `raft::Ready`, collect and send raft message for them.
     /// And then update `RaftLocalState` and `SnapshotRaftState` (if need) into engines.
     pub fn on_raft_ready(&mut self) {
         // Only enable the fail point when the store id is equal to 3, which is
