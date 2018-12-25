@@ -1347,41 +1347,6 @@ impl Peer {
         }
     }
 
-    /// Propose a snapshot request. Note that the `None` response means
-    /// it requires the peer to perform a read-index. The request never
-    /// be actual proposed to other nodes.
-    pub fn propose_snapshot(
-        &mut self,
-        req: RaftCmdRequest,
-        metrics: &mut RaftProposeMetrics,
-    ) -> Option<ReadResponse> {
-        let snapshot = None;
-        if self.pending_remove {
-            let mut response = RaftCmdResponse::new();
-            cmd_resp::bind_error(&mut response, box_err!("peer is pending remove"));
-            return Some(ReadResponse { response, snapshot });
-        }
-        metrics.all += 1;
-
-        // TODO: deny non-snapshot request.
-
-        let policy = self.inspect(&req);
-        match policy {
-            Ok(RequestPolicy::ReadLocal) => {
-                metrics.local_read += 1;
-                Some(self.handle_read(req, false))
-            }
-            // require to propose again, and use the `propose` above.
-            Ok(RequestPolicy::ReadIndex) => None,
-            Ok(_) => unreachable!(),
-            Err(e) => {
-                let mut response = cmd_resp::new_error(e);
-                cmd_resp::bind_term(&mut response, self.term());
-                Some(ReadResponse { response, snapshot })
-            }
-        }
-    }
-
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(monotonic_raw_now());
