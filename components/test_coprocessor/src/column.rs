@@ -22,14 +22,14 @@ pub const TYPE_LONG: i32 = 2;
 #[derive(Clone)]
 pub struct Column {
     pub id: i64,
-    pub col_type: i32,
+    pub(crate) col_type: i32,
     // negative means not a index key, 0 means primary key, positive means normal index key.
     pub index: i64,
-    pub default_val: Option<Datum>,
+    pub(crate) default_val: Option<Datum>,
 }
 
 impl Column {
-    pub fn get_column_info(&self) -> ColumnInfo {
+    pub fn as_column_info(&self) -> ColumnInfo {
         let mut c_info = ColumnInfo::new();
         c_info.set_column_id(self.id);
         c_info.set_tp(self.col_type);
