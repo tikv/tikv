@@ -19,7 +19,7 @@ extern crate bitflags;
 #[macro_use]
 extern crate enum_primitive_derive;
 #[macro_use]
-extern crate quick_error;
+extern crate failure;
 extern crate num_traits;
 #[cfg(test)]
 extern crate test;

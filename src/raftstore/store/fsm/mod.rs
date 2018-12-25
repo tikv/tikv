@@ -16,6 +16,7 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 mod peer;
+mod router;
 mod store;
 
 pub use self::peer::DestroyPeerJob;
@@ -75,6 +76,7 @@ pub struct Store<T, C: 'static> {
     // It assumes that when a peer is going to accept snapshot, it can never
     // captch up by normal log replication.
     pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
+
     split_check_worker: Worker<SplitCheckTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask>,
