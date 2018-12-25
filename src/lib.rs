@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(label_break_value)]
 #![feature(try_from)]
 #![feature(fnbox)]
 #![feature(alloc)]
@@ -53,6 +54,8 @@ extern crate grpcio as grpc;
 extern crate hashbrown;
 extern crate hex;
 extern crate indexmap;
+#[cfg(all(unix, not(fuzzing)))]
+extern crate jemallocator;
 extern crate kvproto;
 
 #[macro_use]
@@ -114,15 +117,16 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
-extern crate safemem;
-extern crate smallvec;
 #[macro_use]
 extern crate more_asserts;
 extern crate base64;
-
 extern crate cop_datatype;
 extern crate flate2;
+extern crate hyper;
 extern crate panic_hook;
+extern crate safemem;
+extern crate smallvec;
+extern crate tokio_threadpool;
 
 #[macro_use]
 pub mod util;
@@ -135,3 +139,13 @@ pub mod server;
 pub mod storage;
 
 pub use storage::Storage;
+
+// As of now TiKV always turns on jemalloc on Unix, though libraries
+// generally shouldn't be opinionated about their allocators like
+// this. It's easier to do this in one place than to have all our bins
+// turn it on themselves.
+//
+// cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs`
+#[cfg(all(unix, not(fuzzing)))]
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;

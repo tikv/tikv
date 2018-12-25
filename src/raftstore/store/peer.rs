@@ -1591,7 +1591,8 @@ impl Peer {
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = self.pending_reads.next_id();
-        let ctx: [u8; 8] = unsafe { mem::transmute(id) };
+        let ctx = id.to_bytes();
+        // TODO: Replace with to_ne_bytes() here if we upgrade rustc to 1.30 or above
         self.raft_group.read_index(ctx.to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();

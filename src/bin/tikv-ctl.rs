@@ -16,6 +16,8 @@ extern crate clap;
 extern crate chrono;
 extern crate futures;
 extern crate grpcio;
+#[cfg(feature = "mem-profiling")]
+extern crate jemallocator;
 extern crate kvproto;
 extern crate libc;
 #[macro_use]

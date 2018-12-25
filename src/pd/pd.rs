@@ -183,7 +183,9 @@ impl Display for Task {
             Task::ReadStats { ref read_stats } => {
                 write!(f, "get the read statistics {:?}", read_stats)
             }
-            Task::DestroyPeer { ref region_id } => write!(f, "destroy peer {}", region_id),
+            Task::DestroyPeer { ref region_id } => {
+                write!(f, "destroy peer of region {}", region_id)
+            }
         }
     }
 }
