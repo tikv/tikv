@@ -164,8 +164,12 @@ fn check_and_open(
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
     let cf_descs = if !existed.is_empty() {
+        let env = match db_opt.env() {
+            Some(env) => env,
+            None => Arc::new(Env::default()),
+        };
         // panic if OPTIONS not found for existing instance?
-        let (_, tmp) = load_latest_options(path, &Env::default(), true)
+        let (_, tmp) = load_latest_options(path, &env, true)
             .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
             .unwrap_or_else(|| panic!("couldn't find the OPTIONS file"));
         tmp
