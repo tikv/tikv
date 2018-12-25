@@ -18,6 +18,7 @@ use std::io::{self, BufReader, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use std::{error, result, str, thread, time, u64};
 
 use kvproto::metapb::Region;
@@ -35,6 +36,7 @@ use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use util::time::SlowTimer;
 use util::transport::SendCh;
 use util::HandyRwLock;
 
@@ -961,7 +963,11 @@ impl Snapshot for Snap {
     }
 
     fn apply(&mut self, options: ApplyOptions) -> Result<()> {
+        let t = SlowTimer::from(Duration::from_millis(100));
+
+        let region_id = options.region.get_id();
         box_try!(self.validate(Arc::clone(&options.db)));
+        slow_log!(t, "[sysbench] region {} validate snapshot", region_id);
 
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
@@ -974,16 +980,34 @@ impl Snapshot for Snap {
             if plain_file_used(cf_file.cf) {
                 let mut file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
+                slow_log!(
+                    t,
+                    "[sysbench] region {} apply file {}",
+                    region_id,
+                    cf_file.path.to_str().unwrap()
+                );
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
                 let path = cf_file.clone_path.to_str().unwrap();
+                slow_log!(
+                    t,
+                    "[sysbench] region {} before ingest file {}",
+                    region_id,
+                    cf_file.path.to_str().unwrap()
+                );
                 box_try!(options.db.ingest_external_file_optimized(
                     cf_handle,
                     &ingest_opt,
                     &[path]
                 ));
+                slow_log!(
+                    t,
+                    "[sysbench] region {} finish ingest file {}",
+                    region_id,
+                    cf_file.path.to_str().unwrap()
+                );
             }
         }
         Ok(())
