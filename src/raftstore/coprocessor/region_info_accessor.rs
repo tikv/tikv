@@ -167,12 +167,12 @@ impl RegionCollector {
         let region_id = region.get_id();
 
         // Create new region
-        self.region_ranges.insert(end_key, region.get_id());
+        self.region_ranges.insert(end_key, region_id);
 
         // TODO: Should we set it follower?
         assert!(
             self.regions
-                .insert(region.get_id(), RegionInfo::new(region, role))
+                .insert(region_id, RegionInfo::new(region, role))
                 .is_none(),
             "region_collector: trying to create new region {} but it already exists.",
             region_id
@@ -249,12 +249,17 @@ impl RegionCollector {
 
     fn handle_role_change(&mut self, region: Region, new_role: StateRole) {
         let region_id = region.get_id();
-        if self.regions.get(&region_id).is_none() {
-            warn!("region_collector: role change on region {} but the region doesn't exist. create it.", region_id);
-            self.create_region(region, new_role);
-        } else if let Some(r) = self.regions.get_mut(&region_id) {
+
+        if let Some(r) = self.regions.get_mut(&region_id) {
             r.role = new_role;
+            return;
         }
+
+        warn!(
+            "region_collector: role change on region {} but the region doesn't exist. create it.",
+            region_id
+        );
+        self.create_region(region, new_role);
     }
 
     /// Determines whether `region_to_check`'s epoch is stale compared to `current`'s epoch
