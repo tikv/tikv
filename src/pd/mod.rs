@@ -69,7 +69,7 @@ impl Deref for RegionInfo {
 
 pub const INVALID_ID: u64 = 0;
 
-/// PdClient communicates with placement driver (PD) for special cluster.
+/// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
 /// cluster id in trait interface every time, so passing the cluster id when
 /// creating the PdClient is enough and the PdClient will use this cluster id
