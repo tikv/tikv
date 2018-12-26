@@ -148,7 +148,7 @@ impl Tick {
 /// group to update some important internal status.
 #[derive(Debug, PartialEq)]
 pub enum SignificantMsg {
-    /// Report the snapshot sending is successful or not.
+    /// Report whether the snapshot sending is successful or not.
     SnapshotStatus {
         region_id: u64,
         to_peer_id: u64,

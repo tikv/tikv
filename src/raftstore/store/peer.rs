@@ -159,7 +159,7 @@ pub struct ReadyContext<'a, T: 'a> {
     pub kv_wb: WriteBatch,
     /// Raft logs will be stored into `raft_wb`.
     pub raft_wb: WriteBatch,
-    /// Indicates the write in `raft_wb` should sync log or not.
+    /// Indicates whether the write in `raft_wb` should synchronize log or not.
     pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
@@ -1588,9 +1588,9 @@ impl Peer {
 
     // Returns a boolean to indicate the `read` is proposed or not.
     // For these cases it won't be proposed:
-    // 1. the region is in merging or splitting;
-    // 2. the message is stale and dropped by raft group internally;
-    // 3. there is already a read request proposed in the current lease;
+    // 1. The region is in merging or splitting;
+    // 2. The message is stale and dropped by the Raft group internally;
+    // 3. There is already a read request proposed in the current lease;
     fn read_index(
         &mut self,
         req: RaftCmdRequest,
