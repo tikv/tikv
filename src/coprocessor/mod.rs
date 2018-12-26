@@ -60,17 +60,17 @@ type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
 trait RequestHandler: Send {
-    /// Process current request and produce a response.
+    /// Processs current request and produce a response.
     fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 
-    /// Process current request and produce streaming responses.
+    /// Processs current request and produce streaming responses.
     fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
         panic!("streaming request is not supported for this handler");
     }
 
-    /// Collect metrics generated in this request handler so far.
+    /// Collects metrics generated in this request handler so far.
     fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
         // Do nothing by default
     }
@@ -97,7 +97,7 @@ pub struct Deadline {
 }
 
 impl Deadline {
-    /// Initialize a deadline that counting from current.
+    /// Initializes a deadline that counting from current.
     pub fn from_now(tag: &'static str, after_duration: Duration) -> Self {
         let start_time = Instant::now_coarse();
         let deadline = start_time + after_duration;

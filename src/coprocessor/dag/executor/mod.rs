@@ -51,7 +51,7 @@ pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
 
-/// An expression tree visitor to extract all column offsets in the tree.
+/// An expression tree visitor that extracts all column offsets in the tree.
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,
     cols_len: usize,

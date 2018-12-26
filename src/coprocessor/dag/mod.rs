@@ -18,7 +18,7 @@
 //! Although this request is called DAG request, these executors are executed one by one (i.e. as
 //! a pipeline) at present.
 //!
-//! Generally, there are two kind of query executors:
+//! Generally, there are two kinds of query executors:
 //!
 //! - Executors that only produce rows (i.e. fetch data from the KV layer)
 //!
