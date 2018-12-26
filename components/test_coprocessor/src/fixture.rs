@@ -19,18 +19,12 @@ use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::{Endpoint, ReadPoolContext};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::Config;
-use tikv::storage::engine::{self, RocksEngine};
-use tikv::storage::{Engine, ALL_CFS, TEMP_DIR};
+use tikv::storage::engine::RocksEngine;
+use tikv::storage::{Engine, TestEngineBuilder};
 use tikv::util::worker::FutureWorker;
 
-/// An example table for test purpose.
 #[derive(Clone)]
-pub struct ProductTable {
-    pub id: Column,
-    pub name: Column,
-    pub count: Column,
-    pub table: Table,
-}
+pub struct ProductTable(Table);
 
 impl ProductTable {
     pub fn new() -> ProductTable {
@@ -48,17 +42,19 @@ impl ProductTable {
             .index_key(idx_id)
             .build();
         let table = TableBuilder::new()
-            .add_col(id)
-            .add_col(name)
-            .add_col(count)
+            .add_col("id", id)
+            .add_col("name", name)
+            .add_col("count", count)
             .build();
+        ProductTable(table)
+    }
+}
 
-        ProductTable {
-            id,
-            name,
-            count,
-            table,
-        }
+impl ::std::ops::Deref for ProductTable {
+    type Target = Table;
+
+    fn deref(&self) -> &Table {
+        &self.0
     }
 }
 
@@ -89,15 +85,15 @@ pub fn init_data_with_details<E: Engine>(
     cfg: &Config,
     read_pool_cfg: &readpool::Config,
 ) -> (Store<E>, Endpoint<E>) {
-    let mut store = Store::new(engine);
+    let mut store = Store::from_engine(engine);
 
     store.begin();
     for &(id, name, count) in vals {
         store
-            .insert_into(&tbl.table)
-            .set(tbl.id, Datum::I64(id))
-            .set(tbl.name, name.map(|s| s.as_bytes()).into())
-            .set(tbl.count, Datum::I64(count))
+            .insert_into(&tbl)
+            .set(&tbl["id"], Datum::I64(id))
+            .set(&tbl["name"], name.map(|s| s.as_bytes()).into())
+            .set(&tbl["count"], Datum::I64(count))
             .execute_with_ctx(ctx.clone());
     }
     if commit {
@@ -116,7 +112,7 @@ pub fn init_data_with_commit(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
-    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    let engine = TestEngineBuilder::new().build().unwrap();
     init_data_with_engine_and_commit(Context::new(), engine, tbl, vals, commit)
 }
 

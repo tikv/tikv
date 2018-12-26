@@ -14,7 +14,6 @@
 use kvproto::kvrpcpb::Context;
 
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::config::Config;
 use tikv::util::HandyRwLock;
 
 use super::*;
@@ -40,11 +39,15 @@ pub fn new_raft_engine(
 pub fn new_raft_storage_with_store_count(
     count: usize,
     key: &str,
-) -> (Cluster<ServerCluster>, SyncStorage<SimulateEngine>, Context) {
+) -> (
+    Cluster<ServerCluster>,
+    SyncTestStorage<SimulateEngine>,
+    Context,
+) {
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,
-        SyncStorage::from_engine(engine, &Config::default()),
+        SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
         ctx,
     )
 }

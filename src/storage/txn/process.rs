@@ -27,7 +27,7 @@ use storage::{
     Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
     Statistics, StatisticsSummary, StorageCb,
 };
-use storage::{Key, KvPair, MvccInfo, Value};
+use storage::{Key, MvccInfo, Value};
 use util::collections::HashMap;
 use util::threadpool::{self, Context as ThreadContext, ContextFactory as ThreadContextFactory};
 use util::time::SlowTimer;
@@ -45,10 +45,8 @@ pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 pub enum ProcessResult {
     Res,
     MultiRes { results: Vec<StorageResult<()>> },
-    MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
     MvccKey { mvcc: MvccInfo },
     MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Value { value: Option<Value> },
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
@@ -64,16 +62,6 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         },
         StorageCb::Booleans(cb) => match pr {
             ProcessResult::MultiRes { results } => cb(Ok(results)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::SingleValue(cb) => match pr {
-            ProcessResult::Value { value } => cb(Ok(value)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::KvPairs(cb) => match pr {
-            ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -462,10 +450,6 @@ fn process_read_impl<E: Engine>(
                 })
             }
         }
-        Command::Pause { duration, .. } => {
-            thread::sleep(Duration::from_millis(duration));
-            Ok(ProcessResult::Res)
-        }
         _ => panic!("unsupported read command"),
     }
 }
@@ -606,6 +590,10 @@ fn process_write_impl<S: Snapshot>(
                 }
             };
             (pr, modifies, rows, ctx)
+        }
+        Command::Pause { ctx, duration, .. } => {
+            thread::sleep(Duration::from_millis(duration));
+            (ProcessResult::Res, vec![], 0, ctx)
         }
         _ => panic!("unsupported write command"),
     };

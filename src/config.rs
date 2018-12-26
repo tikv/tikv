@@ -86,6 +86,7 @@ macro_rules! cf_config {
             pub cache_index_and_filter_blocks: bool,
             pub pin_l0_filter_and_index_blocks: bool,
             pub use_bloom_filter: bool,
+            pub optimize_filters_for_hits: bool,
             pub whole_key_filtering: bool,
             pub bloom_filter_bits_per_key: i32,
             pub block_based_bloom_filter: bool,
@@ -154,6 +155,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
         cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
+        cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
 
         cf_opts
     }};
@@ -170,6 +172,7 @@ impl Default for DefaultCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -224,6 +227,7 @@ impl Default for WriteCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: false,
             whole_key_filtering: false,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -288,6 +292,7 @@ impl Default for LockCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: false,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -337,6 +342,7 @@ impl Default for RaftCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: true,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -512,6 +518,7 @@ impl Default for RaftDefaultCfConfig {
             cache_index_and_filter_blocks: true,
             pin_l0_filter_and_index_blocks: true,
             use_bloom_filter: false,
+            optimize_filters_for_hits: true,
             whole_key_filtering: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
@@ -559,8 +566,8 @@ impl RaftDefaultCfConfig {
 
 // RocksDB Env associate thread pools of multiple instances from the same process.
 // When construct Options, options.env is set to same singleton Env::Default() object.
-// If we set same env parameter in different instance, we may overwrite other instance's config.
-// So we only set max_background_jobs in default rocksdb.
+// So total max_background_jobs = max(rocksdb.max_background_jobs, raftdb.max_background_jobs)
+// But each instance will limit their background jobs according to their own max_background_jobs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -571,6 +578,7 @@ pub struct RaftDbConfig {
     pub wal_ttl_seconds: u64,
     pub wal_size_limit: ReadableSize,
     pub max_total_wal_size: ReadableSize,
+    pub max_background_jobs: i32,
     pub max_manifest_file_size: ReadableSize,
     pub create_if_missing: bool,
     pub max_open_files: i32,
@@ -599,6 +607,7 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
+            max_background_jobs: 2,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -630,6 +639,7 @@ impl RaftDbConfig {
         }
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
+        opts.set_max_background_jobs(self.max_background_jobs);
         opts.set_max_total_wal_size(self.max_total_wal_size.0);
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
@@ -659,6 +669,7 @@ impl RaftDbConfig {
         opts.add_event_listener(EventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
+        // TODO maybe create a new env for raft engine
 
         opts
     }
@@ -1233,11 +1244,11 @@ mod tests {
 
     #[test]
     fn test_create_parent_dir_if_missing() {
-        let tmp_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
-        let pathbuf = tmp_path.into_path().join("not_exist_dir");
+        let root_path = TempDir::new("test_create_parent_dir_if_missing").unwrap();
+        let path = root_path.path().join("not_exist_dir");
 
         let mut tikv_cfg = TiKvConfig::default();
-        tikv_cfg.storage.data_dir = pathbuf.as_path().to_str().unwrap().to_owned();
+        tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
         assert!(check_and_persist_critical_config(&tikv_cfg).is_ok());
     }
 

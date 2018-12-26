@@ -12,14 +12,14 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::HashSet;
 
 use rocksdb::{
     self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
 };
-use util::rocksdb::engine_metrics::*;
 
-use super::properties::RangeProperties;
+use util::collections::HashSet;
+use util::properties::RangeProperties;
+use util::rocksdb::engine_metrics::*;
 
 pub struct EventListener {
     db_name: String,
@@ -65,6 +65,13 @@ impl rocksdb::EventListener for EventListener {
         STORE_ENGINE_COMPACTION_NUM_CORRUPT_KEYS_VEC
             .with_label_values(&[&self.db_name, info.cf_name()])
             .inc_by(info.num_corrupt_keys() as i64);
+        STORE_ENGINE_COMPACTION_REASON_VEC
+            .with_label_values(&[
+                &self.db_name,
+                info.cf_name(),
+                &info.compaction_reason().to_string(),
+            ])
+            .inc();
     }
 
     fn on_external_file_ingested(&self, info: &IngestionInfo) {

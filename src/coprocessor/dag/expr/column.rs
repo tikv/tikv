@@ -11,11 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{Column, EvalContext, Result};
-use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
 use std::borrow::Cow;
 use std::str;
+
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeTp;
+
+use super::{Column, EvalContext, Result};
+use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use coprocessor::codec::Datum;
 
 impl Column {
     pub fn eval(&self, row: &[Datum]) -> Datum {
@@ -46,18 +50,19 @@ impl Column {
         if let Datum::Null = row[self.offset] {
             return Ok(None);
         }
-        if types::is_hybrid_type(self.tp.get_tp() as u8) {
+        if self.field_type.is_hybrid() {
             let s = row[self.offset].to_string()?.into_bytes();
             return Ok(Some(Cow::Owned(s)));
         }
 
-        if !ctx.cfg.pad_char_to_full_length || self.tp.get_tp() != i32::from(types::STRING) {
+        if !ctx.cfg.pad_char_to_full_length || self.field_type.tp() != FieldTypeTp::String {
             return row[self.offset].as_string();
         }
 
         let res = row[self.offset].as_string()?.unwrap();
         let cur_len = str::from_utf8(res.as_ref())?.chars().count();
-        let flen = self.tp.get_flen() as usize;
+        // FIXME: flen() can be -1 (UNSPECIFIED_LENGTH)
+        let flen = self.field_type.flen() as usize;
         if flen <= cur_len {
             return Ok(Some(res));
         }
@@ -88,9 +93,10 @@ mod tests {
     use std::sync::Arc;
     use std::{str, u64};
 
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
 
-    use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
+    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use coprocessor::codec::Datum;
     use coprocessor::dag::expr::tests::col_expr;
     use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
@@ -105,6 +111,33 @@ mod tests {
         Option<Duration>,
         Option<Json>,
     );
+
+    #[test]
+    fn test_with_pad_char_to_full_length() {
+        let mut ctx = EvalContext::default();
+        let mut pad_char_ctx_cfg = EvalConfig::default();
+        pad_char_ctx_cfg.pad_char_to_full_length = true;
+        let mut pad_char_ctx = EvalContext::new(Arc::new(pad_char_ctx_cfg));
+
+        let mut c = col_expr(0);
+        let mut field_tp = FieldType::new();
+        let flen = 16;
+        field_tp
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::String)
+            .set_flen(flen);
+        c.set_field_type(field_tp);
+        let e = Expression::build(&ctx, c).unwrap();
+        // test without pad_char_to_full_length
+        let s = "你好".as_bytes().to_owned();
+        let row = vec![Datum::Bytes(s.clone())];
+        let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
+        assert_eq!(res.to_owned(), s.clone());
+        // test with pad_char_to_full_length
+        let res = e.eval_string(&mut pad_char_ctx, &row).unwrap().unwrap();
+        let s = str::from_utf8(res.as_ref()).unwrap();
+        assert_eq!(s.chars().count(), flen as usize);
+    }
 
     #[test]
     fn test_column_eval() {
@@ -135,7 +168,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (ii, exp) in expecteds.iter().enumerate().take(row.len()) {
             let c = col_expr(ii as i64);
-            let e = Expression::build(&mut ctx, c).unwrap();
+            let e = Expression::build(&ctx, c).unwrap();
 
             let i = e.eval_int(&mut ctx, &row).unwrap_or(None);
             let r = e.eval_real(&mut ctx, &row).unwrap_or(None);
@@ -166,42 +199,21 @@ mod tests {
     }
 
     #[test]
-    fn test_with_pad_char_to_full_length() {
-        let mut ctx = EvalContext::default();
-        let mut pad_char_ctx_cfg = EvalConfig::default();
-        pad_char_ctx_cfg.pad_char_to_full_length = true;
-        let mut pad_char_ctx = EvalContext::new(Arc::new(pad_char_ctx_cfg));
-
-        let mut c = col_expr(0);
-        let mut field_tp = FieldType::new();
-        let flen = 16;
-        field_tp.set_tp(i32::from(types::STRING));
-        field_tp.set_flen(flen);
-        c.set_field_type(field_tp);
-        let e = Expression::build(&mut ctx, c).unwrap();
-        // test without pad_char_to_full_length
-        let s = "你好".as_bytes().to_owned();
-        let row = vec![Datum::Bytes(s.clone())];
-        let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
-        assert_eq!(res.to_owned(), s.clone());
-        // test with pad_char_to_full_length
-        let res = e.eval_string(&mut pad_char_ctx, &row).unwrap().unwrap();
-        let s = str::from_utf8(res.as_ref()).unwrap();
-        assert_eq!(s.chars().count(), flen as usize);
-    }
-
-    #[test]
     fn test_hybrid_type() {
         let mut ctx = EvalContext::default();
         let row = vec![Datum::I64(12)];
-        let hybrid_cases = vec![types::ENUM, types::BIT, types::SET];
-        let in_hybrid_cases = vec![types::JSON, types::NEW_DECIMAL, types::SHORT];
+        let hybrid_cases = vec![FieldTypeTp::Enum, FieldTypeTp::Bit, FieldTypeTp::Set];
+        let in_hybrid_cases = vec![
+            FieldTypeTp::JSON,
+            FieldTypeTp::NewDecimal,
+            FieldTypeTp::Short,
+        ];
         for tp in hybrid_cases {
             let mut c = col_expr(0);
             let mut field_tp = FieldType::new();
-            field_tp.set_tp(i32::from(tp));
+            field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
-            let e = Expression::build(&mut ctx, c).unwrap();
+            let e = Expression::build(&ctx, c).unwrap();
             let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
             assert_eq!(res.as_ref(), b"12");
         }
@@ -209,9 +221,9 @@ mod tests {
         for tp in in_hybrid_cases {
             let mut c = col_expr(0);
             let mut field_tp = FieldType::new();
-            field_tp.set_tp(i32::from(tp));
+            field_tp.as_mut_accessor().set_tp(tp);
             c.set_field_type(field_tp);
-            let e = Expression::build(&mut ctx, c).unwrap();
+            let e = Expression::build(&ctx, c).unwrap();
             let res = e.eval_string(&mut ctx, &row);
             assert!(res.is_err());
         }

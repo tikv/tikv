@@ -25,7 +25,7 @@ use tipb::expression::{ByItem, Expr, ExprType};
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest};
 
-use tikv::coprocessor::codec::{datum, table, Datum};
+use tikv::coprocessor::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::util::codec::number::NumberEncoder;
 
@@ -45,34 +45,30 @@ impl DAGSelect {
         let mut exec = Executor::new();
         exec.set_tp(ExecType::TypeTableScan);
         let mut tbl_scan = TableScan::new();
-        let mut table_info = table.get_table_info();
+        let mut table_info = table.table_info();
         tbl_scan.set_table_id(table_info.get_table_id());
         let columns_info = table_info.take_columns();
         tbl_scan.set_columns(columns_info);
         exec.set_tbl_scan(tbl_scan);
 
-        let mut range = KeyRange::new();
-        range.set_start(table::encode_row_key(table.id, ::std::i64::MIN));
-        range.set_end(table::encode_row_key(table.id, ::std::i64::MAX));
-
         DAGSelect {
             execs: vec![exec],
-            cols: table.get_table_columns(),
+            cols: table.columns_info(),
             order_by: vec![],
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: range,
+            key_range: table.get_record_range_all(),
             output_offsets: None,
         }
     }
 
-    pub fn from_index(table: &Table, index: Column) -> DAGSelect {
+    pub fn from_index(table: &Table, index: &Column) -> DAGSelect {
         let idx = index.index;
         let mut exec = Executor::new();
         exec.set_tp(ExecType::TypeIndexScan);
         let mut scan = IndexScan::new();
-        let mut index_info = table.get_index_info(idx, true);
+        let mut index_info = table.index_info(idx, true);
         scan.set_table_id(index_info.get_table_id());
         scan.set_index_id(idx);
 
@@ -80,7 +76,7 @@ impl DAGSelect {
         scan.set_columns(columns_info.clone());
         exec.set_idx_scan(scan);
 
-        let range = table.get_index_range(idx);
+        let range = table.get_index_range_all(idx);
         DAGSelect {
             execs: vec![exec],
             cols: columns_info.to_vec(),
@@ -98,7 +94,7 @@ impl DAGSelect {
         self
     }
 
-    pub fn order_by(mut self, col: Column, desc: bool) -> DAGSelect {
+    pub fn order_by(mut self, col: &Column, desc: bool) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut item = ByItem::new();
         let mut expr = Expr::new();
@@ -117,7 +113,7 @@ impl DAGSelect {
         self
     }
 
-    pub fn aggr_col(mut self, col: Column, aggr_t: ExprType) -> DAGSelect {
+    pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::new();
         col_expr.set_tp(ExprType::ColumnRef);
@@ -129,39 +125,39 @@ impl DAGSelect {
         self
     }
 
-    pub fn first(self, col: Column) -> DAGSelect {
+    pub fn first(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::First)
     }
 
-    pub fn sum(self, col: Column) -> DAGSelect {
+    pub fn sum(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Sum)
     }
 
-    pub fn avg(self, col: Column) -> DAGSelect {
+    pub fn avg(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Avg)
     }
 
-    pub fn max(self, col: Column) -> DAGSelect {
+    pub fn max(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Max)
     }
 
-    pub fn min(self, col: Column) -> DAGSelect {
+    pub fn min(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Min)
     }
 
-    pub fn bit_and(self, col: Column) -> DAGSelect {
+    pub fn bit_and(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Agg_BitAnd)
     }
 
-    pub fn bit_or(self, col: Column) -> DAGSelect {
+    pub fn bit_or(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Agg_BitOr)
     }
 
-    pub fn bit_xor(self, col: Column) -> DAGSelect {
+    pub fn bit_xor(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Agg_BitXor)
     }
 
-    pub fn group_by(mut self, cols: &[Column]) -> DAGSelect {
+    pub fn group_by(mut self, cols: &[&Column]) -> DAGSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
             let mut expr = Expr::new();

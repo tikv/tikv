@@ -14,7 +14,6 @@
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::config::Config;
 use tikv::storage::engine::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
@@ -25,7 +24,7 @@ use super::*;
 
 #[derive(Clone)]
 pub struct AssertionStorage<E: Engine> {
-    pub store: SyncStorage<E>,
+    pub store: SyncTestStorage<E>,
     pub ctx: Context,
 }
 
@@ -33,7 +32,7 @@ impl Default for AssertionStorage<RocksEngine> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::new(),
-            store: SyncStorage::default(),
+            store: SyncTestStorageBuilder::new().build().unwrap(),
         }
     }
 }
@@ -60,7 +59,7 @@ impl AssertionStorage<SimulateEngine> {
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader.clone());
-        self.store = SyncStorage::from_engine(engine, &Config::default());
+        self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     }
 
     pub fn delete_ok_for_cluster(
@@ -569,7 +568,7 @@ impl<E: Engine> AssertionStorage<E> {
     ) {
         let result: Vec<KvPair> = self
             .store
-            .raw_scan(self.ctx.clone(), cf, start_key, limit)
+            .raw_scan(self.ctx.clone(), cf, start_key, None, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())

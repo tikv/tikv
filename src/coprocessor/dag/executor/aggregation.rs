@@ -35,13 +35,13 @@ struct AggFuncExpr {
 }
 
 impl AggFuncExpr {
-    fn batch_build(ctx: &mut EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
+    fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
         expr.into_iter()
             .map(|v| AggFuncExpr::build(ctx, v))
             .collect()
     }
 
-    fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
+    fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
         let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
         let tp = expr.get_tp();
         let eval_buffer = Vec::with_capacity(args.len());
@@ -95,10 +95,10 @@ impl AggExecutor {
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&group_by)?;
         visitor.batch_visit(&aggr_func)?;
-        let mut ctx = EvalContext::new(eval_config);
+        let ctx = EvalContext::new(eval_config);
         Ok(AggExecutor {
-            group_by: Expression::batch_build(&mut ctx, group_by)?,
-            aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
+            group_by: Expression::batch_build(&ctx, group_by)?,
+            aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
             executed: false,
             ctx,
             related_cols_offset: visitor.column_offsets(),
@@ -110,7 +110,7 @@ impl AggExecutor {
     fn next(&mut self) -> Result<Option<Vec<Datum>>> {
         if let Some(row) = self.src.next()? {
             let row = row.take_origin();
-            row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)
+            row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)
                 .map(Some)
         } else {
             Ok(None)
@@ -398,6 +398,7 @@ impl StreamAggExecutor {
 mod tests {
     use std::i64;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
@@ -406,7 +407,6 @@ mod tests {
 
     use coprocessor::codec::datum::{self, Datum};
     use coprocessor::codec::mysql::decimal::Decimal;
-    use coprocessor::codec::mysql::types;
     use coprocessor::codec::table;
     use storage::SnapshotStore;
     use util::codec::number::NumberEncoder;
@@ -500,8 +500,8 @@ mod tests {
         let tid = 1;
         let idx_id = 1;
         let col_infos = vec![
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -666,11 +666,11 @@ mod tests {
         // prepare data and store
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
-            new_col_info(4, types::FLOAT),
-            new_col_info(5, types::DOUBLE),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
+            new_col_info(4, FieldTypeTp::Float),
+            new_col_info(5, FieldTypeTp::Double),
         ];
         let raw_data = vec![
             vec![

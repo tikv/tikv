@@ -26,7 +26,6 @@ extern crate log;
 extern crate slog;
 #[cfg(unix)]
 extern crate nix;
-extern crate prometheus;
 extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
@@ -37,6 +36,7 @@ extern crate slog_stdlog;
 extern crate slog_term;
 #[macro_use]
 extern crate tikv;
+extern crate hyper;
 extern crate toml;
 
 #[cfg(unix)]
@@ -64,6 +64,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
+use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
@@ -158,14 +159,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             let pd_sender = pd_sender.clone();
             move || storage::ReadPoolContext::new(pd_sender.clone())
         });
-    let mut storage = create_raft_storage(raft_router.clone(), &cfg.storage, storage_read_pool)
-        .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
-    storage
-        .mut_gc_worker()
-        .set_local_storage(Arc::clone(&kv_engine));
-    storage
-        .mut_gc_worker()
-        .set_raft_store_router(raft_router.clone());
+    let storage = create_raft_storage(
+        raft_router.clone(),
+        &cfg.storage,
+        storage_read_pool,
+        Some(Arc::clone(&kv_engine)),
+        Some(raft_router.clone()),
+    ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -235,12 +235,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
-    // Start storage.
-    info!("start storage");
-    if let Err(e) = storage.start(&cfg.storage) {
-        fatal!("failed to start storage, error: {:?}", e);
-    }
-
     let mut metrics_flusher = MetricsFlusher::new(
         engines.clone(),
         Duration::from_millis(DEFAULT_FLUSHER_INTERVAL),
@@ -255,12 +249,31 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
+
+    let server_cfg = cfg.server.clone();
+    let mut status_enabled = cfg.metric.address.is_empty() && !server_cfg.status_addr.is_empty();
+
+    // Create a status server.
+    let mut status_server = StatusServer::new(server_cfg.status_thread_pool_size);
+    if status_enabled {
+        // Start the status server.
+        if let Err(e) = status_server.start(server_cfg.status_addr) {
+            error!("failed to bind addr for status service, error: {:?}", e);
+            status_enabled = false;
+        }
+    }
+
     signal_handler::handle_signal(Some(engines));
 
     // Stop.
     server
         .stop()
         .unwrap_or_else(|e| fatal!("failed to stop server: {:?}", e));
+
+    if status_enabled {
+        // Stop the status server.
+        status_server.stop()
+    }
 
     metrics_flusher.stop();
 
@@ -298,6 +311,13 @@ fn main() {
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Sets advertise listening address for client communication"),
+        )
+        .arg(
+            Arg::with_name("status-addr")
+                .long("status-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Sets HTTP listening address for the status report service"),
         )
         .arg(
             Arg::with_name("log-level")

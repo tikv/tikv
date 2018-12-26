@@ -476,17 +476,15 @@ impl<S: Snapshot> ForwardScanner<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::engine::{self, TEMP_DIR};
     use storage::mvcc::tests::*;
-    use storage::ALL_CFS;
-    use storage::{Engine, Key};
+    use storage::{Engine, Key, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
     /// Check whether everything works as usual when `ForwardScanner::get()` goes out of bound.
     #[test]
     fn test_get_out_of_bound() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
@@ -538,7 +536,7 @@ mod tests {
     /// Case 1. next() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_1() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -601,7 +599,7 @@ mod tests {
     /// Case 2. seek() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_2() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -664,7 +662,7 @@ mod tests {
     /// Range is left open right closed.
     #[test]
     fn test_range() {
-        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [1], [2] ... [6].
         for i in 1..7 {

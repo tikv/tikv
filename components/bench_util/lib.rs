@@ -20,3 +20,13 @@ pub fn new_no_cache_context() -> Context {
     ctx.set_not_fill_cache(true);
     ctx
 }
+
+/// Whether or not env variable TIKV_BENCH_FULL_PAYLOAD = 1, indicating using full payload to
+/// run benchmarks.
+pub fn use_full_payload() -> bool {
+    if let Ok(s) = ::std::env::var("TIKV_BENCH_FULL_PAYLOAD") {
+        s == "1"
+    } else {
+        false
+    }
+}
