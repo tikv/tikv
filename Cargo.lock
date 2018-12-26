@@ -1937,7 +1937,6 @@ version = "0.0.1"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
- "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "test_raftstore 0.0.1",
  "tikv 3.0.0-alpha",
 ]

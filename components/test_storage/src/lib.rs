@@ -15,7 +15,6 @@
 
 extern crate futures;
 extern crate kvproto;
-extern crate tempdir;
 
 #[macro_use]
 extern crate tikv;
