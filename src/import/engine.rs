@@ -162,7 +162,22 @@ pub struct SSTWriter {
 
 impl SSTWriter {
     pub fn new(cfg: &DbConfig) -> Result<SSTWriter> {
-        let env = Arc::new(Env::new_mem());
+        let env = if cfg.security.cipher_file.is_empty() {
+            Arc::new(Env::new_mem())
+        } else {
+            let cipher_hex = match file::read_all(&cfg.security.cipher_file) {
+                Err(e) => ,
+                Ok(content) => content,
+            };
+            let cipher_text = match hex::decode(cipher_hex) {
+                Err(e) => fatal!("cipher file should be hex type, error: {:?}", e),
+                Ok(text) => text,
+            };
+            match Env::new_ctr_encrypted_env(Arc::new(Env::new_mem()), &cipher_text) {
+                Err(e) => fatal!("failed to create encrypted env: {:?}", e),
+                Ok(env) => Arc::new(env),
+            }
+        };
 
         let mut default_opts = cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
