@@ -12,14 +12,14 @@
 // limitations under the License.
 
 use std::cmp;
-use std::collections::HashSet;
 
 use rocksdb::{
     self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
 };
-use util::rocksdb::engine_metrics::*;
 
-use super::properties::RangeProperties;
+use util::collections::HashSet;
+use util::properties::RangeProperties;
+use util::rocksdb::engine_metrics::*;
 
 pub struct EventListener {
     db_name: String,

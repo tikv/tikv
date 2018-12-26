@@ -67,7 +67,7 @@ mod tests {
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let op = scalar_func_expr(ScalarFuncSig::BitCount, args);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -101,7 +101,7 @@ mod tests {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastStringAsInt, args);
             let op = scalar_func_expr(ScalarFuncSig::BitCount, &[child]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -133,7 +133,7 @@ mod tests {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, args);
             let op = scalar_func_expr(ScalarFuncSig::BitCount, &[child]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
