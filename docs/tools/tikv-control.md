@@ -109,7 +109,7 @@ In this command, the key is also the escaped form of raw key.
 
 ### Scan raw keys
 
-The `raw-scan` subcommand is similar to `scan`, except that it doesn't tries to interpret the keys as MVCC keys but print the raw keys directly.
+The `raw-scan` subcommand is similar to `scan`, except that it doesn't try to interpret the keys as MVCC keys but prints the raw keys directly.
 
 Use `--from` and `--to` options to specify the range to scan (unbounded by default). Use `--limit` to limit at most how
 many keys to print out (30 by default). Use `--cf` to specify which cf to scan (can be `default`, `write` or `lock`).
@@ -122,7 +122,7 @@ key: "zt\200\000\000\000\000\000\000\377\025_r\200\000\000\000\000\377\000\000\0
 Total scanned keys: 2
 ```
 
-There's a limitation: if you are trying to scan write cf, the keys you provides shouldn't be shorter than 8 bytes.
+There's a limitation: if you are trying to scan write cf, the keys you provide shouldn't be shorter than 8 bytes.
 
 ### Print a specific key value
 
