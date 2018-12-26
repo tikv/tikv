@@ -91,7 +91,11 @@ test:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	cargo test --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --features "${ENABLE_FEATURES}" --bench coprocessor_executors ${EXTRA_CARGO_ARGS} -- --test && \
+	cargo test --features "${ENABLE_FEATURES}" --bench engines ${EXTRA_CARGO_ARGS} -- --test && \
+	cargo test --features "${ENABLE_FEATURES}" --bench raftstore ${EXTRA_CARGO_ARGS} -- --test && \
+	cargo test --features "${ENABLE_FEATURES}" --bench rocksdb_scan ${EXTRA_CARGO_ARGS} -- --test && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \

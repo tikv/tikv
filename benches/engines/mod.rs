@@ -205,7 +205,7 @@ fn bench_engines<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, factory: F) 
 }
 
 fn main() {
-    let mut criterion = Criterion::default();
+    let mut criterion = Criterion::default().configure_from_args();
     bench_engines(&mut criterion, RocksEngineFactory {});
     bench_engines(&mut criterion, BTreeEngineFactory {});
     criterion.final_summary();
