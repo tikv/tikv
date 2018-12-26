@@ -238,6 +238,7 @@ impl<E: Engine> GCRunner<E> {
 
         let mut next_key = None;
         loop {
+            // Scans at most `GC_BATCH_SIZE` keys
             let (keys, next) = self
                 .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {
@@ -248,6 +249,7 @@ impl<E: Engine> GCRunner<E> {
                 break;
             }
 
+            // Does the GC operation on all scanned keys
             next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
                 warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
                 e
