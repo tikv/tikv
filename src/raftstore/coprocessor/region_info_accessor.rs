@@ -267,21 +267,27 @@ impl RegionCollector {
             || epoch.get_conf_ver() < current_epoch.get_conf_ver()
     }
 
-    /// For all regions whose range overlaps with the given `regions` or region_id is the same as
-    /// `region`'s, checks whether the given `region`'s epoch is older than theirs.
-    /// Returns false if given `region` is stale, which means, at least one region above has newer
-    /// epoch. Returns true otherwise.
-    fn is_region_info_stale(&self, region: &Region) -> bool {
+    /// For all regions whose range overlaps with the given `region` or region_id is the same as
+    /// `region`'s, checks whether the given `region`'s epoch is not older than theirs.
+    ///
+    /// Returns false if the given `region` is stale, which means, at least one region above has
+    /// newer epoch.
+    /// If the given `region` is not stale, all other regions in the collection that overlaps with
+    /// the given `region` must be stale. Returns true in this case, and if `clear_regions_in_range`
+    /// is true, those out-of-date regions will be removed from the collection.
+    fn check_region_range(&mut self, region: &Region, clear_regions_in_range: bool) -> bool {
         if let Some(region_with_same_id) = self.regions.get(&region.get_id()) {
             if self.is_region_epoch_stale(region, &region_with_same_id.region) {
-                return true;
+                return false;
             }
         }
 
-        let regions_in_range = self
+        let mut stale_regions_in_range = vec![];
+
+        for (key, id) in self
             .region_ranges
-            .range((Excluded(data_key(region.get_start_key())), Unbounded));
-        for (_, id) in regions_in_range {
+            .range((Excluded(data_key(region.get_start_key())), Unbounded))
+        {
             if *id == region.get_id() {
                 continue;
             }
@@ -295,53 +301,35 @@ impl RegionCollector {
             }
 
             if self.is_region_epoch_stale(region, current_region) {
-                return true;
+                return false;
             }
             // They are impossible to equal, or they cannot overlap.
             assert_ne!(
                 region.get_region_epoch().get_version(),
                 current_region.get_region_epoch().get_version()
             );
-        }
-
-        false
-    }
-
-    /// Clears all other regions that has range overlapping with `region` except the region with
-    /// the same id with `region`(if there exists such a region).
-    fn clear_overlapped_regions(&mut self, region: &Region) {
-        let mut regions_to_remove = vec![];
-        for (key, id) in self
-            .region_ranges
-            .range((Excluded(data_key(region.get_start_key())), Unbounded))
-        {
-            let current_region = &self.regions[id].region;
-            if !region.get_end_key().is_empty()
-                && current_region.get_start_key() >= region.get_end_key()
-            {
-                // This and following regions don't overlap with `region`.
-                break;
-            }
-
-            // Remove other regions but keep `region`.
-            if *id != region.get_id() {
-                regions_to_remove.push((key.clone(), *id));
+            // Remove it since it's a out-of-date region info.
+            if clear_regions_in_range {
+                stale_regions_in_range.push((key.clone(), *id));
             }
         }
-        for (key, id) in regions_to_remove {
+
+        // Remove all pending-remove regions
+        for (key, id) in stale_regions_in_range {
             self.regions.remove(&id).unwrap();
             self.region_ranges.remove(&key).unwrap();
         }
+
+        true
     }
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
-            if self.is_region_info_stale(region) {
+            if !self.check_region_range(region, true) {
                 debug!("region_collector: Received stale event: {:?}", event);
                 return;
             }
-            self.clear_overlapped_regions(region);
         }
 
         match event {
@@ -435,7 +423,7 @@ mod tests {
         region
     }
 
-    fn new_region_with_conf(
+    fn region_with_conf(
         id: u64,
         start_key: &[u8],
         end_key: &[u8],
@@ -590,64 +578,64 @@ mod tests {
     #[test]
     fn test_epoch_stale_check() {
         let regions = &[
-            new_region_with_conf(1, b"", b"k1", 10, 10),
-            new_region_with_conf(2, b"k1", b"k2", 20, 10),
-            new_region_with_conf(3, b"k3", b"k4", 10, 20),
-            new_region_with_conf(4, b"k4", b"k5", 20, 20),
-            new_region_with_conf(5, b"k6", b"k7", 10, 20),
-            new_region_with_conf(6, b"k7", b"", 20, 10),
+            region_with_conf(1, b"", b"k1", 10, 10),
+            region_with_conf(2, b"k1", b"k2", 20, 10),
+            region_with_conf(3, b"k3", b"k4", 10, 20),
+            region_with_conf(4, b"k4", b"k5", 20, 20),
+            region_with_conf(5, b"k6", b"k7", 10, 20),
+            region_with_conf(6, b"k7", b"", 20, 10),
         ];
 
         let mut c = RegionCollector::new();
         must_load_regions(&mut c, regions);
 
-        assert!(!c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 10, 10)));
-        assert!(!c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 12, 10)));
-        assert!(!c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 10, 12)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 8, 10)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"", b"k1", 10, 8)));
+        assert!(c.check_region_range(&region_with_conf(1, b"", b"k1", 10, 10), false));
+        assert!(c.check_region_range(&region_with_conf(1, b"", b"k1", 12, 10), false));
+        assert!(c.check_region_range(&region_with_conf(1, b"", b"k1", 10, 12), false));
+        assert!(!c.check_region_range(&region_with_conf(1, b"", b"k1", 8, 10), false));
+        assert!(!c.check_region_range(&region_with_conf(1, b"", b"k1", 10, 8), false));
 
-        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k3", b"k4", 12, 20)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(3, b"k3", b"k4", 8, 20)));
+        assert!(c.check_region_range(&region_with_conf(3, b"k3", b"k4", 12, 20), false));
+        assert!(!c.check_region_range(&region_with_conf(3, b"k3", b"k4", 8, 20), false));
 
-        assert!(!c.is_region_info_stale(&new_region_with_conf(6, b"k7", b"", 20, 12)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(6, b"k7", b"", 20, 8)));
+        assert!(c.check_region_range(&region_with_conf(6, b"k7", b"", 20, 12), false));
+        assert!(!c.check_region_range(&region_with_conf(6, b"k7", b"", 20, 8), false));
 
-        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"k7", b"", 15, 10)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(1, b"", b"", 19, 10)));
+        assert!(!c.check_region_range(&region_with_conf(1, b"k7", b"", 15, 10), false));
+        assert!(!c.check_region_range(&region_with_conf(1, b"", b"", 19, 10), false));
 
-        assert!(!c.is_region_info_stale(&new_region_with_conf(7, b"k2", b"k3", 1, 1)));
+        assert!(c.check_region_range(&region_with_conf(7, b"k2", b"k3", 1, 1), false));
 
         must_update_region(
             &mut c,
-            &new_region_with_conf(1, b"", b"k1", 100, 100),
+            &region_with_conf(1, b"", b"k1", 100, 100),
             StateRole::Follower,
         );
         must_update_region(
             &mut c,
-            &new_region_with_conf(6, b"k7", b"", 100, 100),
+            &region_with_conf(6, b"k7", b"", 100, 100),
             StateRole::Follower,
         );
-        assert!(!c.is_region_info_stale(&new_region_with_conf(2, b"k1", b"k7", 30, 30)));
-        assert!(!c.is_region_info_stale(&new_region_with_conf(2, b"k11", b"k61", 30, 30)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(2, b"k0", b"k7", 30, 30)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(2, b"k1", b"k8", 30, 30)));
+        assert!(c.check_region_range(&region_with_conf(2, b"k1", b"k7", 30, 30), false));
+        assert!(c.check_region_range(&region_with_conf(2, b"k11", b"k61", 30, 30), false));
+        assert!(!c.check_region_range(&region_with_conf(2, b"k0", b"k7", 30, 30), false));
+        assert!(!c.check_region_range(&region_with_conf(2, b"k1", b"k8", 30, 30), false));
 
         must_update_region(
             &mut c,
-            &new_region_with_conf(2, b"k1", b"k2", 100, 100),
+            &region_with_conf(2, b"k1", b"k2", 100, 100),
             StateRole::Follower,
         );
         must_update_region(
             &mut c,
-            &new_region_with_conf(5, b"k6", b"k7", 100, 100),
+            &region_with_conf(5, b"k6", b"k7", 100, 100),
             StateRole::Follower,
         );
-        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k2", b"k6", 30, 30)));
-        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k21", b"k51", 30, 30)));
-        assert!(!c.is_region_info_stale(&new_region_with_conf(3, b"k3", b"k5", 30, 30)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(3, b"k11", b"k6", 30, 30)));
-        assert!(c.is_region_info_stale(&new_region_with_conf(3, b"k2", b"k61", 30, 30)));
+        assert!(c.check_region_range(&region_with_conf(3, b"k2", b"k6", 30, 30), false));
+        assert!(c.check_region_range(&region_with_conf(3, b"k21", b"k51", 30, 30), false));
+        assert!(c.check_region_range(&region_with_conf(3, b"k3", b"k5", 30, 30), false));
+        assert!(!c.check_region_range(&region_with_conf(3, b"k11", b"k6", 30, 30), false));
+        assert!(!c.check_region_range(&region_with_conf(3, b"k2", b"k61", 30, 30), false));
     }
 
     #[test]
@@ -668,26 +656,26 @@ mod tests {
             .map(|region| (region.clone(), StateRole::Follower))
             .collect();
 
-        c.clear_overlapped_regions(&new_region(7, b"k2", b"k3", 2));
+        c.check_region_range(&new_region(7, b"k2", b"k3", 2), true);
         check_collection(&c, &regions);
 
-        c.clear_overlapped_regions(&new_region(7, b"k31", b"k32", 2));
+        c.check_region_range(&new_region(7, b"k31", b"k32", 2), true);
         // Remove region 3
         regions.remove(2);
         check_collection(&c, &regions);
 
-        c.clear_overlapped_regions(&new_region(7, b"k3", b"k5", 2));
+        c.check_region_range(&new_region(7, b"k3", b"k5", 2), true);
         // Remove region 4
         regions.remove(2);
         check_collection(&c, &regions);
 
-        c.clear_overlapped_regions(&new_region(7, b"k11", b"k61", 2));
+        c.check_region_range(&new_region(7, b"k11", b"k61", 2), true);
         // Remove region 2 and region 5
         regions.remove(1);
         regions.remove(1);
         check_collection(&c, &regions);
 
-        c.clear_overlapped_regions(&new_region(7, b"", b"", 2));
+        c.check_region_range(&new_region(7, b"", b"", 2), true);
         // Remove all
         check_collection(&c, &[]);
 
@@ -695,7 +683,7 @@ mod tests {
         c = RegionCollector::new();
         must_load_regions(&mut c, &init_regions);
 
-        c.clear_overlapped_regions(&new_region(3, b"k1", b"k7", 2));
+        c.check_region_range(&new_region(3, b"k1", b"k7", 2), true);
         check_collection(
             &c,
             &[
@@ -705,7 +693,7 @@ mod tests {
             ],
         );
 
-        c.clear_overlapped_regions(&new_region(1, b"", b"", 2));
+        c.check_region_range(&new_region(1, b"", b"", 2), true);
         check_collection(&c, &[(init_regions[0].clone(), StateRole::Follower)]);
     }
 
