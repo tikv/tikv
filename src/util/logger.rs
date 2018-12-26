@@ -35,6 +35,8 @@ const ENABLED_TARGETS: &[&str] = &[
     "integrations::",
     "failpoints::",
     "raft::",
+    // Collects logs of components.
+    "test_",
 ];
 
 pub fn init_log<D>(drain: D, level: Level) -> Result<GlobalLoggerGuard, SetLoggerError>

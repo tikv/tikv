@@ -64,6 +64,14 @@
 ## If not set, `addr` will be used.
 # advertise-addr = ""
 
+## Status address.
+## This is used for reporting the status of TiKV directly through the HTTP address.
+## Empty string means disabling it.
+# status-addr = "127.0.0.1:20180"
+
+## Set the maximum number of worker threads for the status report HTTP service.
+# status-thread-pool-size = 1
+
 ## Compression type for gRPC channel: none, deflate or gzip.
 # grpc-compression-type = "none"
 
@@ -129,19 +137,6 @@
 [pd]
 ## PD endpoints.
 # endpoints = []
-
-[metric]
-## Prometheus client push interval.
-## Setting the value to 0s stops Prometheus client from pushing.
-# interval = "15s"
-
-## Prometheus PushGateway address.
-## Leaving it empty stops Prometheus client from pushing.
-# address = ""
-
-## Prometheus client push job name.
-## Note: A node id will automatically append, e.g., "tikv_1".
-# job = "tikv"
 
 [raftstore]
 ## Whether to force to flush logs.
@@ -505,6 +500,13 @@
 ## Pick target size of each level dynamically.
 # dynamic-level-bytes = true
 
+## Optimizes bloom filters. If true, RocksDB won't create bloom filters for the max level of
+## the LSM to reduce metadata that should fit in RAM.
+## This value is setted to true for `default` cf by default because its kv data could be determined
+## whether really exists by upper logic instead of bloom filters. But we suggest to set it to false
+## while using `Raw` mode.
+# optimize-filters-for-hits = true
+
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -535,6 +537,7 @@
 # compaction-pri = 3
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = false
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -553,8 +556,10 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = false
 
 [raftdb]
+# max-background-jobs = 2
 # max-sub-compactions = 1
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
@@ -575,6 +580,7 @@
 # info-log-roll-time = "0"
 # info-log-keep-log-file-num = 10
 # info-log-dir = ""
+# optimize-filters-for-hits = true
 
 [raftdb.defaultcf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -602,6 +608,7 @@
 # compaction-pri = 0
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
+# optimize-filters-for-hits = true
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
