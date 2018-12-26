@@ -476,7 +476,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    // WARNING: Currently this API may leave some dirty keys in TiKV. Be careful using this API.
     fn kv_delete_range(
         &mut self,
         ctx: RpcContext,
@@ -583,14 +582,22 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
 
+        let end_key = if req.get_end_key().is_empty() {
+            None
+        } else {
+            Some(req.take_end_key())
+        };
+
         let future = self
             .storage
             .async_raw_scan(
                 req.take_context(),
                 req.take_cf(),
                 req.take_start_key(),
+                end_key,
                 req.get_limit() as usize,
                 req.get_key_only(),
+                req.get_reverse(),
             )
             .then(|v| {
                 let mut resp = RawScanResponse::new();
@@ -626,6 +633,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 req.take_ranges().into_vec(),
                 req.get_each_limit() as usize,
                 req.get_key_only(),
+                req.get_reverse(),
             )
             .then(|v| {
                 let mut resp = RawBatchScanResponse::new();
@@ -964,11 +972,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
 
-        let storage = self.storage.clone();
-
         let key = Key::from_raw(req.get_key());
         let (cb, f) = paired_future_callback();
-        let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
+        let res = self
+            .storage
+            .async_mvcc_by_key(req.take_context(), key.clone(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1004,11 +1012,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .mvcc_get_by_start_ts
             .start_coarse_timer();
 
-        let storage = self.storage.clone();
-
         let (cb, f) = paired_future_callback();
-
-        let res = storage.async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
+        let res = self
+            .storage
+            .async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1166,6 +1173,10 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts: {:?}", err);
+            key_error.set_retryable(format!("{:?}", err));
+        }
+        storage::Error::Closed => {
+            warn!("tikv server is closing");
             key_error.set_retryable(format!("{:?}", err));
         }
         _ => {

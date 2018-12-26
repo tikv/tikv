@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod extension;
+pub mod extension;
 mod tz;
-mod weekmode;
+pub mod weekmode;
 
 use std::cmp::{min, Ordering};
 use std::convert::{TryFrom, TryInto};
@@ -32,8 +32,8 @@ use coprocessor::codec::{Error, Result, TEN_POW};
 use util::codec::number::{self, NumberEncoder};
 use util::codec::BytesSlice;
 
-use self::extension::*;
-use self::weekmode::WeekMode;
+pub use self::extension::*;
+pub use self::weekmode::WeekMode;
 
 pub use self::tz::Tz;
 
@@ -89,13 +89,18 @@ fn ymd_hms_nanos<T: TimeZone>(
     secs: u32,
     nanos: u32,
 ) -> Result<DateTime<T>> {
-    tz.ymd_opt(year, month, day)
-        .and_hms_opt(hour, min, secs)
-        .single()
+    use chrono::NaiveDate;
+
+    // Note: We are not using `tz::from_ymd_opt` as suggested in chrono's README due to
+    // chronotope/chrono-tz #23.
+    // As a workaround, we first build a NaiveDate, then attach time zone information to it.
+    NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|date| date.and_hms_opt(hour, min, secs))
         .and_then(|t| t.checked_add_signed(Duration::nanoseconds(i64::from(nanos))))
+        .and_then(|datetime| tz.from_local_datetime(&datetime).earliest())
         .ok_or_else(|| {
             box_err!(
-                "'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime",
+                "'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime in specified time zone",
                 year,
                 month,
                 day,
@@ -1035,23 +1040,20 @@ mod tests {
 
     #[test]
     fn test_parse_datetime_dst() {
-        // Ambiguous date times are commented out.
-        // See https://github.com/chronotope/chrono-tz/issues/23
-
         let ok_tables = vec![
             ("Asia/Shanghai", "1988-04-09 23:59:59", 576604799),
             ("Asia/Shanghai", "1988-04-10 01:00:00", 576604800),
             ("Asia/Shanghai", "1988-09-11 00:00:00", 589910400),
             ("Asia/Shanghai", "1988-09-11 00:00:01", 589910401),
-            // ("Asia/Shanghai", "1988-09-10 23:59:59", 589906799), // ambiguous
-            // ("Asia/Shanghai", "1988-09-10 23:00:00", 589903200), // ambiguous
+            ("Asia/Shanghai", "1988-09-10 23:59:59", 589906799), // ambiguous
+            ("Asia/Shanghai", "1988-09-10 23:00:00", 589903200), // ambiguous
             ("Asia/Shanghai", "1988-09-10 22:59:59", 589903199),
             ("Asia/Shanghai", "2015-01-02 23:59:59", 1420214399),
             ("America/Los_Angeles", "1919-03-30 01:59:59", -1601820001),
             ("America/Los_Angeles", "1919-03-30 03:00:00", -1601820000),
             ("America/Los_Angeles", "2011-03-13 01:59:59", 1300010399),
             ("America/Los_Angeles", "2011-03-13 03:00:00", 1300010400),
-            // ("America/Los_Angeles", "2011-11-06 01:59:59", 1320569999), // ambiguous
+            ("America/Los_Angeles", "2011-11-06 01:59:59", 1320569999), // ambiguous
             ("America/Los_Angeles", "2011-11-06 02:00:00", 1320573600),
             ("America/Toronto", "2013-11-18 11:55:00", 1384793700),
         ];

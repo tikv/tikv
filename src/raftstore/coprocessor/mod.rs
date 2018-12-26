@@ -102,7 +102,7 @@ pub trait SplitChecker {
     /// Hook to call for every kv scanned during split.
     ///
     /// Return true to abort scan early.
-    fn on_kv(&mut self, _: &mut ObserverContext, &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, _: &KeyEntry) -> bool {
         false
     }
 
@@ -110,7 +110,7 @@ pub trait SplitChecker {
     fn split_keys(&mut self) -> Vec<Vec<u8>>;
 
     /// Get approximate split keys without scan.
-    fn approximate_split_keys(&self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
+    fn approximate_split_keys(&mut self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
         Ok(vec![])
     }
 
@@ -123,7 +123,7 @@ pub trait SplitCheckObserver: Coprocessor {
     fn add_checker(
         &self,
         _: &mut ObserverContext,
-        &mut SplitCheckerHost,
+        _: &mut SplitCheckerHost,
         _: &DB,
         policy: CheckPolicy,
     );
@@ -147,5 +147,5 @@ pub enum RegionChangeEvent {
 
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
-    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent) {}
+    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {}
 }

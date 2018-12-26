@@ -127,8 +127,8 @@ impl Runner {
         compact_range_timer.observe_duration();
         info!(
             "compact range ({:?}, {:?}) for cf {:?} finished, takes: {:?}",
-            start,
-            end,
+            &start.as_ref().map(|k| escape(k)),
+            &end.as_ref().map(|k| escape(k)),
             cf_name,
             timer.elapsed()
         );

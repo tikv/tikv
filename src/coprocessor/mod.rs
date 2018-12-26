@@ -21,7 +21,7 @@ mod metrics;
 mod readpool_context;
 mod statistics;
 mod tracker;
-mod util;
+pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
@@ -156,7 +156,7 @@ impl ReqContext {
             "test",
             kvrpcpb::Context::new(),
             &[],
-            Duration::from_secs(10),
+            Duration::from_secs(100),
             None,
             None,
             None,

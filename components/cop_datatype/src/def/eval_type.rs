@@ -36,9 +36,9 @@ impl fmt::Display for EvalType {
 }
 
 impl ::std::convert::TryFrom<::FieldTypeTp> for EvalType {
-    type Error = ::Error;
+    type Error = ::DataTypeError;
 
-    fn try_from(tp: ::FieldTypeTp) -> Result<Self, ::Error> {
+    fn try_from(tp: ::FieldTypeTp) -> Result<Self, ::DataTypeError> {
         let eval_type = match tp {
             ::FieldTypeTp::Tiny
             | ::FieldTypeTp::Short
@@ -62,7 +62,9 @@ impl ::std::convert::TryFrom<::FieldTypeTp> for EvalType {
             | ::FieldTypeTp::String => EvalType::Bytes,
             _ => {
                 // Note: In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
-                return Err(::Error::UnsupportedType(tp.to_string()));
+                return Err(::DataTypeError::UnsupportedType {
+                    name: tp.to_string(),
+                });
             }
         };
         Ok(eval_type)
