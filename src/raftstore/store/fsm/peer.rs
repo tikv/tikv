@@ -844,8 +844,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .schedule(ReadTask::destroy(region_id))
             .unwrap();
         // Trigger region change observer
-        self.coprocessor_host
-            .on_region_changed(p.region(), RegionChangeEvent::Destroy);
+        self.coprocessor_host.on_region_changed(
+            p.region(),
+            RegionChangeEvent::Destroy,
+            p.get_role(),
+        );
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
