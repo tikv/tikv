@@ -15,9 +15,6 @@ use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use std::{f64, i64, u64};
 
-use cop_datatype::prelude::*;
-use cop_datatype::FieldTypeFlag;
-
 use coprocessor::codec::mysql::{Decimal, Res};
 use coprocessor::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, Datum};
 
@@ -48,14 +45,8 @@ impl ScalarFunc {
     pub fn plus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-        let lus = self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
-        let rus = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let lus = self.children[0].is_unsigned();
+        let rus = self.children[1].is_unsigned();
         let res = match (lus, rus) {
             (true, true) => (lhs as u64).checked_add(rhs as u64).map(|t| t as i64),
             (true, false) => if rhs >= 0 {
@@ -107,14 +98,8 @@ impl ScalarFunc {
     pub fn minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-        let lus = self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
-        let rus = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let lus = self.children[0].is_unsigned();
+        let rus = self.children[1].is_unsigned();
         let data_type = if lus | rus {
             "BIGINT UNSIGNED"
         } else {
@@ -164,14 +149,8 @@ impl ScalarFunc {
     pub fn multiply_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-        let lus = self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
-        let rus = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let lus = self.children[0].is_unsigned();
+        let rus = self.children[1].is_unsigned();
         let u64_mul_i64 = |u, s| {
             if s >= 0 {
                 (u as u64).checked_mul(s as u64).map(|t| t as i64)
@@ -239,16 +218,10 @@ impl ScalarFunc {
         if rhs == 0 {
             return Ok(None);
         }
-        let rus = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let rus = self.children[1].is_unsigned();
 
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let lus = self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let lus = self.children[0].is_unsigned();
 
         let res = match (lus, rus) {
             (true, true) => Ok(((lhs as u64) / (rhs as u64)) as i64),
@@ -305,16 +278,10 @@ impl ScalarFunc {
         if rhs == 0 {
             return Ok(None);
         }
-        let rus = self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let rus = self.children[1].is_unsigned();
 
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
-        let lus = self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let lus = self.children[0].is_unsigned();
 
         let res = match (lus, rus) {
             (true, true) => ((lhs as u64) % (rhs as u64)) as i64,
