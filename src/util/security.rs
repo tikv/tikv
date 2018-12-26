@@ -97,6 +97,7 @@ pub struct SecurityManager {
     cert: Vec<u8>,
     key: Vec<u8>,
     override_ssl_target: String,
+    cipher_file: String,
 }
 
 impl Drop for SecurityManager {
@@ -116,6 +117,7 @@ impl SecurityManager {
             cert: load_key("certificate", &cfg.cert_path)?,
             key: load_key("private key", &cfg.key_path)?,
             override_ssl_target: cfg.override_ssl_target.clone(),
+            cipher_file: cfg.cipher_file.clone(),
         })
     }
 
@@ -144,6 +146,10 @@ impl SecurityManager {
                 .build();
             sb.bind_secure(addr, port, cred)
         }
+    }
+
+    pub fn cipher_file(&self) -> &str {
+        &self.cipher_file
     }
 }
 
