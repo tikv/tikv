@@ -479,7 +479,7 @@ impl Peer {
         self.raft_group.raft.raft_log.last_index() + 1
     }
 
-    /// Put self region id into `pending_raft_groups`.
+    /// Puts self `region_id` into `pending_raft_groups`.
     pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
         if !self.marked_to_be_checked {
             self.marked_to_be_checked = true;
@@ -487,7 +487,7 @@ impl Peer {
         }
     }
 
-    /// Try to destroy itself. Returns a job if need to do more clean task.
+    /// Tries to destroy itself. Returns a job if need to do more clean task.
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!("{} is being destroyed, skip", self.tag);
@@ -519,10 +519,10 @@ impl Peer {
         })
     }
 
-    /// Do the really destroy task:
-    /// 1. tombstone the region;
-    /// 2. clear data;
-    /// 3. notify all pending requests.
+    /// Does the really destroy task which includes:
+    /// 1. Tombstone the region;
+    /// 2. Clear data;
+    /// 3. Notify all pending requests.
     pub fn destroy(&mut self, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
@@ -702,7 +702,7 @@ impl Peer {
         Ok(())
     }
 
-    /// Step the raft message.
+    /// Steps the raft message.
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
         fail_point!(
             "step_message_3_1",
@@ -721,7 +721,7 @@ impl Peer {
         Ok(())
     }
 
-    /// Check and update `peer_heartbeats` for the peer.
+    /// Checks and updates `peer_heartbeats` for the peer.
     pub fn check_peers(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
@@ -741,7 +741,7 @@ impl Peer {
         }
     }
 
-    /// Collect all down peers.
+    /// Collects all down peers.
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
         for p in self.region().get_peers() {
@@ -760,7 +760,7 @@ impl Peer {
         down_peers
     }
 
-    /// Collect all pending peers and update `peers_start_pending_time`.
+    /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
@@ -1784,8 +1784,8 @@ impl Peer {
     }
 
     // Fails in such cases:
-    // 1. there is already a pending conf change not applied;
-    // 2. remove leader but the configuration doesn't allow;
+    // 1. A pending conf change has not been applied yet;
+    // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
     fn propose_conf_change(

@@ -83,9 +83,9 @@ impl PartialEq for SnapState {
     }
 }
 
-/// Update the `state` with given `compact_index` and `compact_term`.
+/// Updates the `state` with given `compact_index` and `compact_term`.
 ///
-/// Please remember the raft log is not delete here.
+/// Remember the Raft log is not deleted here.
 pub fn compact_raft_log(
     tag: &str,
     state: &mut RaftApplyState,

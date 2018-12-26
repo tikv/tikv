@@ -144,7 +144,7 @@ impl Tick {
     }
 }
 
-/// Some significant messages sent to raftstore. Raftstore will dispatch these messages to raft
+/// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// group to update some important internal status.
 #[derive(Debug, PartialEq)]
 pub enum SignificantMsg {
