@@ -154,12 +154,12 @@ impl<T: Display + Send + 'static> Worker<T> {
         Ok(())
     }
 
-    /// Gets a scheduler to schedule task.
+    /// Gets a scheduler to schedule the task.
     pub fn scheduler(&self) -> Scheduler<T> {
         self.scheduler.clone()
     }
 
-    /// Schedule a task to run.
+    /// Schedules a task to run.
     ///
     /// If the worker is stopped, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {

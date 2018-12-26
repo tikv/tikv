@@ -60,7 +60,7 @@ impl IOLimiter {
         }
     }
 
-    /// Gets the total bytes that have gone though the rate limiter.
+    /// Gets the total bytes that have gone through the rate limiter.
     pub fn get_total_bytes_through(&self) -> i64 {
         self.inner.get_total_bytes_through(PRIORITY_HIGH)
     }
@@ -70,7 +70,7 @@ impl IOLimiter {
         self.inner.get_bytes_per_second()
     }
 
-    /// Gets the total number of requests that have gone though rate limiter
+    /// Gets the total number of requests that have gone through rate limiter
     pub fn get_total_requests(&self) -> i64 {
         self.inner.get_total_requests(PRIORITY_HIGH)
     }

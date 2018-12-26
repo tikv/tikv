@@ -19,7 +19,7 @@ use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
 
-/// Monitors current process's threads.
+/// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = ThreadsCollector::new(pid, namespace);
@@ -188,7 +188,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     Ok(tids)
 }
 
-/// Gets thread name and the index of the last character(including ')').
+/// Gets the thread name and the index of the last character (including ')').
 fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     let start = stat.find('(');
     let end = stat.rfind(')');
@@ -202,7 +202,7 @@ fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     )))
 }
 
-/// Sanitizes thread name. Keep `a-zA-Z0-9_:`, replace `-` and ` ` with `_`, drop the others.
+/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
 ///
 /// Examples:
 ///

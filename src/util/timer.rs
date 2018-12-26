@@ -45,7 +45,7 @@ impl<T> Timer<T> {
     }
 
     /// Pops a `TimeoutTask` from the `Timer`, which should be ticked before `instant`.
-    /// Returns `None` if there is no tasks should be ticked any more.
+    /// Returns `None` if no tasks should be ticked any more.
     ///
     /// The normal use case is keeping `pop_task_before` until get `None` in order
     /// to retrieve all available events.

@@ -43,7 +43,7 @@ impl Default for SecurityConfig {
     }
 }
 
-/// Checks and opens key file. Return `Ok(None)` if path is empty.
+/// Checks and opens key file. Returns `Ok(None)` if the path is empty.
 ///
 ///  # Arguments
 ///
@@ -58,7 +58,7 @@ fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<Error>> {
     }
 }
 
-/// Loads key file content. Return `Ok(vec![])` if path is empty.
+/// Loads key file content. Returns `Ok(vec![])` if the path is empty.
 fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
     let mut key = vec![];
     let f = check_key_file(tag, path)?;

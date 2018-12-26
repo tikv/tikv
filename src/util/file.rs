@@ -27,7 +27,7 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
     path.exists() && path.is_file()
 }
 
-/// Deletes given path from file system. Return `true` on success, `false` if the file doesn't exist.
+/// Deletes given path from file system. Returns `true` on success, `false` if the file doesn't exist.
 /// Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     match fs::remove_file(&file) {
@@ -37,7 +37,7 @@ pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     }
 }
 
-/// Deletes given path from file system. Return `true` on success, `false` if the directory doesn't
+/// Deletes given path from file system. Returns `true` on success, `false` if the directory doesn't
 /// exist. Otherwise the raw error will be returned.
 pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::remove_dir_all(&dir) {
@@ -47,7 +47,7 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Creates a new, empty directory at the provided path. Return `true` on success,
+/// Creates a new, empty directory at the provided path. Returns `true` on success,
 /// `false` if the directory already exists. Otherwise the raw error will be returned.
 pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match fs::create_dir(&dir) {

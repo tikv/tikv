@@ -38,7 +38,7 @@ fn rotation_file_path_with_timestamp(
     ))
 }
 
-/// Opens log file with append mode. Create a new log file if it doesn't exist.
+/// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
     let parent = path
@@ -75,7 +75,7 @@ impl RotatingFileLogger {
         })
     }
 
-    /// Opens log file with append mode. Create a new file if it doesn't exist.
+    /// Opens log file with append mode. Creates a new file if it doesn't exist.
     fn open(&mut self) -> io::Result<()> {
         self.file = open_log_file(&self.file_path)?;
         Ok(())
@@ -85,7 +85,7 @@ impl RotatingFileLogger {
         Utc::now() > self.next_rotation_time
     }
 
-    /// Rotates the current file and update next rotation time.
+    /// Rotates the current file and updates the next rotation time.
     fn rotate(&mut self) -> io::Result<()> {
         self.close()?;
         let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
@@ -100,7 +100,6 @@ impl RotatingFileLogger {
         self.next_rotation_time = compute_rotation_time(&now, self.rotation_timespan);
     }
 
-    /// Closes log file.
     fn close(&mut self) -> io::Result<()> {
         self.file.flush()
     }

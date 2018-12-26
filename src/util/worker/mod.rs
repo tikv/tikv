@@ -185,7 +185,7 @@ impl<T> Clone for Scheduler<T> {
     }
 }
 
-/// Creates a scheduler that can't be scheduled any task.
+/// Creates a scheduler that can't schedule any task.
 ///
 /// Useful for test purpose.
 #[cfg(test)]
@@ -292,7 +292,7 @@ fn poll<R, T, U>(
     runner.shutdown();
 }
 
-/// Fills buffer with next task batch comes from `rx`.
+/// Fills buffer with next task batch coming from `rx`.
 fn fill_task_batch<T>(
     rx: &Receiver<Option<T>>,
     buffer: &mut Vec<T>,
@@ -356,7 +356,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         Ok(())
     }
 
-    /// Gets a scheduler to schedule task.
+    /// Gets a scheduler to schedule the task.
     pub fn scheduler(&self) -> Scheduler<T> {
         self.scheduler.clone()
     }

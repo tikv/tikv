@@ -283,7 +283,7 @@ impl Instant {
         }
     }
 
-    /// It is similar with `duration_since`, but it won't panic when `self` is less than `other`,
+    /// It is similar to `duration_since`, but it won't panic when `self` is less than `other`,
     /// and `None` will be returned in this case.
     ///
     /// Callers need to ensure that `self` and `other` are same type of Instants.

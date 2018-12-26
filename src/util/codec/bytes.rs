@@ -101,10 +101,14 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     encoded
 }
 
-/// Gets the first compactly encoded bytes's length in encoded.
+/// Compact-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
+/// This function gets the total bytes length of compact-encoded data, including the length prefix.
 ///
-/// Please note that, this function won't check the whether the bytes
-/// is encoded correctly.
+/// Note:
+///     - There can be multiple compact-encoded data, placed one by one. This function only returns
+///       the length of the first one.
+///
+///     - This function won't check the whether the bytes is encoded correctly.
 pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
     let last_encoded = encoded.as_ptr() as usize;
     let total_len = encoded.len();
@@ -119,7 +123,7 @@ pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
 }
 
 pub trait CompactBytesFromFileDecoder: BufRead {
-    /// Decodes bytes which is encoded by `encode_compact_bytes` before.
+    /// Decodes bytes which are encoded by `encode_compact_bytes` before.
     fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
         let mut var_data = Vec::with_capacity(number::MAX_VAR_I64_LEN);
         while var_data.len() < number::MAX_VAR_U64_LEN {
@@ -138,10 +142,14 @@ pub trait CompactBytesFromFileDecoder: BufRead {
 
 impl<T: BufRead> CompactBytesFromFileDecoder for T {}
 
-/// Gets the first encoded bytes's length in encoded.
+/// Memcomparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
+/// This function gets the total bytes length of memcomparable-encoded data, including the length prefix.
 ///
-/// Please note that, this function won't check the whether the bytes
-/// is encoded correctly.
+/// Note:
+///     - There can be multiple memcomparable-encoded data, placed one by one. This function only returns
+///       the length of the first one.
+///
+///     - This function won't check the whether the bytes is encoded correctly.
 pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
     let mut idx = ENC_GROUP_SIZE;
     loop {
@@ -156,7 +164,7 @@ pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
     }
 }
 
-/// Decodes bytes which is encoded by `encode_compact_bytes` before.
+/// Decodes bytes which are encoded by `encode_compact_bytes` before.
 pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
     let vn = number::decode_var_i64(data)? as usize;
     if data.len() >= vn {
@@ -167,7 +175,7 @@ pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
     Err(Error::unexpected_eof())
 }
 
-/// Decodes bytes which is encoded by `encode_bytes` before.
+/// Decodes bytes which are encoded by `encode_bytes` before.
 ///
 /// Please note that, data is a mut reference to slice. After calling this the
 /// slice that data point to would change.
@@ -219,7 +227,7 @@ pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
     }
 }
 
-/// Decodes bytes which is encoded by `encode_bytes` before just in place without malloc.
+/// Decodes bytes which are encoded by `encode_bytes` before just in place without malloc.
 /// Please use this instead of `decode_bytes` if possible.
 pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     let mut write_offset = 0;

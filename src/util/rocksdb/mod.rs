@@ -102,8 +102,8 @@ pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Res
     new_engine_opt(path, db_opts, cf_opts)
 }
 
-/// Turn "dynamic level size" off for existing column family which was off before.
-/// column families are small, HashMap isn't necessary
+/// Turns "dynamic level size" off for the existing column family which was off before.
+/// Column families are small, HashMap isn't necessary.
 fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: &mut CFOptions) {
     if let Some(ref cf_desc) = cf_descs
         .iter()
@@ -399,7 +399,7 @@ pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<
     Ok(())
 }
 
-/// Compacts the cf in the specified range by manual or not.
+/// Compacts the column families in the specified range by manual or not.
 pub fn compact_range(
     db: &DB,
     handle: &CFHandle,
