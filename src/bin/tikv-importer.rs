@@ -98,8 +98,8 @@ fn main() {
         .get_matches();
 
     let config = setup_config(&matches);
-    let guard = initial_logger(&config);
-    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
+    initial_logger(&config).cancel_reset();
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
     util::print_tikv_info();

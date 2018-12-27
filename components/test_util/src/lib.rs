@@ -35,17 +35,12 @@ pub use macros::*;
 pub use security::*;
 
 pub fn setup_for_ci() {
-    let guard = if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-        Some(logging::init_log_for_test())
-    } else {
-        None
-    };
+    if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
+        logging::init_log_for_test().cancel_reset();
+    }
     if env::var("PANIC_ABORT").is_ok() {
         // Panics as aborts, it's helpful for debugging,
         // but also stops tests immediately.
-        tikv::util::set_exit_hook(true, guard, "./");
-    } else if let Some(guard) = guard {
-        // Do not reset the global logger.
-        guard.cancel_reset();
+        tikv::util::set_panic_hook(true, "./");
     }
 }

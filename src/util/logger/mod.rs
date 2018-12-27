@@ -120,16 +120,6 @@ pub fn get_string_by_level(lv: Level) -> &'static str {
     }
 }
 
-pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
-    match lv {
-        Level::Critical | Level::Error => log::LogLevel::Error,
-        Level::Warning => log::LogLevel::Warn,
-        Level::Debug => log::LogLevel::Debug,
-        Level::Trace => log::LogLevel::Trace,
-        Level::Info => log::LogLevel::Info,
-    }
-}
-
 #[test]
 fn test_get_level_by_string() {
     // Ensure UPPER, Capitalized, and lower case all map over.
@@ -142,6 +132,54 @@ fn test_get_level_by_string() {
     // Ensure that all non-defined values map to `Info`.
     assert_eq!(None, get_level_by_string("Off"));
     assert_eq!(None, get_level_by_string("definitely not an option"));
+}
+
+pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
+    match lv {
+        Level::Critical | Level::Error => log::LogLevel::Error,
+        Level::Warning => log::LogLevel::Warn,
+        Level::Debug => log::LogLevel::Debug,
+        Level::Trace => log::LogLevel::Trace,
+        Level::Info => log::LogLevel::Info,
+    }
+}
+
+pub fn convert_log_level_to_slog_level(lv: log::LogLevel) -> Level {
+    match lv {
+        log::LogLevel::Error => Level::Error,
+        log::LogLevel::Warn => Level::Warning,
+        log::LogLevel::Debug => Level::Debug,
+        log::LogLevel::Trace => Level::Trace,
+        log::LogLevel::Info => Level::Info,
+    }
+}
+
+#[test]
+fn test_log_level_conversion() {
+    assert_eq!(
+        Level::Error,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Critical))
+    );
+    assert_eq!(
+        Level::Error,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Error))
+    );
+    assert_eq!(
+        Level::Warning,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Warning))
+    );
+    assert_eq!(
+        Level::Debug,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Debug))
+    );
+    assert_eq!(
+        Level::Trace,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Trace))
+    );
+    assert_eq!(
+        Level::Info,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Info))
+    );
 }
 
 pub struct TikvFormat<D>
