@@ -59,6 +59,7 @@ pub trait Fsm {
 enum FsmTypes<N, C> {
     Normal(Box<N>),
     Control(Box<C>),
+    // Used as a signal that scheduler should be shutdown.
     Empty,
 }
 
@@ -98,6 +99,7 @@ impl<N: Fsm, C> FsmScheduler for NormalScheduler<N, C> {
 
     fn shutdown(&self) {
         // TODO: close it explicitly once it's supported.
+        // Magic number, actually any number greater than poll pool size works.
         for _ in 0..100 {
             let _ = self.sender.send(FsmTypes::Empty);
         }
@@ -161,13 +163,14 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     /// Put back the FSM located at index.
     ///
-    /// Only messages located after `channel_pos` will trigger further notification.
-    /// This function may fail if messages is put after `channel_pos` before FSM is released.
-    pub fn release(&mut self, index: usize, channel_pos: usize) -> bool {
+    /// Only when channel length is larger than `checked_len` will trigger
+    /// further notification. This function may fail if channel length is
+    /// larger than the given value before FSM is released.
+    pub fn release(&mut self, index: usize, checked_len: usize) -> bool {
         let mut fsm = self.normals.swap_remove(index);
         let mailbox = fsm.take_mailbox().unwrap();
         mailbox.release(fsm);
-        if mailbox.len() == channel_pos {
+        if mailbox.len() == checked_len {
             true
         } else {
             match mailbox.take_fsm() {
@@ -204,10 +207,10 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     }
 
     /// Same as `release`, but working on control FSM.
-    pub fn release_control(&mut self, control_box: &BasicMailbox<C>, channel_pos: usize) -> bool {
+    pub fn release_control(&mut self, control_box: &BasicMailbox<C>, checked_len: usize) -> bool {
         let s = self.control.take().unwrap();
         control_box.release(s);
-        if control_box.len() == channel_pos {
+        if control_box.len() == checked_len {
             true
         } else {
             match control_box.take_fsm() {
@@ -251,9 +254,9 @@ pub trait PollHandler<N, C> {
 
     /// This function is called when handling readiness for control FSM.
     ///
-    /// If returned value is Some, than it represents the channel pos that
+    /// If returned value is Some, then it represents the channel length that
     /// this function is checked. This function will only be called after
-    /// new messages are put after the position. If it returns None, then
+    /// channel's lengh is larger than the value. If it returns None, then
     /// this FSM is stopped and should be removed.
     fn handle_control(&mut self, control: &mut C) -> Option<usize>;
 
@@ -348,6 +351,11 @@ pub trait HandlerBuilder<N, C> {
     fn build(&mut self) -> Self::Handler;
 }
 
+/// A system that can poll FSMs concurrently and in batch.
+///
+/// To use the system, two type of FSMs and their PollHandlers need
+/// to be defined: Normal and Control. Normal FSM handles the general
+/// task while Control FSM creates normal FSM instances.
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: String,
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
