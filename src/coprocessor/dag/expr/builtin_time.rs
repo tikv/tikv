@@ -343,6 +343,32 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz))))
     }
+
+    #[inline]
+    pub fn add_duration_and_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let mut d0: Cow<'a, MyDuration> = try_opt_or!(
+            self.children[0].eval_duration(ctx, row),
+            Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
+        );
+        let d1: Cow<'a, MyDuration> = try_opt_or!(
+            self.children[1].eval_duration(ctx, row),
+            Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
+        );
+        let add = match t
+            .get_time()
+            .checked_add_signed(Duration::nanoseconds(d.to_nanos()))
+        {
+            Some(result) => result,
+            None => return Err(box_err!("parse from duration {} overflows", d)),
+        };
+        let mut res = t.to_mut().clone();
+        res.set_time(add);
+        Ok(Some(Cow::Owned(res)))
+    }
 }
 
 #[cfg(test)]
