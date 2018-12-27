@@ -279,7 +279,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
-        let mut tracker = box Tracker::new(req_ctx);
+        let mut tracker = box Tracker::new(req_ctx.clone());
 
         let result = self.read_pool.future_execute(priority, move |ctxd| {
             tracker.attach_ctxd(ctxd);
@@ -291,7 +291,10 @@ impl<E: Engine> Endpoint<E> {
             // If the read pool is full, an error response will be returned directly.
             .map_err(|_| Error::Full)
             .flatten()
-            .or_else(|e| Ok(make_error_response(e)))
+            .or_else(move |e| {
+                error!("request info :{:?}", req_ctx);
+                Ok(make_error_response(e))
+            })
     }
 
     #[inline]
