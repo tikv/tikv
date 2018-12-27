@@ -283,7 +283,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Space
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Uncompress
-            | ScalarFuncSig::UncompressedLength => (1, 1),
+            | ScalarFuncSig::UncompressedLength
+            | ScalarFuncSig::ToDays => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -482,7 +483,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeStringTimeDiff
             | ScalarFuncSig::TimeTimeTimeDiff
             | ScalarFuncSig::TimeToSec
-            | ScalarFuncSig::ToDays
             | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
@@ -762,6 +762,7 @@ dispatch_call! {
         WeekDay => week_day,
         WeekOfYear => week_of_year,
         Year => year,
+        ToDays => to_days,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1548,7 +1549,6 @@ mod tests {
             ScalarFuncSig::TimeStringTimeDiff,
             ScalarFuncSig::TimeTimeTimeDiff,
             ScalarFuncSig::TimeToSec,
-            ScalarFuncSig::ToDays,
             ScalarFuncSig::ToSeconds,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
