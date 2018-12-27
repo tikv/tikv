@@ -344,6 +344,7 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz))))
     }
 
+    #[inline]
     pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
