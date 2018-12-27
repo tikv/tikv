@@ -145,16 +145,16 @@ impl Tick {
 }
 
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
-/// group to update some important internal status.
+/// groups to update some important internal status.
 #[derive(Debug, PartialEq)]
 pub enum SignificantMsg {
-    /// Report whether the snapshot sending is successful or not.
+    /// Reports whether the snapshot sending is successful or not.
     SnapshotStatus {
         region_id: u64,
         to_peer_id: u64,
         status: SnapshotStatus,
     },
-    /// Report `to_peer_id` is unreachable.
+    /// Reports `to_peer_id` is unreachable.
     Unreachable { region_id: u64, to_peer_id: u64 },
 }
 

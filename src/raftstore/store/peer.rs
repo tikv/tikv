@@ -163,7 +163,7 @@ pub struct ReadyContext<'a, T: 'a> {
     pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
-    /// All `Ready` and their `InvokeContext` will be stored into `ready_res`.
+    /// All `Ready`s and their `InvokeContext`s will be stored into `ready_res`.
     pub ready_res: Vec<(Ready, InvokeContext)>,
 }
 
@@ -191,7 +191,7 @@ bitflags! {
 }
 
 impl ProposalContext {
-    /// Convert itself to a vector.
+    /// Converts itself to a vector.
     pub fn to_vec(self) -> Vec<u8> {
         if self.is_empty() {
             return vec![];
@@ -200,7 +200,7 @@ impl ProposalContext {
         vec![ctx]
     }
 
-    /// Initialize a `ProposalContext` from a byte slice.
+    /// Initializes a `ProposalContext` from a byte slice.
     pub fn from_bytes(ctx: &[u8]) -> ProposalContext {
         if ctx.is_empty() {
             ProposalContext::empty()
@@ -212,7 +212,7 @@ impl ProposalContext {
     }
 }
 
-/// ConsistencyState is used for consistency check.
+/// `ConsistencyState` is used for consistency check.
 pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
