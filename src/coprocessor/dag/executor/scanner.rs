@@ -17,7 +17,7 @@ use coprocessor::codec::table::truncate_as_row_key;
 use coprocessor::util;
 use storage::txn::Result;
 use storage::{Key, ScanMode, Snapshot, SnapshotStore, Statistics, StoreScanner, Value};
-use util::{escape, set_panic_mark};
+use util::escape;
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 

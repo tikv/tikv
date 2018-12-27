@@ -19,7 +19,6 @@ use std::sync::Arc;
 use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
-use util::set_panic_mark;
 
 /// Snapshot of a region.
 ///
@@ -319,7 +318,7 @@ impl RegionIterator {
             if self.panic_when_exceed_bound {
                 //set_panic_mark();
                 error!("key exceed bound: {:?}", e);
-            } 
+            }
             return Err(e);
         }
         Ok(())
