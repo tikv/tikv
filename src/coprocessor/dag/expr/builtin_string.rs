@@ -18,8 +18,8 @@ use std::i64;
 
 use hex::{self, FromHex};
 
+use cop_datatype;
 use cop_datatype::prelude::*;
-use cop_datatype::{self, FieldTypeFlag};
 
 use super::{EvalContext, Result, ScalarFunc};
 use coprocessor::codec::Datum;
@@ -106,6 +106,28 @@ impl ScalarFunc {
         for expr in &self.children {
             let input = try_opt!(expr.eval_string(ctx, row));
             output.extend_from_slice(&input);
+        }
+        Ok(Some(Cow::Owned(output)))
+    }
+
+    #[inline]
+    pub fn concat_ws<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let mut output_sep: Vec<u8> = Vec::new();
+        let mut output: Vec<u8> = Vec::new();
+        for (index, expr) in self.children.iter().enumerate() {
+            let input = try_opt!(expr.eval_string(ctx, row));
+            match index {
+                0 => output_sep = input.to_vec(),
+                1 => output = input.to_vec(),
+                _ => {
+                    output.extend_from_slice(&output_sep);
+                    output.extend_from_slice(&input);
+                }
+            }
         }
         Ok(Some(Cow::Owned(output)))
     }
@@ -391,13 +413,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
-        let (count, is_positive) = i64_to_usize(
-            count,
-            self.children[2]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (count, is_positive) = i64_to_usize(count, self.children[2].is_unsigned());
 
         let r = if is_positive {
             substring_index_positive(&s, delim.as_ref(), count)
@@ -421,13 +437,7 @@ impl ScalarFunc {
 
         // we need to check the unsigned_flag , othewise a input larger than
         // i64::max_value() will overflow to a negative number
-        let (pos, positive_search) = i64_to_usize(
-            pos,
-            self.children[1]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (pos, positive_search) = i64_to_usize(pos, self.children[1].is_unsigned());
 
         let start = if positive_search {
             s.char_indices()
@@ -459,20 +469,8 @@ impl ScalarFunc {
         let pos = try_opt!(self.children[1].eval_int(ctx, row));
         let len = try_opt!(self.children[2].eval_int(ctx, row));
 
-        let (pos, positive_search) = i64_to_usize(
-            pos,
-            self.children[1]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
-        let (len, len_positive) = i64_to_usize(
-            len,
-            self.children[2]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (pos, positive_search) = i64_to_usize(pos, self.children[1].is_unsigned());
+        let (len, len_positive) = i64_to_usize(len, self.children[2].is_unsigned());
 
         if pos == 0 || len == 0 || !len_positive {
             return Ok(Some(Cow::Borrowed(b"")));
@@ -491,7 +489,7 @@ impl ScalarFunc {
                 .map(|(_, (i, _))| i)
                 .unwrap_or_else(|| s.len())
         } else {
-            let mut positions = VecDeque::with_capacity(len);
+            let mut positions = VecDeque::with_capacity(len.min(s.len()));
             positions.push_back(s.len());
             start = s
                 .char_indices()
@@ -547,13 +545,7 @@ impl ScalarFunc {
         let pos = try_opt!(self.children[1].eval_int(ctx, row));
         let (len, len_positive) = if with_len {
             let len = try_opt!(self.children[2].eval_int(ctx, row));
-            i64_to_usize(
-                len,
-                self.children[2]
-                    .field_type()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED),
-            )
+            i64_to_usize(len, self.children[2].is_unsigned())
         } else {
             (s.len(), true)
         };
@@ -562,13 +554,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
-        let (pos, positive_search) = i64_to_usize(
-            pos,
-            self.children[1]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED),
-        );
+        let (pos, positive_search) = i64_to_usize(pos, self.children[1].is_unsigned());
 
         let start = if positive_search {
             (pos - 1).min(s.len())
@@ -579,6 +565,200 @@ impl ScalarFunc {
         let end = start.saturating_add(len).min(s.len());
         Ok(Some(Cow::Owned(s[start..end].to_vec())))
     }
+
+    #[inline]
+    pub fn space<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let len = try_opt!(self.children[0].eval_int(ctx, row));
+        let unsigned = self.children[0].is_unsigned();
+        let len = if unsigned {
+            len as u64 as usize
+        } else if len <= 0 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        } else {
+            len as usize
+        };
+
+        if len > cop_datatype::MAX_BLOB_WIDTH as usize {
+            return Ok(None);
+        }
+
+        Ok(Some(Cow::Owned(vec![SPACE; len])))
+    }
+
+    #[inline]
+    pub fn strcmp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        use std::cmp::Ordering::*;
+        let left = try_opt!(self.children[0].eval_string(ctx, row));
+        let right = try_opt!(self.children[1].eval_string(ctx, row));
+        match left.cmp(&right) {
+            Less => Ok(Some(-1)),
+            Equal => Ok(Some(0)),
+            Greater => Ok(Some(1)),
+        }
+    }
+
+    #[inline]
+    pub fn rpad<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string_and_decode(ctx, row));
+        let input_len = input.chars().count();
+
+        match validate_target_len_for_pad(
+            self.children[1].is_unsigned(),
+            target_len,
+            input_len,
+            4,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = input
+                    .chars()
+                    .chain(pad.chars().cycle())
+                    .take(target_len)
+                    .collect::<String>();
+                Ok(Some(Cow::Owned(r.into_bytes())))
+            }
+        }
+    }
+
+    #[inline]
+    pub fn rpad_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string(ctx, row));
+
+        match validate_target_len_for_pad(
+            self.children[1].is_unsigned(),
+            target_len,
+            input.len(),
+            1,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = input
+                    .iter()
+                    .chain(pad.iter().cycle())
+                    .cloned()
+                    .take(target_len)
+                    .collect::<Vec<_>>();
+                Ok(Some(Cow::Owned(r)))
+            }
+        }
+    }
+
+    #[inline]
+    pub fn lpad<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string_and_decode(ctx, row));
+        let input_len = input.chars().count();
+
+        match validate_target_len_for_pad(
+            self.children[1].is_unsigned(),
+            target_len,
+            input_len,
+            4,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = if let Some(remain) = target_len.checked_sub(input_len) {
+                    pad.chars()
+                        .cycle()
+                        .take(remain)
+                        .chain(input.chars())
+                        .collect::<String>()
+                } else {
+                    input.chars().take(target_len).collect::<String>()
+                };
+                Ok(Some(Cow::Owned(r.into_bytes())))
+            }
+        }
+    }
+
+    #[inline]
+    pub fn lpad_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let target_len = try_opt!(self.children[1].eval_int(ctx, row));
+        let pad = try_opt!(self.children[2].eval_string(ctx, row));
+
+        match validate_target_len_for_pad(
+            self.children[1].is_unsigned(),
+            target_len,
+            input.len(),
+            1,
+            pad.is_empty(),
+        ) {
+            None => Ok(None),
+            Some(0) => Ok(Some(Cow::Borrowed(b""))),
+            Some(target_len) => {
+                let r = if let Some(remain) = target_len.checked_sub(input.len()) {
+                    pad.iter()
+                        .cycle()
+                        .take(remain)
+                        .chain(input.iter())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    input[..target_len].to_vec()
+                };
+                Ok(Some(Cow::Owned(r)))
+            }
+        }
+    }
+}
+
+// when target_len is 0, return Some(0), means the pad function should return empty string
+// currently there are three conditions it return None, which means pad function should return Null
+//   1. target_len is negative
+//   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
+//   3. target_len is greater than length of input string, *and* pad string is empty
+// otherwise return Some(target_len)
+#[inline]
+fn validate_target_len_for_pad(
+    len_unsigned: bool,
+    target_len: i64,
+    input_len: usize,
+    size_of_type: usize,
+    pad_empty: bool,
+) -> Option<usize> {
+    if target_len == 0 {
+        return Some(0);
+    }
+    let (target_len, target_len_positive) = i64_to_usize(target_len, len_unsigned);
+    if !target_len_positive
+        || target_len.saturating_mul(size_of_type) > cop_datatype::MAX_BLOB_WIDTH as usize
+        || (pad_empty && input_len < target_len)
+    {
+        return None;
+    }
+    Some(target_len)
 }
 
 // Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
@@ -699,7 +879,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
-    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use coprocessor::codec::mysql::charset::CHARSET_BIN;
     use tipb::expression::{Expr, ScalarFuncSig};
 
@@ -725,7 +905,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Length, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "length('{:?}')", input_str);
@@ -734,7 +914,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Length, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "length(NULL)");
@@ -756,7 +936,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::BitLength, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "bit_length('{:?}')", input_str);
@@ -765,7 +945,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::BitLength, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "bit_length(NULL)");
@@ -810,7 +990,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Bin, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -844,7 +1024,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp.as_bytes().to_vec());
             assert_eq!(got, exp, "ltrim('{:?}')", input_str);
@@ -853,7 +1033,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "ltrim(NULL)");
@@ -887,7 +1067,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp.as_bytes().to_vec());
             assert_eq!(got, exp, "rtrim('{:?}')", input_str);
@@ -896,7 +1076,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "rtrim(NULL)");
@@ -935,7 +1115,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let op = scalar_func_expr(ScalarFuncSig::Reverse, &[datum_expr(arg)]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -966,7 +1146,7 @@ mod tests {
                 Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::ReverseBinary, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1014,7 +1194,7 @@ mod tests {
             let arg1 = datum_expr(arg1);
             let arg2 = datum_expr(arg2);
             let op = scalar_func_expr(ScalarFuncSig::Left, &[arg1, arg2]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1061,7 +1241,7 @@ mod tests {
             let arg1 = datum_expr(arg1);
             let arg2 = datum_expr(arg2);
             let op = scalar_func_expr(ScalarFuncSig::Right, &[arg1, arg2]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1096,7 +1276,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::ASCII, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1142,7 +1322,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1192,7 +1372,7 @@ mod tests {
                 Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1238,7 +1418,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Lower, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1287,7 +1467,7 @@ mod tests {
                 Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::Lower, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1339,7 +1519,62 @@ mod tests {
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let mut expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
-            let e = Expression::build(&mut ctx, expr).unwrap();
+            let e = Expression::build(&ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+    #[test]
+    fn test_concat_ws() {
+        let cases = vec![
+            (
+                vec![
+		    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes(b"defg".to_vec()),
+                ],
+                Datum::Bytes(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                    Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                    Datum::Bytes( "НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                ],
+                Datum::Bytes(
+                    "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                ],
+                Datum::Bytes("abc,CAFÉ,数据库".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"defg".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (vec![Datum::Null], Datum::Null),
+        ];
+        let mut ctx = EvalContext::default();
+        for (row, exp) in cases {
+            let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
+            let mut expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -1373,7 +1608,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::CharLength, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1410,7 +1645,7 @@ mod tests {
                 Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::CharLength, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1431,7 +1666,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::HexIntArg, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1455,7 +1690,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::HexStrArg, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1486,7 +1721,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::UnHex, &[input]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1570,7 +1805,7 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::Elt, &children);
-            let e = Expression::build(&mut ctx, op).unwrap();
+            let e = Expression::build(&ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);
         }
@@ -1924,6 +2159,12 @@ mod tests {
                 Datum::U64(u64::max_value()),
                 "文a测a试",
             ),
+            (
+                "中文a测a试",
+                Datum::I64(-2),
+                Datum::U64(u64::max_value()),
+                "a试",
+            ),
         ];
         for (s, pos, len, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
@@ -2025,4 +2266,389 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_space() {
+        let tests = vec![
+            (Datum::I64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(0), Datum::Bytes(b"".to_vec())),
+            (Datum::I64(3), Datum::Bytes(b"   ".to_vec())),
+            (Datum::I64(-1), Datum::Bytes(b"".to_vec())),
+            (Datum::U64(u64::max_value()), Datum::Null),
+            (Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1), Datum::Null),
+            (
+                Datum::I64(i64::from(MAX_BLOB_WIDTH)),
+                Datum::Bytes(vec![super::SPACE; MAX_BLOB_WIDTH as usize]),
+            ),
+        ];
+
+        for (len, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Space, &[len]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_strcmp() {
+        let tests = vec![
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(0),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"1".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"1".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"45".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes("你好".as_bytes().to_vec()),
+                Datum::Bytes(b"hello".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"123".to_vec()),
+                Datum::I64(-1),
+            ),
+            (
+                Datum::Bytes(b"123".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(0),
+            ),
+            (Datum::Null, Datum::Bytes(b"123".to_vec()), Datum::Null),
+            (Datum::Bytes(b"123".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
+        ];
+
+        for (left, right, exp) in tests {
+            let got = eval_func(ScalarFuncSig::Strcmp, &[left, right]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_validate_target_len_for_pad() {
+        let cases = vec![
+            // target_len, input_len, size_of_type, pad_empty, result
+            (0, 10, 1, false, Some(0)),
+            (-1, 10, 1, false, None),
+            (12, 10, 1, true, None),
+            (i64::from(MAX_BLOB_WIDTH) + 1, 10, 1, false, None),
+            (i64::from(MAX_BLOB_WIDTH) / 4 + 1, 10, 4, false, None),
+            (12, 10, 1, false, Some(12)),
+        ];
+        for case in cases {
+            let got = super::validate_target_len_for_pad(false, case.0, case.1, case.2, case.3);
+            assert_eq!(got, case.4);
+        }
+
+        let unsigned_cases = vec![
+            (u64::max_value(), 10, 1, false, None),
+            (u64::max_value(), 10, 4, false, None),
+            (u64::max_value(), 10, 1, true, None),
+            (u64::max_value(), 10, 4, true, None),
+            (12u64, 10, 4, false, Some(12)),
+        ];
+        for case in unsigned_cases {
+            let got =
+                super::validate_target_len_for_pad(true, case.0 as i64, case.1, case.2, case.3);
+            assert_eq!(got, case.4);
+        }
+    }
+
+    fn common_rpad_cases() -> Vec<(Datum, Datum, Datum, Datum)> {
+        vec![
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"hi???".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"hiaba".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(6),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"hiabab".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_rpad() {
+        let mut cases = vec![
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(4),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(5),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(6),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测试".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(7),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测试测".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) / 4 + 1),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Null,
+            ),
+        ];
+        cases.append(&mut common_rpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::Rpad, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_rpad_binary() {
+        let mut cases = vec![
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x61\x76\x5e\x35\x35".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(2),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x61\x76".to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(13),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节测".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1),
+                Datum::Bytes(b"aa".to_vec()),
+                Datum::Null,
+            ),
+        ];
+        cases.append(&mut common_rpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::RpadBinary, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    fn common_lpad_cases() -> Vec<(Datum, Datum, Datum, Datum)> {
+        vec![
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"???hi".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(0),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"?".to_vec()),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(1),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Bytes(b"h".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"abahi".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"hi".to_vec()),
+                Datum::I64(6),
+                Datum::Bytes(b"ab".to_vec()),
+                Datum::Bytes(b"ababhi".to_vec()),
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_lpad() {
+        let mut cases = vec![
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(3),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(4),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(5),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(6),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测试a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(7),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测试测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) / 4 + 1),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Null,
+            ),
+        ];
+        cases.append(&mut common_lpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::Lpad, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_lpad_binary() {
+        let mut cases = vec![
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(5),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x35\x35\x61\x76\x5e".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"\x61\x76\x5e".to_vec()),
+                Datum::I64(2),
+                Datum::Bytes(b"\x35".to_vec()),
+                Datum::Bytes(b"\x61\x76".to_vec()),
+            ),
+            (
+                Datum::Bytes("a多字节".as_bytes().to_vec()),
+                Datum::I64(13),
+                Datum::Bytes("测试".as_bytes().to_vec()),
+                Datum::Bytes("测a多字节".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1),
+                Datum::Bytes(b"aa".to_vec()),
+                Datum::Null,
+            ),
+        ];
+        cases.append(&mut common_lpad_cases());
+
+        for (s, len, pad, exp) in cases {
+            let got = eval_func(ScalarFuncSig::LpadBinary, &[s, len, pad]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
 }

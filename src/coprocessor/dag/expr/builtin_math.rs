@@ -19,9 +19,6 @@ use num::traits::Pow;
 use rand::{Rng, SeedableRng, XorShiftRng};
 use time;
 
-use cop_datatype::prelude::*;
-use cop_datatype::FieldTypeFlag;
-
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use coprocessor::codec::Datum;
@@ -385,22 +382,10 @@ impl ScalarFunc {
     pub fn truncate_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let x = try_opt!(self.children[0].eval_int(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
-            0
-        } else {
-            d
-        };
+        let d = if self.children[1].is_unsigned() { 0 } else { d };
         if d >= 0 {
             Ok(Some(x))
-        } else if self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        } else if self.children[0].is_unsigned() {
             if d < -19 {
                 return Ok(Some(0));
             }
@@ -420,11 +405,7 @@ impl ScalarFunc {
     pub fn truncate_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        let d = if self.children[1].is_unsigned() {
             (d as u64).min(i32::max_value() as u64) as i32
         } else if d >= 0 {
             d.min(i64::from(i32::max_value())) as i32
@@ -451,11 +432,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<Decimal>>> {
         let x = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
-        let d = if self.children[1]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        let d = if self.children[1].is_unsigned() {
             (d as u64).min(127) as i8
         } else if d >= 0 {
             d.min(127) as i8
@@ -966,19 +943,19 @@ mod tests {
                 str2dec("-123.456"),
                 str2dec("-123.000"),
             ),
-            (ScalarFuncSig::RouldReal, Datum::F64(3.45), Datum::F64(3f64)),
+            (ScalarFuncSig::RoundReal, Datum::F64(3.45), Datum::F64(3f64)),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(-3.45),
                 Datum::F64(-3f64),
             ),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(f64::MAX),
                 Datum::F64(f64::MAX),
             ),
             (
-                ScalarFuncSig::RouldReal,
+                ScalarFuncSig::RoundReal,
                 Datum::F64(f64::MIN),
                 Datum::F64(f64::MIN),
             ),
