@@ -648,7 +648,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -685,7 +685,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(
             &Config {
@@ -725,7 +725,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -744,7 +744,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -770,7 +770,7 @@ mod tests {
                 max_tasks_per_worker_normal: 2,
                 ..readpool::Config::default_for_test()
             },
-            || || ReadPoolContext::new(pd_worker.scheduler()),
+            || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -815,7 +815,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -835,7 +835,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -880,7 +880,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -900,7 +900,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -986,7 +986,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(
             &Config {
@@ -1041,7 +1041,7 @@ mod tests {
         let read_pool = ReadPool::new(
             "readpool",
             &readpool::Config::default_with_concurrency(1),
-            || || ReadPoolContext::new(pd_worker.scheduler()),
+            || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =

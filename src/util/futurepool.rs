@@ -179,7 +179,7 @@ impl<T: Context + 'static> FuturePool<T> {
         context_factory: F,
     ) -> FuturePool<T>
     where
-        F: Factory<T>,
+        F: Fn() -> T,
     {
         let (tx, rx) = mpsc::sync_channel(pool_size);
         let pool = cpupool::Builder::new()
@@ -196,8 +196,7 @@ impl<T: Context + 'static> FuturePool<T> {
         let contexts = (0..pool_size)
             .map(|_| {
                 let thread_id = rx.recv().unwrap();
-                let context = context_factory.build();
-                let context_delegator = ContextDelegator::new(context, tick_interval);
+                let context_delegator = ContextDelegator::new(context_factory(), tick_interval);
                 (thread_id, context_delegator)
             })
             .collect();
