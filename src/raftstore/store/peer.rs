@@ -182,7 +182,7 @@ impl<'a, T> ReadyContext<'a, T> {
 
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
-    /// `ProposalContext` is a bitmap contains some useful flags.
+    /// A bitmap contains some useful flags when dealing with `eraftpb::Entry`.
     pub struct ProposalContext: u8 {
         const SYNC_LOG       = 0b00000001;
         const SPLIT          = 0b00000010;
@@ -487,7 +487,7 @@ impl Peer {
         }
     }
 
-    /// Tries to destroy itself. Returns a job if need to do more clean task.
+    /// Tries to destroy itself. Returns a job (if need) to do more clean task.
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!("{} is being destroyed, skip", self.tag);
@@ -519,8 +519,8 @@ impl Peer {
         })
     }
 
-    /// Does the really destroy task which includes:
-    /// 1. Tombstone the region;
+    /// Does the real destroy task which includes:
+    /// 1. Set the region to tombstone;
     /// 2. Clear data;
     /// 3. Notify all pending requests.
     pub fn destroy(&mut self, keep_data: bool) -> Result<()> {
@@ -789,8 +789,8 @@ impl Peer {
         pending_peers
     }
 
-    /// Returns `true` if any new peer catch up logs, and update `peers_start_pending_time` if
-    /// need.
+    /// Returns `true` if any new peer catches up with the leader in replicating logs.
+    /// And updates `peers_start_pending_time` if needed.
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
         if self.peers_start_pending_time.is_empty() {
             return false;
@@ -1551,7 +1551,7 @@ impl Peer {
         Ok(())
     }
 
-    // Returns a boolean to indicate the `read` is proposed or not.
+    // Returns a boolean to indicate whether the `read` is proposed or not.
     // For these cases it won't be proposed:
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;

@@ -706,7 +706,7 @@ impl PeerStorage {
         true
     }
 
-    /// Get a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
+    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
     /// snapshot.
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
