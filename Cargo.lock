@@ -1348,7 +1348,7 @@ dependencies = [
 [[package]]
 name = "procinfo"
 version = "0.4.2"
-source = "git+https://github.com/tikv/procinfo-rs?rev=ac3841d271fe2e4e865afdce60bb6a166044f7c7#ac3841d271fe2e4e865afdce60bb6a166044f7c7"
+source = "git+https://github.com/tikv/procinfo-rs#ac3841d271fe2e4e865afdce60bb6a166044f7c7"
 dependencies = [
  "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.43 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2022,7 +2022,7 @@ dependencies = [
  "num 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "panic_hook 0.0.1",
- "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=ac3841d271fe2e4e865afdce60bb6a166044f7c7)",
+ "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
  "prometheus 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus-static-metric 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2602,7 +2602,7 @@ dependencies = [
 "checksum proc-macro2 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "1b06e2f335f48d24442b35a19df506a835fb3547bc3c06ef27340da9acf5cae7"
 "checksum proc-macro2 0.4.24 (registry+https://github.com/rust-lang/crates.io-index)" = "77619697826f31a02ae974457af0b29b723e5619e113e9397b8b82c6bd253f09"
 "checksum procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"
-"checksum procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=ac3841d271fe2e4e865afdce60bb6a166044f7c7)" = "<none>"
+"checksum procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)" = "<none>"
 "checksum prometheus 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "760293453bee1de0a12987422d7c4885f7ee933e4417bb828ed23f7d05c3c390"
 "checksum prometheus-static-metric 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "1d2b4a6a1ae793e7eb6773a5301a5a08e8929ea5517b677c93e57ce2d0973c02"
 "checksum protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)" = "128a4f37a2df739a567a8685b17f54aa19b9c3c4a6a5b8731e97a419b3db451c"
