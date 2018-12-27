@@ -14,9 +14,6 @@
 use std::borrow::Cow;
 use std::i64;
 
-use cop_datatype::prelude::*;
-use cop_datatype::FieldTypeFlag;
-
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::Decimal;
 use coprocessor::codec::Datum;
@@ -96,11 +93,7 @@ impl ScalarFunc {
 
     pub fn unary_minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        if self.children[0].is_unsigned() {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
                 return Err(Error::overflow("BIGINT", &format!("-{}", uval)));
