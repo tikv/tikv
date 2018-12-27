@@ -175,14 +175,13 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let i = try_opt!(self.children[1].eval_int(ctx, row));
-        if i <= 0 {
+        let (i, length_positive) = i64_to_usize(i, self.children[1].is_unsigned());
+        if !length_positive || i == 0 {
             return Ok(Some(Cow::Owned(b"".to_vec())));
         }
-        if s.chars().count() > i as usize {
+        if s.chars().count() > i {
             let t = s.chars();
-            return Ok(Some(Cow::Owned(
-                t.take(i as usize).collect::<String>().into_bytes(),
-            )));
+            return Ok(Some(Cow::Owned(t.take(i).collect::<String>().into_bytes())));
         }
         Ok(Some(Cow::Owned(s.to_string().into_bytes())))
     }
@@ -217,11 +216,11 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let i = try_opt!(self.children[1].eval_int(ctx, row));
-        if i <= 0 {
+        let (i, length_positive) = i64_to_usize(i, self.children[1].is_unsigned());
+        if !length_positive || i == 0 {
             return Ok(Some(Cow::Owned(b"".to_vec())));
         }
         let len = s.chars().count();
-        let i = i as usize;
         if len > i {
             let idx = s
                 .char_indices()
@@ -1219,6 +1218,11 @@ mod tests {
                 Datum::I64(-1),
                 Datum::Bytes(b"".to_vec()),
             ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::U64(u64::max_value()),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+            ),
             (Datum::Null, Datum::I64(-1), Datum::Null),
             (Datum::Bytes(b"hello".to_vec()), Datum::Null, Datum::Null),
         ];
@@ -1266,6 +1270,11 @@ mod tests {
                 Datum::Bytes("数据库".as_bytes().to_vec()),
                 Datum::I64(-1),
                 Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                Datum::Bytes("数据库".as_bytes().to_vec()),
+                Datum::U64(u64::max_value()),
+                Datum::Bytes("数据库".as_bytes().to_vec()),
             ),
             (Datum::Null, Datum::I64(-1), Datum::Null),
             (Datum::Bytes(b"hello".to_vec()), Datum::Null, Datum::Null),
