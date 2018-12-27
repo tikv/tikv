@@ -62,3 +62,19 @@ pub fn gt_int(
         _ => None,
     }
 }
+
+#[inline(always)]
+pub fn lt_int(
+    _ctx: &mut RpnExpressionEvalContext,
+    _: &FieldType,
+    arg0: &Option<i64>,
+    _: &FieldType,
+    arg1: &Option<i64>,
+) -> Option<i64> {
+    // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
+    match (arg0, arg1) {
+        (None, None) => Some(1),
+        (Some(ref arg0), Some(ref arg1)) => Some((*arg0 < *arg1) as i64),
+        _ => None,
+    }
+}

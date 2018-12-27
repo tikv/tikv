@@ -39,6 +39,7 @@ extern crate test_raftstore;
 extern crate test_storage;
 #[macro_use]
 extern crate test_util;
+extern crate cop_datatype;
 
 mod config;
 mod coprocessor;

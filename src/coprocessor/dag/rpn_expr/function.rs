@@ -32,6 +32,7 @@ pub enum RpnFunction {
     EQReal,
     EQInt,
     GTInt,
+    LTInt,
 }
 
 impl TryFrom<ScalarFuncSig> for RpnFunction {
@@ -42,7 +43,8 @@ impl TryFrom<ScalarFuncSig> for RpnFunction {
             ScalarFuncSig::EQReal => Ok(RpnFunction::EQReal),
             ScalarFuncSig::EQInt => Ok(RpnFunction::EQInt),
             ScalarFuncSig::GTInt => Ok(RpnFunction::GTInt),
-            _ => Err(box_err!("Not supported")),
+            ScalarFuncSig::LTInt => Ok(RpnFunction::GTInt),
+            v => Err(box_err!("ScalarFunction {:?} is not supported in batch mode", v)),
         }
     }
 }
@@ -56,6 +58,7 @@ impl RpnFunction {
             RpnFunction::EQReal => 2,
             RpnFunction::EQInt => 2,
             RpnFunction::GTInt => 2,
+            RpnFunction::LTInt => 2,
         }
     }
 
@@ -88,6 +91,9 @@ impl RpnFunction {
             }
             RpnFunction::GTInt => {
                 Self::eval_2_args(rows, impl_compare::gt_int, context, &args[0], &args[1])
+            }
+            RpnFunction::LTInt => {
+                Self::eval_2_args(rows, impl_compare::lt_int, context, &args[0], &args[1])
             }
         }
     }

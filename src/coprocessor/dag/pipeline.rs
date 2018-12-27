@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
+use tipb::expression::{Expr, ExprType};
+use cop_datatype::EvalType;
 
 use storage::Store;
 
@@ -25,9 +27,47 @@ use super::executor::{
     StreamAggExecutor, TableScanExecutor, TopNExecutor,
 };
 use coprocessor::dag::expr::EvalConfig;
+use coprocessor::dag::rpn_expr::RpnFunction;
 use coprocessor::*;
 
 pub struct ExecutorPipelineBuilder;
+
+fn check_condition(c: &Expr) -> bool {
+    use std::convert::TryFrom;
+    use cop_datatype::FieldTypeAccessor;
+
+    let eval_type = EvalType::try_from(c.get_field_type().tp());
+    if eval_type.is_err() {
+        return false;
+    }
+    match c.get_tp() {
+        ExprType::ScalarFunc => {
+            let sig = c.get_sig();
+            let func = RpnFunction::try_from(sig);
+            if func.is_err() {
+                return false;
+            }
+            for n in c.get_children() {
+                if !check_condition(n) {
+                    return false;
+                }
+            }
+        }
+        ExprType::Null => {}
+        ExprType::Int64 => {}
+        ExprType::Uint64 => {}
+        ExprType::String | ExprType::Bytes => {}
+        ExprType::Float32 | ExprType::Float64 => {}
+        ExprType::MysqlTime => {}
+        ExprType::MysqlDuration => {}
+        ExprType::MysqlDecimal => {}
+        ExprType::MysqlJson => {}
+        ExprType::ColumnRef => {}
+        _ => return false
+    }
+
+    true
+}
 
 impl ExecutorPipelineBuilder {
     /// Given a list of executor descriptors and returns whether all executor descriptors can
@@ -75,7 +115,16 @@ impl ExecutorPipelineBuilder {
                         }
                     }
                 }
-                ExecType::TypeSelection => {}
+                ExecType::TypeSelection => {
+                    let descriptor = ed.get_selection();
+                    let conditions = descriptor.get_conditions();
+                    for c in conditions {
+                        if !check_condition(c) {
+                            info!("Coprocessor request cannot be batched because condition {:?} is not supported", c);
+                            return false;
+                        }
+                    }
+                }
                 _ => {
                     info!(
                         "Coprocessor request cannot be batched because {:?} is not supported",
