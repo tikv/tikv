@@ -18,7 +18,7 @@ use std::time::Instant;
 use libc::{getpid, pid_t};
 
 use server::load_statistics::ThreadLoad;
-use util::metrics::{get_thread_ids, cpu_total};
+use util::metrics::{cpu_total, get_thread_ids};
 
 use procinfo::pid;
 
