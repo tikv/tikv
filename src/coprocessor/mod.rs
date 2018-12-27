@@ -60,12 +60,12 @@ type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
 trait RequestHandler: Send {
-    /// Processes current request and produce a response.
+    /// Processes current request and produces a response.
     fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 
-    /// Processes current request and produce streaming responses.
+    /// Processes current request and produces streaming responses.
     fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
         panic!("streaming request is not supported for this handler");
     }
