@@ -51,7 +51,7 @@ pub enum Task {
         region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
-        // If true, right Region derive origin region_id.
+        // If true, right Region derives origin region_id.
         right_derive: bool,
         callback: Callback,
     },
@@ -59,7 +59,7 @@ pub enum Task {
         region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
-        // If true, right Region derive origin region_id.
+        // If true, right Region derives origin region_id.
         right_derive: bool,
         callback: Callback,
     },

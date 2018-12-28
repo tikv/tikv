@@ -84,7 +84,7 @@ pub trait PdClient: Send + Sync {
     /// cluster is not bootstrapped, it begins to create node, stores, first Region
     /// and then call bootstrap_cluster to let PD know it.
     /// It may happen that multi nodes start at same time to try to
-    /// bootstrap, and only one can success, others will fail
+    /// bootstrap, but only one can succeed, while others will fail
     /// and must remove their created local Region data themselves.
     fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()>;
 
@@ -102,15 +102,15 @@ pub trait PdClient: Send + Sync {
     fn put_store(&self, store: metapb::Store) -> Result<()>;
 
     /// We don't need to support Region and Peer put/delete,
-    /// because PD knows all Region and Peers itself.
-    /// When bootstrapping, PD knows first Region with `bootstrap_cluster`.
-    /// When changing Peer, PD determines where to add a new Peer in some store
-    /// for this Region.
-    /// When Region splitting, PD determines the new Region id and Peer id for the
-    /// split Region.
-    /// When Region merging, PD knows which two Regions will be merged and which Region
-    /// and Peers will be removed.
-    /// When doing auto-balance, PD determines how to move the Region from one store to another.
+    /// because PD knows all Region and Peers itself:
+    /// - For bootstrapping, PD knows first Region with `bootstrap_cluster`.
+    /// - For changing Peer, PD determines where to add a new Peer in some store
+    ///   for this Region.
+    /// - For Region splitting, PD determines the new Region id and Peer id for the
+    ///   split Region.
+    /// - For Region merging, PD knows which two Regions will be merged and which Region
+    ///   and Peers will be removed.
+    /// - For auto-balance, PD determines how to move the Region from one store to another.
 
     /// Gets store information.
     fn get_store(&self, store_id: u64) -> Result<metapb::Store>;
@@ -124,10 +124,10 @@ pub trait PdClient: Send + Sync {
     fn get_cluster_config(&self) -> Result<metapb::Cluster>;
 
     /// For route.
-    /// Gets Region which the key belong to.
+    /// Gets Region which the key belongs to.
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
-    /// Gets Region info which the key belong to.
+    /// Gets Region info which the key belongs to.
     fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
         self.get_region(key)
             .map(|region| RegionInfo::new(region, None))
@@ -151,10 +151,10 @@ pub trait PdClient: Send + Sync {
     where
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static;
 
-    /// Asks PD for split, PD returns the new split Region id.
+    /// Asks PD for split. PD returns the newly split Region id.
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
 
-    /// Asks PD for batch split, PD returns the new split Region ids.
+    /// Asks PD for batch split. PD returns the newly split Region ids.
     fn ask_batch_split(
         &self,
         region: metapb::Region,
@@ -172,7 +172,7 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
-    /// Registers a handler to the client, it will be invoked after reconnecting to PD.
+    /// Registers a handler to the client, which will be invoked after reconnecting to PD.
     ///
     /// Please note that this method should only be called once.
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
