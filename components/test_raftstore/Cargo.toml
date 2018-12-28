@@ -18,5 +18,4 @@ log = "0.3.9"
 git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.rocksdb]
-git = "https://github.com/DorianZheng/rust-rocksdb.git"
-branch = "titan-master"
+git = "https://github.com/pingcap/rust-rocksdb.git"
