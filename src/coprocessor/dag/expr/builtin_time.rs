@@ -354,6 +354,23 @@ impl ScalarFunc {
         use coprocessor::codec::mysql::time::DateTimeExtension;
         Ok(Some(i64::from(time.day_number())))
     }
+
+    pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if lhs.invalid_zero() {
+            return handle_incorrect_datetime_error(ctx, lhs).map(|_| None);
+        }
+        let rhs: Cow<Time> = try_opt!(self.children[1].eval_time(ctx, row));
+        if rhs.invalid_zero() {
+            return handle_incorrect_datetime_error(ctx, rhs).map(|_| None);
+        }
+        let days_diff = lhs
+            .get_time()
+            .date()
+            .signed_duration_since(rhs.get_time().date())
+            .num_days();
+        Ok(Some(days_diff))
+    }
 }
 
 #[cfg(test)]
@@ -1160,5 +1177,58 @@ mod tests {
             ScalarFuncSig::ToDays,
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
         );
+    }
+
+    #[test]
+    fn test_date_diff() {
+        let cases = vec![
+            (
+                "0000-01-01 00:00:00.000000",
+                "0000-01-01 00:00:00.000000",
+                0,
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                0,
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                1,
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-02 00:00:00.000000",
+                -1,
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 23:59:59.999999",
+                1,
+            ),
+            (
+                "2018-02-01 23:59:59.999999",
+                "2018-02-02 00:00:00.000000",
+                -1,
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::DateDiff,
+                Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime(arg2, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
+
+        test_err_case_two_arg(&mut ctx, ScalarFuncSig::DateDiff, Datum::Null, Datum::Null);
     }
 }
