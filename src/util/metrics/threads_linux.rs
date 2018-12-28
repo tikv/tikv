@@ -237,7 +237,7 @@ lazy_static! {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::env::temp_dir;
     use std::sync;
     use std::thread;
 
@@ -247,14 +247,17 @@ mod tests {
 
     #[test]
     fn test_thread_stat_io() {
-        let name = "theadnametest66";
+        let name = "thread_name_test66";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
         let h = thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
-                // Make `io::read_bytes` > 0
-                fs::read_to_string("Cargo.lock").unwrap();
+                // Make `io::write_bytes` > 0
+                let mut tmp = temp_dir();
+                tmp.push(name);
+                tmp.set_extension("txt");
+                fs::write(tmp.as_path(), name);
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
             })
@@ -276,7 +279,7 @@ mod tests {
         tids.iter()
             .find(|t| {
                 pid::io_task(pid, **t)
-                    .map(|io| io.read_bytes > 0)
+                    .map(|io| io.write_bytes > 0)
                     .unwrap_or(false)
             })
             .unwrap();
