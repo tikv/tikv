@@ -17,6 +17,7 @@ mod jemalloc {
     use libc::{self, c_char, c_void};
     use std::{ptr, slice};
 
+    #[allow(cast_ptr_alignment)]
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         unsafe {
             let buf = &mut *(printer as *mut Vec<u8>);
