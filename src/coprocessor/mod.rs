@@ -11,6 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Coprocessor mainly handles some simple SQL query executors. Most TiDB read queries are processed
+//! by Coprocessor instead of KV interface. By doing so, the CPU of TiKV nodes can be utilized for
+//! computing and the amount of data to transfer can be reduced (i.e. filtered at TiKV side).
+//!
+//! Notice that Coprocessor handles more than simple SQL query executors (DAG request). It also
+//! handles analyzing requests and checksum requests.
+//!
+//! The entry point of handling all coprocessor requests is `Endpoint`. Common steps are:
+//! 1. Parse the request into a DAG request, Checksum request or Analyze request.
+//! 2. Retrieve a snapshot from the underlying engine according to the given timestamp.
+//! 3. Build corresponding request handlers from the snapshot and request detail.
+//! 4. Run request handlers once (for unary requests) or multiple times (for streaming requests)
+//!    on a future thread pool.
+//! 5. Return handling result as a response.
+//!
+//! Please refer to `Endpoint` for more details.
+
 mod checksum;
 pub mod codec;
 pub mod dag;
@@ -41,15 +58,19 @@ const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
+/// An interface for all kind of Coprocessor request handlers.
 trait RequestHandler: Send {
+    /// Processes current request and produces a response.
     fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 
+    /// Processes current request and produces streaming responses.
     fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
         panic!("streaming request is not supported for this handler");
     }
 
+    /// Collects metrics generated in this request handler so far.
     fn collect_metrics_into(&mut self, _metrics: &mut self::dag::executor::ExecutorMetrics) {
         // Do nothing by default
     }
@@ -62,6 +83,10 @@ trait RequestHandler: Send {
     }
 }
 
+/// Request process dead line.
+///
+/// When dead line exceeded, the request handling should be stopped.
+// TODO: This struct can be removed.
 #[derive(Debug, Clone, Copy)]
 pub struct Deadline {
     /// Used to construct the Error when deadline exceeded
@@ -72,7 +97,7 @@ pub struct Deadline {
 }
 
 impl Deadline {
-    /// Initialize a deadline that counting from current.
+    /// Initializes a deadline that counting from current.
     pub fn from_now(tag: &'static str, after_duration: Duration) -> Self {
         let start_time = Instant::now_coarse();
         let deadline = start_time + after_duration;
