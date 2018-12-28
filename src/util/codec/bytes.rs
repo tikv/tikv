@@ -105,10 +105,9 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
 /// This function gets the total bytes length of compact-encoded data, including the length prefix.
 ///
 /// Note:
+///     - This function won't check the whether the bytes is encoded correctly.
 ///     - There can be multiple compact-encoded data, placed one by one. This function only returns
 ///       the length of the first one.
-///
-///     - This function won't check the whether the bytes is encoded correctly.
 pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
     let last_encoded = encoded.as_ptr() as usize;
     let total_len = encoded.len();
@@ -146,10 +145,9 @@ impl<T: BufRead> CompactBytesFromFileDecoder for T {}
 /// This function gets the total bytes length of memcomparable-encoded data, including the length prefix.
 ///
 /// Note:
+///     - This function won't check the whether the bytes is encoded correctly.
 ///     - There can be multiple memcomparable-encoded data, placed one by one. This function only returns
 ///       the length of the first one.
-///
-///     - This function won't check the whether the bytes is encoded correctly.
 pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
     let mut idx = ENC_GROUP_SIZE;
     loop {
