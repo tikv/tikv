@@ -164,7 +164,7 @@ impl LeaderClient {
         self.inner.rl().members.get_leader().clone()
     }
 
-    // Re-establish connection with PD leader in synchronized fashion.
+    /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> Result<()> {
         let ((client, members), start) = {
             let inner = self.inner.rl();
@@ -291,7 +291,7 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // Error::Incompatible is returned by response header from pd, no need to retry
+            // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
                 error!("request failed: {:?}, retry", err);
