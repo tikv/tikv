@@ -254,10 +254,11 @@ pub trait PollHandler<N, C> {
 
     /// This function is called when handling readiness for control FSM.
     ///
-    /// If returned value is Some, then it represents the channel length that
-    /// this function is checked. This function will only be called after
-    /// channel's lengh is larger than the value. If it returns None, then
-    /// this FSM is stopped and should be removed.
+    /// If returned value is Some, then it represents a length of channel. This
+    /// function will only be called for the same fsm after channel's lengh is
+    /// larger than the value. If it returns None, then this function will
+    /// still be called for the same FSM in the next loop unless the FSM is
+    /// stopped.
     fn handle_control(&mut self, control: &mut C) -> Option<usize>;
 
     /// This function is called when handling readiness for normal FSM.
@@ -309,24 +310,26 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         while !batch.is_empty() {
             self.handler.begin();
             if batch.control.is_some() {
-                let pos = self.handler.handle_control(batch.control.as_mut().unwrap());
+                let len = self.handler.handle_control(batch.control.as_mut().unwrap());
                 if batch.control.as_ref().unwrap().is_stopped() {
                     batch.remove_control(&self.router.control_box);
-                } else if let Some(pos) = pos {
-                    batch.release_control(&self.router.control_box, pos);
+                } else if let Some(len) = len {
+                    batch.release_control(&self.router.control_box, len);
                 }
             }
             if !batch.normals.is_empty() {
                 for (i, p) in batch.normals.iter_mut().enumerate() {
-                    let pos = self.handler.handle_normal(p);
+                    let len = self.handler.handle_normal(p);
                     if p.is_stopped() {
                         exhausted_fsms.push((i, None));
-                    } else if pos.is_some() {
-                        exhausted_fsms.push((i, pos));
+                    } else if len.is_some() {
+                        exhausted_fsms.push((i, len));
                     }
                 }
             }
             self.handler.end();
+            // Because release use `swap_remove` internally, so using pop here
+            // to remove the correct FSM.
             while let Some((r, mark)) = exhausted_fsms.pop() {
                 if let Some(m) = mark {
                     batch.release(r, m);
