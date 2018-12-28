@@ -240,7 +240,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
-            }
+            },
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -293,7 +293,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
-            }
+            },
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -346,7 +346,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
-            }
+            },
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -399,7 +399,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
-            }
+            },
         },
         titan: TitanConfig {
             enabled: true,
@@ -491,7 +491,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.00156,
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
-            }
+            },
         },
     };
     value.storage = StorageConfig {
