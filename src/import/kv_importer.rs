@@ -54,6 +54,7 @@ impl KVImporter {
 
     /// Open the engine.
     pub fn open_engine(&self, uuid: Uuid) -> Result<()> {
+        // Checks if we have already opened an engine related to UUID
         let mut inner = self.inner.lock().unwrap();
         if inner.engines.contains_key(&uuid) {
             return Ok(());
@@ -124,6 +125,7 @@ impl KVImporter {
         let client = Client::new(pd_addr, self.cfg.num_import_jobs)?;
         let job = {
             let mut inner = self.inner.lock().unwrap();
+            // One engine only related to one ImportJob
             if inner.engines.contains_key(&uuid) || inner.import_jobs.contains_key(&uuid) {
                 return Err(Error::EngineInUse(uuid));
             }
@@ -220,6 +222,7 @@ impl EngineDir {
         }
     }
 
+    /// Creates an engine from `$root/.temp/$uuid` for storing and sorting KV pairs temporarily.
     fn open(&self, uuid: Uuid) -> Result<EngineFile> {
         let path = self.join(uuid);
         if path.save.exists() {
@@ -228,11 +231,13 @@ impl EngineDir {
         EngineFile::new(uuid, path, self.opts.clone())
     }
 
+    /// Creates an engine from `$root/$uuid` for importing data.
     fn import(&self, uuid: Uuid) -> Result<Engine> {
         let path = self.join(uuid);
         Engine::new(&path.save, uuid, self.opts.clone())
     }
 
+    /// Cleans up directories for both `$root/.temp/$uuid` and `$root/$uuid`
     fn cleanup(&self, uuid: Uuid) -> Result<EnginePath> {
         let path = self.join(uuid);
         if path.save.exists() {
@@ -271,6 +276,7 @@ pub struct EngineFile {
 }
 
 impl EngineFile {
+    /// Creates an engine in the temp directory for writing.
     fn new(uuid: Uuid, path: EnginePath, opts: DbConfig) -> Result<EngineFile> {
         let engine = Engine::new(&path.temp, uuid, opts)?;
         Ok(EngineFile {
@@ -280,6 +286,7 @@ impl EngineFile {
         })
     }
 
+    /// Writes KV pairs to the engine.
     pub fn write(&self, batch: WriteBatch) -> Result<usize> {
         self.engine.as_ref().unwrap().write(batch)
     }

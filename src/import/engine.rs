@@ -162,13 +162,19 @@ pub struct SSTWriter {
 
 impl SSTWriter {
     pub fn new(cfg: &DbConfig) -> Result<SSTWriter> {
+        // Using a memory environment to generate SST in memory
         let env = Arc::new(Env::new_mem());
 
+        // Creates a writer for default CF
+        // Here is where we set table_properties_collector_factory, so that we can collect
+        // some properties about SST
         let mut default_opts = cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
+
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(CF_DEFAULT)?;
 
+        // Creates a writer for write CF
         let mut write_opts = cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
@@ -214,6 +220,9 @@ impl SSTWriter {
     }
 }
 
+/// Gets a set of approximately equal size ranges from `props`.
+/// The maximum number of ranges cannot exceed `max_ranges`,
+/// and the minimum number of ranges cannot be smaller than `min_range_size`
 pub fn get_approximate_ranges(
     props: &SizeProperties,
     max_ranges: usize,
