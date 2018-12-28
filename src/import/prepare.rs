@@ -34,8 +34,8 @@ const RETRY_INTERVAL_SECS: u64 = 1;
 /// PrepareJob is responsible for improving cluster data balance
 ///
 /// The main job is:
- /// 1. split data into ranges according to region size and region distribution
- /// 2. split and scatter regions of a cluster before we import a large amount of data
+/// 1. split data into ranges according to region size and region distribution
+/// 2. split and scatter regions of a cluster before we import a large amount of data
 pub struct PrepareJob<Client> {
     tag: String,
     cfg: Config,

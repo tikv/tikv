@@ -243,7 +243,8 @@ impl<Client: ImportClient> SubImportJob<Client> {
     }
 }
 
-/// ImportSSTJob is responsible for importing a sst file to cluster
+/// ImportSSTJob is responsible for importing `sst` to all replicas of the
+/// specific Region
 struct ImportSSTJob<Client> {
     tag: String,
     sst: SSTFile,
