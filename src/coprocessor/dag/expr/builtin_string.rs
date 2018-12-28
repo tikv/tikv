@@ -96,7 +96,10 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        let input = input.chars().as_str().trim();
+        let input = input
+            .into_iter()
+            .skip_while(|x| x.is_ascii_whitespace())
+            .collect::<Vec<_>>();
 
         if input.len() == 0 {
             return Ok(Some(Cow::Owned(b"0".to_vec())));
@@ -1063,10 +1066,6 @@ mod tests {
     fn test_oct_string() {
         let cases = vec![
             (Datum::Bytes(b"".to_vec()), Datum::Bytes(b"0".to_vec())),
-            (
-                Datum::Bytes(b"   12   ".to_vec()),
-                Datum::Bytes(b"14".to_vec()),
-            ),
             (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
             (Datum::Bytes(b"8".to_vec()), Datum::Bytes(b"10".to_vec())),
             (Datum::Bytes(b"365".to_vec()), Datum::Bytes(b"555".to_vec())),
