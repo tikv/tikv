@@ -76,6 +76,7 @@ quick_error!{
     }
 }
 
+/// Describes the meta information of a region.
 #[derive(PartialEq, Debug, Default)]
 pub struct RegionInfo {
     pub raft_local_state: Option<RaftLocalState>,
@@ -97,6 +98,7 @@ impl RegionInfo {
     }
 }
 
+/// A thin wrapper of `DBBottommostLevelCompaction`.
 #[derive(Copy, Clone, Debug)]
 pub struct BottommostLevelCompaction(pub DBBottommostLevelCompaction);
 
@@ -1210,7 +1212,7 @@ impl Iterator for MvccInfoIterator {
     }
 }
 
-pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
+fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
         (DBType::KV, CF_DEFAULT)
         | (DBType::KV, CF_WRITE)

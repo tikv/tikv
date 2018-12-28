@@ -29,6 +29,10 @@ pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
 
+/// A priority-awared thread pool for executing futures.
+///
+/// It is specifically used for all sorts of read operations like Kv Get,
+/// Kv Scan and Coprocessor Read to improve performance.
 pub struct ReadPool<T: futurepool::Context + 'static> {
     pool_high: FuturePool<T>,
     pool_normal: FuturePool<T>,
@@ -53,6 +57,7 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 }
 
 impl<T: futurepool::Context + 'static> ReadPool<T> {
+    /// Create a new thread pool.
     // Rust does not support copying closures (RFC 2132) so that we need a closure builder.
     // TODO: Use a single closure once RFC 2132 is implemented.
     pub fn new<F, CF>(name_prefix: &str, config: &Config, context_factory_builder: F) -> Self

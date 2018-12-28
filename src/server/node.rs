@@ -42,6 +42,8 @@ use util::worker::{FutureWorker, Worker};
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
+/// Creates a new storage engine which is backended by the Raft consensus
+/// protocol.
 pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
@@ -77,7 +79,7 @@ fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result
     Ok(())
 }
 
-// Node is a wrapper for raft store.
+/// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
 pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
@@ -93,6 +95,7 @@ impl<C> Node<C>
 where
     C: PdClient,
 {
+    /// Create a new Node.
     pub fn new<T>(
         event_loop: &mut EventLoop<Store<T, C>>,
         cfg: &ServerConfig,
@@ -131,6 +134,9 @@ where
         }
     }
 
+    /// Starts the Node. It tries to bootstrap cluster if the cluster is not
+    /// bootstrapped yet. Then it spawns a thread to run the raftstore in
+    /// background.
     #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
     pub fn start<T>(
         &mut self,
@@ -188,10 +194,13 @@ where
         Ok(())
     }
 
+    /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
     }
 
+    /// Gets a transmission end of a channel which is used to send `Msg` to the
+    /// raftstore.
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.ch.clone()
     }
@@ -237,6 +246,7 @@ where
         Ok(store_id)
     }
 
+    #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
         engines: &Engines,
@@ -400,6 +410,7 @@ where
         Ok(())
     }
 
+    /// Stops the Node.
     pub fn stop(&mut self) -> Result<()> {
         let store_id = self.store.get_id();
         self.stop_store(store_id)

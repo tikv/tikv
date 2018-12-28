@@ -11,17 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::Future;
-use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
-use prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec};
+//! This mod implemented a wrapped future pool that supports `on_tick()` which is driven by
+//! tasks and is invoked no less than the specific interval.
+
 use std::cell::{Cell, RefCell, RefMut};
-/// This mod implemented a wrapped future pool that supports `on_tick()` which is driven by
-/// tasks and is invoked no less than the specific interval.
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
+
+use futures::Future;
+use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
+use prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec};
 
 use util;
 use util::collections::HashMap;

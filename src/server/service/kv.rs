@@ -42,6 +42,7 @@ use util::worker::Scheduler;
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
+/// Service handles the rpc messages for the `Tikv` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     // For handling KV requests.
@@ -55,6 +56,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
+    /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E>,
         cop: Endpoint<E>,

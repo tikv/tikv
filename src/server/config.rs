@@ -33,15 +33,16 @@ const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
 // Number of rows in each chunk.
-pub const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
+const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
-pub const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
+const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 
 // Number of rows in each chunk for streaming coprocessor.
-pub const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
+const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
+/// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GrpcCompressionType {
@@ -50,6 +51,7 @@ pub enum GrpcCompressionType {
     Gzip,
 }
 
+/// Configuration for the `server` module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -150,6 +152,7 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Validates the configuration, returns an error if it is misconfigured.
     pub fn validate(&mut self) -> Result<()> {
         box_try!(config::check_addr(&self.addr));
         if !self.advertise_addr.is_empty() {
@@ -215,6 +218,7 @@ impl Config {
         Ok(())
     }
 
+    /// Gets configured grpc compression algorithm.
     pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
         match self.grpc_compression_type {
             GrpcCompressionType::None => CompressionAlgorithms::None,

@@ -40,6 +40,7 @@ pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_POOL_SIZE: usize = 4;
 
+/// A task for either receiving Snapshot or sending Snapshot.
 pub enum Task {
     Recv {
         stream: RequestStream<SnapshotChunk>,

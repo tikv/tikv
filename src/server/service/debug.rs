@@ -51,6 +51,7 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
     e
 }
 
+/// Service handles the rpc messages for the `Debug` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
@@ -59,6 +60,7 @@ pub struct Service<T: RaftStoreRouter> {
 }
 
 impl<T: RaftStoreRouter> Service<T> {
+    /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
     pub fn new(engines: Engines, raft_router: T) -> Service<T> {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
@@ -85,7 +87,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
