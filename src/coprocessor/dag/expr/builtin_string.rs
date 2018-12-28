@@ -96,12 +96,17 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        let input = input.trim();
+        let input: Vec<_> = input
+            .into_iter()
+            .skip_while(|x| x.is_ascii_whitespace())
+            .collect();
         if input.len() == 0 {
-            return Ok(Some(Cow::Owned(b"0")));
+            return Ok(Some(Cow::Owned(b"0".to_vec())));
         }
 
-        match input.parse::<u64>() {
+        match String::from(input)
+            .as_str()
+            .parse::<u64>() {
             Ok(val) => return Ok(Some(Cow::Owned(format!("{:o}", val).into_bytes()))),
             _ => {}
         };
