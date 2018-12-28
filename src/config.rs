@@ -77,7 +77,7 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct TitanDbConfig {
+pub struct TitanConfig {
     pub enabled: bool,
     pub dirname: String,
     pub min_blob_size: u64,
@@ -92,7 +92,7 @@ pub struct TitanDbConfig {
     pub merge_small_file_threshold: ReadableSize,
 }
 
-impl Default for TitanDbConfig {
+impl Default for TitanConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -111,7 +111,7 @@ impl Default for TitanDbConfig {
     }
 }
 
-impl TitanDbConfig {
+impl TitanConfig {
     fn build_opts(&self) -> TitanDBOptions {
         let mut opts = TitanDBOptions::new();
         opts.set_dirname(&self.dirname);
@@ -167,7 +167,7 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
-            pub titandb: TitanDbConfig,
+            pub titan: TitanConfig,
         }
     };
 }
@@ -221,8 +221,8 @@ cf_config!(DefaultCfConfig);
 
 impl Default for DefaultCfConfig {
     fn default() -> DefaultCfConfig {
-        let mut titandb = TitanDbConfig::default();
-        titandb.min_blob_size = 4096;
+        let mut titan = TitanConfig::default();
+        titan.min_blob_size = 4096;
         DefaultCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_DEFAULT) as u64),
@@ -261,7 +261,7 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titandb,
+            titan,
         }
     }
 }
@@ -272,7 +272,7 @@ impl DefaultCfConfig {
         let f = Box::new(RangePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
 
-        cf_opts.set_titandb_options(&self.titandb.build_opts());
+        cf_opts.set_titandb_options(&self.titan.build_opts());
 
         cf_opts
     }
@@ -282,7 +282,7 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
-        let titandb = TitanDbConfig::default();
+        let titan = TitanConfig::default();
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -321,7 +321,7 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titandb,
+            titan,
         }
     }
 }
@@ -341,7 +341,7 @@ impl WriteCfConfig {
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         let f = Box::new(RangePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        cf_opts.set_titandb_options(&self.titandb.build_opts());
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -350,7 +350,7 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
-        let titandb = TitanDbConfig::default();
+        let titan = TitanConfig::default();
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -381,7 +381,7 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titandb,
+            titan,
         }
     }
 }
@@ -394,7 +394,7 @@ impl LockCfConfig {
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titandb.build_opts());
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -403,7 +403,7 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
-        let titandb = TitanDbConfig::default();
+        let titan = TitanConfig::default();
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -434,7 +434,7 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titandb,
+            titan,
         }
     }
 }
@@ -447,7 +447,7 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titandb.build_opts());
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -484,7 +484,7 @@ pub struct DbConfig {
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
     pub raftcf: RaftCfConfig,
-    pub titandb: TitanDbConfig,
+    pub titan: TitanConfig,
 }
 
 impl Default for DbConfig {
@@ -517,7 +517,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            titandb: TitanDbConfig::default(),
+            titan: TitanConfig::default(),
         }
     }
 }
@@ -564,8 +564,8 @@ impl DbConfig {
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.add_event_listener(EventListener::new("kv"));
 
-        if self.titandb.enabled {
-            opts.set_titandb_options(&self.titandb.build_opts());
+        if self.titan.enabled {
+            opts.set_titandb_options(&self.titan.build_opts());
         }
         opts
     }
@@ -626,7 +626,7 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titandb: TitanDbConfig::default(),
+            titan: TitanConfig::default(),
         }
     }
 }
