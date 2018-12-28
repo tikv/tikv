@@ -490,7 +490,7 @@ impl Peer {
         }
     }
 
-    /// Tries to destroy itself. Returns a job (if needed) to do more clean task.
+    /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!("{} is being destroyed, skip", self.tag);
