@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use kvproto::metapb::Region;
+use raft::StateRole;
 use std::mem;
 use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
@@ -30,7 +31,7 @@ struct TestObserver {
 impl Coprocessor for TestObserver {}
 
 impl RegionChangeObserver for TestObserver {
-    fn on_region_changed(&self, ctx: &mut ObserverContext, event: RegionChangeEvent) {
+    fn on_region_changed(&self, ctx: &mut ObserverContext, event: RegionChangeEvent, _: StateRole) {
         self.sender.send((ctx.region().clone(), event)).unwrap();
     }
 }

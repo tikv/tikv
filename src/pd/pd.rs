@@ -45,13 +45,13 @@ use util::time::time_now_sec;
 use util::transport::SendCh;
 use util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
-// Use an asynchronous thread to tell pd something.
+/// Uses an asynchronous thread to tell PD something.
 pub enum Task {
     AskSplit {
         region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
-        // If true, right region derive origin region_id.
+        // If true, right Region derives origin region_id.
         right_derive: bool,
         callback: Callback,
     },
@@ -59,7 +59,7 @@ pub enum Task {
         region: metapb::Region,
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
-        // If true, right region derive origin region_id.
+        // If true, right Region derives origin region_id.
         right_derive: bool,
         callback: Callback,
     },
@@ -201,7 +201,7 @@ pub struct Runner<T: PdClient> {
 
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
-    // calls Runner's run() on Task recevied.
+    // calls Runner's run() on Task received.
     scheduler: Scheduler<Task>,
 }
 
@@ -297,9 +297,9 @@ impl<T: PdClient> Runner<T> {
                         let epoch = region.take_region_epoch();
                         send_admin_request(&ch, region_id, epoch, peer, req, callback)
                     }
-                    // When rolling update, there might be some old version tikvs that doesn't support batch split in cluster.
-                    // In this situation, pd version check would refuse ask_batch_split.
-                    // But if update time is long, it may cause large regions, so call ask_split instead.
+                    // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
+                    // In this situation, PD version check would refuse `ask_batch_split`.
+                    // But if update time is long, it may cause large Regions, so call `ask_split` instead.
                     Err(Error::Incompatible) => {
                         let (region_id, peer_id) = (region.id, peer.id);
                         info!(
@@ -361,7 +361,6 @@ impl<T: PdClient> Runner<T> {
             .region_keys_read
             .observe(region_stat.read_keys as f64);
 
-        // Now we use put region protocol for heartbeat.
         let f = self
             .pd_client
             .region_heartbeat(region.clone(), peer.clone(), region_stat)
@@ -412,8 +411,7 @@ impl<T: PdClient> Runner<T> {
             0
         };
 
-        // We only care rocksdb SST file size, so we should
-        // check disk available here.
+        // We only care about rocksdb SST file size, so we should check disk available here.
         if available > disk_stats.free_space() {
             available = disk_stats.free_space();
         }
@@ -474,9 +472,9 @@ impl<T: PdClient> Runner<T> {
                             pd_region.get_region_epoch(),
                             local_region.get_region_epoch(),
                         ) {
-                            // The local region epoch is fresher than region epoch in PD
-                            // This means the region info in PD is not updated to the latest even
-                            // after max_leader_missing_duration. Something is wrong in the system.
+                            // The local Region epoch is fresher than Region epoch in PD
+                            // This means the Region info in PD is not updated to the latest even
+                            // after `max_leader_missing_duration`. Something is wrong in the system.
                             // Just add a log here for this situation.
                             info!(
                                 "[region {}] {} the local region epoch: {:?} is greater the \
@@ -497,7 +495,7 @@ impl<T: PdClient> Runner<T> {
                             .into_iter()
                             .all(|p| p.get_id() != peer.get_id())
                         {
-                            // Peer is not a member of this region anymore. Probably it's removed out.
+                            // Peer is not a member of this Region anymore. Probably it's removed out.
                             // Send it a raft massage to destroy it since it's obsolete.
                             info!(
                                 "[region {}] {} is not a valid member of region {:?}. To be \
@@ -527,7 +525,7 @@ impl<T: PdClient> Runner<T> {
                             .inc();
                     }
                     Ok(None) => {
-                        // splitted region has not yet reported to pd.
+                        // splitted Region has not yet reported to PD.
                         // TODO: handle merge
                     }
                     Err(e) => {
@@ -826,14 +824,14 @@ fn send_admin_request(
     }
 }
 
-// send merge fail to gc merge source.
+/// Sends merge fail message to gc merge source.
 fn send_merge_fail(ch: SendCh<Msg>, source: u64) {
     if let Err(e) = ch.send(Msg::MergeFail { region_id: source }) {
         error!("[region {}] failed to report merge fail: {:?}", source, e);
     }
 }
 
-// send a raft message to destroy the specified stale peer
+/// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
     ch: SendCh<Msg>,
     local_region: metapb::Region,
