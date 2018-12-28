@@ -96,9 +96,24 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
+        let input = input.trim();
+        if input.len() == 0 {
+            return Ok(Some(Cow::Owned(b"0")));
+        }
+
+        match input.parse::<u64>() {
+            Ok(val) => {
+                return Ok(Some(Cow::Owned(
+                    format!("{:o}", val).into_bytes(),
+                )))
+            },
+            _ => {},
+        };
+
         let mut num: u64 = 0;
         let mut i: usize = 1;
         let mut overflow = false;
+
         let neg = match input[0] {
             b'-' => true,
             b'+' => false,
@@ -1055,6 +1070,8 @@ mod tests {
     #[test]
     fn test_oct_string() {
         let cases = vec![
+            (Datum::Bytes(b"   12   ".to_vec()), Datum::Bytes(b"14".to_vec())),
+            (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
             (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
             (Datum::Bytes(b"8".to_vec()), Datum::Bytes(b"10".to_vec())),
             (Datum::Bytes(b"365".to_vec()), Datum::Bytes(b"555".to_vec())),
