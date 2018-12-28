@@ -30,6 +30,9 @@ use coprocessor::*;
 use super::{Executor, ExecutorMetrics, Row};
 use super::{ScanOn, Scanner};
 
+/// Scans rows from table records.
+///
+/// `row_id` in the key and datums in the value are processed.
 pub struct TableScanExecutor<S: Store> {
     store: S,
     desc: bool,
