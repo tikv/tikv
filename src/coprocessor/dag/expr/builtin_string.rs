@@ -1070,8 +1070,8 @@ mod tests {
     #[test]
     fn test_oct_string() {
         let cases = vec![
+            (Datum::Bytes(b"".to_vec()), Datum::Bytes(b"0".to_vec())),
             (Datum::Bytes(b"   12   ".to_vec()), Datum::Bytes(b"14".to_vec())),
-            (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
             (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
             (Datum::Bytes(b"8".to_vec()), Datum::Bytes(b"10".to_vec())),
             (Datum::Bytes(b"365".to_vec()), Datum::Bytes(b"555".to_vec())),
