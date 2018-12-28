@@ -102,12 +102,8 @@ impl ScalarFunc {
         }
 
         match input.parse::<u64>() {
-            Ok(val) => {
-                return Ok(Some(Cow::Owned(
-                    format!("{:o}", val).into_bytes(),
-                )))
-            },
-            _ => {},
+            Ok(val) => return Ok(Some(Cow::Owned(format!("{:o}", val).into_bytes()))),
+            _ => {}
         };
 
         let mut num: u64 = 0;
@@ -1071,7 +1067,10 @@ mod tests {
     fn test_oct_string() {
         let cases = vec![
             (Datum::Bytes(b"".to_vec()), Datum::Bytes(b"0".to_vec())),
-            (Datum::Bytes(b"   12   ".to_vec()), Datum::Bytes(b"14".to_vec())),
+            (
+                Datum::Bytes(b"   12   ".to_vec()),
+                Datum::Bytes(b"14".to_vec()),
+            ),
             (Datum::Bytes(b"12".to_vec()), Datum::Bytes(b"14".to_vec())),
             (Datum::Bytes(b"8".to_vec()), Datum::Bytes(b"10".to_vec())),
             (Datum::Bytes(b"365".to_vec()), Datum::Bytes(b"555".to_vec())),
