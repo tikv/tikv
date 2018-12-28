@@ -67,6 +67,7 @@ struct ReadIndexRequest {
 }
 
 impl ReadIndexRequest {
+    // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
     fn binary_id(&self) -> &[u8] {
         unsafe {
             let id = &self.id as *const u64 as *const u8;
@@ -112,6 +113,7 @@ pub enum StaleState {
     LeaderMissing,
 }
 
+/// Meta information about proposals.
 pub struct ProposalMeta {
     pub index: u64,
     pub term: u64,
@@ -151,12 +153,17 @@ impl ProposalQueue {
     }
 }
 
+/// `ReadyContext` is for storing raft logs temporarily.
 pub struct ReadyContext<'a, T: 'a> {
+    /// If the raft log contains a snapshot, old RaftLocalState will be stored into `kv_wb`.
     pub kv_wb: WriteBatch,
+    /// Raft logs will be stored into `raft_wb`.
     pub raft_wb: WriteBatch,
+    /// Indicates whether the write in `raft_wb` should synchronize log or not.
     pub sync_log: bool,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
+    /// All `Ready`s and their `InvokeContext`s will be stored into `ready_res`.
     pub ready_res: Vec<(Ready, InvokeContext)>,
 }
 
@@ -175,6 +182,7 @@ impl<'a, T> ReadyContext<'a, T> {
 
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
+    /// A bitmap contains some useful flags when dealing with `eraftpb::Entry`.
     pub struct ProposalContext: u8 {
         const SYNC_LOG       = 0b00000001;
         const SPLIT          = 0b00000010;
@@ -183,6 +191,7 @@ bitflags! {
 }
 
 impl ProposalContext {
+    /// Converts itself to a vector.
     pub fn to_vec(self) -> Vec<u8> {
         if self.is_empty() {
             return vec![];
@@ -191,6 +200,7 @@ impl ProposalContext {
         vec![ctx]
     }
 
+    /// Initializes a `ProposalContext` from a byte slice.
     pub fn from_bytes(ctx: &[u8]) -> ProposalContext {
         if ctx.is_empty() {
             ProposalContext::empty()
@@ -202,6 +212,7 @@ impl ProposalContext {
     }
 }
 
+/// `ConsistencyState` is used for consistency check.
 pub struct ConsistencyState {
     pub last_check_time: Instant,
     // (computed_result_or_to_be_verified, index, hash)
@@ -209,6 +220,7 @@ pub struct ConsistencyState {
     pub hash: Vec<u8>,
 }
 
+/// Statistics about raft peer.
 #[derive(Default, Clone)]
 pub struct PeerStat {
     pub written_bytes: u64,
@@ -470,6 +482,7 @@ impl Peer {
         self.raft_group.raft.raft_log.last_index() + 1
     }
 
+    /// Puts self `region_id` into `pending_raft_groups`.
     pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
         if !self.marked_to_be_checked {
             self.marked_to_be_checked = true;
@@ -477,6 +490,7 @@ impl Peer {
         }
     }
 
+    /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
     pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!("{} is being destroyed, skip", self.tag);
@@ -508,6 +522,10 @@ impl Peer {
         })
     }
 
+    /// Does the real destroy task which includes:
+    /// 1. Set the region to tombstone;
+    /// 2. Clear data;
+    /// 3. Notify all pending requests.
     pub fn destroy(&mut self, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
@@ -628,6 +646,7 @@ impl Peer {
         self.get_store().is_applying_snapshot()
     }
 
+    /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
         self.raft_group.get_snap().is_some()
@@ -693,6 +712,7 @@ impl Peer {
         Ok(())
     }
 
+    /// Steps the raft message.
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
         fail_point!(
             "step_message_3_1",
@@ -711,6 +731,7 @@ impl Peer {
         Ok(())
     }
 
+    /// Checks and updates `peer_heartbeats` for the peer.
     pub fn check_peers(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
@@ -730,6 +751,7 @@ impl Peer {
         }
     }
 
+    /// Collects all down peers.
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
         for p in self.region().get_peers() {
@@ -748,6 +770,7 @@ impl Peer {
         down_peers
     }
 
+    /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
@@ -776,6 +799,8 @@ impl Peer {
         pending_peers
     }
 
+    /// Returns `true` if any new peer catches up with the leader in replicating logs.
+    /// And updates `peers_start_pending_time` if needed.
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
         if self.peers_start_pending_time.is_empty() {
             return false;
@@ -1536,6 +1561,11 @@ impl Peer {
         Ok(())
     }
 
+    // Returns a boolean to indicate whether the `read` is proposed or not.
+    // For these cases it won't be proposed:
+    // 1. The region is in merging or splitting;
+    // 2. The message is stale and dropped by the Raft group internally;
+    // 3. There is already a read request proposed in the current lease;
     fn read_index(
         &mut self,
         req: RaftCmdRequest,
@@ -1763,6 +1793,11 @@ impl Peer {
         transferred
     }
 
+    // Fails in such cases:
+    // 1. A pending conf change has not been applied yet;
+    // 2. Removing the leader is not allowed in the configuration;
+    // 3. The conf change makes the raft group not healthy;
+    // 4. The conf change is dropped by raft group internally.
     fn propose_conf_change(
         &mut self,
         req: &RaftCmdRequest,
