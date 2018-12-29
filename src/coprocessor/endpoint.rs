@@ -37,13 +37,22 @@ use coprocessor::*;
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 const BUSY_ERROR_MSG: &str = "server is busy (coprocessor full).";
 
+/// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
+    /// The storage engine to build Coprocessor request handlers.
     engine: E,
+
+    /// The thread pool to run Coprocessor requests.
     read_pool: ReadPool<ReadPoolContext>,
+
+    /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
+
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
     stream_channel_size: usize,
+
+    /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
 }
 
