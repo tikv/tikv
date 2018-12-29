@@ -95,7 +95,7 @@ impl<C> Node<C>
 where
     C: PdClient,
 {
-    /// Create a new Node.
+    /// Creates a new Node.
     pub fn new<T>(
         event_loop: &mut EventLoop<Store<T, C>>,
         cfg: &ServerConfig,
