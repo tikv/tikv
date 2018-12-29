@@ -285,7 +285,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
-            }
+            },
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -334,7 +334,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
-            }
+            },
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -383,7 +383,7 @@ fn test_serde_custom_tikv_config() {
                 discardable_ratio: 0.5,
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
-            }
+            },
         },
         titan: TitanDBConfig {
             enabled: true,
