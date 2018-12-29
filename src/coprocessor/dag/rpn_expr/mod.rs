@@ -16,6 +16,7 @@ mod types;
 
 mod impl_compare;
 mod impl_dummy;
+mod impl_op;
 
 pub use self::function::RpnFunction;
 pub use self::types::{RpnExpressionEvalContext, RpnExpressionNodeVec};

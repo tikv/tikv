@@ -24,7 +24,6 @@ pub fn eq_real(
 ) -> Option<i64> {
     // FIXME: It really should be a `Result<Option<f64>>`.
     match (arg0, arg1) {
-        (None, None) => Some(1),
         (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
         // TODO: Use `partial_cmp`.
         _ => None,
@@ -41,7 +40,6 @@ pub fn eq_int(
 ) -> Option<i64> {
     // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
     match (arg0, arg1) {
-        (None, None) => Some(1),
         (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
         _ => None,
     }
@@ -57,7 +55,6 @@ pub fn gt_int(
 ) -> Option<i64> {
     // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
     match (arg0, arg1) {
-        (None, None) => Some(1),
         (Some(ref arg0), Some(ref arg1)) => Some((*arg0 > *arg1) as i64),
         _ => None,
     }
@@ -73,7 +70,6 @@ pub fn lt_int(
 ) -> Option<i64> {
     // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
     match (arg0, arg1) {
-        (None, None) => Some(1),
         (Some(ref arg0), Some(ref arg1)) => Some((*arg0 < *arg1) as i64),
         _ => None,
     }

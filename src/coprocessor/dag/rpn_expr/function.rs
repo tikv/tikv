@@ -16,7 +16,7 @@ use std::convert::TryFrom;
 use tipb::expression::{FieldType, ScalarFuncSig};
 
 use super::types::{RpnExpressionEvalContext, RpnStackNode};
-use super::{impl_compare, impl_dummy};
+use super::{impl_compare, impl_dummy, impl_op};
 use coprocessor::data_type::{Evaluable, ScalarValueRef, VectorValue, VectorValueRef};
 use coprocessor::Error;
 
@@ -33,6 +33,8 @@ pub enum RpnFunction {
     EQInt,
     GTInt,
     LTInt,
+    LogicalAnd,
+    LogicalOr,
 }
 
 impl TryFrom<ScalarFuncSig> for RpnFunction {
@@ -44,6 +46,8 @@ impl TryFrom<ScalarFuncSig> for RpnFunction {
             ScalarFuncSig::EQInt => Ok(RpnFunction::EQInt),
             ScalarFuncSig::GTInt => Ok(RpnFunction::GTInt),
             ScalarFuncSig::LTInt => Ok(RpnFunction::LTInt),
+            ScalarFuncSig::LogicalAnd => Ok(RpnFunction::LogicalAnd),
+            ScalarFuncSig::LogicalOr => Ok(RpnFunction::LogicalOr),
             v => Err(box_err!(
                 "ScalarFunction {:?} is not supported in batch mode",
                 v
@@ -62,6 +66,8 @@ impl RpnFunction {
             RpnFunction::EQInt => 2,
             RpnFunction::GTInt => 2,
             RpnFunction::LTInt => 2,
+            RpnFunction::LogicalAnd => 2,
+            RpnFunction::LogicalOr => 2,
         }
     }
 
@@ -97,6 +103,12 @@ impl RpnFunction {
             }
             RpnFunction::LTInt => {
                 Self::eval_2_args(rows, impl_compare::lt_int, context, &args[0], &args[1])
+            }
+            RpnFunction::LogicalAnd => {
+                Self::eval_2_args(rows, impl_op::logical_and, context, &args[0], &args[1])
+            }
+            RpnFunction::LogicalOr => {
+                Self::eval_2_args(rows, impl_op::logical_or, context, &args[0], &args[1])
             }
         }
     }
