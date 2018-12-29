@@ -59,7 +59,7 @@ pub trait RaftStoreRouter: Send + Clone {
         })
     }
 
-    /// Report the sending snapshot status to the peer of the region.
+    /// Reports the sending snapshot status to the peer of the region.
     fn report_snapshot_status(
         &self,
         region_id: u64,
