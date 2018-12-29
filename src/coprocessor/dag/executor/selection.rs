@@ -20,6 +20,7 @@ use coprocessor::Result;
 
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
+/// Retrieves rows from the source executor and filter rows by expressions.
 pub struct SelectionExecutor {
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
