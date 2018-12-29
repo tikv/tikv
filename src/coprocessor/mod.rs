@@ -55,7 +55,7 @@ pub trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn into_boxed(self) -> Box<RequestHandler + Send>
+    fn into_boxed(self) -> Box<RequestHandler>
     where
         Self: 'static + Sized,
     {
@@ -98,7 +98,7 @@ impl Deadline {
 /// Denotes for a function that builds a `RequestHandler`.
 /// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler + Send>> + Send>;
+    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]

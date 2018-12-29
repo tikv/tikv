@@ -201,12 +201,19 @@ impl LazyBatchColumnVec {
     }
 
     /// Encodes into binary format.
-    pub fn encode(&self, output_offsets: impl AsRef<[u32]>, output: &mut Vec<u8>) -> Result<()> {
+    pub fn encode(
+        &self,
+        output_offsets: impl AsRef<[u32]>,
+        columns_info: impl AsRef<[ColumnInfo]>,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
         let len = self.rows_len();
+        let columns_info = columns_info.as_ref();
         for i in 0..len {
             for offset in output_offsets.as_ref() {
-                let col = &self.columns[(*offset) as usize];
-                col.encode(i, output)?;
+                let offset = *offset as usize;
+                let col = &self.columns[offset];
+                col.encode(i, &columns_info[offset], output)?;
             }
         }
         Ok(())

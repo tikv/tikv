@@ -818,7 +818,7 @@ fn bench_dag_handle(
 
     b.iter_with_setup(
         || {
-            DAGContext::new(
+            DAGContext::build(
                 dag.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),
@@ -829,7 +829,6 @@ fn bench_dag_handle(
             ).unwrap()
         },
         |mut dag| {
-            use tikv::coprocessor::RequestHandler;
             dag.handle_request().unwrap();
         },
     );

@@ -681,60 +681,6 @@ impl BatchColumn {
             BatchColumn::Json(ref _vec) => Err(Error::Other(box_err!("JSON is not supported"))),
         }
     }
-
-    pub fn to_datum(&self, row_index: usize) -> datum::Datum {
-        match self {
-            BatchColumn::Int(ref vec) => {
-                if let Some(val) = vec[row_index] {
-                    datum::Datum::I64(val)
-                } else {
-                    datum::Datum::Null
-                }
-            }
-            BatchColumn::Real(ref vec) => {
-                if let Some(val) = vec[row_index] {
-                    datum::Datum::F64(val)
-                } else {
-                    datum::Datum::Null
-                }
-            }
-            BatchColumn::Decimal(ref vec) => {
-                if let Some(val) = &vec[row_index] {
-                    datum::Datum::Dec(val.clone()) // TODO: don't clone?
-                } else {
-                    datum::Datum::Null
-                }
-            }
-            BatchColumn::Bytes(ref vec) => {
-                if let Some(val) = &vec[row_index] {
-                    datum::Datum::Bytes(val.clone()) // TODO: don't clone?
-                } else {
-                    datum::Datum::Null
-                }
-            }
-            BatchColumn::DateTime(ref vec) => {
-                if let Some(val) = &vec[row_index] {
-                    datum::Datum::Time(val.clone()) // TODO: don't clone?
-                } else {
-                    datum::Datum::Null
-                }
-            }
-            BatchColumn::Duration(ref vec) => {
-                if let Some(val) = &vec[row_index] {
-                    datum::Datum::Dur(*val)
-                } else {
-                    datum::Datum::Null
-                }
-            }
-            BatchColumn::Json(ref vec) => {
-                if let Some(val) = &vec[row_index] {
-                    datum::Datum::Json(val.clone()) // TODO: don't clone?
-                } else {
-                    datum::Datum::Null
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

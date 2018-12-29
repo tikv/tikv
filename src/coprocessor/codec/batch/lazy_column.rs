@@ -295,12 +295,29 @@ impl LazyBatchColumn {
     }
 
     /// Encodes into binary format.
-    pub fn encode(&self, row_index: usize, output: &mut Vec<u8>) -> Result<()> {
-        // FIXME: TiKV should output the default value in encode if corresponding datum is absent.
-        // TODO: Maybe it is not necessary to output the default value since TiDB knows?
+    pub fn encode(
+        &self,
+        row_index: usize,
+        column_info: &ColumnInfo,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
         match self {
             LazyBatchColumn::Raw(ref v) => {
-                output.extend_from_slice(v[row_index].as_slice());
+                let value = if v[row_index].is_empty() {
+                    if column_info.has_default_val() {
+                        column_info.get_default_val()
+                    } else if !column_info.flag().contains(FieldTypeFlag::NOT_NULL) {
+                        datum::DATUM_DATA_NULL
+                    } else {
+                        return Err(box_err!(
+                            "Column (id = {}) has flag NOT NULL, but no value is given",
+                            column_info.get_column_id()
+                        ));
+                    }
+                } else {
+                    v[row_index].as_slice()
+                };
+                output.extend_from_slice(value);
                 Ok(())
             }
             LazyBatchColumn::Decoded(ref v) => v.encode(row_index, output),

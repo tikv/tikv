@@ -21,29 +21,68 @@ use coprocessor::dag::expr::EvalConfig;
 use coprocessor::*;
 use storage::Store;
 
-use super::batch_executor::interface::BatchExecutor;
 use super::executor::{Executor, ExecutorMetrics};
 
 pub struct DAGContext {
     deadline: Deadline,
-    normal_executor: Option<Box<Executor + Send>>,
-    batch_executor: Option<Box<BatchExecutor>>,
+    executor: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
-    is_streaming: bool,
-    is_batch: bool,
 }
 
 impl DAGContext {
-    pub fn new<S: Store + 'static>(
+    fn build_dag<S: Store + 'static>(
+        eval_cfg: EvalConfig,
         mut req: DAGRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+        deadline: Deadline,
+        batch_row_limit: usize,
+    ) -> Result<Self> {
+        let executor = super::pipeline::ExecutorPipelineBuilder::build_normal(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            Arc::new(eval_cfg),
+            req.get_collect_range_counts(),
+        )?;
+        Ok(Self {
+            deadline,
+            executor,
+            output_offsets: req.take_output_offsets(),
+            batch_row_limit,
+        })
+    }
+
+    fn build_batch_dag<S: Store + 'static>(
+        eval_config: EvalConfig,
+        mut req: DAGRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+    ) -> Result<super::batch_dag::BatchDAGHandler> {
+        let (out_most_executor, executor_context) =
+            super::pipeline::ExecutorPipelineBuilder::build_batch(
+                req.take_executors().into_vec(),
+                store,
+                ranges,
+                eval_config,
+            )?;
+        Ok(super::batch_dag::BatchDAGHandler::new(
+            out_most_executor,
+            req.take_output_offsets(),
+            executor_context,
+        ))
+    }
+
+    pub fn build<S: Store + 'static>(
+        req: DAGRequest,
         ranges: Vec<KeyRange>,
         store: S,
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
         enable_batch_if_possible: bool,
-    ) -> Result<Self> {
+    ) -> Result<Box<RequestHandler>> {
         let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
@@ -67,53 +106,26 @@ impl DAGContext {
         let is_batch = enable_batch_if_possible
             && !is_streaming
             && super::pipeline::ExecutorPipelineBuilder::can_build_batch(req.get_executors());
-        let executor_descriptors = req.take_executors().into_vec();
 
-        let (normal_executor, batch_executor) = if is_batch {
-            (
-                None,
-                Some(super::pipeline::ExecutorPipelineBuilder::build_batch(
-                    executor_descriptors,
-                    store,
-                    ranges,
-                    eval_cfg,
-                )?),
-            )
+        if is_batch {
+            Ok(Self::build_batch_dag(eval_cfg, req, ranges, store)?.into_boxed())
         } else {
-            (
-                Some(super::pipeline::ExecutorPipelineBuilder::build_normal(
-                    executor_descriptors,
-                    store,
-                    ranges,
-                    Arc::new(eval_cfg),
-                    req.get_collect_range_counts(),
-                )?),
-                None,
+            Ok(
+                Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?
+                    .into_boxed(),
             )
-        };
-
-        Ok(Self {
-            deadline,
-            normal_executor,
-            batch_executor,
-            output_offsets: req.take_output_offsets(),
-            batch_row_limit,
-            is_streaming,
-            is_batch,
-        })
+        }
     }
 
     fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
-        assert!(!self.is_batch);
-
-        let exec = self.normal_executor.as_mut().unwrap();
         let mut s_resp = StreamResponse::new();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
-        if let Some(eval_warnings) = exec.take_eval_warnings() {
+        if let Some(eval_warnings) = self.executor.take_eval_warnings() {
             s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
             s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
         }
-        exec.collect_output_counts(s_resp.mut_output_counts());
+        self.executor
+            .collect_output_counts(s_resp.mut_output_counts());
 
         let mut resp = Response::new();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
@@ -122,15 +134,14 @@ impl DAGContext {
         }
         Ok(resp)
     }
+}
 
-    fn handle_normal_request(&mut self) -> Result<Response> {
-        assert!(!self.is_batch);
-
-        let exec = self.normal_executor.as_mut().unwrap();
+impl RequestHandler for DAGContext {
+    fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
-            match exec.next() {
+            match self.executor.next() {
                 Ok(Some(row)) => {
                     self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
@@ -148,11 +159,12 @@ impl DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    if let Some(eval_warnings) = exec.take_eval_warnings() {
+                    if let Some(eval_warnings) = self.executor.take_eval_warnings() {
                         sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
                         sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
                     }
-                    exec.collect_output_counts(sel_resp.mut_output_counts());
+                    self.executor
+                        .collect_output_counts(sel_resp.mut_output_counts());
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);
@@ -170,71 +182,12 @@ impl DAGContext {
         }
     }
 
-    fn handle_batch_request(&mut self) -> Result<Response> {
-        assert!(self.is_batch);
-
-        let exec = self.batch_executor.as_mut().unwrap();
-        let mut chunks = vec![];
-        loop {
-            self.deadline.check_if_exceeded()?;
-            let result = exec.next_batch(1024);
-
-            // Check error first, because it means that we should directly respond error.
-            match result.error {
-                Some(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_error(err);
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
-                    return Ok(resp);
-                }
-                Some(e) => return Err(e),
-                None => {}
-            }
-
-            let number_of_rows = result.data.rows_len();
-            if number_of_rows > 0 {
-                let mut chunk = Chunk::new();
-                {
-                    let data = chunk.mut_rows_data();
-                    data.reserve(result.data.encoded_size(&self.output_offsets)?);
-                    result.data.encode(&self.output_offsets, data)?;
-                }
-                chunks.push(chunk);
-            } else {
-                let mut resp = Response::new();
-                let mut sel_resp = SelectResponse::new();
-                sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-
-                // TODO: Warning
-                // TODO: Output counts
-
-                let data = box_try!(sel_resp.write_to_bytes());
-                resp.set_data(data);
-                return Ok(resp);
-            }
-        }
-    }
-}
-
-impl RequestHandler for DAGContext {
-    fn handle_request(&mut self) -> Result<Response> {
-        assert!(!self.is_streaming);
-        if self.is_batch {
-            self.handle_batch_request()
-        } else {
-            self.handle_normal_request()
-        }
-    }
-
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        assert!(self.is_streaming);
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
-        self.normal_executor.as_mut().unwrap().start_scan();
+        self.executor.start_scan();
         while record_cnt < self.batch_row_limit {
-            match self.normal_executor.as_mut().unwrap().next() {
+            match self.executor.next() {
                 Ok(Some(row)) => {
                     self.deadline.check_if_exceeded()?;
                     record_cnt += 1;
@@ -257,7 +210,7 @@ impl RequestHandler for DAGContext {
             }
         }
         if record_cnt > 0 {
-            let range = self.normal_executor.as_mut().unwrap().stop_scan();
+            let range = self.executor.stop_scan();
             return self
                 .make_stream_response(chunk, range)
                 .map(|r| (Some(r), finished));
@@ -266,12 +219,6 @@ impl RequestHandler for DAGContext {
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        if !self.is_batch {
-            self.normal_executor
-                .as_mut()
-                .unwrap()
-                .collect_metrics_into(metrics);
-        }
-        // TODO
+        self.executor.collect_metrics_into(metrics);
     }
 }

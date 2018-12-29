@@ -124,7 +124,7 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                     );
-                    dag::DAGContext::new(
+                    dag::DAGContext::build(
                         dag,
                         ranges,
                         store,
@@ -132,7 +132,7 @@ impl<E: Engine> Endpoint<E> {
                         batch_row_limit,
                         is_streaming,
                         true,
-                    ).map(|h| h.into_boxed())
+                    )
                 };
             }
             REQ_TYPE_ANALYZE => {

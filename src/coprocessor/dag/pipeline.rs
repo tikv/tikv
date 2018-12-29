@@ -143,7 +143,7 @@ impl ExecutorPipelineBuilder {
         store: S,
         ranges: Vec<KeyRange>,
         eval_config: EvalConfig,
-    ) -> Result<Box<BatchExecutor>> {
+    ) -> Result<(Box<BatchExecutor>, ExecutorContext)> {
         // Shared in multiple executors, so wrap with Rc.
         let eval_config = Arc::new(eval_config);
         let mut executor_descriptors = executor_descriptors.into_iter();
@@ -213,7 +213,7 @@ impl ExecutorPipelineBuilder {
             executor = new_executor;
         }
 
-        Ok(executor)
+        Ok((executor, executor_context))
     }
 
     pub fn build_normal<S: Store + 'static>(
