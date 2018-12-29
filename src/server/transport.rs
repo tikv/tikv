@@ -38,7 +38,7 @@ pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg.
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
-    /// Send RaftMessage to local store.
+    /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::RaftMessage(msg))
     }
