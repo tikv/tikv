@@ -212,7 +212,7 @@ impl<T: Context + 'static> FuturePool<T> {
         }
     }
 
-    /// Get current running task count
+    /// Gets current running task count
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
         self.running_task_count.load(Ordering::Acquire)
