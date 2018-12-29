@@ -131,13 +131,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::SubstringBinary2Args
-<<<<<<< HEAD
-            | ScalarFuncSig::Strcmp
-            | ScalarFuncSig::AddDurationAndDuration => (2, 2),
-=======
             | ScalarFuncSig::DateDiff
+            | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::Strcmp => (2, 2),
->>>>>>> upstream/master
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
