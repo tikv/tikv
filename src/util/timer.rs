@@ -30,7 +30,7 @@ impl<T> Timer<T> {
         }
     }
 
-    /// Add a periodic task into the `Timer`.
+    /// Adds a periodic task into the `Timer`.
     pub fn add_task(&mut self, timeout: Duration, task: T) {
         let task = TimeoutTask {
             next_tick: Instant::now() + timeout,
@@ -39,16 +39,16 @@ impl<T> Timer<T> {
         self.pending.push(Reverse(task));
     }
 
-    /// Get the next `timeout` from the timer.
+    /// Gets the next `timeout` from the timer.
     pub fn next_timeout(&mut self) -> Option<Instant> {
         self.pending.peek().map(|task| task.0.next_tick)
     }
 
-    /// Pop a `TimeoutTask` from the `Timer`, which should be tick before `instant`.
-    /// If there is no tasks should be ticked any more, None will be returned.
+    /// Pops a `TimeoutTask` from the `Timer`, which should be ticked before `instant`.
+    /// Returns `None` if no tasks should be ticked any more.
     ///
     /// The normal use case is keeping `pop_task_before` until get `None` in order
-    /// to retreive all avaliable events.
+    /// to retrieve all available events.
     pub fn pop_task_before(&mut self, instant: Instant) -> Option<T> {
         if self
             .pending

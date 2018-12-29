@@ -43,6 +43,11 @@ impl Default for SecurityConfig {
     }
 }
 
+/// Checks and opens key file. Returns `Ok(None)` if the path is empty.
+///
+///  # Arguments
+///
+///  - `tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
 fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<Error>> {
     if path.is_empty() {
         return Ok(None);
@@ -53,6 +58,7 @@ fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<Error>> {
     }
 }
 
+/// Loads key file content. Returns `Ok(vec![])` if the path is empty.
 fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
     let mut key = vec![];
     let f = check_key_file(tag, path)?;
@@ -66,6 +72,7 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
 }
 
 impl SecurityConfig {
+    /// Validates ca, cert and private key.
     pub fn validate(&mut self) -> Result<(), Box<Error>> {
         check_key_file("ca key", &self.ca_path)?;
         check_key_file("cert key", &self.cert_path)?;
