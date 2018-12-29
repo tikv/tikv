@@ -20,21 +20,15 @@
 
 [rocksdb.defaultcf]
 
-[rocksdb.writecf]
+[rocksdb.defaultcf.titan]
 
-[rocksdb.writecf.titan]
+[rocksdb.writecf]
 
 [rocksdb.lockcf]
 
-[rocksdb.lockcf.titan]
-
 [raftdb]
 
-[raftdb.titan]
-
 [raftdb.defaultcf]
-
-[raftdb.defaultcf.titan]
 
 [security]
 
