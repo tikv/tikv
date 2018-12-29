@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{self, Debug, Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -66,8 +66,6 @@ impl Runnable<Task> for Runner {
 }
 
 struct RocksEngineCore {
-    // only use for memory mode
-    temp_dir: Option<TempDir>,
     worker: Worker<Task>,
 }
 
@@ -93,19 +91,19 @@ impl RocksEngine {
         cfs_opts: Option<Vec<CFOptions>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path {}", path);
-        let (path, temp_dir) = match path {
+        let path = match path {
             TEMP_DIR => {
                 let td = TempDir::new("temp-rocksdb").unwrap();
-                (td.path().to_str().unwrap().to_owned(), Some(td))
+                td.path().to_str().unwrap().to_owned()
             }
-            _ => (path.to_owned(), None),
+            _ => path.to_owned(),
         };
         let mut worker = Worker::new("engine-rocksdb");
         let db = Arc::new(rocksdb::new_engine(&path, cfs, cfs_opts)?);
         box_try!(worker.start(Runner(Arc::clone(&db))));
         Ok(RocksEngine {
             sched: worker.scheduler(),
-            core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
+            core: Arc::new(Mutex::new(RocksEngineCore { worker })),
             db,
         })
     }
@@ -119,22 +117,6 @@ impl RocksEngine {
         if let Some(h) = core.worker.stop() {
             h.join().unwrap();
         }
-    }
-}
-
-impl Display for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "RocksDB")
-    }
-}
-
-impl Debug for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "RocksDB [is_temp: {}]",
-            self.core.lock().unwrap().temp_dir.is_some()
-        )
     }
 }
 
