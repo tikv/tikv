@@ -48,7 +48,7 @@ pub trait RaftStoreRouter: Send + Clone {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
-    /// Send significant message. We should guarantee that the message can't be dropped.
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()>;
 
     /// Report the peer of the region is unreachable.
