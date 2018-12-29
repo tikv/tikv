@@ -13,10 +13,10 @@
 
 use std::sync::Arc;
 
+use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
-use cop_datatype::EvalType;
 
 use storage::Store;
 
@@ -33,8 +33,8 @@ use coprocessor::*;
 pub struct ExecutorPipelineBuilder;
 
 fn check_condition(c: &Expr) -> bool {
-    use std::convert::TryFrom;
     use cop_datatype::FieldTypeAccessor;
+    use std::convert::TryFrom;
 
     let eval_type = EvalType::try_from(c.get_field_type().tp());
     if eval_type.is_err() {
@@ -63,7 +63,7 @@ fn check_condition(c: &Expr) -> bool {
         ExprType::MysqlDecimal => {}
         ExprType::MysqlJson => {}
         ExprType::ColumnRef => {}
-        _ => return false
+        _ => return false,
     }
 
     true

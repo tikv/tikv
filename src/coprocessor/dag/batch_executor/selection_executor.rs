@@ -55,7 +55,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             ref_visitor.batch_visit(&conditions)?;
             ref_visitor.column_offsets()
         };
-        // println!("referred_columns = {:?}", referred_columns);
+
         let pending_data = {
             let mut is_column_referred = vec![false; context.columns_info.len()];
             for idx in &referred_columns {
@@ -128,37 +128,6 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             }
         }
 
-        /*
-        // FIXME: We are still evaluating row by row here.
-        let cols_len = self.context.columns_info.len();
-
-        // `cols` only contains referred columns.
-        let mut cols = vec![datum::Datum::Null; cols_len];
-        for ri in 0..rows_len {
-            // Convert data into datum
-            for ci in &self.referred_columns {
-                cols[*ci] = data[*ci].decoded().to_datum(ri);
-            }
-
-            let mut retain = true;
-            for filter in &self.conditions {
-                // If there are any errors during filter rows, we just return.
-                // Elements in the retain map remains `false` for uncovered rows.
-                let val = filter.eval(&mut self.eval_context, &cols)?;
-                if !val.into_bool(&mut self.eval_context)?.unwrap_or(false) {
-                    retain = false;
-                    break;
-                }
-            }
-
-            retain_map[ri] = retain;
-            // Clear columns, for next row evaluation
-            for i in 0..cols_len {
-                cols[i] = datum::Datum::Null;
-            }
-        }
-        */
-
         Ok(())
     }
 
@@ -169,7 +138,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         assert!(!self.has_drained);
 
         // Fetch some rows
-        let mut result = self.src.next_batch(1024); // TODO: Remove magic number
+        let mut result = self.src.next_batch(1024); // TODO: Remove magic numbe
 
         for idx in &self.referred_columns {
             result.data.ensure_column_decoded(
@@ -180,11 +149,14 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             // TODO: what if ensure_column_decoded failed?
             // FIXME: We should not fail due to errors from unneeded rows.
         }
+
+        let result_is_drained = result.data.rows_len() == 0;
+
         // Filter fetched rows. If there are errors, less rows will be retained.
         let mut retain_map = vec![true; result.data.rows_len()];
         let filter_result = self.filter_rows(&result.data, &mut retain_map);
 
-        // Append by retain map.
+        // Append by retain map. Notice that after this function call, `result.data` will be none.
         self.pending_data
             .append_by_index(&mut result.data, |idx| retain_map[idx]);
         self.pending_error = self
@@ -193,7 +165,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             .or_else(|| filter_result.err())
             .or(result.error);
 
-        self.has_drained = self.pending_error.is_some() || result.data.rows_len() == 0;
+        self.has_drained = self.pending_error.is_some() || result_is_drained;
     }
 }
 

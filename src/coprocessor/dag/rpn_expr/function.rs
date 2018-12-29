@@ -44,7 +44,10 @@ impl TryFrom<ScalarFuncSig> for RpnFunction {
             ScalarFuncSig::EQInt => Ok(RpnFunction::EQInt),
             ScalarFuncSig::GTInt => Ok(RpnFunction::GTInt),
             ScalarFuncSig::LTInt => Ok(RpnFunction::LTInt),
-            v => Err(box_err!("ScalarFunction {:?} is not supported in batch mode", v)),
+            v => Err(box_err!(
+                "ScalarFunction {:?} is not supported in batch mode",
+                v
+            )),
         }
     }
 }
