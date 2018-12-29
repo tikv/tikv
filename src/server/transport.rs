@@ -43,7 +43,7 @@ pub trait RaftStoreRouter: Send + Clone {
         self.try_send(StoreMsg::RaftMessage(msg))
     }
 
-    /// Send RaftCmdRequest to local store.
+    /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
