@@ -124,7 +124,7 @@ struct PendingDeleteRanges {
 }
 
 impl PendingDeleteRanges {
-    // Finds ranges that is overlapped with [start_key, end_key)
+    /// Finds ranges that overlap with [start_key, end_key).
     fn find_overlap_ranges(
         &self,
         start_key: &[u8],
@@ -157,7 +157,7 @@ impl PendingDeleteRanges {
         ranges
     }
 
-    // Gets ranges that overlap with [start_key, end_key)
+    /// Gets ranges that overlap with [start_key, end_key).
     pub fn drain_overlap_ranges(
         &mut self,
         start_key: &[u8],
@@ -171,14 +171,14 @@ impl PendingDeleteRanges {
         ranges
     }
 
-    // Removes and returns the peer info with the `start_key`.
+    /// Removes and returns the peer info with the `start_key`.
     fn remove(&mut self, start_key: &[u8]) -> Option<(u64, Vec<u8>, Vec<u8>)> {
         self.ranges
             .remove(start_key)
             .map(|peer_info| (peer_info.region_id, start_key.to_owned(), peer_info.end_key))
     }
 
-    // Before an insert is called, it must call drain_overlap_ranges to clean the overlapped range.
+    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapped range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
@@ -196,7 +196,7 @@ impl PendingDeleteRanges {
         self.ranges.insert(start_key.to_owned(), info);
     }
 
-    // Get all timeout ranges info.
+    // Gets all timeout ranges info.
     pub fn timeout_ranges<'a>(
         &'a self,
         now: time::Instant,
@@ -346,8 +346,8 @@ impl SnapContext {
         Ok(())
     }
 
-    /// Checks the number of files at level 0 to avoid write stall after ingesting sst,
-    /// return indicate whether ingest will cause write stall or not.
+    /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
+    /// Returns true if the ingestion will cause write stall.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -366,9 +366,9 @@ impl SnapContext {
         false
     }
 
-    /// Tries to apply the snapshot of specified region.
+    /// Tries to apply the snapshot of the specified region.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        status.compare_and_swap(JOB_STATUS_PENDNG, JOB_STATUS_RUNNING, Ordering::SeqCst);
+        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_coarse_timer();
@@ -400,7 +400,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    /// Cleans up the data between the range.
+    /// Cleans up the data within the range.
     fn cleanup_range(
         &self,
         region_id: u64,
@@ -440,7 +440,7 @@ impl SnapContext {
         }
     }
 
-    /// Gets the overlaped ranges and clean them up.
+    /// Gets the overlapped ranges and cleans them up.
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self
             .pending_delete_ranges

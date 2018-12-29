@@ -211,7 +211,7 @@ fn collect_ranges_need_compact(
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
-        // Gets total entries and total versions in this range and check if need compacting.
+        // Gets total entries and total versions in this range and checks if it needs to be compacted.
         if let Some((num_ent, num_ver)) =
             get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
@@ -239,7 +239,7 @@ fn collect_ranges_need_compact(
         }
     }
 
-    // Saves the last range that need compacting.
+    // Saves the last range that needs to be compacted.
     if compact_start.is_some() {
         ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
     }

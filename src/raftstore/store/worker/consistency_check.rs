@@ -77,7 +77,7 @@ impl<C: MsgSender> Runner<C> {
         let mut cf_names = snap.cf_names();
         cf_names.sort();
 
-        // computes hash based on all the keys and values in range of region
+        // computes the hash from all the keys and values in the range of the region
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         for cf in cf_names {
@@ -95,7 +95,7 @@ impl<C: MsgSender> Runner<C> {
             }
         }
 
-        // computes hash based on region state too
+        // computes the hash from the region state too
         let region_state_key = keys::region_state_key(region_id);
         digest.write(&region_state_key);
         match snap.get_value_cf(CF_RAFT, &region_state_key) {

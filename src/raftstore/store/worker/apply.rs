@@ -244,7 +244,6 @@ struct ApplyContextCore<'a> {
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
 
-    // write batch
     wb: Option<WriteBatch>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
@@ -256,7 +255,7 @@ struct ApplyContextCore<'a> {
     enable_sync_log: bool,
     // Indicates whether synchronize wal is prefered.
     sync_log_hint: bool,
-    // Indicates whether use delete range api instead of delete one by one.
+    // Indicates whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 }
 
@@ -520,10 +519,10 @@ pub struct ApplyDelegate {
     apply_state: RaftApplyState,
     applied_index_term: u64,
 
-    // the commands waiting to be committed and apply
+    // the commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
 
-    // merge related state
+    // related states about Region Merge
     is_merging: bool,
     last_merge_version: u64,
 
@@ -753,9 +752,9 @@ impl ApplyDelegate {
     /// Applies raft command.
     ///
     /// Apply operation can fail as following situation:
-    ///   1. encouter an error that will occur on all store, it can continue
+    ///   1. encouter an error that will occur on all stores, it can continue
     /// applying next entry safely, like stale epoch for example;
-    ///   2. encouter an error that may not occur on all store, in this case
+    ///   2. encouter an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(
@@ -2206,7 +2205,7 @@ impl Runner {
         }
     }
 
-    // Handle peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
+    // Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy(&mut self, d: Destroy) {
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.
