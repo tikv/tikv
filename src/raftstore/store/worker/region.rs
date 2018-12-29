@@ -116,8 +116,8 @@ struct StalePeerInfo {
     pub timeout: time::Instant,
 }
 
-// PendingDeleteRanges records all ranges to be deleted with some delay.
-// The delay is beacause there maybe some coprocessor requests related to these ranges.
+/// PendingDeleteRanges records all ranges to be deleted with some delay.
+/// The delay is beacause there maybe some coprocessor requests related to these ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
@@ -223,7 +223,7 @@ struct SnapContext {
 }
 
 impl SnapContext {
-    // Generates the snapshot of the region.
+    /// Generates the snapshot of the region.
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
         let raft_engine = Arc::clone(&self.engines.raft);
@@ -248,7 +248,7 @@ impl SnapContext {
         Ok(())
     }
 
-    // Handles generate snapshot task of the region.
+    /// Handles generate snapshot task of the region.
     fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
@@ -267,7 +267,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    // Applies snapshot data of the region.
+    /// Applies snapshot data of the region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
@@ -346,8 +346,8 @@ impl SnapContext {
         Ok(())
     }
 
-    // Checks the number of files at level 0 to avoid write stall after ingesting sst,
-    // return indicate whether ingest will cause write stall or not.
+    /// Checks the number of files at level 0 to avoid write stall after ingesting sst,
+    /// return indicate whether ingest will cause write stall or not.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -366,7 +366,7 @@ impl SnapContext {
         false
     }
 
-    // Tries to apply the snapshot of specified region.
+    /// Tries to apply the snapshot of specified region.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDNG, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
@@ -400,7 +400,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    // Cleans up the data between the range.
+    /// Cleans up the data between the range.
     fn cleanup_range(
         &self,
         region_id: u64,
@@ -440,7 +440,7 @@ impl SnapContext {
         }
     }
 
-    // Gets the overlaped ranges and clean them up.
+    /// Gets the overlaped ranges and clean them up.
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self
             .pending_delete_ranges
@@ -451,7 +451,7 @@ impl SnapContext {
         }
     }
 
-    // Inserts a new pending range, and it will be cleaned up with some delay.
+    /// Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(
         &mut self,
         region_id: u64,
@@ -476,7 +476,7 @@ impl SnapContext {
         true
     }
 
-    // Cleans up timeouted ranges.
+    /// Cleans up timeouted ranges.
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
@@ -557,7 +557,7 @@ impl Runner {
         timer
     }
 
-    // Tries to apply pending tasks if there is some.
+    /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
