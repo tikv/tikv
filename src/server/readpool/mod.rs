@@ -57,7 +57,7 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 }
 
 impl<T: futurepool::Context + 'static> ReadPool<T> {
-    /// Create a new thread pool.
+    /// Creates a new thread pool.
     // Rust does not support copying closures (RFC 2132) so that we need a closure builder.
     // TODO: Use a single closure once RFC 2132 is implemented.
     pub fn new<F, CF>(name_prefix: &str, config: &Config, context_factory_builder: F) -> Self
