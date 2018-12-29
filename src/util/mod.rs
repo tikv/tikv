@@ -171,9 +171,9 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     }
 }
 
-// A helper function to parse SocketAddr for mio.
-// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
-// but it is just ok for "ip:port", not "host:port".
+/// A helper function to parse SocketAddr for mio.
+/// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
+/// but it is just ok for "ip:port", not "host:port".
 pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
     let addrs = addr.to_socket_addrs()?;
     Ok(addrs.collect::<Vec<SocketAddr>>()[0])
@@ -262,7 +262,7 @@ pub fn unescape(s: &str) -> Vec<u8> {
     buf
 }
 
-/// Convert a borrow to a slice.
+/// Converts a borrow to a slice.
 pub fn as_slice<T>(t: &T) -> &[T] {
     unsafe {
         let ptr = t as *const T;
@@ -270,7 +270,7 @@ pub fn as_slice<T>(t: &T) -> &[T] {
     }
 }
 
-/// `TryInsertWith` is a helper trait for `Entry` to accept a failable closure.
+/// A helper trait for `Entry` to accept a failable closure.
 pub trait TryInsertWith<'a, V, E> {
     fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
 }
@@ -294,7 +294,7 @@ pub fn get_tag_from_thread_name() -> Option<String> {
         .map(From::from)
 }
 
-/// `DeferContext` will invoke the wrapped closure when dropped.
+/// Invokes the wrapped closure when dropped.
 pub struct DeferContext<T: FnOnce()> {
     t: Option<T>,
 }
@@ -394,7 +394,7 @@ impl<T> RingQueue<T> {
     }
 }
 
-// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+/// Returns a Vec of cf which is in `a' but not in `b'.
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
         .filter(|x| b.iter().find(|y| y == x).is_none())
