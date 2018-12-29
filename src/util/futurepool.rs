@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This mod implemented a wrapped future pool that supports `on_tick()` which is driven by
-//! tasks and is invoked no less than the specific interval.
+//! This mod implemented a wrapped future pool that supports `on_tick()` which
+//! is invoked no less than the specific interval.
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::fmt;
