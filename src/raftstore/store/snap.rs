@@ -721,16 +721,22 @@ impl Snap {
         for cf in SNAPSHOT_CFS {
             self.switch_to_cf_file(cf)?;
             let (cf_key_count, cf_size) = if plain_file_used(cf) {
-                // If the relative files are deleted after `Snap::new` and
-                // `init_for_building`, the file could be None.
-                let file = match self.cf_files[self.cf_index].file.as_mut() {
-                    Some(f) => f,
-                    None => {
-                        let e = box_err!("cf_file is none for cf {}", cf);
-                        return Err(RaftStoreError::Snapshot(e));
-                    }
+                let (kv_count, cf_size) = {
+                    // If the relative files are deleted after `Snap::new` and
+                    // `init_for_building`, the file could be None.
+                    let file = match self.cf_files[self.cf_index].file.as_mut() {
+                        Some(f) => f,
+                        None => {
+                            let e = box_err!("cf_file is none for cf {}", cf);
+                            return Err(RaftStoreError::Snapshot(e));
+                        }
+                    };
+                    build_plain_cf_file(file, snap, cf, &begin_key, &end_key)?
                 };
-                build_plain_cf_file(file, snap, cf, &begin_key, &end_key)?
+                // Also update kv count for plain file.
+                let cf_file = &mut self.cf_files[self.cf_index];
+                cf_file.kv_count = kv_count as u64;
+                (kv_count, cf_size)
             } else {
                 let mut key_count = 0;
                 let mut size = 0;
