@@ -80,8 +80,8 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
 pub struct TitanCfConfig {
     pub min_blob_size: u64,
     pub blob_file_compression: CompressionType,
-    pub min_gc_batch_size: ReadableSize,
     pub blob_cache_size: ReadableSize,
+    pub min_gc_batch_size: ReadableSize,
     pub max_gc_batch_size: ReadableSize,
     pub discardable_ratio: f64,
     pub sample_ratio: f64,
@@ -91,7 +91,7 @@ pub struct TitanCfConfig {
 impl Default for TitanCfConfig {
     fn default() -> Self {
         Self {
-            min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+            min_blob_size: ReadableSize::kb(1).0 as u64, // disable titan default
             blob_file_compression: CompressionType::Lz4,
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
@@ -108,8 +108,8 @@ impl TitanCfConfig {
         let mut opts = TitanDBOptions::new();
         opts.set_min_blob_size(self.min_blob_size);
         opts.set_blob_file_compression(self.blob_file_compression.into());
-        opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, 0, 0.0);
+        opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
         opts.set_sample_ratio(self.sample_ratio);
@@ -258,9 +258,7 @@ impl DefaultCfConfig {
         let mut cf_opts = build_cf_opt!(self);
         let f = Box::new(RangePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-
         cf_opts.set_titandb_options(&self.titan.build_opts());
-
         cf_opts
     }
 }
@@ -269,6 +267,8 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
+        let mut titan = TitanCfConfig::default();
+        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -307,7 +307,7 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titan: TitanCfConfig::default(),
+            titan,
         }
     }
 }
@@ -327,6 +327,7 @@ impl WriteCfConfig {
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         let f = Box::new(RangePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -335,6 +336,8 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
+        let mut titan = TitanCfConfig::default();
+        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -365,7 +368,7 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titan: TitanCfConfig::default(),
+            titan,
         }
     }
 }
@@ -378,6 +381,7 @@ impl LockCfConfig {
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -386,6 +390,8 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
+        let mut titan = TitanCfConfig::default();
+        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -416,7 +422,7 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            titan: TitanCfConfig::default(),
+            titan,
         }
     }
 }
@@ -429,6 +435,7 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }

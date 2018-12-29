@@ -197,8 +197,8 @@ hard-pending-compaction-bytes-limit = "12GB"
 [rocksdb.defaultcf.titan]
 min-blob-size = 2018
 blob-file-compression = "zstd"
-min-gc-batch-size = "12KB"
 blob-cache-size = "12GB"
+min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
 discardable-ratio = 0.00156
 sample-ratio = 0.982

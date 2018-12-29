@@ -373,7 +373,7 @@
 [rocksdb.titan]
 ## Enables `Titan`
 ## default: false
-# enable = false
+# enabled = false
 
 ## Specifies `Titan` blob files directory
 ## default: "titandb" (if not specific or empty)
@@ -529,8 +529,8 @@
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
 ## this threshold will be inlined in base DB.
-## default: 4GB
-# min-blob-size = "4GB"
+## default: 1KB
+# min-blob-size = "1KB"
 
 ## The compression algorithm used to compress data in blob files.
 ## Compression method.
