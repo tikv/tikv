@@ -20,8 +20,6 @@
 
 [rocksdb.defaultcf]
 
-[rocksdb.defaultcf.titan]
-
 [rocksdb.writecf]
 
 [rocksdb.writecf.titan]
