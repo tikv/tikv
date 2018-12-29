@@ -157,19 +157,6 @@ impl<T: Context + 'static> Clone for FuturePool<T> {
 impl<T: Context + 'static> util::AssertSend for FuturePool<T> {}
 impl<T: Context + 'static> util::AssertSync for FuturePool<T> {}
 
-pub trait Factory<T> {
-    fn build(&self) -> T;
-}
-
-impl<T, F> Factory<T> for F
-where
-    F: Fn() -> T,
-{
-    fn build(&self) -> T {
-        self()
-    }
-}
-
 impl<T: Context + 'static> FuturePool<T> {
     pub fn new<F>(
         pool_size: usize,
