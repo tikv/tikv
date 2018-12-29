@@ -240,7 +240,7 @@ pub fn db_exist(path: &str) -> bool {
     }
 
     // If path is not an empty directory, we say db exists. If path is not an empty directory
-    // but db has not been created, `DB::list_column_families` fails and we can cleanup
+    // but db has not been created, `DB::list_column_families` fails and we can clean up
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
 }

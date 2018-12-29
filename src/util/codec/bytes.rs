@@ -63,7 +63,7 @@ pub trait BytesEncoder: NumberEncoder {
     }
 
     /// Joins bytes with its length into a byte slice. It is more
-    /// efficient in both space and time compare to `encode_bytes`. Note that the encoded
+    /// efficient in both space and time compared to `encode_bytes`. Note that the encoded
     /// result is not memcomparable.
     fn encode_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.encode_var_i64(data.len() as i64)?;
@@ -101,11 +101,13 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     encoded
 }
 
+/// Gets the first encoded bytes' length in compactly encoded data.
+///
 /// Compact-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
 /// This function gets the total bytes length of compact-encoded data, including the length prefix.
 ///
 /// Note:
-///     - This function won't check the whether the bytes is encoded correctly.
+///     - This function won't check whether the bytes are encoded correctly.
 ///     - There can be multiple compact-encoded data, placed one by one. This function only returns
 ///       the length of the first one.
 pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
@@ -141,11 +143,13 @@ pub trait CompactBytesFromFileDecoder: BufRead {
 
 impl<T: BufRead> CompactBytesFromFileDecoder for T {}
 
+/// Gets the first encoded bytes' length in memcomparable-encoded data.
+///
 /// Memcomparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
 /// This function gets the total bytes length of memcomparable-encoded data, including the length prefix.
 ///
 /// Note:
-///     - This function won't check the whether the bytes is encoded correctly.
+///     - This function won't check whether the bytes are encoded correctly.
 ///     - There can be multiple memcomparable-encoded data, placed one by one. This function only returns
 ///       the length of the first one.
 pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {

@@ -32,7 +32,7 @@ macro_rules! count_args {
     ($head:expr $(, $tail:expr)*) => { 1 + count_args!($($tail),*) };
 }
 
-/// Initializes a `HashMap` with specify key-value pairs.
+/// Initializes a `HashMap` with specified key-value pairs.
 ///
 /// # Examples
 ///
@@ -77,7 +77,7 @@ macro_rules! map {
     };
 }
 
-/// Boxes error first, and then do the same thing as `try!`.
+/// Boxes error first, and then does the same thing as `try!`.
 #[macro_export]
 macro_rules! box_try {
     ($expr:expr) => {{
