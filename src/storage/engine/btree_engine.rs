@@ -252,7 +252,7 @@ impl Snapshot for BTreeEngineSnapshot {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct BTreeEngineSnapshot {
     inner_engine: Arc<BTreeEngine>,
 }
