@@ -16,7 +16,11 @@
 
 [rocksdb]
 
+[rocksdb.titan]
+
 [rocksdb.defaultcf]
+
+[rocksdb.defaultcf.titan]
 
 [rocksdb.writecf]
 
