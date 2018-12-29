@@ -131,8 +131,13 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::SubstringBinary2Args
+<<<<<<< HEAD
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::AddDurationAndDuration => (2, 2),
+=======
+            | ScalarFuncSig::DateDiff
+            | ScalarFuncSig::Strcmp => (2, 2),
+>>>>>>> upstream/master
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -380,7 +385,6 @@ impl ScalarFunc {
             | ScalarFuncSig::CurrentTime1Arg
             | ScalarFuncSig::CurrentUser
             | ScalarFuncSig::Database
-            | ScalarFuncSig::DateDiff
             | ScalarFuncSig::DateLiteral
             | ScalarFuncSig::DecimalAnyValue
             | ScalarFuncSig::DurationAnyValue
@@ -763,6 +767,7 @@ dispatch_call! {
         WeekOfYear => week_of_year,
         Year => year,
         ToDays => to_days,
+        DateDiff => date_diff,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1447,7 +1452,6 @@ mod tests {
             ScalarFuncSig::CurrentTime1Arg,
             ScalarFuncSig::CurrentUser,
             ScalarFuncSig::Database,
-            ScalarFuncSig::DateDiff,
             ScalarFuncSig::DateLiteral,
             ScalarFuncSig::DecimalAnyValue,
             ScalarFuncSig::DurationAnyValue,

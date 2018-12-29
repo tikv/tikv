@@ -31,6 +31,11 @@ use super::{Config, Error, Result};
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 1;
 
+/// PrepareJob is responsible for improving cluster data balance
+///
+/// The main job is:
+/// 1. split data into ranges according to region size and region distribution
+/// 2. split and scatter regions of a cluster before we import a large amount of data
 pub struct PrepareJob<Client> {
     tag: String,
     cfg: Config,
@@ -84,6 +89,8 @@ impl<Client: ImportClient> PrepareJob<Client> {
             start.elapsed(),
         );
 
+        // One `SubImportJob` is responsible for one range, the max number of `SubImportJob`
+        // is `num_import_jobs`.
         Ok(get_approximate_ranges(
             &props,
             self.cfg.num_import_jobs,
@@ -123,6 +130,8 @@ impl<Client: ImportClient> PrepareJob<Client> {
     }
 }
 
+/// PrepareRangeJob is responsible for helping to split and scatter regions.
+/// according to range of data we are going to import
 struct PrepareRangeJob<Client> {
     tag: String,
     range: RangeInfo,
@@ -202,6 +211,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         }
     }
 
+    /// Judges if we need to split the region.
     fn need_split(&self, region: &Region) -> bool {
         let split_key = self.range.get_end();
         if split_key.is_empty() {
