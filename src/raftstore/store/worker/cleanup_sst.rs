@@ -59,12 +59,14 @@ impl<C: PdClient> Runner<C> {
         }
     }
 
+    /// Deletes sst of importer.
     fn handle_delete_sst(&self, ssts: Vec<SSTMeta>) {
         for sst in &ssts {
             let _ = self.importer.delete(sst);
         }
     }
 
+    /// Validates the sst whether is stale or not.
     fn handle_validate_sst(&self, ssts: Vec<SSTMeta>) {
         let store_id = self.store_id;
         let mut invalid_ssts = Vec::new();

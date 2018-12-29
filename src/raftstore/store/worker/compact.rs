@@ -103,6 +103,7 @@ impl Runner {
         Runner { engine }
     }
 
+    /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
         cf_name: String,
@@ -202,7 +203,7 @@ fn collect_ranges_need_compact(
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
-    // Check the SST properties for each range, and we will compact a range if the range
+    // Checks the SST properties for each range, and we will compact a range if the range
     // contains too much RocksDB tombstones. we will merge multiple neighbouring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
@@ -210,7 +211,7 @@ fn collect_ranges_need_compact(
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
-        // Get total entries and total versions in this range and check if need compacting.
+        // Gets total entries and total versions in this range and check if need compacting.
         if let Some((num_ent, num_ver)) =
             get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
@@ -238,7 +239,7 @@ fn collect_ranges_need_compact(
         }
     }
 
-    // Save the last range that need compacting.
+    // Saves the last range that need compacting.
     if compact_start.is_some() {
         ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
     }

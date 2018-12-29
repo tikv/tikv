@@ -99,6 +99,7 @@ impl Debug for PendingCmd {
     }
 }
 
+// The commands waiting to be executed.
 #[derive(Default, Debug)]
 pub struct PendingCmdQueue {
     normals: VecDeque<PendingCmd>,
@@ -234,23 +235,28 @@ struct Stash {
     last_applied_index: u64,
 }
 
+// ApllyContextCore is the core implementation of apply context.
 struct ApplyContextCore<'a> {
     host: &'a CoprocessorHost,
     importer: &'a SSTImporter,
-    wb: Option<WriteBatch>,
     cbs: MustConsumeVec<ApplyCallback>,
     merged_regions: Vec<u64>,
     apply_res: Vec<ApplyRes>,
+    exec_ctx: Option<ExecContext>,
+
+    // write batch
+    wb: Option<WriteBatch>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
+
     last_applied_index: u64,
     committed_count: usize,
-    // `enable_sync_log` indicates that wal can be synchronized when data
-    // is written to kv engine.
+
+    // Indicates that wal can be synchronized when data is written to kv engine.
     enable_sync_log: bool,
-    // `sync_log_hint` indicates whether synchronize wal is prefered.
+    // Indicates whether synchronize wal is prefered.
     sync_log_hint: bool,
-    exec_ctx: Option<ExecContext>,
+    // Indicates whether use delete range api instead of delete one by one.
     use_delete_range: bool,
 }
 
@@ -289,7 +295,7 @@ impl<'a> ApplyContextCore<'a> {
         self
     }
 
-    /// Prepare for applying entries for `delegate`.
+    /// Prepares for applying entries for `delegate`.
     ///
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
@@ -304,7 +310,7 @@ impl<'a> ApplyContextCore<'a> {
         self.last_applied_index = delegate.apply_state.get_applied_index();
     }
 
-    /// Commit all changes have done for delegate. `persistent` indicates whether
+    /// Commits all changes have done for delegate. `persistent` indicates whether
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
@@ -327,7 +333,7 @@ impl<'a> ApplyContextCore<'a> {
         self.wb_last_keys = self.wb().count() as u64;
     }
 
-    /// Write all the changes into rocksdb.
+    /// Writes all the changes into rocksdb.
     pub fn write_to_db(&mut self, engine: &DB) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
@@ -343,7 +349,7 @@ impl<'a> ApplyContextCore<'a> {
         }
     }
 
-    /// Finish applys for the delegate.
+    /// Finishs applys for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: Vec<ExecResult>) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.wb_mut());
@@ -359,7 +365,7 @@ impl<'a> ApplyContextCore<'a> {
         });
     }
 
-    /// Stash the dirty state away for a `ApplyDelegate`, so
+    /// Stashes the dirty state away for a `ApplyDelegate`, so
     /// the context is ready to switch to apply other `ApplyDelegate`.
     pub fn stash(&mut self, delegate: &mut ApplyDelegate) -> Stash {
         self.commit_opt(delegate, false);
@@ -372,7 +378,7 @@ impl<'a> ApplyContextCore<'a> {
         }
     }
 
-    /// Restore the dirty state, so context can resume applying from
+    /// Restores the dirty state, so context can resume applying from
     /// last stash point.
     pub fn restore_stash(&mut self, stash: Stash) {
         if let Some(region) = stash.region {
@@ -401,8 +407,11 @@ impl<'a> ApplyContextCore<'a> {
     }
 }
 
+/// ApplyContext is the context for a region apply work.
 struct ApplyContext<'a, 'b: 'a> {
     core: &'a mut ApplyContextCore<'b>,
+    // It is a reference of apply worker's `deletgates`,
+    // and it is used for merge process to get source peer delegate.
     delegates: &'a mut HashMap<u64, Option<ApplyDelegate>>,
 }
 
@@ -429,7 +438,7 @@ impl<'a, 'b> DerefMut for ApplyContext<'a, 'b> {
     }
 }
 
-/// Call the callback of `cmd` that the region is removed.
+/// Calls the callback of `cmd` that the region is removed.
 fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     debug!(
         "[region {}] {} is removed, notify cmd at [index: {}, term: {}].",
@@ -444,7 +453,7 @@ pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
     cb.invoke_with_response(resp);
 }
 
-/// Call the callback of `cmd` when it can not be processed further.
+/// Calls the callback of `cmd` when it can not be processed further.
 fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
     info!(
         "{} command at [index: {}, term: {}] is stale, skip",
@@ -458,7 +467,7 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
     cb.invoke_with_response(resp);
 }
 
-/// Check if a write is needed to be issued before handle the command.
+/// Checks if a write is needed to be issued before handle the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
@@ -490,14 +499,17 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
+/// ApplyDelegate is the apply deletgate of the region.
 #[derive(Debug)]
 pub struct ApplyDelegate {
-    // peer_id
+    // peer info
     id: u64,
+    term: u64,
+    region: Region,
     // peer_tag, "[region region_id] peer_id"
     tag: String,
+
     engines: Engines,
-    region: Region,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -507,11 +519,15 @@ pub struct ApplyDelegate {
     // to file, but kv data may not synced to file, so we will lose data.
     apply_state: RaftApplyState,
     applied_index_term: u64,
-    term: u64,
-    is_merging: bool,
+
+    // the commands waiting to be committed and apply
     pending_cmds: PendingCmdQueue,
-    metrics: ApplyMetrics,
+
+    // merge related state
+    is_merging: bool,
     last_merge_version: u64,
+
+    metrics: ApplyMetrics,
 }
 
 impl ApplyDelegate {
@@ -545,6 +561,7 @@ impl ApplyDelegate {
         self.id
     }
 
+    /// Handles all the committed_entries, namely, applies the committed entries.
     fn handle_raft_committed_entries(
         &mut self,
         apply_ctx: &mut ApplyContext,
@@ -733,12 +750,14 @@ impl ApplyDelegate {
         exec_result
     }
 
-    // apply operation can fail as following situation:
-    //   1. encouter an error that will occur on all store, it can continue
-    // applying next entry safely, like stale epoch for example;
-    //   2. encouter an error that may not occur on all store, in this case
-    // we should try to apply the entry again or panic. Considering that this
-    // usually due to disk operation fail, which is rare, so just panic is ok.
+    /// Applies raft command.
+    ///
+    /// Apply operation can fail as following situation:
+    ///   1. encouter an error that will occur on all store, it can continue
+    /// applying next entry safely, like stale epoch for example;
+    ///   2. encouter an error that may not occur on all store, in this case
+    /// we should try to apply the entry again or panic. Considering that this
+    /// usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(
         &mut self,
         ctx: &mut ApplyContext,
@@ -804,7 +823,7 @@ impl ApplyDelegate {
         (resp, exec_result)
     }
 
-    /// Clear all the pending commands.
+    /// Clears all the pending commands.
     ///
     /// Please note that all the pending callbacks will be lost.
     /// Should not do this when dropping a peer in case of possible leak.
@@ -939,6 +958,243 @@ impl ApplyDelegate {
         Ok((resp, exec_result))
     }
 
+    fn exec_write_cmd(
+        &mut self,
+        ctx: &ApplyContext,
+        requests: &[Request],
+    ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+        let mut responses = Vec::with_capacity(requests.len());
+
+        let mut ranges = vec![];
+        let mut ssts = vec![];
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
+            let mut resp = match cmd_type {
+                CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Delete => self.handle_delete(ctx, req),
+                CmdType::DeleteRange => {
+                    self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
+                }
+                CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
+                // Readonly commands are handled in raftstore directly.
+                // Don't panic here in case there are old entries need to be applied.
+                // It's also safe to skip them here, because a restart must have happened,
+                // hence there is no callback to be called.
+                CmdType::Snap | CmdType::Get => {
+                    warn!("{} skip readonly command: {:?}", self.tag, req);
+                    continue;
+                }
+                CmdType::Prewrite | CmdType::Invalid => {
+                    Err(box_err!("invalid cmd type, message maybe currupted"))
+                }
+            }?;
+
+            resp.set_cmd_type(cmd_type);
+
+            responses.push(resp);
+        }
+
+        let mut resp = RaftCmdResponse::new();
+        let uuid = ctx
+            .exec_ctx
+            .as_ref()
+            .unwrap()
+            .req
+            .get_header()
+            .get_uuid()
+            .to_vec();
+        resp.mut_header().set_uuid(uuid);
+        resp.set_responses(RepeatedField::from_vec(responses));
+
+        assert!(ranges.is_empty() || ssts.is_empty());
+        let exec_res = if !ranges.is_empty() {
+            Some(ExecResult::DeleteRange { ranges })
+        } else if !ssts.is_empty() {
+            Some(ExecResult::IngestSST { ssts })
+        } else {
+            None
+        };
+
+        Ok((resp, exec_res))
+    }
+}
+
+// Write commands related.
+impl ApplyDelegate {
+    fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
+
+        let resp = Response::new();
+        let key = keys::data_key(key);
+        self.metrics.size_diff_hint += key.len() as i64;
+        self.metrics.size_diff_hint += value.len() as i64;
+        if !req.get_put().get_cf().is_empty() {
+            let cf = req.get_put().get_cf();
+            // TODO: don't allow write preseved cfs.
+            if cf == CF_LOCK {
+                self.metrics.lock_cf_written_bytes += key.len() as u64;
+                self.metrics.lock_cf_written_bytes += value.len() as u64;
+            }
+            // TODO: check whether cf exists or not.
+            rocksdb::get_cf_handle(&self.engines.kv, cf)
+                .and_then(|handle| ctx.wb().put_cf(handle, &key, value))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to write ({}, {}) to cf {}: {:?}",
+                        self.tag,
+                        escape(&key),
+                        escape(value),
+                        cf,
+                        e
+                    )
+                });
+        } else {
+            ctx.wb().put(&key, value).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to write ({}, {}): {:?}",
+                    self.tag,
+                    escape(&key),
+                    escape(value),
+                    e
+                );
+            });
+        }
+        Ok(resp)
+    }
+
+    fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+        let key = req.get_delete().get_key();
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
+
+        let key = keys::data_key(key);
+        // since size_diff_hint is not accurate, so we just skip calculate the value size.
+        self.metrics.size_diff_hint -= key.len() as i64;
+        let resp = Response::new();
+        if !req.get_delete().get_cf().is_empty() {
+            let cf = req.get_delete().get_cf();
+            // TODO: check whether cf exists or not.
+            rocksdb::get_cf_handle(&self.engines.kv, cf)
+                .and_then(|handle| ctx.wb().delete_cf(handle, &key))
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                });
+
+            if cf == CF_LOCK {
+                // delete is a kind of write for RocksDB.
+                self.metrics.lock_cf_written_bytes += key.len() as u64;
+            } else {
+                self.metrics.delete_keys_hint += 1;
+            }
+        } else {
+            ctx.wb().delete(&key).unwrap_or_else(|e| {
+                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+            });
+            self.metrics.delete_keys_hint += 1;
+        }
+
+        Ok(resp)
+    }
+
+    fn handle_delete_range(
+        &mut self,
+        req: &Request,
+        ranges: &mut Vec<Range>,
+        use_delete_range: bool,
+    ) -> Result<Response> {
+        let s_key = req.get_delete_range().get_start_key();
+        let e_key = req.get_delete_range().get_end_key();
+        if !e_key.is_empty() && s_key >= e_key {
+            return Err(box_err!(
+                "invalid delete range command, start_key: {:?}, end_key: {:?}",
+                s_key,
+                e_key
+            ));
+        }
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(s_key, &self.region)?;
+        let end_key = keys::data_end_key(e_key);
+        let region_end_key = keys::data_end_key(self.region.get_end_key());
+        if end_key > region_end_key {
+            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
+        }
+
+        let resp = Response::new();
+        let mut cf = req.get_delete_range().get_cf();
+        if cf.is_empty() {
+            cf = CF_DEFAULT;
+        }
+        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
+            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
+        }
+        let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
+
+        let start_key = keys::data_key(s_key);
+        // Use delete_files_in_range to drop as many sst files as possible, this
+        // is a way to reclaim disk space quickly after drop a table/index.
+        self.engines
+            .kv
+            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete files in range [{}, {}): {:?}",
+                    self.tag,
+                    escape(&start_key),
+                    escape(&end_key),
+                    e
+                )
+            });
+
+        // Delete all remaining keys.
+        util::delete_all_in_range_cf(&self.engines.kv, cf, &start_key, &end_key, use_delete_range)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                    self.tag,
+                    escape(&start_key),
+                    escape(&end_key),
+                    cf,
+                    e
+                );
+            });
+
+        ranges.push(Range::new(cf.to_owned(), start_key, end_key));
+
+        Ok(resp)
+    }
+
+    fn handle_ingest_sst(
+        &mut self,
+        ctx: &ApplyContext,
+        req: &Request,
+        ssts: &mut Vec<SSTMeta>,
+    ) -> Result<Response> {
+        let sst = req.get_ingest_sst().get_sst();
+
+        if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
+            error!("ingest {:?} to region {:?}: {:?}", sst, self.region, e);
+            // This file is not valid, we can delete it here.
+            let _ = ctx.importer.delete(sst);
+            return Err(e);
+        }
+
+        ctx.importer
+            .ingest(sst, &self.engines.kv)
+            .unwrap_or_else(|e| {
+                // If this failed, it means that the file is corrupted or something
+                // is wrong with the engine, but we can do nothing about that.
+                panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+            });
+
+        ssts.push(sst.clone());
+        Ok(Response::new())
+    }
+}
+
+// Admin commands related.
+impl ApplyDelegate {
     fn exec_change_peer(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1575,235 +1831,36 @@ impl ApplyDelegate {
         ))
     }
 
-    fn exec_write_cmd(
-        &mut self,
+    fn exec_compute_hash(
+        &self,
         ctx: &ApplyContext,
-        requests: &[Request],
-    ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        let mut responses = Vec::with_capacity(requests.len());
-
-        let mut ranges = vec![];
-        let mut ssts = vec![];
-        for req in requests {
-            let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
-                CmdType::Put => self.handle_put(ctx, req),
-                CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => {
-                    self.handle_delete_range(req, &mut ranges, ctx.use_delete_range)
-                }
-                CmdType::IngestSST => self.handle_ingest_sst(ctx, req, &mut ssts),
-                // Readonly commands are handled in raftstore directly.
-                // Don't panic here in case there are old entries need to be applied.
-                // It's also safe to skip them here, because a restart must have happened,
-                // hence there is no callback to be called.
-                CmdType::Snap | CmdType::Get => {
-                    warn!("{} skip readonly command: {:?}", self.tag, req);
-                    continue;
-                }
-                CmdType::Prewrite | CmdType::Invalid => {
-                    Err(box_err!("invalid cmd type, message maybe currupted"))
-                }
-            }?;
-
-            resp.set_cmd_type(cmd_type);
-
-            responses.push(resp);
-        }
-
-        let mut resp = RaftCmdResponse::new();
-        let uuid = ctx
-            .exec_ctx
-            .as_ref()
-            .unwrap()
-            .req
-            .get_header()
-            .get_uuid()
-            .to_vec();
-        resp.mut_header().set_uuid(uuid);
-        resp.set_responses(RepeatedField::from_vec(responses));
-
-        assert!(ranges.is_empty() || ssts.is_empty());
-        let exec_res = if !ranges.is_empty() {
-            Some(ExecResult::DeleteRange { ranges })
-        } else if !ssts.is_empty() {
-            Some(ExecResult::IngestSST { ssts })
-        } else {
-            None
-        };
-
-        Ok((resp, exec_res))
+        _: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        let resp = AdminResponse::new();
+        Ok((
+            resp,
+            Some(ExecResult::ComputeHash {
+                region: self.region.clone(),
+                index: ctx.exec_ctx.as_ref().unwrap().index,
+                // This snapshot may be held for a long time, which may cause too many
+                // open files in rocksdb.
+                // TODO: figure out another way to do consistency check without snapshot
+                // or short life snapshot.
+                snap: Snapshot::new(Arc::clone(&self.engines.kv)),
+            }),
+        ))
     }
 
-    fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
-        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region)?;
-
-        let resp = Response::new();
-        let key = keys::data_key(key);
-        self.metrics.size_diff_hint += key.len() as i64;
-        self.metrics.size_diff_hint += value.len() as i64;
-        if !req.get_put().get_cf().is_empty() {
-            let cf = req.get_put().get_cf();
-            // TODO: don't allow write preseved cfs.
-            if cf == CF_LOCK {
-                self.metrics.lock_cf_written_bytes += key.len() as u64;
-                self.metrics.lock_cf_written_bytes += value.len() as u64;
-            }
-            // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&self.engines.kv, cf)
-                .and_then(|handle| ctx.wb().put_cf(handle, &key, value))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to write ({}, {}) to cf {}: {:?}",
-                        self.tag,
-                        escape(&key),
-                        escape(value),
-                        cf,
-                        e
-                    )
-                });
-        } else {
-            ctx.wb().put(&key, value).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to write ({}, {}): {:?}",
-                    self.tag,
-                    escape(&key),
-                    escape(value),
-                    e
-                );
-            });
-        }
-        Ok(resp)
-    }
-
-    fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
-        let key = req.get_delete().get_key();
-        // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region)?;
-
-        let key = keys::data_key(key);
-        // since size_diff_hint is not accurate, so we just skip calculate the value size.
-        self.metrics.size_diff_hint -= key.len() as i64;
-        let resp = Response::new();
-        if !req.get_delete().get_cf().is_empty() {
-            let cf = req.get_delete().get_cf();
-            // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&self.engines.kv, cf)
-                .and_then(|handle| ctx.wb().delete_cf(handle, &key))
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
-                });
-
-            if cf == CF_LOCK {
-                // delete is a kind of write for RocksDB.
-                self.metrics.lock_cf_written_bytes += key.len() as u64;
-            } else {
-                self.metrics.delete_keys_hint += 1;
-            }
-        } else {
-            ctx.wb().delete(&key).unwrap_or_else(|e| {
-                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
-            });
-            self.metrics.delete_keys_hint += 1;
-        }
-
-        Ok(resp)
-    }
-
-    fn handle_delete_range(
-        &mut self,
-        req: &Request,
-        ranges: &mut Vec<Range>,
-        use_delete_range: bool,
-    ) -> Result<Response> {
-        let s_key = req.get_delete_range().get_start_key();
-        let e_key = req.get_delete_range().get_end_key();
-        if !e_key.is_empty() && s_key >= e_key {
-            return Err(box_err!(
-                "invalid delete range command, start_key: {:?}, end_key: {:?}",
-                s_key,
-                e_key
-            ));
-        }
-        // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(s_key, &self.region)?;
-        let end_key = keys::data_end_key(e_key);
-        let region_end_key = keys::data_end_key(self.region.get_end_key());
-        if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
-        }
-
-        let resp = Response::new();
-        let mut cf = req.get_delete_range().get_cf();
-        if cf.is_empty() {
-            cf = CF_DEFAULT;
-        }
-        if ALL_CFS.iter().find(|x| **x == cf).is_none() {
-            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
-        }
-        let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
-
-        let start_key = keys::data_key(s_key);
-        // Use delete_files_in_range to drop as many sst files as possible, this
-        // is a way to reclaim disk space quickly after drop a table/index.
-        self.engines
-            .kv
-            .delete_files_in_range_cf(handle, &start_key, &end_key, /* include_end */ false)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete files in range [{}, {}): {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    e
-                )
-            });
-
-        // Delete all remaining keys.
-        util::delete_all_in_range_cf(&self.engines.kv, cf, &start_key, &end_key, use_delete_range)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    escape(&start_key),
-                    escape(&end_key),
-                    cf,
-                    e
-                );
-            });
-
-        ranges.push(Range::new(cf.to_owned(), start_key, end_key));
-
-        Ok(resp)
-    }
-
-    fn handle_ingest_sst(
-        &mut self,
-        ctx: &ApplyContext,
-        req: &Request,
-        ssts: &mut Vec<SSTMeta>,
-    ) -> Result<Response> {
-        let sst = req.get_ingest_sst().get_sst();
-
-        if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
-            error!("ingest {:?} to region {:?}: {:?}", sst, self.region, e);
-            // This file is not valid, we can delete it here.
-            let _ = ctx.importer.delete(sst);
-            return Err(e);
-        }
-
-        ctx.importer
-            .ingest(sst, &self.engines.kv)
-            .unwrap_or_else(|e| {
-                // If this failed, it means that the file is corrupted or something
-                // is wrong with the engine, but we can do nothing about that.
-                panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
-            });
-
-        ssts.push(sst.clone());
-        Ok(Response::new())
+    fn exec_verify_hash(
+        &self,
+        _: &ApplyContext,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, Option<ExecResult>)> {
+        let verify_req = req.get_verify_hash();
+        let index = verify_req.get_index();
+        let hash = verify_req.get_hash().to_vec();
+        let resp = AdminResponse::new();
+        Ok((resp, Some(ExecResult::VerifyHash { index, hash })))
     }
 }
 
@@ -1849,41 +1906,6 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     util::check_key_in_region(range.get_end(), region)?;
 
     Ok(())
-}
-
-// Consistency Check
-impl ApplyDelegate {
-    fn exec_compute_hash(
-        &self,
-        ctx: &ApplyContext,
-        _: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
-        let resp = AdminResponse::new();
-        Ok((
-            resp,
-            Some(ExecResult::ComputeHash {
-                region: self.region.clone(),
-                index: ctx.exec_ctx.as_ref().unwrap().index,
-                // This snapshot may be held for a long time, which may cause too many
-                // open files in rocksdb.
-                // TODO: figure out another way to do consistency check without snapshot
-                // or short life snapshot.
-                snap: Snapshot::new(Arc::clone(&self.engines.kv)),
-            }),
-        ))
-    }
-
-    fn exec_verify_hash(
-        &self,
-        _: &ApplyContext,
-        req: &AdminRequest,
-    ) -> Result<(AdminResponse, Option<ExecResult>)> {
-        let verify_req = req.get_verify_hash();
-        let index = verify_req.get_index();
-        let hash = verify_req.get_hash().to_vec();
-        let resp = AdminResponse::new();
-        Ok((resp, Some(ExecResult::VerifyHash { index, hash })))
-    }
 }
 
 pub struct Apply {
@@ -1966,7 +1988,6 @@ pub struct Destroy {
     region_id: u64,
 }
 
-/// region related task.
 pub enum Task {
     Applies(ApplyBatch),
     Registration(Registration),
@@ -2068,6 +2089,7 @@ impl Runner {
         }
     }
 
+    /// Handles apply tasks, and it gets corresponding apply delegate to handle the committed entries.
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let t = SlowTimer::new();
 
@@ -2131,6 +2153,7 @@ impl Runner {
         );
     }
 
+    /// Handles proposals, and it appends the commands to the corresponding apply delegate.
     fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
         let mut propose_num = 0;
         for region_proposal in proposals {
@@ -2165,6 +2188,7 @@ impl Runner {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
+    // Handles peer registration. when a peer is created, it will register a apply delegate.
     fn handle_registration(&mut self, s: Registration) {
         let peer_id = s.id;
         let region_id = s.region.get_id();
@@ -2182,6 +2206,7 @@ impl Runner {
         }
     }
 
+    // Handle peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy(&mut self, d: Destroy) {
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.

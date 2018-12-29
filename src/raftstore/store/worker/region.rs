@@ -56,7 +56,7 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
-/// region related task.
+/// Region related task.
 #[derive(Debug)]
 pub enum Task {
     Gen {
@@ -116,13 +116,15 @@ struct StalePeerInfo {
     pub timeout: time::Instant,
 }
 
+// PendingDeleteRanges records all ranges to be deleted with some delay.
+// The delay is beacause there maybe some coprocessor requests related to these ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
 }
 
 impl PendingDeleteRanges {
-    // find ranges that overlap with [start_key, end_key)
+    // Finds ranges that is overlapped with [start_key, end_key)
     fn find_overlap_ranges(
         &self,
         start_key: &[u8],
@@ -155,7 +157,7 @@ impl PendingDeleteRanges {
         ranges
     }
 
-    // get ranges that overlap with [start_key, end_key)
+    // Gets ranges that overlap with [start_key, end_key)
     pub fn drain_overlap_ranges(
         &mut self,
         start_key: &[u8],
@@ -169,13 +171,14 @@ impl PendingDeleteRanges {
         ranges
     }
 
+    // Removes and returns the peer info with the `start_key`.
     fn remove(&mut self, start_key: &[u8]) -> Option<(u64, Vec<u8>, Vec<u8>)> {
         self.ranges
             .remove(start_key)
             .map(|peer_info| (peer_info.region_id, start_key.to_owned(), peer_info.end_key))
     }
 
-    // before an insert is called, must call drain_overlap_ranges to clean the overlap range
+    // Before an insert is called, it must call drain_overlap_ranges to clean the overlapped range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
@@ -193,6 +196,7 @@ impl PendingDeleteRanges {
         self.ranges.insert(start_key.to_owned(), info);
     }
 
+    // Get all timeout ranges info.
     pub fn timeout_ranges<'a>(
         &'a self,
         now: time::Instant,
@@ -219,6 +223,7 @@ struct SnapContext {
 }
 
 impl SnapContext {
+    // Generates the snapshot of the region.
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
         let raft_engine = Arc::clone(&self.engines.raft);
@@ -243,6 +248,7 @@ impl SnapContext {
         Ok(())
     }
 
+    // Handles generate snapshot task of the region.
     fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
@@ -261,6 +267,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
+    // Applies snapshot data of the region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
@@ -339,7 +346,7 @@ impl SnapContext {
         Ok(())
     }
 
-    // check the number of files at level 0 to avoid write stall after ingesting sst,
+    // Checks the number of files at level 0 to avoid write stall after ingesting sst,
     // return indicate whether ingest will cause write stall or not.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
@@ -359,8 +366,9 @@ impl SnapContext {
         false
     }
 
+    // Tries to apply the snapshot of specified region.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
+        status.compare_and_swap(JOB_STATUS_PENDNG, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
         let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         let timer = apply_histogram.start_coarse_timer();
@@ -392,6 +400,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
+    // Cleans up the data between the range.
     fn cleanup_range(
         &self,
         region_id: u64,
@@ -431,6 +440,7 @@ impl SnapContext {
         }
     }
 
+    // Gets the overlaped ranges and clean them up.
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self
             .pending_delete_ranges
@@ -441,6 +451,7 @@ impl SnapContext {
         }
     }
 
+    // Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(
         &mut self,
         region_id: u64,
@@ -465,6 +476,7 @@ impl SnapContext {
         true
     }
 
+    // Cleans up timeouted ranges.
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
@@ -545,7 +557,7 @@ impl Runner {
         timer
     }
 
-    // try to apply pending tasks if there is some.
+    // Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
@@ -610,7 +622,7 @@ impl Runnable<Task> for Runner {
     }
 }
 
-/// region related timeout event.
+/// Region related timeout event.
 pub enum Event {
     CheckStalePeer,
     CheckApply,

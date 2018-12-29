@@ -64,7 +64,7 @@ impl Runner {
         Runner { ch }
     }
 
-    /// Do the gc job and return the count of log collected.
+    /// Does the gc job and returns the count of log collected.
     fn gc_raft_log(
         &mut self,
         raft_engine: Arc<DB>,
