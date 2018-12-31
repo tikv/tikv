@@ -244,7 +244,8 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &FieldTypeAccessor) ->
                     FieldTypeTp::String,
                     FieldTypeTp::NewDecimal,
                     FieldTypeTp::JSON
-                ].contains(&t),
+                ]
+                .contains(&t),
                 "unknown type {} {:?}",
                 t,
                 datum
@@ -541,11 +542,9 @@ mod tests {
 
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
-        assert!(
-            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
+            .unwrap()
+            .is_empty());
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());
     }

@@ -35,7 +35,7 @@ extern crate signal;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;

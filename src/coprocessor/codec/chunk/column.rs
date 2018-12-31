@@ -92,7 +92,7 @@ impl Column {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
-                ))
+                ));
             }
             FieldTypeTp::VarChar
             | FieldTypeTp::VarString

@@ -50,11 +50,13 @@ const SIZE_LEN: usize = U32_LEN;
 impl Json {
     pub fn as_literal(&self) -> Result<u8> {
         match *self {
-            Json::Boolean(d) => if d {
-                Ok(JSON_LITERAL_TRUE)
-            } else {
-                Ok(JSON_LITERAL_FALSE)
-            },
+            Json::Boolean(d) => {
+                if d {
+                    Ok(JSON_LITERAL_TRUE)
+                } else {
+                    Ok(JSON_LITERAL_FALSE)
+                }
+            }
             Json::None => Ok(JSON_LITERAL_NIL),
             _ => Err(invalid_type!(
                 "{:?} from {} to literal",

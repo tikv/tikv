@@ -35,7 +35,7 @@ extern crate signal;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;
@@ -171,7 +171,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         storage_read_pool,
         Some(Arc::clone(&kv_engine)),
         Some(raft_router.clone()),
-    ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -181,7 +182,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
             raft_db_cf_opts,
-        ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
+        )
+        .unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
     );
     let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
@@ -218,7 +220,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
-    ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
     // Create node.
@@ -246,7 +249,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         local_reader,
         coprocessor_host,
         importer,
-    ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start auto gc

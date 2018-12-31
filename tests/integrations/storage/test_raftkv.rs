@@ -228,11 +228,9 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
     let mut statistics = CFStatistics::default();
-    assert!(
-        !iter
-            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
-            .unwrap()
-    );
+    assert!(!iter
+        .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+        .unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
 }
@@ -251,11 +249,9 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
     assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
     let mut statistics = CFStatistics::default();
-    assert!(
-        !cursor
-            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
-            .unwrap()
-    );
+    assert!(!cursor
+        .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
+        .unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
 }

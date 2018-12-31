@@ -342,7 +342,8 @@ mod tests {
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &Options::default(),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }

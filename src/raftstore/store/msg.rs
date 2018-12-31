@@ -332,7 +332,8 @@ mod tests {
                 sendch.try_send(Msg::new_raft_cmd(request, callback))
             },
             timeout
-        ).ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
+        )
+        .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     struct TestHandler;

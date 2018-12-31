@@ -378,7 +378,7 @@ impl Time {
                             s,
                             s1,
                             s1.len()
-                        ))
+                        ));
                     }
                 }
             }
@@ -722,11 +722,13 @@ impl Time {
     pub fn last_day_of_month(&self) -> u32 {
         match self.time.month() {
             4 | 6 | 9 | 11 => 30,
-            2 => if self.is_leap_year() {
-                29
-            } else {
-                28
-            },
+            2 => {
+                if self.is_leap_year() {
+                    29
+                } else {
+                    28
+                }
+            }
             _ => 31,
         }
     }
@@ -981,7 +983,8 @@ mod tests {
                         utc_t.time - Duration::seconds(offset),
                         utc_t.time_type,
                         utc_t.fsp as i8,
-                    ).unwrap();
+                    )
+                    .unwrap();
                     assert_eq!(exp_t, t);
                 }
             });

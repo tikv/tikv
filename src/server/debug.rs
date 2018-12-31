@@ -56,7 +56,7 @@ use util::worker::Worker;
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidArgument(msg: String) {
@@ -208,18 +208,16 @@ impl Debugger {
         let raft_state = box_try!(self.engines.raft.get_msg::<RaftLocalState>(&raft_state_key));
 
         let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
-        );
+        let apply_state = box_try!(self
+            .engines
+            .kv
+            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key));
 
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        );
+        let region_state = box_try!(self
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
 
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
@@ -689,11 +687,10 @@ impl Debugger {
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        );
+        let region_state = box_try!(self
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
         match region_state {
             Some(v) => Ok(v),
             None => Err(Error::NotFound(format!("region {}", region_id))),
@@ -735,9 +732,10 @@ impl Debugger {
             ("mvcc.num_puts", mvcc_properties.num_puts),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ].iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         res.push((
             "middle_key_by_approximate_size".to_string(),
             escape(&middle_key),
@@ -833,11 +831,13 @@ impl MvccChecker {
             None
         };
         match (key, iter_key) {
-            (Some(a), Some(b)) => if a < b {
-                Some(a)
-            } else {
-                Some(b)
-            },
+            (Some(a), Some(b)) => {
+                if a < b {
+                    Some(a)
+                } else {
+                    Some(b)
+                }
+            }
             (Some(a), None) => Some(a),
             (None, Some(b)) => Some(b),
             (None, None) => None,
@@ -1181,9 +1181,11 @@ impl MvccInfoIterator {
         }
         if self.default_iter.valid() {
             match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
-                Ordering::Equal => if let Some((_, values)) = self.next_default()? {
-                    mvcc_info.set_values(values);
-                },
+                Ordering::Equal => {
+                    if let Some((_, values)) = self.next_default()? {
+                        mvcc_info.set_values(values);
+                    }
+                }
                 Ordering::Greater => {}
                 _ => {
                     let err_msg = format!(
@@ -1474,7 +1476,8 @@ mod tests {
                     CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
                 ],
-            ).unwrap(),
+            )
+            .unwrap(),
         );
 
         let engines = Engines::new(Arc::clone(&engine), engine);
@@ -2030,7 +2033,8 @@ mod tests {
                 get_cf_handle(&db, cf).unwrap(),
                 &keys::data_key(k.as_encoded()),
                 v,
-            ).unwrap();
+            )
+            .unwrap();
         }
         db.write(wb).unwrap();
         // Fix problems.
@@ -2040,11 +2044,12 @@ mod tests {
         db.write(wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
-            let data =
-                db.get_cf(
+            let data = db
+                .get_cf(
                     get_cf_handle(&db, cf).unwrap(),
                     &keys::data_key(k.as_encoded()),
-                ).unwrap();
+                )
+                .unwrap();
             match expect {
                 Expect::Keep => assert!(data.is_some()),
                 Expect::Remove => assert!(data.is_none()),

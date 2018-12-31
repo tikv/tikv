@@ -371,7 +371,7 @@ impl<S: Snapshot> BackwardScanner<S> {
 
             match write.write_type {
                 WriteType::Put => {
-                    return Ok(Some(self.reverse_load_data_by_write(write, user_key)?))
+                    return Ok(Some(self.reverse_load_data_by_write(write, user_key)?));
                 }
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {

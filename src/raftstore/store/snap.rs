@@ -1551,7 +1551,8 @@ pub mod tests {
                     kv_count += 1;
                     Ok(true)
                 },
-            ).unwrap();
+            )
+            .unwrap();
         }
         kv_count
     }
@@ -1669,7 +1670,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         // Ensure that this snapshot file doesn't exist before being built.
         assert!(!s1.exists());
         assert_eq!(size_track.load(Ordering::SeqCst), 0);
@@ -1683,7 +1685,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
         assert!(s1.exists());
@@ -1700,7 +1703,8 @@ pub mod tests {
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s2.exists());
 
         // TODO check meta data correct.
@@ -1715,7 +1719,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!s3.exists());
 
         // Ensure snapshot data could be read out of `s2`, and write into `s3`.
@@ -1791,7 +1796,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!s1.exists());
 
         let mut snap_data = RaftSnapshotData::new();
@@ -1803,7 +1809,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s1.exists());
 
         let mut s2 = Snap::new_for_building(
@@ -1813,7 +1820,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s2.exists());
 
         s2.build(&snapshot, &region, &mut snap_data, &mut stat, deleter)
@@ -1934,7 +1942,8 @@ pub mod tests {
             key,
             Arc::clone(&size_track),
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(from.exists());
 
         let mut to = Snap::new_for_receiving(
@@ -1944,7 +1953,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter,
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(!to.exists());
         let _ = io::copy(&mut from, &mut to).unwrap();
@@ -1971,7 +1981,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!s1.exists());
 
         let mut snap_data = RaftSnapshotData::new();
@@ -1983,7 +1994,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s1.exists());
 
         corrupt_snapshot_size_in(dir.path());
@@ -2000,7 +2012,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!s2.exists());
         s2.build(
             &snapshot,
@@ -2008,7 +2021,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s2.exists());
 
         let dst_dir = TempDir::new("test-snap-corruption-dst").unwrap();
@@ -2030,7 +2044,8 @@ pub mod tests {
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s5.exists());
 
         let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
@@ -2044,24 +2059,22 @@ pub mod tests {
         assert!(s5.apply(options).is_err());
 
         corrupt_snapshot_size_in(dst_dir.path());
-        assert!(
-            Snap::new_for_receiving(
-                dst_dir.path(),
-                &key,
-                snap_meta,
-                Arc::clone(&size_track),
-                deleter.clone(),
-                None,
-            ).is_err()
-        );
-        assert!(
-            Snap::new_for_applying(
-                dst_dir.path(),
-                &key,
-                Arc::clone(&size_track),
-                deleter.clone()
-            ).is_err()
-        );
+        assert!(Snap::new_for_receiving(
+            dst_dir.path(),
+            &key,
+            snap_meta,
+            Arc::clone(&size_track),
+            deleter.clone(),
+            None,
+        )
+        .is_err());
+        assert!(Snap::new_for_applying(
+            dst_dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone()
+        )
+        .is_err());
     }
 
     #[test]
@@ -2083,7 +2096,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!s1.exists());
 
         let mut snap_data = RaftSnapshotData::new();
@@ -2095,7 +2109,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s1.exists());
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
@@ -2112,7 +2127,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!s2.exists());
         s2.build(
             &snapshot,
@@ -2120,7 +2136,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(s2.exists());
 
         let dst_dir = TempDir::new("test-snap-corruption-meta-dst").unwrap();
@@ -2135,24 +2152,22 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        assert!(
-            Snap::new_for_applying(
-                dst_dir.path(),
-                &key,
-                Arc::clone(&size_track),
-                deleter.clone()
-            ).is_err()
-        );
-        assert!(
-            Snap::new_for_receiving(
-                dst_dir.path(),
-                &key,
-                snap_data.take_meta(),
-                Arc::clone(&size_track),
-                deleter.clone(),
-                None,
-            ).is_err()
-        );
+        assert!(Snap::new_for_applying(
+            dst_dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone()
+        )
+        .is_err());
+        assert!(Snap::new_for_receiving(
+            dst_dir.path(),
+            &key,
+            snap_data.take_meta(),
+            Arc::clone(&size_track),
+            deleter.clone(),
+            None,
+        )
+        .is_err());
     }
 
     #[test]
@@ -2194,7 +2209,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
@@ -2205,7 +2221,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             deleter.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         let mut s =
             Snap::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
@@ -2216,7 +2233,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
         assert_eq!(n, expected_size);
         s2.save().unwrap();
@@ -2231,7 +2249,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         let s4 = Snap::new_for_receiving(
             &path,
             &key2,
@@ -2239,7 +2258,8 @@ pub mod tests {
             Arc::clone(&size_track),
             deleter.clone(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(s1.exists());
         assert!(s2.exists());
@@ -2299,7 +2319,8 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             Box::new(src_mgr.clone()),
-        ).unwrap();
+        )
+        .unwrap();
         let mut v = vec![];
         snap_data.write_to_vec(&mut v).unwrap();
 
@@ -2365,7 +2386,8 @@ pub mod tests {
                 &mut snap_data,
                 &mut stat,
                 Box::new(snap_mgr.clone()),
-            ).unwrap();
+            )
+            .unwrap();
             snap_data.write_to_bytes().unwrap()
         };
         let recv_remain = {
@@ -2393,7 +2415,8 @@ pub mod tests {
                 &mut snap_data,
                 &mut stat,
                 Box::new(snap_mgr.clone()),
-            ).unwrap();
+            )
+            .unwrap();
 
             // TODO: this size may change in different RocksDB version.
             let snap_size = 1342;

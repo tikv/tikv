@@ -446,10 +446,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.pd_worker.start(pd_runner));
 
         let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
-        box_try!(
-            self.consistency_check_worker
-                .start(consistency_check_runner)
-        );
+        box_try!(self
+            .consistency_check_worker
+            .start(consistency_check_runner));
 
         let cleanup_sst_runner = CleanupSSTRunner::new(
             self.store_id(),
@@ -1040,9 +1039,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
-            Msg::RaftMessage(data) => if let Err(e) = self.on_raft_message(data) {
-                error!("{} handle raft message err: {:?}", self.tag, e);
-            },
+            Msg::RaftMessage(data) => {
+                if let Err(e) = self.on_raft_message(data) {
+                    error!("{} handle raft message err: {:?}", self.tag, e);
+                }
+            }
             Msg::RaftCmd {
                 send_time,
                 request,

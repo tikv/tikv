@@ -64,9 +64,11 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
     let f = check_key_file(tag, path)?;
     match f {
         None => return Ok(vec![]),
-        Some(mut f) => if let Err(e) = f.read_to_end(&mut key) {
-            return Err(format!("failed to load {} from path {}: {:?}", tag, path, e).into());
-        },
+        Some(mut f) => {
+            if let Err(e) = f.read_to_end(&mut key) {
+                return Err(format!("failed to load {} from path {}: {:?}", tag, path, e).into());
+            }
+        }
     }
     Ok(key)
 }

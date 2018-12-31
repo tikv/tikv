@@ -37,7 +37,7 @@ extern crate signal;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;
@@ -260,39 +260,39 @@ trait DebugExecutor {
             limit = 1;
         }
 
-        let scan_future = self.get_mvcc_infos(from.clone(), to, limit).for_each(
-            move |(key, mvcc)| {
-                if point_query && key != from {
-                    println!("no mvcc infos for {}", escape(&from));
-                }
+        let scan_future =
+            self.get_mvcc_infos(from.clone(), to, limit)
+                .for_each(move |(key, mvcc)| {
+                    if point_query && key != from {
+                        println!("no mvcc infos for {}", escape(&from));
+                    }
 
-                println!("key: {}", escape(&key));
-                if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
-                    let lock_info = mvcc.get_lock();
-                    if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
-                        println!("\tlock cf value: {:?}", lock_info);
-                    }
-                }
-                if cfs.contains(&CF_DEFAULT) {
-                    for value_info in mvcc.get_values() {
-                        if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
-                            println!("\tdefault cf value: {:?}", value_info);
+                    println!("key: {}", escape(&key));
+                    if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
+                        let lock_info = mvcc.get_lock();
+                        if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
+                            println!("\tlock cf value: {:?}", lock_info);
                         }
                     }
-                }
-                if cfs.contains(&CF_WRITE) {
-                    for write_info in mvcc.get_writes() {
-                        if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
-                            && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
-                        {
-                            println!("\t write cf value: {:?}", write_info);
+                    if cfs.contains(&CF_DEFAULT) {
+                        for value_info in mvcc.get_values() {
+                            if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
+                                println!("\tdefault cf value: {:?}", value_info);
+                            }
                         }
                     }
-                }
-                println!();
-                future::ok::<(), String>(())
-            },
-        );
+                    if cfs.contains(&CF_WRITE) {
+                        for write_info in mvcc.get_writes() {
+                            if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
+                                && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
+                            {
+                                println!("\t write cf value: {:?}", write_info);
+                            }
+                        }
+                    }
+                    println!();
+                    future::ok::<(), String>(())
+                });
         if let Err(e) = scan_future.wait() {
             eprintln!("{}", e);
             process::exit(-1);

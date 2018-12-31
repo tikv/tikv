@@ -812,7 +812,8 @@ impl<T: Simulator> Cluster<T> {
             region_epoch: region.get_region_epoch().clone(),
             split_keys: vec![split_key.clone()],
             callback: cb,
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {

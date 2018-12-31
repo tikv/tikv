@@ -1208,15 +1208,16 @@ impl ApplyDelegate {
                 &new_region,
                 PeerState::Normal,
                 None,
-            ).and_then(|_| {
+            )
+            .and_then(|_| {
                 write_initial_apply_state(&self.engines.kv, ctx.wb_mut(), new_region.get_id())
             })
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} fails to save split region {:?}: {:?}",
-                        self.tag, new_region, e
-                    )
-                });
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} fails to save split region {:?}: {:?}",
+                    self.tag, new_region, e
+                )
+            });
             regions.push(new_region);
         }
         if right_derive {
@@ -1229,7 +1230,8 @@ impl ApplyDelegate {
             &derived,
             PeerState::Normal,
             None,
-        ).unwrap_or_else(|e| panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e));
+        )
+        .unwrap_or_else(|e| panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e));
         let mut resp = AdminResponse::new();
         resp.mut_splits()
             .set_regions(RepeatedField::from_slice(&regions));
@@ -1281,7 +1283,8 @@ impl ApplyDelegate {
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
-        ).unwrap_or_else(|e| {
+        )
+        .unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
                 self.tag, merging_state, region, e
@@ -1324,7 +1327,8 @@ impl ApplyDelegate {
             exist_first_index,
             NO_LIMIT,
             &mut entries,
-        ).unwrap_or_else(|e| {
+        )
+        .unwrap_or_else(|e| {
             panic!(
                 "{} failed to load entries [{}:{}) from region {}: {:?}",
                 self.tag,

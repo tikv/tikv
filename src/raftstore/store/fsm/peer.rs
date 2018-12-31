@@ -81,9 +81,11 @@ impl<T, C> Store<T, C> {
                 Ok(SignificantMsg::Unreachable {
                     region_id,
                     to_peer_id,
-                }) => if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                    peer.raft_group.report_unreachable(to_peer_id);
-                },
+                }) => {
+                    if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                        peer.raft_group.report_unreachable(to_peer_id);
+                    }
+                }
                 Err(TryRecvError::Empty) => {
                     // The snapshot status receiver channel is empty
                     return;
@@ -163,33 +165,35 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn poll_apply(&mut self) {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
-                Ok(ApplyTaskRes::Applies(multi_res)) => for res in multi_res {
-                    debug!(
-                        "{} async apply finish: {:?}",
-                        self.region_peers
-                            .get(&res.region_id)
-                            .map_or(&self.tag, |p| &p.tag),
-                        res
-                    );
-                    let ApplyRes {
-                        region_id,
-                        apply_state,
-                        applied_index_term,
-                        exec_res,
-                        metrics,
-                        merged,
-                    } = res;
-                    self.on_ready_result(region_id, merged, exec_res, &metrics);
-                    if let Some(p) = self.region_peers.get_mut(&region_id) {
-                        p.post_apply(
-                            &mut self.pending_raft_groups,
+                Ok(ApplyTaskRes::Applies(multi_res)) => {
+                    for res in multi_res {
+                        debug!(
+                            "{} async apply finish: {:?}",
+                            self.region_peers
+                                .get(&res.region_id)
+                                .map_or(&self.tag, |p| &p.tag),
+                            res
+                        );
+                        let ApplyRes {
+                            region_id,
                             apply_state,
                             applied_index_term,
+                            exec_res,
+                            metrics,
                             merged,
-                            &metrics,
-                        );
+                        } = res;
+                        self.on_ready_result(region_id, merged, exec_res, &metrics);
+                        if let Some(p) = self.region_peers.get_mut(&region_id) {
+                            p.post_apply(
+                                &mut self.pending_raft_groups,
+                                apply_state,
+                                applied_index_term,
+                                merged,
+                                &metrics,
+                            );
+                        }
                     }
-                },
+                }
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
                     self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()), false);
@@ -829,14 +833,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // and is the very target.
         let mut p = match self.region_peers.remove(&region_id) {
             None => return,
-            Some(p) => if p.peer_id() == peer.get_id() {
-                p
-            } else {
-                assert!(p.peer_id() > peer.get_id());
-                // It has been destroyed.
-                self.region_peers.insert(region_id, p);
-                return;
-            },
+            Some(p) => {
+                if p.peer_id() == peer.get_id() {
+                    p
+                } else {
+                    assert!(p.peer_id() > peer.get_id());
+                    // It has been destroyed.
+                    self.region_peers.insert(region_id, p);
+                    return;
+                }
+            }
         };
 
         info!("[region {}] destroy peer {:?}", region_id, peer);
@@ -1406,9 +1412,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for result in exec_results {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(region_id, cp),
-                ExecResult::CompactLog { first_index, state } => if !merged {
-                    self.on_ready_compact_log(region_id, first_index, state)
-                },
+                ExecResult::CompactLog { first_index, state } => {
+                    if !merged {
+                        self.on_ready_compact_log(region_id, first_index, state)
+                    }
+                }
                 ExecResult::SplitRegion { derived, regions } => {
                     self.on_ready_split_region(region_id, derived, regions)
                 }

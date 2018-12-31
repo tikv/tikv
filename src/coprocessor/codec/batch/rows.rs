@@ -355,7 +355,8 @@ mod tests {
                         &mut ret,
                         &[some_datum.clone().take().unwrap()],
                         comparable,
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 ret
             })

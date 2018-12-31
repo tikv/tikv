@@ -607,7 +607,8 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -687,7 +688,8 @@ mod tests {
                         .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                         .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -760,7 +762,8 @@ mod tests {
                         .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                         .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -1351,7 +1354,8 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }

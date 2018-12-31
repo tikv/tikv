@@ -1167,9 +1167,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(
-                            super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err()
-                        );
+                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1504,9 +1502,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(
-                            super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err()
-                        );
+                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1547,9 +1543,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(
-                            super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err()
-                        );
+                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1858,7 +1852,8 @@ mod benches {
             OldVarIntEncoder::encode_var_u64(
                 test::black_box(&mut buf),
                 test::black_box(VARINT_SAMPLE),
-            ).unwrap();
+            )
+            .unwrap();
             test::black_box(&buf);
             unsafe { buf.set_len(0) };
         });
