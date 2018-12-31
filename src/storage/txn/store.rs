@@ -423,7 +423,7 @@ mod tests {
         let result = scanner.scan(half).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
@@ -447,7 +447,7 @@ mod tests {
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         expect.reverse();

@@ -120,7 +120,7 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
         ));
     }
     let mut values = Vec::with_capacity(cmp::max(row.len() * 2, 1));
-    for (&id, col) in col_ids.into_iter().zip(row) {
+    for (&id, col) in col_ids.iter().zip(row) {
         values.push(Datum::I64(id));
         let fc = flatten(col)?;
         values.push(fc);

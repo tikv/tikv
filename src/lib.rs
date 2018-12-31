@@ -27,7 +27,7 @@
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
+#![cfg_attr(feature = "cargo-clippy", allow(clippy::nonminimal_bool))]
 
 extern crate alloc;
 extern crate backtrace;

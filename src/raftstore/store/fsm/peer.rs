@@ -1630,7 +1630,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
+    #[cfg_attr(feature = "cargo-clippy", allow(clippy::if_same_then_else))]
     pub fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we

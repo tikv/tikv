@@ -295,7 +295,6 @@ impl<'a> io::Write for CountingWriter<'a> {
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         self.wrapped.write_all(buf).map(|_| {
             self.count += buf.len();
-            ()
         })
     }
 }
@@ -345,7 +344,7 @@ macro_rules! s(
     };
 );
 
-#[cfg_attr(feature = "cargo-clippy", allow(write_literal))]
+#[cfg_attr(feature = "cargo-clippy", allow(clippy::write_literal))]
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         s!(self, key, "None");

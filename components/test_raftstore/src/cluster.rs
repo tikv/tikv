@@ -297,7 +297,7 @@ impl<T: Simulator> Cluster<T> {
             .map(|region| {
                 region
                     .get_peers()
-                    .into_iter()
+                    .iter()
                     .map(|p| p.get_store_id())
                     .collect()
             })

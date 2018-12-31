@@ -210,7 +210,7 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
-        let keys: Vec<Key> = keys.into_iter().map(|x| Key::from_raw(x)).collect();
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         let result: Vec<Vec<u8>> = self
             .store
             .batch_get(self.ctx.clone(), &keys, ts)

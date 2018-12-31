@@ -120,7 +120,7 @@ where
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[cfg_attr(feature = "cargo-clippy", allow(clippy::too_many_arguments))]
     pub fn new(
         ch: StoreChannel,
         meta: metapb::Store,

@@ -809,7 +809,7 @@ impl PeerStorage {
         }
 
         // Delete any previously appended log entries which never committed.
-        for i in (last_index + 1)..(prev_last_index + 1) {
+        for i in (last_index + 1)..=prev_last_index {
             ready_ctx
                 .raft_wb
                 .delete(&keys::raft_log_key(self.get_region_id(), i))?;
@@ -1258,7 +1258,7 @@ pub fn clear_meta(
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
         })?;
-    for id in first_index..last_index + 1 {
+    for id in first_index..=last_index {
         raft_wb.delete(&keys::raft_log_key(region_id, id))?;
     }
     raft_wb.delete(&keys::raft_state_key(region_id))?;
@@ -1975,14 +1975,14 @@ mod tests {
         let cap = MAX_CACHE_CAPACITY as u64;
 
         // result overflow
-        entries = (3..cap + 1).map(|i| new_entry(i + 5, 8)).collect();
+        entries = (3..=cap).map(|i| new_entry(i + 5, 8)).collect();
         append_ents(&mut store, &entries);
         exp_res.remove(0);
         exp_res.extend_from_slice(&entries);
         validate_cache(&store, &exp_res);
 
         // input overflow
-        entries = (0..cap + 1).map(|i| new_entry(i + cap + 6, 8)).collect();
+        entries = (0..=cap).map(|i| new_entry(i + cap + 6, 8)).collect();
         append_ents(&mut store, &entries);
         exp_res = entries[entries.len() - cap as usize..].to_vec();
         validate_cache(&store, &exp_res);
@@ -2000,7 +2000,7 @@ mod tests {
         assert!(store.cache.cache.capacity() < cap as usize);
 
         // append shrink
-        entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
+        entries = (0..=cap).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
         assert!(store.cache.cache.capacity() >= cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);

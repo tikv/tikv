@@ -53,7 +53,7 @@ impl Service {
 
 fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
     let mut members = Vec::with_capacity(eps.len());
-    for (i, ep) in (&eps).into_iter().enumerate() {
+    for (i, ep) in (&eps).iter().enumerate() {
         let mut m = Member::new();
         m.set_name(format!("pd{}", i));
         m.set_member_id(100 + i as u64);

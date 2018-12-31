@@ -301,7 +301,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let keys = req
             .get_keys()
-            .into_iter()
+            .iter()
             .map(|x| Key::from_raw(x))
             .collect();
 
@@ -339,7 +339,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let keys = req
             .get_keys()
-            .into_iter()
+            .iter()
             .map(|x| Key::from_raw(x))
             .collect();
 

@@ -77,7 +77,7 @@ pub fn zero_datetime(tz: Tz) -> Time {
     Time::new(zero_time(tz), TimeType::DateTime, mysql::DEFAULT_FSP).unwrap()
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+#[cfg_attr(feature = "cargo-clippy", allow(clippy::too_many_arguments))]
 #[inline]
 fn ymd_hms_nanos<T: TimeZone>(
     tz: T,
@@ -1086,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(zero_prefixed_literal))]
+    #[cfg_attr(feature = "cargo-clippy", allow(clippy::zero_prefixed_literal))]
     fn test_parse_datetime_system_timezone() {
         // Basically, we check whether the parse result is the same when construcing using local.
         let tables = vec![

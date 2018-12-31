@@ -233,7 +233,7 @@ impl BatchColumn {
     ///
     /// Panics if `field_type` doesn't match current column's type.
     #[inline]
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
+    #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
     pub fn push_datum(
         &mut self,
         mut raw_datum: &[u8],

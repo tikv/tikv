@@ -1303,7 +1303,6 @@ mod tests {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
             .map(|(start_key, end_key, id)| (start_key, (id, end_key)))
-            .into_iter()
             .collect();
 
         let mut test_util = GCManagerTestUtil::new(regions);

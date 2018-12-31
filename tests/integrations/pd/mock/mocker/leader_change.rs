@@ -94,7 +94,7 @@ impl PdMocker for LeaderChange {
 
     fn set_endpoints(&self, eps: Vec<String>) {
         let mut members = Vec::with_capacity(eps.len());
-        for (i, ep) in (&eps).into_iter().enumerate() {
+        for (i, ep) in (&eps).iter().enumerate() {
             let mut m = Member::new();
             m.set_name(format!("pd{}", i));
             m.set_member_id(100 + i as u64);
@@ -115,7 +115,7 @@ impl PdMocker for LeaderChange {
         header.set_cluster_id(1);
 
         let mut resps = Vec::with_capacity(eps.len());
-        for (i, _) in (&eps).into_iter().enumerate() {
+        for (i, _) in (&eps).iter().enumerate() {
             let mut resp = GetMembersResponse::new();
             resp.set_header(header.clone());
             resp.set_members(RepeatedField::from_vec(members.clone()));

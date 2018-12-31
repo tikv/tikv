@@ -186,7 +186,7 @@ mod tests {
         let example_cert = temp.path().join("cert");
         let example_key = temp.path().join("key");
         for (id, f) in (&[&example_ca, &example_cert, &example_key])
-            .into_iter()
+            .iter()
             .enumerate()
         {
             File::create(f).unwrap().write_all(&[id as u8]).unwrap();

@@ -812,7 +812,7 @@ pub mod log_level_serde {
             .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(trivially_copy_pass_by_ref))]
+    #[cfg_attr(feature = "cargo-clippy", allow(clippy::trivially_copy_pass_by_ref))]
     pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

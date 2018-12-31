@@ -1410,7 +1410,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
-            .into_iter()
+            .iter()
             .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
@@ -1467,7 +1467,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
-            .into_iter()
+            .iter()
             .map(|cf| {
                 let mut cf_opts = ColumnFamilyOptions::new();
                 cf_opts.set_level_zero_file_num_compaction_trigger(1);

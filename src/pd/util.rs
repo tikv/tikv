@@ -433,7 +433,7 @@ pub fn try_connect_leader(
     let mut resp = None;
     // Try to connect to other members, then the previous leader.
     'outer: for m in members
-        .into_iter()
+        .iter()
         .filter(|m| *m != previous_leader)
         .chain(&[previous_leader.clone()])
     {

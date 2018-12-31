@@ -653,7 +653,7 @@ fn do_div_mod(
                 }
             }
             let mut carry = 0;
-            for (r_idx, l_idx) in (r_start..r_stop).rev().zip((0..l_idx + r_len + 1).rev()) {
+            for (r_idx, l_idx) in (r_start..r_stop).rev().zip((0..=l_idx + r_len).rev()) {
                 let x = guess * i64::from(rhs.word_buf[r_idx]);
                 let hi = x / i64::from(WORD_BASE);
                 let lo = x - hi * i64::from(WORD_BASE);
@@ -668,7 +668,7 @@ fn do_div_mod(
             if carry > 0 {
                 guess -= 1;
                 let mut carry = 0;
-                for (r_idx, l_idx) in (r_start..r_stop).rev().zip((0..l_idx + r_len + 1).rev()) {
+                for (r_idx, l_idx) in (r_start..r_stop).rev().zip((0..=l_idx + r_len).rev()) {
                     add(buf[l_idx], rhs.word_buf[r_idx], &mut carry, &mut buf[l_idx]);
                 }
             }
@@ -1211,7 +1211,7 @@ impl Decimal {
                     // e.g ceiling 3.0001 to scale 1, gets 3.1
                     let idx = to_idx + frac_word_cnt as i8 - frac_words_to;
                     if idx > to_idx {
-                        res.word_buf[(to_idx + 1) as usize..(idx as usize + 1)]
+                        res.word_buf[(to_idx + 1) as usize..=(idx as usize)]
                             .iter()
                             .any(|c| *c != 0)
                     } else {
@@ -1441,10 +1441,10 @@ impl Decimal {
                 word_shift = new_front / DIGITS_PER_WORD as isize;
                 let to = ((beg / DIGITS_PER_WORD) as isize - word_shift) as usize;
                 let barier = (((end - 1) / DIGITS_PER_WORD) as isize - word_shift) as usize;
-                for i in to..barier + 1 {
+                for i in to..=barier {
                     res.word_buf[i] = res.word_buf[i + word_shift as usize];
                 }
-                for i in barier + 1..barier + word_shift as usize + 1 {
+                for i in barier + 1..=barier + word_shift as usize {
                     res.word_buf[i] = 0;
                 }
                 word_shift = -word_shift;
@@ -1452,7 +1452,7 @@ impl Decimal {
                 word_shift = (1 - new_front) / DIGITS_PER_WORD as isize;
                 let to = (((end - 1) / DIGITS_PER_WORD) as isize + word_shift) as usize;
                 let barier = ((beg / DIGITS_PER_WORD) as isize + word_shift) as usize;
-                for i in (barier..to + 1).rev() {
+                for i in (barier..=to).rev() {
                     res.word_buf[i] = res.word_buf[i - word_shift as usize];
                 }
                 for i in barier - word_shift as usize..barier {
@@ -1472,7 +1472,7 @@ impl Decimal {
             0
         };
         if new_point_word > end_word {
-            for i in end_word + 1..new_point_word + 1 {
+            for i in end_word + 1..=new_point_word {
                 res.word_buf[i as usize] = 0;
             }
         } else {
@@ -1616,7 +1616,7 @@ impl Decimal {
         let mut inner_idx = 0;
         let mut word_idx = int_word_cnt as usize;
         let mut word = 0;
-        for c in bs[int_idx - int_cnt as usize..int_idx].into_iter().rev() {
+        for c in bs[int_idx - int_cnt as usize..int_idx].iter().rev() {
             word += u32::from(c - b'0') * TEN_POW[inner_idx];
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
@@ -1715,7 +1715,7 @@ macro_rules! enable_conv_for_int {
     ($s:ty, $t:ty) => {
         impl From<$s> for Decimal {
             fn from(t: $s) -> Decimal {
-                #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
+                #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
                 (t as $t).into()
             }
         }
@@ -2297,7 +2297,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(approx_constant))]
+    #[cfg_attr(feature = "cargo-clippy", allow(clippy::approx_constant))]
     fn test_f64() {
         let cases = vec![
             ("12345", 12345f64),

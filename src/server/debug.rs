@@ -2022,7 +2022,7 @@ mod tests {
         let path = TempDir::new("test_mvcc_checker").expect("");
         let path_str = path.path().to_str().unwrap();
         let cfs_opts = ALL_CFS
-            .into_iter()
+            .iter()
             .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
         let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
