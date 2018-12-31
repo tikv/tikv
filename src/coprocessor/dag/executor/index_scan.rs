@@ -55,6 +55,8 @@ pub struct IndexScanExecutor<S: Store> {
     counts: Option<Vec<i64>>,
     metrics: ExecutorMetrics,
     first_collect: bool,
+    // Record analyze explain
+    run_time_stats: util::RuntimeStats,
 }
 
 impl<S: Store> IndexScanExecutor<S> {
@@ -92,6 +94,7 @@ impl<S: Store> IndexScanExecutor<S> {
             counts,
             metrics: Default::default(),
             first_collect: true,
+            run_time_stats: util::RuntimeStats::empty(),
         })
     }
 
@@ -112,6 +115,7 @@ impl<S: Store> IndexScanExecutor<S> {
             counts: None,
             metrics: ExecutorMetrics::default(),
             first_collect: true,
+            run_time_stats: util::RuntimeStats::empty(),
         })
     }
 
@@ -176,11 +180,18 @@ impl<S: Store> IndexScanExecutor<S> {
 
 impl<S: Store> Executor for IndexScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
+        let now = Instant::now();
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
                 if let Some(counts) = self.counts.as_mut() {
                     counts.last_mut().map_or((), |val| *val += 1);
                 }
+                self.run_time_stats.record_and_set(
+                    now.elapsed(), 
+                    self.metrics.scan_counter.range.checked_add(
+                        self.metrics.scan_counter.point
+                    ).unwrap() as i64,
+                );
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
@@ -193,6 +204,12 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
                         if let Some(counts) = self.counts.as_mut() {
                             counts.last_mut().map_or((), |val| *val += 1);
                         }
+                        self.run_time_stats.record_and_set(
+                            now.elapsed(), 
+                            self.metrics.scan_counter.range.checked_add(
+                                self.metrics.scan_counter.point
+                            ).unwrap() as i64,
+                        );
                         return Ok(Some(row));
                     }
                     continue;
@@ -603,5 +620,56 @@ pub mod tests {
             }
         }
         assert!(scanner.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_run_time_stats() {
+        let unique = true;
+        let test_data = prepare_index_data(KEY_NUMBER, TABLE_ID, INDEX_ID, unique);
+        let mut wrapper = IndexTestWrapper::new(unique, test_data);
+
+        let val_start = Datum::Bytes(b"abc".to_vec());
+        let val_end = Datum::Bytes(b"abc".to_vec());
+        // point get
+        let r1 = get_idx_range(TABLE_ID, INDEX_ID, 0, 1, &val_start, &val_end, unique);
+        // range seek
+        let r2 = get_idx_range(TABLE_ID, INDEX_ID, 1, 4, &val_start, &val_end, unique);
+        // point get
+        let r3 = get_idx_range(TABLE_ID, INDEX_ID, 4, 5, &val_start, &val_end, unique);
+        //range seek
+        let r4 = get_idx_range(
+            TABLE_ID,
+            INDEX_ID,
+            5,
+            (KEY_NUMBER + 1) as i64,
+            &val_start,
+            &val_end,
+            unique,
+        );
+        let r5 = get_idx_range(
+            TABLE_ID,
+            INDEX_ID,
+            (KEY_NUMBER + 1) as i64,
+            (KEY_NUMBER + 2) as i64,
+            &val_start,
+            &val_end,
+            unique,
+        ); // point get but miss
+        wrapper.ranges = vec![r1, r2, r3, r4, r5];
+
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let mut scanner =
+            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
+        
+        use std::sync::atomic::Ordering;
+        let mut last = 0;
+
+        for _handle in 0..KEY_NUMBER {
+            scanner.next().unwrap().unwrap().take_origin();
+            let consume = scanner.run_time_stats.consume.load(Ordering::Relaxed) as i64;
+            assert_gt!(consume, last);
+            last = consume;
+        }
     }
 }

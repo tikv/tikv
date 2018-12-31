@@ -134,6 +134,62 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
+use std::time::Duration;
+use std::sync::atomic::{AtomicIsize, Ordering};
+
+// RuntimeStats collects one executor's execution info.
+#[derive(Debug)]
+pub struct RuntimeStats {
+    // executor consume time.
+    pub consume: AtomicIsize,
+    // executor's Next() called times.
+    pub count: AtomicIsize,
+    // executor return row count.
+    pub rows: AtomicIsize,
+}
+
+#[allow(dead_code)]
+impl RuntimeStats {
+    // Record records executor's execution.
+    pub fn record(&self, d: Duration, row_num: i64) {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        self.consume.fetch_add(d.as_nanos() as isize, Ordering::Relaxed);
+        self.rows.fetch_add(row_num as isize, Ordering::Relaxed);
+    }
+
+    // Record and set records executor's elapsed time and set row_num
+    pub fn record_and_set(&self, d: Duration, row_num: i64) {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        self.consume.fetch_add(d.as_nanos() as isize, Ordering::Relaxed);
+        self.rows.store(row_num as isize, Ordering::Relaxed);
+    }
+
+    // set_row_num sets the row num.
+    pub fn set_row_num(&self, row_num: i64) {
+        self.rows.store(row_num as isize, Ordering::Relaxed);
+    }
+
+    // string returns the information
+    pub fn string(&self) -> String {
+        format!(
+            "time:{}, loops:{}, rows:{}",  
+            self.consume.load(Ordering::Relaxed),
+            self.count.load(Ordering::Relaxed),
+            self.rows.load(Ordering::Relaxed),
+        )
+    }
+
+
+    // initialize structure
+    pub fn empty() -> RuntimeStats {
+        RuntimeStats{
+            consume: AtomicIsize::new(0), 
+            count: AtomicIsize::new(0), 
+            rows: AtomicIsize::new(0),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +262,87 @@ mod tests {
                 &[1, 2, 4, 0, 0, 0],
             ],
         );
+    }
+
+    use std::time::Duration;
+    use std::sync::atomic::AtomicIsize;
+
+    
+    #[test]
+    fn test_record() {
+        let run_time_stats = RuntimeStats {
+            consume: AtomicIsize::new(1),
+            count: AtomicIsize::new(2),
+            rows: AtomicIsize::new(3),
+        };
+        let cases = vec![
+            (1, 1, 2, 3, 4),
+            (2, 2, 4, 4, 6),
+        ];
+
+        for (d, row_num, exp_time, exp_count, exp_rows) in cases {
+            run_time_stats.record(Duration::from_nanos(d), row_num);
+            assert_eq!(
+                run_time_stats.string(),
+                format!("time:{}, loops:{}, rows:{}", exp_time, exp_count, exp_rows),
+            );
+        }
+        
+    }
+
+    #[test]
+    fn test_record_and_set() {
+        let run_time_stats = RuntimeStats {
+            consume: AtomicIsize::new(1),
+            count: AtomicIsize::new(2),
+            rows: AtomicIsize::new(3),
+        };
+        let cases = vec![
+            (1, 1, 2, 3, 1),
+            (2, 2, 4, 4, 2),
+        ];
+
+        for (d, row_num, exp_time, exp_count, exp_rows) in cases {
+            run_time_stats.record_and_set(Duration::from_nanos(d), row_num);
+            assert_eq!(
+                run_time_stats.string(),
+                format!("time:{}, loops:{}, rows:{}", exp_time, exp_count, exp_rows),
+            );
+        }
+        
+    }
+
+    #[test]
+    fn test_set_row_num() {
+        let run_time_stats = RuntimeStats {
+            consume: AtomicIsize::new(1),
+            count: AtomicIsize::new(2),
+            rows: AtomicIsize::new(3),
+        };
+
+        let cases = vec![1, 2, 3];
+        for row_num in cases {
+            run_time_stats.set_row_num(row_num);
+            assert_eq!(
+                run_time_stats.string(),
+                format!("time:1, loops:2, rows:{}", row_num),
+            );
+        }
+    }
+    
+
+    #[test]
+    fn test_string() {
+        let run_time_stats = RuntimeStats {
+            consume: AtomicIsize::new(1),
+            count: AtomicIsize::new(2),
+            rows: AtomicIsize::new(3),
+        };
+        assert_eq!(run_time_stats.string(), "time:1, loops:2, rows:3");
+    }
+
+    #[test]
+    fn test_empty() {
+        assert_eq!(RuntimeStats::empty().string(), "time:0, loops:0, rows:0");
     }
 }
