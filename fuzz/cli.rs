@@ -161,12 +161,52 @@ fn run(fuzzer: Fuzzer, target: &str) -> Result<(), Error> {
 }
 
 /// Run one target fuzz test using AFL
-fn run_afl(_filter: &str) -> Result<(), Error> {
-    // AFL requires initial inputs, so leave it to future.
+fn run_afl(target: &str) -> Result<(), Error> {
     // General process:
     // 1. cargo afl build (in fuzzer-afl directory)
     // 2. cargo afl fuzz -i in -o out target/debug/fuzzer-afl
-    unimplemented!()
+    let fuzzer = Fuzzer::Afl;
+
+    let fuzzer_build = Command::new("cargo")
+        .args(&["afl", "build", "--bin", target, "--target-dir", "./target"])
+        .current_dir(fuzzer.directory())
+        .spawn()
+        .context(format!("Failed to build {}", fuzzer))?
+        .wait()
+        .context(format!("Failed to complete building {}", fuzzer))?;
+
+    if !fuzzer_build.success() {
+        Err(format_err!(
+            "error building afl instrumented binary, exit code {:?}",
+            fuzzer_build.code()
+        ))?;
+    }
+
+    let fuzzer_bin = Command::new("cargo")
+        .args(&[
+            "afl",
+            "fuzz",
+            "-i",
+            "in",
+            "-o",
+            "out",
+            &format!("./target/debug/{}", target),
+        ])
+        .current_dir(fuzzer.directory())
+        .spawn()
+        .context(format!("Failed to run {}", fuzzer))?
+        .wait()
+        .context(format!("Failed to wait {}", fuzzer))?;
+
+    if !fuzzer_bin.success() {
+        Err(format_err!(
+            "{} exited with code {:?}",
+            fuzzer,
+            fuzzer_bin.code()
+        ))?;
+    }
+
+    Ok(())
 }
 
 /// Run one target fuzz test using Honggfuzz
