@@ -475,7 +475,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
             ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-                || ReadPoolContext::new(pd_worker.scheduler())
+                ReadPoolContext::new(pd_worker.scheduler())
             })
         };
         Storage::from_engine(

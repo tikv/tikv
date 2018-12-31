@@ -156,8 +156,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let storage_read_pool =
         ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-            let pd_sender = pd_sender.clone();
-            move || storage::ReadPoolContext::new(pd_sender.clone())
+            storage::ReadPoolContext::new(pd_sender.clone())
         });
     let storage = create_raft_storage(
         raft_router.clone(),
@@ -199,8 +198,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
     let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-        let pd_sender = pd_sender.clone();
-        move || coprocessor::ReadPoolContext::new(pd_sender.clone())
+        coprocessor::ReadPoolContext::new(pd_sender.clone())
     });
     let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(

@@ -15,6 +15,7 @@
 //! and store is also a special state machine that handles all requests across
 //! stores. They are mixed for now, will be separated in the future.
 
+mod batch;
 mod peer;
 mod router;
 mod store;

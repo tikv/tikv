@@ -54,21 +54,25 @@ impl RpcClient {
         })
     }
 
+    /// Creates a new request header.
     fn header(&self) -> pdpb::RequestHeader {
         let mut header = pdpb::RequestHeader::new();
         header.set_cluster_id(self.cluster_id);
         header
     }
 
+    /// Gets the leader of PD.
     pub fn get_leader(&self) -> Member {
         self.leader_client.get_leader()
     }
 
+    /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option() -> CallOption {
         CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
     }
 
+    /// Gets given key's Region and Region's leader from PD.
     fn get_region_and_leader(&self, key: &[u8]) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
