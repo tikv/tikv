@@ -135,7 +135,7 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-future-worker");
         let storage_read_pool =
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-                || storage::ReadPoolContext::new(pd_worker.scheduler())
+                storage::ReadPoolContext::new(pd_worker.scheduler())
             });
         let store = create_raft_storage(
             sim_router.clone(),
@@ -165,7 +165,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-            || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
+            coprocessor::ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;
