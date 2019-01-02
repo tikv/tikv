@@ -121,8 +121,4 @@ lazy_static! {
         "State of the auto gc manager",
         &["state"]
     ).unwrap();
-    pub static ref AUTO_GC_PROGRESS: IntGauge = register_int_gauge!(
-        "tikv_gcworker_autogc_progress",
-        "Progress of the auto gc manager"
-    ).unwrap();
 }
