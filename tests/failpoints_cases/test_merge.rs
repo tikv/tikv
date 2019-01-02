@@ -28,6 +28,7 @@ use tikv::storage::CF_RAFT;
 use tikv::util::HandyRwLock;
 use tikv::util::config::*;
 
+use raftstore::cluster::Simulator;
 use raftstore::node::new_node_cluster;
 use raftstore::transport_simulate::*;
 use raftstore::util;
