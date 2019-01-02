@@ -14,7 +14,6 @@
 use std::boxed::FnBox;
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::fmt::{Debug, Display};
 use std::time::Duration;
 use std::{error, result};
 
@@ -70,9 +69,8 @@ pub enum Modify {
     DeleteRange(CfName, Key, Key),
 }
 
-pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
-    type Iter: Iterator;
-    type Snap: Snapshot<Iter = Self::Iter>;
+pub trait Engine: Send + Clone + 'static {
+    type Snap: Snapshot;
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
@@ -110,7 +108,7 @@ pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
     }
 }
 
-pub trait Snapshot: Send + Debug + Clone + Sized {
+pub trait Snapshot: Send + Clone {
     type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
@@ -130,7 +128,7 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
     }
 }
 
-pub trait Iterator: Send + Sized {
+pub trait Iterator: Send {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -147,7 +145,7 @@ pub trait Iterator: Send + Sized {
     fn value(&self) -> &[u8];
 }
 
-pub trait RegionInfoProvider: Send + Sized + Clone + 'static {
+pub trait RegionInfoProvider: Send + Clone + 'static {
     /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
     /// this TiKV satisfies `filter(peer)` returns true.
     fn seek_region(
