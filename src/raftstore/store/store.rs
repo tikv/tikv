@@ -3560,7 +3560,7 @@ mod tests {
     fn test_is_range_covered() {
         let meta = vec![(b"b", b"d"), (b"d", b"e"), (b"e", b"f"), (b"f", b"h")];
         let mut region_ranges = BTreeMap::new();
-        let mut region_peers = HashMap::new();
+        let mut region_peers = HashMap::default();
 
         {
             for (i, (start, end)) in meta.into_iter().enumerate() {
