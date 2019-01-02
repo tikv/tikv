@@ -260,7 +260,6 @@ impl<S: RaftStoreRouter> Debug for RaftKv<S> {
 }
 
 impl<S: RaftStoreRouter> Engine for RaftKv<S> {
-    type Iter = RegionIterator;
     type Snap = RegionSnapshot;
 
     fn async_write(
