@@ -498,34 +498,40 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
-/// ApplyDelegate is the apply deletgate of the region.
+/// The apply deletgate of the Region which is responsible to handle committed raft entries of a Region.
 #[derive(Debug)]
 pub struct ApplyDelegate {
-    // peer info
+    /// the ID of the peer
     id: u64,
+    /// the term of the Region
     term: u64,
+    /// the Region information of the peer
     region: Region,
-    // peer_tag, "[region region_id] peer_id"
+    /// peer_tag, "[region region_id] peer_id"
     tag: String,
-
+    /// the local engine to write kv and raft data
     engines: Engines,
-    // if we remove ourself in ChangePeer remove, we should set this flag, then
-    // any following committed logs in same Ready should be applied failed.
-    pending_remove: bool,
-    // we write apply_state to kv rocksdb, in one writebatch together with kv data.
-    // because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
-    // separate WAL file. when power failure, for current raft log, apply_index may synced
-    // to file, but kv data may not synced to file, so we will lose data.
-    apply_state: RaftApplyState,
-    applied_index_term: u64,
 
-    // the commands waiting to be committed and applied
+    /// It is set to true when removing ourself because of ConfChangeType::RemoveNode, and then
+    /// any following committed logs in same Ready should be applied failed.
+    pending_remove: bool,
+    /// the commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
 
-    // related states about Region Merge
+    /// We write apply_state to kv rocksdb, in one write batch together with kv data.
+    /// Because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
+    /// separate WAL file. When power failure, for current raft log, apply_index may synced
+    /// to file, but kv data may not synced to file, so we will lose data.
+    apply_state: RaftApplyState,
+    /// the term of the raft log at applied index
+    applied_index_term: u64,
+
+    /// indicates the peer is in merging, if that compact log will not performed
     is_merging: bool,
+    /// records the epoch version after the last merge
     last_merge_version: u64,
 
+    /// the local metrics, and it will be flushed periodly
     metrics: ApplyMetrics,
 }
 
