@@ -235,7 +235,7 @@ struct Stash {
     last_applied_index: u64,
 }
 
-// ApllyContextCore is the core implementation of apply context.
+// The core implementation of apply context.
 struct ApplyContextCore<'a> {
     host: &'a CoprocessorHost,
     importer: &'a SSTImporter,
@@ -348,7 +348,7 @@ impl<'a> ApplyContextCore<'a> {
         }
     }
 
-    /// Finishs applys for the delegate.
+    /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: Vec<ExecResult>) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.wb_mut());
@@ -409,7 +409,7 @@ impl<'a> ApplyContextCore<'a> {
 /// ApplyContext is the context for a region apply work.
 struct ApplyContext<'a, 'b: 'a> {
     core: &'a mut ApplyContextCore<'b>,
-    // It is a reference of apply worker's `deletgates`,
+    // It is a reference of apply worker's `delegates`,
     // and it is used for merge process to get source peer delegate.
     delegates: &'a mut HashMap<u64, Option<ApplyDelegate>>,
 }
@@ -751,10 +751,10 @@ impl ApplyDelegate {
 
     /// Applies raft command.
     ///
-    /// Apply operation can fail as following situation:
-    ///   1. encouter an error that will occur on all stores, it can continue
+    /// An apply operation can fail in the following situations:
+    ///   1. it encounters an error that will occur on all stores, it can continue
     /// applying next entry safely, like stale epoch for example;
-    ///   2. encouter an error that may not occur on all stores, in this case
+    ///   2. it encounter an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(
@@ -1131,7 +1131,7 @@ impl ApplyDelegate {
         let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
-        // Use delete_files_in_range to drop as many sst files as possible, this
+        // Use delete_files_in_range to drop as many SST files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         self.engines
             .kv
@@ -2187,7 +2187,7 @@ impl Runner {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    // Handles peer registration. when a peer is created, it will register a apply delegate.
+    // Handles peer registration. When a peer is created, it will register a apply delegate.
     fn handle_registration(&mut self, s: Registration) {
         let peer_id = s.id;
         let region_id = s.region.get_id();

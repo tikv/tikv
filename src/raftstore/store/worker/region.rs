@@ -56,7 +56,7 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
-/// Region related task.
+/// Region related task
 #[derive(Debug)]
 pub enum Task {
     Gen {
@@ -117,7 +117,7 @@ struct StalePeerInfo {
 }
 
 /// PendingDeleteRanges records all ranges to be deleted with some delay.
-/// The delay is beacause there maybe some coprocessor requests related to these ranges.
+/// The delay is because there may be some coprocessor requests related to these ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
@@ -223,7 +223,7 @@ struct SnapContext {
 }
 
 impl SnapContext {
-    /// Generates the snapshot of the region.
+    /// Generates the snapshot of the Region.
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
         let raft_engine = Arc::clone(&self.engines.raft);
@@ -248,7 +248,7 @@ impl SnapContext {
         Ok(())
     }
 
-    /// Handles generate snapshot task of the region.
+    /// Handles generated snapshot task of the Region.
     fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
@@ -347,7 +347,7 @@ impl SnapContext {
     }
 
     /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
-    /// Returns true if the ingestion will cause write stall.
+    /// Returns true if the ingestion causes write stall.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -440,7 +440,7 @@ impl SnapContext {
         }
     }
 
-    /// Gets the overlapped ranges and cleans them up.
+    /// Gets the overlapping ranges and cleans them up.
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self
             .pending_delete_ranges
@@ -622,7 +622,7 @@ impl Runnable<Task> for Runner {
     }
 }
 
-/// Region related timeout event.
+/// Region related timeout event
 pub enum Event {
     CheckStalePeer,
     CheckApply,
