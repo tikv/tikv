@@ -16,7 +16,7 @@ use futures::{Async, Future, IntoFuture, Poll};
 use std::boxed;
 use util::Either;
 
-/// Generated a paired future and callback so that when callback is being called, its result
+/// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
 pub fn paired_future_callback<T>() -> (Box<boxed::FnBox(T) + Send>, oneshot::Receiver<T>)
 where
