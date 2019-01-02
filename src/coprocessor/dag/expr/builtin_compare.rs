@@ -17,9 +17,6 @@ use std::{f64, i64};
 
 use chrono::TimeZone;
 
-use cop_datatype::prelude::*;
-use cop_datatype::FieldTypeFlag;
-
 use super::{Error, EvalContext, Result, ScalarFunc};
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
 use coprocessor::codec::{datum, mysql, Datum};
@@ -45,14 +42,8 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let e = |i: usize| self.children[i].eval_int(ctx, row);
         do_compare(e, op, |l, r| {
-            let lhs_unsigned = self.children[0]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED);
-            let rhs_unsigned = self.children[1]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED);
+            let lhs_unsigned = self.children[0].is_unsigned();
+            let rhs_unsigned = self.children[1].is_unsigned();
             Ok(cmp_i64_with_unsigned_flag(l, lhs_unsigned, r, rhs_unsigned))
         })
     }
@@ -278,14 +269,8 @@ impl ScalarFunc {
             self,
             |v| v.eval_int(ctx, row),
             |l, r| {
-                let lhs_unsigned = self.children[0]
-                    .field_type()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED);
-                let rhs_unsigned = self.children[1]
-                    .field_type()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED);
+                let lhs_unsigned = self.children[0].is_unsigned();
+                let rhs_unsigned = self.children[1].is_unsigned();
                 Ok(cmp_i64_with_unsigned_flag(
                     *l,
                     lhs_unsigned,
@@ -329,21 +314,14 @@ impl ScalarFunc {
             None => return Ok(Some(-1)),
             Some(v) => v,
         };
-        let tus = self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED);
+        let tus = self.children[0].is_unsigned();
 
         let mut left = 1;
         let mut right = self.children.len();
         while left < right {
             let mid = left + (right - left) / 2;
             let m = self.children[mid].eval_int(ctx, row)?.unwrap_or(target);
-
-            let mus = self.children[mid]
-                .field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED);
+            let mus = self.children[mid].is_unsigned();
 
             let cmp = match (tus, mus) {
                 (false, false) => target < m,

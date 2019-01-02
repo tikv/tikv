@@ -131,11 +131,7 @@ impl ScalarFunc {
 
     pub fn cast_int_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if !self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        if !self.children[0].is_unsigned() {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
         } else {
             let uval = val as u64;
@@ -289,11 +285,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let s = if self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        let s = if self.children[0].is_unsigned() {
             let uval = val as u64;
             format!("{}", uval)
         } else {

@@ -52,6 +52,8 @@ impl OrderBy {
     }
 }
 
+/// Retrieves rows from the source executor, orders rows according to expressions and produces part
+/// of the rows.
 pub struct TopNExecutor {
     order_by: OrderBy,
     related_cols_offset: Vec<usize>, // offset of related columns

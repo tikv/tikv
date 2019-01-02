@@ -16,7 +16,6 @@
 extern crate test;
 
 extern crate rand;
-#[macro_use]
 extern crate slog;
 extern crate slog_scope;
 extern crate time;
@@ -37,7 +36,7 @@ pub use security::*;
 
 pub fn setup_for_ci() {
     let guard = if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-        Some(logging::init_log())
+        Some(logging::init_log_for_test())
     } else {
         None
     };

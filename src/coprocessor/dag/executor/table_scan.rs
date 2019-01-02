@@ -29,6 +29,9 @@ use coprocessor::dag::{ScanOn, Scanner};
 use coprocessor::util;
 use coprocessor::*;
 
+/// Scans rows from table records.
+///
+/// `row_id` in the key and datums in the value are processed.
 pub struct TableScanExecutor<S: Store> {
     store: S,
     desc: bool,

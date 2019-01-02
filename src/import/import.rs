@@ -32,6 +32,7 @@ use super::{Config, Error, Result};
 const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
 
+/// ImportJob is responsible for importing data stored in an engine to a cluster.
 pub struct ImportJob<Client> {
     tag: String,
     cfg: Config,
@@ -55,6 +56,7 @@ impl<Client: ImportClient> ImportJob<Client> {
         let start = Instant::now();
         info!("{} start", self.tag);
 
+        // Before importing data, we need to help to balance data in the cluster.
         let job = PrepareJob::new(
             self.cfg.clone(),
             self.client.clone(),
@@ -83,6 +85,7 @@ impl<Client: ImportClient> ImportJob<Client> {
         }
     }
 
+    /// Creates a new thread to run SubImportJob for importing a range of data.
     fn new_import_thread(&self, id: u64, range: RangeInfo) -> JoinHandle<Result<()>> {
         let cfg = self.cfg.clone();
         let client = self.client.clone();
@@ -107,6 +110,8 @@ impl<Client: ImportClient> ImportJob<Client> {
     }
 }
 
+/// SubImportJob is responsible for generating and importing sst files for a range of data
+/// stored in an engine.
 struct SubImportJob<Client> {
     id: u64,
     tag: String,
@@ -238,6 +243,8 @@ impl<Client: ImportClient> SubImportJob<Client> {
     }
 }
 
+/// ImportSSTJob is responsible for importing `sst` to all replicas of the
+/// specific Region
 struct ImportSSTJob<Client> {
     tag: String,
     sst: SSTFile,
