@@ -3,6 +3,8 @@ All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [2.0.11]
+### Bug Fixes
+* Fix two issues about Region merge [#4003](https://github.com/tikv/tikv/pull/4003) and [#4004](https://github.com/tikv/tikv/pull/4004)
 
 ## [2.0.10]
 ### Bug Fixes
