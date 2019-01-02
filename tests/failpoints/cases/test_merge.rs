@@ -121,7 +121,6 @@ fn test_node_merge_rollback() {
 #[test]
 fn test_node_merge_restart() {
     let _guard = ::setup();
-    // ::util::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.run();

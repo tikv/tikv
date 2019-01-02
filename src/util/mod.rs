@@ -32,7 +32,6 @@ pub mod codec;
 pub mod collections;
 pub mod config;
 pub mod file;
-pub mod file_log;
 pub mod future;
 pub mod futurepool;
 pub mod io_limiter;

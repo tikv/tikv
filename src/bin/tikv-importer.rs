@@ -22,8 +22,6 @@ extern crate jemallocator;
 extern crate libc;
 #[macro_use]
 extern crate log;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
@@ -31,11 +29,11 @@ extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
+extern crate slog;
 extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
-#[macro_use]
 extern crate tikv;
 extern crate toml;
 
@@ -100,7 +98,7 @@ fn main() {
         .get_matches();
 
     let config = setup_config(&matches);
-    let guard = init_log(&config);
+    let guard = initial_logger(&config);
     tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     initial_metric(&config.metric, None);

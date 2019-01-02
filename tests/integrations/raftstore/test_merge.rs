@@ -116,7 +116,6 @@ fn test_node_base_merge() {
 /// Test whether merge will be aborted if prerequisites is not met.
 #[test]
 fn test_node_merge_prerequisites_check() {
-    // ::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -186,7 +185,6 @@ fn test_node_merge_prerequisites_check() {
 /// Test if stale peer will be handled properly after merge.
 #[test]
 fn test_node_check_merged_message() {
-    // ::init_log();
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -345,7 +343,6 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
 /// Test various cases that a store is isolated during merge.
 #[test]
 fn test_node_merge_dist_isolation() {
-    // ::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -421,7 +418,6 @@ fn test_node_merge_dist_isolation() {
 /// way behind others so others have to send it a snapshot.
 #[test]
 fn test_node_merge_brain_split() {
-    // ::init_log();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
