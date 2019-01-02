@@ -90,7 +90,7 @@ pub fn file_drainer(
 
 /// Constructs a new terminal drainer which outputs logs to stderr.
 pub fn term_drainer() -> TikvFormat<TermDecorator> {
-    let decorator = TermDecorator::new().build();
+    let decorator = TermDecorator::new().stderr().build();
     TikvFormat::new(decorator)
 }
 
