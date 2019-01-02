@@ -26,13 +26,13 @@
 //! ### Run using CPU Profiler
 //!
 //! ```bash
-//! TIKV_PROFILE=1 ../../target/debug/examples/prime
+//! ../../target/debug/examples/prime
 //! ```
 //!
 //! ### Run using Callgrind
 //!
 //! ```bash
-//! TIKV_PROFILE=1 valgrind --tool=callgrind --instr-atstart=no ../../target/debug/examples/prime
+//! valgrind --tool=callgrind --instr-atstart=no ../../target/debug/examples/prime
 //! ```
 //!
 //! You must not run example via `valgrind cargo run ...`. The framework won't detect Callgrind!

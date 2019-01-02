@@ -30,7 +30,7 @@ lazy_static! {
     static ref ACTIVE_PROFILER: Mutex<Profiler> = Mutex::new(Profiler::None);
 }
 
-/// Start profiling when there is environment variable `TIKV_PROFILE=1`.
+/// Start profiling.
 ///
 /// When `profiling` feature is not enabled, this function will do nothing and there is totally
 /// zero cost.
@@ -38,6 +38,7 @@ lazy_static! {
 /// When running in Callgrind, Callgrind instrumentation will be started
 /// (`CALLGRIND_START_INSTRUMENTATION`). Otherwise, the CPU Profiler will be started and profile
 /// will be generated to the file specified by `name`.
+// TODO: Better multi-thread support.
 #[inline]
 pub fn start(name: impl AsRef<str>) {
     let mut profiler = ACTIVE_PROFILER.lock().unwrap();
@@ -47,28 +48,16 @@ pub fn start(name: impl AsRef<str>) {
         return;
     }
 
-    let activate_profiling = {
-        let var = env::var("TIKV_PROFILE").ok();
-        match var {
-            None => false,
-            Some(s) => s == "1",
-        }
-    };
-
-    if !activate_profiling {
-        *profiler = Profiler::None;
+    if valgrind_request::running_on_valgrind() != 0 {
+        *profiler = Profiler::CallGrind;
+        CallgrindClientRequest::start();
     } else {
-        if valgrind_request::running_on_valgrind() != 0 {
-            *profiler = Profiler::CallGrind;
-            CallgrindClientRequest::start();
-        } else {
-            *profiler = Profiler::GPerfTools;
-            cpuprofiler::PROFILER
-                .lock()
-                .unwrap()
-                .start(name.as_ref())
-                .unwrap();
-        }
+        *profiler = Profiler::GPerfTools;
+        cpuprofiler::PROFILER
+            .lock()
+            .unwrap()
+            .start(name.as_ref())
+            .unwrap();
     }
 }
 
