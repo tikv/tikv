@@ -343,6 +343,53 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz))))
     }
+
+    #[inline]
+    pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.is_zero() {
+            return handle_incorrect_datetime_error(ctx, t).map(|_| None);
+        }
+        let time = t.get_time();
+        use coprocessor::codec::mysql::time::DateTimeExtension;
+        Ok(Some(i64::from(time.day_number())))
+    }
+
+    pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if lhs.invalid_zero() {
+            return handle_incorrect_datetime_error(ctx, lhs).map(|_| None);
+        }
+        let rhs: Cow<Time> = try_opt!(self.children[1].eval_time(ctx, row));
+        if rhs.invalid_zero() {
+            return handle_incorrect_datetime_error(ctx, rhs).map(|_| None);
+        }
+        let days_diff = lhs
+            .get_time()
+            .date()
+            .signed_duration_since(rhs.get_time().date())
+            .num_days();
+        Ok(Some(days_diff))
+    }
+
+    #[inline]
+    pub fn add_duration_and_duration<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, MyDuration>>> {
+        let d0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let d1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
+        let add = match d0.to_nanos().checked_add(d1.to_nanos()) {
+            Some(result) => result,
+            None => return Err(box_err!("add duration {} and duration {} overflow", d0, d1)),
+        };
+        let res = match MyDuration::from_nanos(add, d0.get_fsp().max(d1.get_fsp()) as i8) {
+            Ok(result) => result,
+            Err(e) => return Err(e),
+        };
+        Ok(Some(Cow::Owned(res)))
+    }
 }
 
 #[cfg(test)]
@@ -1119,4 +1166,156 @@ mod tests {
             Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00.000000", 6).unwrap()),
         );
     }
+
+    #[test]
+    fn test_to_days() {
+        let cases = vec![
+            ("950501", 728779),
+            ("2007-10-07", 733321),
+            ("2008-10-07", 733687),
+            ("08-10-07", 733687),
+            ("0000-01-01", 1),
+            ("2007-10-07 00:00:59", 733321),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::ToDays,
+                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToDays, Datum::Null);
+
+        // test ZERO case
+        test_err_case_one_arg(
+            &mut ctx,
+            ScalarFuncSig::ToDays,
+            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap()),
+        );
+    }
+
+    #[test]
+    fn test_date_diff() {
+        let cases = vec![
+            (
+                "0000-01-01 00:00:00.000000",
+                "0000-01-01 00:00:00.000000",
+                0,
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                0,
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                1,
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-02 00:00:00.000000",
+                -1,
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 23:59:59.999999",
+                1,
+            ),
+            (
+                "2018-02-01 23:59:59.999999",
+                "2018-02-02 00:00:00.000000",
+                -1,
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::DateDiff,
+                Datum::Time(Time::parse_utc_datetime(arg1, 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime(arg2, 6).unwrap()),
+                Datum::I64(exp),
+            );
+        }
+
+        let mut cfg = EvalConfig::new();
+        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
+            .set_strict_sql_mode(true);
+
+        test_err_case_two_arg(&mut ctx, ScalarFuncSig::DateDiff, Datum::Null, Datum::Null);
+    }
+
+    #[test]
+    fn test_add_duration_and_duration() {
+        let cases = vec![
+            ("01:00:00.999999", "02:00:00.999998", "03:00:01.999997"),
+            ("23:59:59", "00:00:01", "24:00:00"),
+            ("235959", "00:00:01", "24:00:00"),
+            ("110:00:00", "1 02:00:00", "136:00:00"),
+            ("-110:00:00", "1 02:00:00", "-84:00:00"),
+            ("00:00:01", "-00:00:01", "00:00:00"),
+            ("00:00:03", "-00:00:01", "00:00:02"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::AddDurationAndDuration,
+                Datum::Dur(Duration::parse(arg1.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(arg2.as_ref(), 6).unwrap()),
+                Datum::Dur(Duration::parse(exp.as_ref(), 6).unwrap()),
+            );
+        }
+
+        let zero_duration = Datum::Dur(Duration::zero());
+        let cases = vec![
+            (
+                Datum::Dur(Duration::parse(b"1 01:00:00", 6).unwrap()),
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                Datum::Null,
+                Datum::Dur(Duration::parse(b"11:30:45.123456", 6).unwrap()),
+                Datum::Null,
+            ),
+            (Datum::Null, Datum::Null, Datum::Null),
+            (
+                zero_duration.clone(),
+                zero_duration.clone(),
+                zero_duration.clone(),
+            ),
+            (
+                zero_duration.clone(),
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            ),
+            (
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                zero_duration.clone(),
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            ),
+            (
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Dur(Duration::parse(b"-01:00:00", 6).unwrap()),
+                zero_duration.clone(),
+            ),
+        ];
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::AddDurationAndDuration,
+                arg1,
+                arg2,
+                exp,
+            );
+        }
+    }
+
 }

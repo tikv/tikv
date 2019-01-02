@@ -11,14 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This is the core implementation of a batch system. Generally there will be two
-//! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
-//! represents a peer, the other is control FSM, which usually represents something
-//! that controls how the former is created or metrics are collected.
-
 // TODO: remove this
 #![allow(dead_code)]
 
+use super::batch::{Fsm, FsmScheduler};
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -50,36 +46,6 @@ impl<N> Drop for State<N> {
     }
 }
 
-/// `FsmScheduler` schedules `Fsm` for later handles.
-pub trait FsmScheduler {
-    type Fsm: Fsm;
-
-    /// Schedule a Fsm for later handles.
-    fn schedule(&self, fsm: Box<Self::Fsm>);
-    /// Shutdown the scheduler, which indicates that resouces like
-    /// background thread pool should be released.
-    fn shutdown(&self);
-}
-
-/// A Fsm is a finite state machine. It should be able to be notified for
-/// updating internal state according to incomming messages.
-pub trait Fsm {
-    type Message;
-
-    /// Notify the Fsm for readiness.
-    fn notify(&self);
-
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
-    where
-        Self: Sized;
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
-    /// no reference to mailbox after calling this method.
-    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
-    where
-        Self: Sized;
-}
-
 /// A basic mailbox.
 ///
 /// Every mailbox should have one and only one owner, who will receive all
@@ -95,7 +61,7 @@ pub struct BasicMailbox<Owner: Fsm> {
 
 impl<Owner: Fsm> BasicMailbox<Owner> {
     #[inline]
-    fn new(
+    pub fn new(
         sender: mpsc::LooseBoundedSender<Owner::Message>,
         fsm: Box<Owner>,
     ) -> BasicMailbox<Owner> {
@@ -109,7 +75,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     }
 
     /// Take the owner if it's IDLE.
-    fn take_fsm(&self) -> Option<Box<Owner>> {
+    pub(super) fn take_fsm(&self) -> Option<Box<Owner>> {
         let previous_state = self.state.status.compare_and_swap(
             NOTIFYSTATE_IDLE,
             NOTIFYSTATE_NOTIFIED,
@@ -125,6 +91,16 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         } else {
             panic!("inconsistent status and data, something should be wrong.");
         }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.sender.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.sender.is_empty()
     }
 
     /// Notify owner via a `FsmScheduler`.
@@ -145,7 +121,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     /// releasing a fsm. However, a fsm is guaranteed to be notified only
     /// when new messages arrives after it's released.
     #[inline]
-    fn release(&self, fsm: Box<Owner>) {
+    pub(super) fn release(&self, fsm: Box<Owner>) {
         let previous = self.state.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
@@ -255,7 +231,7 @@ impl<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> Mailbox<Owner, Scheduler>
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<HashMap<u64, BasicMailbox<N>>>>,
     caches: Cell<HashMap<u64, BasicMailbox<N>>>,
-    control_box: BasicMailbox<C>,
+    pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
@@ -270,7 +246,7 @@ where
     Ns: FsmScheduler<Fsm = N> + Clone,
     Cs: FsmScheduler<Fsm = C> + Clone,
 {
-    fn new(
+    pub(super) fn new(
         control_box: BasicMailbox<C>,
         normal_scheduler: Ns,
         control_scheduler: Cs,
@@ -472,7 +448,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crossbeam::channel::{SendError, TryRecvError, TrySendError};
     use std::sync::atomic::AtomicUsize;
@@ -481,16 +457,18 @@ mod tests {
     use test::Bencher;
     use util::mpsc;
 
-    struct Counter {
-        counter: Arc<AtomicUsize>,
-        recv: mpsc::Receiver<usize>,
+    pub struct Counter {
+        pub counter: Arc<AtomicUsize>,
+        pub recv: mpsc::Receiver<usize>,
         mailbox: Option<BasicMailbox<Counter>>,
     }
 
     impl Fsm for Counter {
         type Message = usize;
 
-        fn notify(&self) {}
+        fn is_stopped(&self) -> bool {
+            false
+        }
 
         fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>) {
             self.mailbox = Some(mailbox.into_owned());
@@ -508,7 +486,7 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct CounterScheduler {
+    pub struct CounterScheduler {
         sender: mpsc::Sender<Option<Box<Counter>>>,
     }
 
@@ -520,11 +498,13 @@ mod tests {
         }
 
         fn shutdown(&self) {
-            self.sender.send(None).unwrap();
+            // Note that CounterScheduler is used as both normal scheduler
+            // and control scheduler, so this method can be called twice.
+            let _ = self.sender.send(None);
         }
     }
 
-    fn poll_fsm(fsm_receiver: &mpsc::Receiver<Option<Box<Counter>>>, block: bool) -> bool {
+    pub fn poll_fsm(fsm_receiver: &mpsc::Receiver<Option<Box<Counter>>>, block: bool) -> bool {
         loop {
             let mut fsm = if block {
                 match fsm_receiver.recv() {
@@ -547,7 +527,7 @@ mod tests {
         }
     }
 
-    fn new_counter(cap: usize) -> (mpsc::LooseBoundedSender<usize>, Arc<AtomicUsize>, Counter) {
+    pub fn new_counter(cap: usize) -> (mpsc::LooseBoundedSender<usize>, Arc<AtomicUsize>, Counter) {
         let cnt = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = mpsc::loose_bounded(cap);
         let fsm = Counter {

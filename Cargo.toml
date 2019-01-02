@@ -43,9 +43,9 @@ harness = false
 path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
-name = "engines"
+name = "hierarchy"
 harness = false
-path = "benches/engines/mod.rs"
+path = "benches/hierarchy/mod.rs"
 
 [[bench]]
 name = "misc"

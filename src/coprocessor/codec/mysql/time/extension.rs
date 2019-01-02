@@ -58,6 +58,7 @@ pub trait DateTimeExtension {
     fn week(&self, mode: WeekMode) -> i32;
     fn year_week(&self, mode: WeekMode) -> (i32, i32);
     fn abbr_day_of_month(&self) -> &'static str;
+    fn day_number(&self) -> i32;
 }
 
 impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
@@ -153,6 +154,11 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
             3 | 23 => "rd",
             _ => "th",
         }
+    }
+
+    /// returns the days since 0000-00-00
+    fn day_number(&self) -> i32 {
+        calc_day_number(self.year(), self.month() as i32, self.day() as i32)
     }
 }
 
