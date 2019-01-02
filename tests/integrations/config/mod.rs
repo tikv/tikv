@@ -27,7 +27,7 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
-use tikv::util::config::{ReadableDuration, ReadableSize};
+use tikv::util::config::{CompressionType, ReadableDuration, ReadableSize};
 use tikv::util::security::SecurityConfig;
 
 #[test]
@@ -227,6 +227,16 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            titan: TitanCfConfig {
+                min_blob_size: 2018,
+                blob_file_compression: CompressionType::Zstd,
+                blob_cache_size: ReadableSize::gb(12),
+                min_gc_batch_size: ReadableSize::kb(12),
+                max_gc_batch_size: ReadableSize::mb(12),
+                discardable_ratio: 0.00156,
+                sample_ratio: 0.982,
+                merge_small_file_threshold: ReadableSize::kb(21),
+            },
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -266,6 +276,16 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            titan: TitanCfConfig {
+                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                blob_file_compression: CompressionType::Lz4,
+                blob_cache_size: ReadableSize::mb(0),
+                min_gc_batch_size: ReadableSize::mb(16),
+                max_gc_batch_size: ReadableSize::mb(64),
+                discardable_ratio: 0.5,
+                sample_ratio: 0.1,
+                merge_small_file_threshold: ReadableSize::mb(8),
+            },
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -305,6 +325,16 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            titan: TitanCfConfig {
+                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                blob_file_compression: CompressionType::Lz4,
+                blob_cache_size: ReadableSize::mb(0),
+                min_gc_batch_size: ReadableSize::mb(16),
+                max_gc_batch_size: ReadableSize::mb(64),
+                discardable_ratio: 0.5,
+                sample_ratio: 0.1,
+                merge_small_file_threshold: ReadableSize::mb(8),
+            },
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -344,6 +374,22 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            titan: TitanCfConfig {
+                min_blob_size: ReadableSize::gb(4).0 as u64, // disable titan default
+                blob_file_compression: CompressionType::Lz4,
+                blob_cache_size: ReadableSize::mb(0),
+                min_gc_batch_size: ReadableSize::mb(16),
+                max_gc_batch_size: ReadableSize::mb(64),
+                discardable_ratio: 0.5,
+                sample_ratio: 0.1,
+                merge_small_file_threshold: ReadableSize::mb(8),
+            },
+        },
+        titan: TitanDBConfig {
+            enabled: true,
+            dirname: "bar".to_owned(),
+            disable_gc: false,
+            max_background_gc: 9,
         },
     };
     value.raftdb = RaftDbConfig {
@@ -408,6 +454,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            titan: TitanCfConfig::default(),
         },
     };
     value.storage = StorageConfig {
@@ -448,7 +495,8 @@ fn test_serde_custom_tikv_config() {
     let load = toml::from_str(&custom).unwrap();
     assert_eq!(value, load);
     let dump = toml::to_string_pretty(&load).unwrap();
-    assert_eq!(dump, custom);
+    let load_from_dump = toml::from_str(&dump).unwrap();
+    assert_eq!(load, load_from_dump);
 }
 
 #[test]

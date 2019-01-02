@@ -23,25 +23,35 @@ const FARENESS: i32 = 10;
 const SNAP_MAX_BYTES_PER_TIME: i64 = 4 * 1024 * 1024;
 pub const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
+/// The I/O rate limiter for RocksDB.
+///
+/// Throttles the maximum bytes per second written to disk.
 pub struct IOLimiter {
     inner: RateLimiter,
 }
 
 impl IOLimiter {
+    /// # Arguments
+    ///
+    /// - `bytes_per_sec`: controls the total write rate of compaction and flush in bytes per second.
     pub fn new(bytes_per_sec: u64) -> IOLimiter {
         IOLimiter {
             inner: RateLimiter::new(bytes_per_sec as i64, REFILL_PERIOD, FARENESS),
         }
     }
 
+    /// Sets the rate limit in bytes per second
     pub fn set_bytes_per_second(&self, bytes_per_sec: i64) {
         self.inner.set_bytes_per_second(bytes_per_sec)
     }
 
+    /// Requests an access token to read or write bytes. If this request can not be satisfied, the call is blocked.
     pub fn request(&self, bytes: i64) {
         self.inner.request(bytes, PRIORITY_HIGH)
     }
 
+    /// Gets the max bytes that can be granted in a single burst.
+    /// Note: it will be less than or equal to `SNAP_MAX_BYTES_PER_TIME`.
     pub fn get_max_bytes_per_time(&self) -> i64 {
         if self.inner.get_singleburst_bytes() > SNAP_MAX_BYTES_PER_TIME {
             SNAP_MAX_BYTES_PER_TIME
@@ -50,14 +60,17 @@ impl IOLimiter {
         }
     }
 
+    /// Gets the total bytes that have gone through the rate limiter.
     pub fn get_total_bytes_through(&self) -> i64 {
         self.inner.get_total_bytes_through(PRIORITY_HIGH)
     }
 
+    /// Gets the rate limit in bytes per second.
     pub fn get_bytes_per_second(&self) -> i64 {
         self.inner.get_bytes_per_second()
     }
 
+    /// Gets the total number of requests that have gone through rate limiter
     pub fn get_total_requests(&self) -> i64 {
         self.inner.get_total_requests(PRIORITY_HIGH)
     }

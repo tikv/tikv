@@ -83,12 +83,12 @@ impl<T> Debug for ScheduleError<T> {
 }
 
 pub trait Runnable<T: Display> {
-    /// Run a task.
+    /// Runs a task.
     fn run(&mut self, _: T) {
         unimplemented!()
     }
 
-    /// Run a batch of tasks.
+    /// Runs a batch of tasks.
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>) {
@@ -151,7 +151,7 @@ impl<T: Display> Scheduler<T> {
         }
     }
 
-    /// Schedule a task to run.
+    /// Schedules a task to run.
     ///
     /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
@@ -168,7 +168,7 @@ impl<T: Display> Scheduler<T> {
         Ok(())
     }
 
-    /// Check if underlying worker can't handle task immediately.
+    /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
         self.counter.load(Ordering::SeqCst) > 0
     }
@@ -185,7 +185,7 @@ impl<T> Clone for Scheduler<T> {
     }
 }
 
-/// Create a scheduler that can't be scheduled any task.
+/// Creates a scheduler that can't schedule any task.
 ///
 /// Useful for test purpose.
 #[cfg(test)]
@@ -292,7 +292,7 @@ fn poll<R, T, U>(
     runner.shutdown();
 }
 
-// Fill buffer with next task batch comes from `rx`.
+/// Fills buffer with next task batch coming from `rx`.
 fn fill_task_batch<T>(
     rx: &Receiver<Option<T>>,
     buffer: &mut Vec<T>,
@@ -322,12 +322,12 @@ fn fill_task_batch<T>(
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
-    /// Create a worker.
+    /// Creates a worker.
     pub fn new<S: Into<String>>(name: S) -> Worker<T> {
         Builder::new(name).create()
     }
 
-    /// Start the worker.
+    /// Starts the worker.
     pub fn start<R: Runnable<T> + Send + 'static>(&mut self, runner: R) -> Result<(), io::Error> {
         let runner = DefaultRunnerWithTimer(runner);
         let timer: Timer<()> = Timer::new(0);
@@ -356,19 +356,19 @@ impl<T: Display + Send + 'static> Worker<T> {
         Ok(())
     }
 
-    /// Get a scheduler to schedule task.
+    /// Gets a scheduler to schedule the task.
     pub fn scheduler(&self) -> Scheduler<T> {
         self.scheduler.clone()
     }
 
-    /// Schedule a task to run.
+    /// Schedules a task to run.
     ///
     /// If the worker is stopped, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.scheduler.schedule(task)
     }
 
-    /// Check if underlying worker can't handle task immediately.
+    /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
         self.handle.is_none() || self.scheduler.is_busy()
     }
@@ -377,9 +377,9 @@ impl<T: Display + Send + 'static> Worker<T> {
         self.scheduler.name.as_str()
     }
 
-    /// Stop the worker thread.
+    /// Stops the worker thread.
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
-        // close sender explicitly so the background thread will exit.
+        // Closes sender explicitly so the background thread will exit.
         info!("stoping {}", self.scheduler.name);
         let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.send(None) {
