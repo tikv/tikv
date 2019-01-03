@@ -135,57 +135,55 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 use std::time::Duration;
-use std::sync::atomic::{AtomicIsize, Ordering};
 
 // RuntimeStats collects one executor's execution info.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RuntimeStats {
     // executor consume time.
-    pub consume: AtomicIsize,
+    pub consume: Duration,
     // executor's Next() called times.
-    pub count: AtomicIsize,
+    pub count: i64,
     // executor return row count.
-    pub rows: AtomicIsize,
+    pub rows: i64,
 }
 
 #[allow(dead_code)]
 impl RuntimeStats {
     // Record records executor's execution.
-    pub fn record(&self, d: Duration, row_num: i64) {
-        self.count.fetch_add(1, Ordering::Relaxed);
-        self.consume.fetch_add(d.as_nanos() as isize, Ordering::Relaxed);
-        self.rows.fetch_add(row_num as isize, Ordering::Relaxed);
+    pub fn record(&mut self, d: Duration, row_num: i64) {
+        self.consume += d;
+        self.count += 1;
+        self.rows += row_num;
     }
 
     // Record and set records executor's elapsed time and set row_num
-    pub fn record_and_set(&self, d: Duration, row_num: i64) {
-        self.count.fetch_add(1, Ordering::Relaxed);
-        self.consume.fetch_add(d.as_nanos() as isize, Ordering::Relaxed);
-        self.rows.store(row_num as isize, Ordering::Relaxed);
+    pub fn record_and_set(&mut self, d: Duration, row_num: i64) {
+        self.consume += d;
+        self.count += 1;
+        self.rows = row_num;
     }
 
     // set_row_num sets the row num.
-    pub fn set_row_num(&self, row_num: i64) {
-        self.rows.store(row_num as isize, Ordering::Relaxed);
+    pub fn set_row_num(&mut self, row_num: i64) {
+        self.rows = row_num;
     }
 
     // string returns the information
-    pub fn string(&self) -> String {
+    pub fn string(&mut self) -> String {
         format!(
-            "time:{}, loops:{}, rows:{}",  
-            self.consume.load(Ordering::Relaxed),
-            self.count.load(Ordering::Relaxed),
-            self.rows.load(Ordering::Relaxed),
+            "time:{}, loops:{}, rows:{}",
+            self.consume.as_nanos(),
+            self.count,
+            self.rows,
         )
     }
 
-
     // initialize structure
     pub fn empty() -> RuntimeStats {
-        RuntimeStats{
-            consume: AtomicIsize::new(0), 
-            count: AtomicIsize::new(0), 
-            rows: AtomicIsize::new(0),
+        RuntimeStats {
+            consume: Duration::new(0, 0),
+            count: 0,
+            rows: 0,
         }
     }
 }
@@ -265,20 +263,15 @@ mod tests {
     }
 
     use std::time::Duration;
-    use std::sync::atomic::AtomicIsize;
 
-    
     #[test]
     fn test_record() {
-        let run_time_stats = RuntimeStats {
-            consume: AtomicIsize::new(1),
-            count: AtomicIsize::new(2),
-            rows: AtomicIsize::new(3),
+        let mut run_time_stats = RuntimeStats {
+            consume: Duration::new(0, 1),
+            count: 2,
+            rows: 3,
         };
-        let cases = vec![
-            (1, 1, 2, 3, 4),
-            (2, 2, 4, 4, 6),
-        ];
+        let cases = vec![(1, 1, 2, 3, 4), (2, 2, 4, 4, 6)];
 
         for (d, row_num, exp_time, exp_count, exp_rows) in cases {
             run_time_stats.record(Duration::from_nanos(d), row_num);
@@ -287,20 +280,16 @@ mod tests {
                 format!("time:{}, loops:{}, rows:{}", exp_time, exp_count, exp_rows),
             );
         }
-        
     }
 
     #[test]
     fn test_record_and_set() {
-        let run_time_stats = RuntimeStats {
-            consume: AtomicIsize::new(1),
-            count: AtomicIsize::new(2),
-            rows: AtomicIsize::new(3),
+        let mut run_time_stats = RuntimeStats {
+            consume: Duration::new(0, 1),
+            count: 2,
+            rows: 3,
         };
-        let cases = vec![
-            (1, 1, 2, 3, 1),
-            (2, 2, 4, 4, 2),
-        ];
+        let cases = vec![(1, 1, 2, 3, 1), (2, 2, 4, 4, 2)];
 
         for (d, row_num, exp_time, exp_count, exp_rows) in cases {
             run_time_stats.record_and_set(Duration::from_nanos(d), row_num);
@@ -309,15 +298,14 @@ mod tests {
                 format!("time:{}, loops:{}, rows:{}", exp_time, exp_count, exp_rows),
             );
         }
-        
     }
 
     #[test]
     fn test_set_row_num() {
-        let run_time_stats = RuntimeStats {
-            consume: AtomicIsize::new(1),
-            count: AtomicIsize::new(2),
-            rows: AtomicIsize::new(3),
+        let mut run_time_stats = RuntimeStats {
+            consume: Duration::new(0, 1),
+            count: 2,
+            rows: 3,
         };
 
         let cases = vec![1, 2, 3];
@@ -329,14 +317,13 @@ mod tests {
             );
         }
     }
-    
 
     #[test]
     fn test_string() {
-        let run_time_stats = RuntimeStats {
-            consume: AtomicIsize::new(1),
-            count: AtomicIsize::new(2),
-            rows: AtomicIsize::new(3),
+        let mut run_time_stats = RuntimeStats {
+            consume: Duration::new(0, 1),
+            count: 2,
+            rows: 3,
         };
         assert_eq!(run_time_stats.string(), "time:1, loops:2, rows:3");
     }

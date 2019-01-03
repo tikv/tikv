@@ -34,6 +34,8 @@ use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
 use super::{Executor, Row};
 
+use util::time::Instant;
+
 /// Scans rows from table indexes.
 ///
 /// Index values are in the key. Additionally, for unique index, `row_id` is in the value and for
@@ -55,8 +57,6 @@ pub struct IndexScanExecutor<S: Store> {
     counts: Option<Vec<i64>>,
     metrics: ExecutorMetrics,
     first_collect: bool,
-    // Record analyze explain
-    run_time_stats: util::RuntimeStats,
 }
 
 impl<S: Store> IndexScanExecutor<S> {
@@ -94,7 +94,6 @@ impl<S: Store> IndexScanExecutor<S> {
             counts,
             metrics: Default::default(),
             first_collect: true,
-            run_time_stats: util::RuntimeStats::empty(),
         })
     }
 
@@ -115,7 +114,6 @@ impl<S: Store> IndexScanExecutor<S> {
             counts: None,
             metrics: ExecutorMetrics::default(),
             first_collect: true,
-            run_time_stats: util::RuntimeStats::empty(),
         })
     }
 
@@ -180,18 +178,13 @@ impl<S: Store> IndexScanExecutor<S> {
 
 impl<S: Store> Executor for IndexScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
-        let now = Instant::now();
+        let now = Instant::now_coarse();
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
                 if let Some(counts) = self.counts.as_mut() {
                     counts.last_mut().map_or((), |val| *val += 1);
                 }
-                self.run_time_stats.record_and_set(
-                    now.elapsed(), 
-                    self.metrics.scan_counter.range.checked_add(
-                        self.metrics.scan_counter.point
-                    ).unwrap() as i64,
-                );
+                self.metrics.record_runtime_stats(now.elapsed());
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
@@ -204,12 +197,7 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
                         if let Some(counts) = self.counts.as_mut() {
                             counts.last_mut().map_or((), |val| *val += 1);
                         }
-                        self.run_time_stats.record_and_set(
-                            now.elapsed(), 
-                            self.metrics.scan_counter.range.checked_add(
-                                self.metrics.scan_counter.point
-                            ).unwrap() as i64,
-                        );
+                        self.metrics.record_runtime_stats(now.elapsed());
                         return Ok(Some(row));
                     }
                     continue;
@@ -661,15 +649,12 @@ pub mod tests {
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut scanner =
             IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
-        
-        use std::sync::atomic::Ordering;
         let mut last = 0;
 
         for _handle in 0..KEY_NUMBER {
-            scanner.next().unwrap().unwrap().take_origin();
-            let consume = scanner.run_time_stats.consume.load(Ordering::Relaxed) as i64;
-            assert_gt!(consume, last);
-            last = consume;
+            let _row = scanner.next().unwrap().unwrap().take_origin();
+            assert_ge!(scanner.metrics.runtime_stats.consume.as_nanos(), last);
+            last = scanner.metrics.runtime_stats.consume.as_nanos();
         }
     }
 }

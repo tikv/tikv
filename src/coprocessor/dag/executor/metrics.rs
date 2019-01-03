@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use coprocessor::util;
 use prometheus::local::LocalIntCounterVec;
+use std::time::Duration;
 use storage::engine::Statistics;
 
 /// `ExecutorMetrics` is metrics collected from executors group by request.
@@ -20,6 +22,7 @@ pub struct ExecutorMetrics {
     pub cf_stats: Statistics,
     pub scan_counter: ScanCounter,
     pub executor_count: ExecCounter,
+    pub runtime_stats: util::RuntimeStats,
 }
 
 impl ExecutorMetrics {
@@ -30,6 +33,16 @@ impl ExecutorMetrics {
         other.cf_stats = Default::default();
         self.scan_counter.merge(&mut other.scan_counter);
         self.executor_count.merge(&mut other.executor_count);
+    }
+
+    pub fn record_runtime_stats(&mut self, d: Duration) {
+        self.runtime_stats.record_and_set(
+            d,
+            self.scan_counter
+                .range
+                .checked_add(self.scan_counter.point)
+                .unwrap() as i64,
+        );
     }
 }
 
