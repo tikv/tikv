@@ -29,7 +29,7 @@ impl ThreadLoad {
         }
     }
 
-    /// Returns true if the current load exceeds it's threshold.
+    /// Returns true if the current load exceeds its threshold.
     #[allow(dead_code)]
     pub fn in_heavy_load(&self) -> bool {
         self.load.load(Ordering::Acquire) > self.threshold
