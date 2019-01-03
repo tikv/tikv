@@ -35,7 +35,7 @@ impl ThreadLoad {
         self.load.load(Ordering::Acquire) > self.threshold
     }
 
-    /// Inceases when every time updating `load`.
+    /// Increases when updating `load`.
     #[allow(dead_code)]
     pub fn term(&self) -> usize {
         self.term.load(Ordering::Acquire)
