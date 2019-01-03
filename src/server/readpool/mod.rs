@@ -29,7 +29,7 @@ pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
 
-/// A priority-awared thread pool for executing futures.
+/// A priority-aware thread pool for executing futures.
 ///
 /// It is specifically used for all sorts of read operations like Kv Get,
 /// Kv Scan and Coprocessor Read to improve performance.
