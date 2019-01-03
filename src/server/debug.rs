@@ -76,7 +76,7 @@ quick_error!{
     }
 }
 
-/// Describes the meta information of a region.
+/// Describes the meta information of a Region.
 #[derive(PartialEq, Debug, Default)]
 pub struct RegionInfo {
     pub raft_local_state: Option<RaftLocalState>,
