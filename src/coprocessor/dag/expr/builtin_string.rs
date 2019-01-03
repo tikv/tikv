@@ -313,6 +313,47 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn field_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        // Pattern matching made explicit here.
+        // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
+        let s = match self.children[0].eval_string(ctx, row) {
+            Err(e) => return Err(e),
+            Ok(None) => return Ok(Some(0)),
+            Ok(Some(res)) => res,
+        };
+
+        let mut i = 1;
+        while i < self.children.len() as i64 {
+            let tmp = try_opt!(self.children[i as usize].eval_string(ctx, row));
+            if s == tmp {
+                break;
+            }
+            i += 1;
+        }
+
+        if i == self.children.len() as i64 {
+            Ok(Some(0))
+        } else {
+            Ok(Some(i))
+        }
+    }
+
+    #[inline]
+    pub fn field_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        Ok(Some(try_opt!(self.field_int(ctx, row)) as f64))
+    }
+
+    #[inline]
+    pub fn field_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let i = try_opt!(self.field_int(ctx, row));
+        Ok(Some(Cow::Owned(i.to_string().into_bytes())))
+    }
+
+    #[inline]
     pub fn trim_1_arg<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -1572,7 +1613,7 @@ mod tests {
         let cases = vec![
             (
                 vec![
-		    Datum::Bytes(b",".to_vec()),
+            Datum::Bytes(b",".to_vec()),
                     Datum::Bytes(b"abc".to_vec()),
                     Datum::Bytes(b"defg".to_vec()),
                 ],
@@ -1848,6 +1889,76 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::Elt, &children);
+            let e = Expression::build(&ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_field_int() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::Bytes(b"foo".to_vec()),
+                    Datum::Bytes(b"foo".to_vec()),
+                    Datum::Bytes(b"bar".to_vec()),
+                    Datum::Bytes(b"baz".to_vec()),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"foo".to_vec()),
+                    Datum::Bytes(b"bar".to_vec()),
+                    Datum::Bytes(b"baz".to_vec()),
+                    Datum::Bytes(b"hello".to_vec()),
+                ],
+                Datum::I64(0),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"hello".to_vec()),
+                    Datum::Bytes(b"world".to_vec()),
+                    Datum::Bytes(b"world".to_vec()),
+                    Datum::Bytes(b"hello".to_vec()),
+                ],
+                Datum::I64(3),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"Hello".to_vec()),
+                    Datum::Bytes(b"Hola".to_vec()),
+                    Datum::Bytes("Cześć".as_bytes().to_vec()),
+                    Datum::Bytes("你好".as_bytes().to_vec()),
+                    Datum::Bytes("Здравствуйте".as_bytes().to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                    Datum::Bytes(b"Hello".to_vec()),
+                ],
+                Datum::I64(6),
+            ),
+            (
+                vec![
+                    Datum::Null,
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::I64(0),
+            ),
+            (
+                vec![
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::I64(0),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::FieldInt, &children);
             let e = Expression::build(&ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);

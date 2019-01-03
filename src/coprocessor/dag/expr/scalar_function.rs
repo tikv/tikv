@@ -323,6 +323,9 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
+            | ScalarFuncSig::FieldInt
+            | ScalarFuncSig::FieldReal
+            | ScalarFuncSig::FieldString
             | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
@@ -391,9 +394,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ExportSet5Arg
             | ScalarFuncSig::ExtractDatetime
             | ScalarFuncSig::ExtractDuration
-            | ScalarFuncSig::FieldInt
-            | ScalarFuncSig::FieldReal
-            | ScalarFuncSig::FieldString
             | ScalarFuncSig::FindInSet
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
@@ -818,6 +818,7 @@ dispatch_call! {
 
         Length => length,
         BitCount => bit_count,
+        FieldInt => field_int,
         CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
@@ -880,6 +881,8 @@ dispatch_call! {
         Pow => pow,
         Cot => cot,
         Degrees => degrees,
+
+        FieldReal => field_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -968,6 +971,7 @@ dispatch_call! {
         Uncompress => uncompress,
 
         Conv => conv,
+        FieldString => field_string,
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
         Trim3Args => trim_3_args,
@@ -1356,6 +1360,9 @@ mod tests {
                     ScalarFuncSig::CaseWhenTime,
                     ScalarFuncSig::Concat,
                     ScalarFuncSig::ConcatWS,
+                    ScalarFuncSig::FieldInt,
+                    ScalarFuncSig::FieldReal,
+                    ScalarFuncSig::FieldString,
                 ],
                 1,
                 usize::MAX,
@@ -1458,9 +1465,6 @@ mod tests {
             ScalarFuncSig::ExportSet5Arg,
             ScalarFuncSig::ExtractDatetime,
             ScalarFuncSig::ExtractDuration,
-            ScalarFuncSig::FieldInt,
-            ScalarFuncSig::FieldReal,
-            ScalarFuncSig::FieldString,
             ScalarFuncSig::FindInSet,
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
