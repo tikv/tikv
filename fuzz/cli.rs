@@ -162,11 +162,9 @@ fn run(fuzzer: Fuzzer, target: &str) -> Result<(), Error> {
 
 /// Run one target fuzz test using AFL
 fn run_afl(target: &str) -> Result<(), Error> {
-    // General process:
-    // 1. cargo afl build (in fuzzer-afl directory)
-    // 2. cargo afl fuzz -i in -o out target/debug/fuzzer-afl
     let fuzzer = Fuzzer::Afl;
 
+    // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
         .args(&["afl", "build", "--bin", target, "--target-dir", "./target"])
         .current_dir(fuzzer.directory())
@@ -182,15 +180,23 @@ fn run_afl(target: &str) -> Result<(), Error> {
         ))?;
     }
 
+    let input_seeds = format!("seeds/{}", target);
+    let input_seeds = if fuzzer.directory().join(&input_seeds).exists() {
+        &input_seeds
+    } else {
+        "seeds/default"
+    };
+
+    // 2. cargo afl fuzz -i {input_seeds} -o out target/debug/{instrumented_binary}
     let fuzzer_bin = Command::new("cargo")
         .args(&[
             "afl",
             "fuzz",
             "-i",
-            "in",
+            input_seeds,
             "-o",
             "out",
-            &format!("./target/debug/{}", target),
+            &format!("target/debug/{}", target),
         ])
         .current_dir(fuzzer.directory())
         .spawn()

@@ -7,9 +7,6 @@ Supported fuzzers:
 
 - [libfuzzer](https://llvm.org/docs/LibFuzzer.html)
 - [Honggfuzz](https://github.com/google/honggfuzz)
-
-Planned to support:
-
 - [AFL](http://lcamtuf.coredump.cx/afl/)
 
 ## Prerequisites
@@ -36,7 +33,11 @@ See [honggfuzz-rs documentation](https://github.com/rust-fuzz/honggfuzz-rs).
 cargo install afl
 ```
 
-See [the fuzz.rs book](https://fuzz.rs/book/afl/setup.html).
+Seed files should be placed in the `fuzz/fuzzer-afl/seeds/{target}/` directory, where `target` is the fuzz target name.
+
+If no seed file provided, `fuzz/fuzzer-afl/seeds/default/` will be used as seeds.
+
+For more details, see [the fuzz.rs book](https://fuzz.rs/book/afl/setup.html).
 
 ## Usage
 
