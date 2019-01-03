@@ -159,19 +159,6 @@ impl<T: Context + 'static> Clone for FuturePool<T> {
 impl<T: Context + 'static> util::AssertSend for FuturePool<T> {}
 impl<T: Context + 'static> util::AssertSync for FuturePool<T> {}
 
-pub trait Factory<T> {
-    fn build(&self) -> T;
-}
-
-impl<T, F> Factory<T> for F
-where
-    F: Fn() -> T,
-{
-    fn build(&self) -> T {
-        self()
-    }
-}
-
 impl<T: Context + 'static> FuturePool<T> {
     pub fn new<F>(
         pool_size: usize,
@@ -181,7 +168,7 @@ impl<T: Context + 'static> FuturePool<T> {
         context_factory: F,
     ) -> FuturePool<T>
     where
-        F: Factory<T>,
+        F: Fn() -> T,
     {
         let (tx, rx) = mpsc::sync_channel(pool_size);
         let pool = cpupool::Builder::new()
@@ -198,8 +185,7 @@ impl<T: Context + 'static> FuturePool<T> {
         let contexts = (0..pool_size)
             .map(|_| {
                 let thread_id = rx.recv().unwrap();
-                let context = context_factory.build();
-                let context_delegator = ContextDelegator::new(context, tick_interval);
+                let context_delegator = ContextDelegator::new(context_factory(), tick_interval);
                 (thread_id, context_delegator)
             })
             .collect();
@@ -214,7 +200,7 @@ impl<T: Context + 'static> FuturePool<T> {
         }
     }
 
-    /// Get current running task count
+    /// Gets current running task count
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
         self.running_task_count.load(Ordering::Acquire)

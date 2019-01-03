@@ -131,6 +131,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::SubstringBinary2Args
+            | ScalarFuncSig::DateDiff
+            | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::Strcmp => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -363,7 +365,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringDecimal
             | ScalarFuncSig::AddDateStringInt
             | ScalarFuncSig::AddDateStringString
-            | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
@@ -380,7 +381,6 @@ impl ScalarFunc {
             | ScalarFuncSig::CurrentTime1Arg
             | ScalarFuncSig::CurrentUser
             | ScalarFuncSig::Database
-            | ScalarFuncSig::DateDiff
             | ScalarFuncSig::DateLiteral
             | ScalarFuncSig::DecimalAnyValue
             | ScalarFuncSig::DurationAnyValue
@@ -763,6 +763,7 @@ dispatch_call! {
         WeekOfYear => week_of_year,
         Year => year,
         ToDays => to_days,
+        DateDiff => date_diff,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1016,6 +1017,8 @@ dispatch_call! {
 
         CoalesceDuration => coalesce_duration,
         CaseWhenDuration => case_when_duration,
+
+        AddDurationAndDuration => add_duration_and_duration,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1429,7 +1432,6 @@ mod tests {
             ScalarFuncSig::AddDateStringDecimal,
             ScalarFuncSig::AddDateStringInt,
             ScalarFuncSig::AddDateStringString,
-            ScalarFuncSig::AddDurationAndDuration,
             ScalarFuncSig::AddDurationAndString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
@@ -1446,7 +1448,6 @@ mod tests {
             ScalarFuncSig::CurrentTime1Arg,
             ScalarFuncSig::CurrentUser,
             ScalarFuncSig::Database,
-            ScalarFuncSig::DateDiff,
             ScalarFuncSig::DateLiteral,
             ScalarFuncSig::DecimalAnyValue,
             ScalarFuncSig::DurationAnyValue,
