@@ -22,20 +22,18 @@ extern crate jemallocator;
 extern crate libc;
 #[macro_use]
 extern crate log;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
+extern crate hyper;
 #[cfg(unix)]
 extern crate nix;
-extern crate prometheus;
 extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
+extern crate slog;
 extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
-#[macro_use]
 extern crate tikv;
 extern crate toml;
 
@@ -64,6 +62,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
+use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
@@ -155,8 +154,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
     let storage_read_pool =
         ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-            let pd_sender = pd_sender.clone();
-            move || storage::ReadPoolContext::new(pd_sender.clone())
+            storage::ReadPoolContext::new(pd_sender.clone())
         });
     let storage = create_raft_storage(
         raft_router.clone(),
@@ -198,8 +196,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
     let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-        let pd_sender = pd_sender.clone();
-        move || coprocessor::ReadPoolContext::new(pd_sender.clone())
+        coprocessor::ReadPoolContext::new(pd_sender.clone())
     });
     let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(
@@ -248,12 +245,31 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     server
         .start(server_cfg, security_mgr)
         .unwrap_or_else(|e| fatal!("failed to start server: {:?}", e));
+
+    let server_cfg = cfg.server.clone();
+    let mut status_enabled = cfg.metric.address.is_empty() && !server_cfg.status_addr.is_empty();
+
+    // Create a status server.
+    let mut status_server = StatusServer::new(server_cfg.status_thread_pool_size);
+    if status_enabled {
+        // Start the status server.
+        if let Err(e) = status_server.start(server_cfg.status_addr) {
+            error!("failed to bind addr for status service, error: {:?}", e);
+            status_enabled = false;
+        }
+    }
+
     signal_handler::handle_signal(Some(engines));
 
     // Stop.
     server
         .stop()
         .unwrap_or_else(|e| fatal!("failed to stop server: {:?}", e));
+
+    if status_enabled {
+        // Stop the status server.
+        status_server.stop()
+    }
 
     metrics_flusher.stop();
 
@@ -291,6 +307,13 @@ fn main() {
                 .takes_value(true)
                 .value_name("IP:PORT")
                 .help("Sets advertise listening address for client communication"),
+        )
+        .arg(
+            Arg::with_name("status-addr")
+                .long("status-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Sets HTTP listening address for the status report service"),
         )
         .arg(
             Arg::with_name("log-level")
@@ -384,8 +407,8 @@ fn main() {
 
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
-    // because `init_log()` handles various conditions.
-    let guard = init_log(&config);
+    // because `initial_logger()` handles various conditions.
+    let guard = initial_logger(&config);
     tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
 
     // Print version information.
