@@ -1369,7 +1369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_gc_once() {
+    fn test_auto_gc_a_round_without_rewind() {
         // First region starts with empty and last region ends with empty.
         let regions = vec![
             (b"".to_vec(), b"1".to_vec(), 1),
