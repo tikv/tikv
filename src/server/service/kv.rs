@@ -299,11 +299,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
 
-        let keys = req
-            .get_keys()
-            .iter()
-            .map(|x| Key::from_raw(x))
-            .collect();
+        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
         let future = self
             .storage
@@ -337,11 +333,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .kv_batch_rollback
             .start_coarse_timer();
 
-        let keys = req
-            .get_keys()
-            .iter()
-            .map(|x| Key::from_raw(x))
-            .collect();
+        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
         let (cb, f) = paired_future_callback();
         let res =

@@ -499,7 +499,7 @@ mod tests {
 
         // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
         let k = &[9 as u8];
-        for ts in 0..=REVERSE_SEEK_BOUND  {
+        for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_commit(&engine, k, ts, ts);
         }
