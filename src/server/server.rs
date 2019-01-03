@@ -46,8 +46,10 @@ const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
-/// The TiKV server. It hosts various internal components, including gRPC,
-/// the raftstore router and a snapshot worker.
+/// The TiKV server
+///
+/// It hosts various internal components, including gRPC, the raftstore router
+/// and a snapshot worker.
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     // Grpc server.
