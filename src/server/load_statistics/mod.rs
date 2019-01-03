@@ -59,7 +59,7 @@ mod other_os {
     use std::sync::Arc;
     use std::time::Instant;
 
-    /// A dummy `ThreadLoadStatistics` implementation for non-Linux platforms.
+    /// A dummy `ThreadLoadStatistics` implementation for non-Linux platforms
     pub struct ThreadLoadStatistics {}
 
     impl ThreadLoadStatistics {
