@@ -11,23 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::engine::{
-    Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary,
-};
-use super::metrics::*;
-use super::mvcc::{MvccReader, MvccTxn};
-use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::Future;
-use kvproto::kvrpcpb::Context;
-use kvproto::metapb;
-use pd::PdClient;
-use raft::StateRole;
-use raftstore::store::keys;
-use raftstore::store::msg::Msg as RaftStoreMsg;
-use raftstore::store::util::{delete_all_in_range_cf, find_peer};
-use raftstore::store::SeekRegionResult;
-use rocksdb::rocksdb::DB;
-use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
@@ -35,6 +18,25 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
+
+use futures::Future;
+use kvproto::kvrpcpb::Context;
+use kvproto::metapb;
+use raft::StateRole;
+use rocksdb::rocksdb::DB;
+
+use super::engine::{
+    Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary,
+};
+use super::metrics::*;
+use super::mvcc::{MvccReader, MvccTxn};
+use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use pd::PdClient;
+use raftstore::store::keys;
+use raftstore::store::msg::Msg as RaftStoreMsg;
+use raftstore::store::util::{delete_all_in_range_cf, find_peer};
+use raftstore::store::SeekRegionResult;
+use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use util::rocksdb::get_cf_handle;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
@@ -58,11 +60,6 @@ const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 const GC_SEEK_REGION_LIMIT: u32 = 32;
 
 const BEGIN_KEY: &[u8] = b"";
-
-const STATE_NONE: &str = "";
-const STATE_INIT: &str = "initializing";
-const STATE_IDLE: &str = "idle";
-const STATE_WORKING: &str = "working";
 
 /// GCWorker can get safe point from something that implements `GCSafePointSourse`
 /// TODO: Give it a better name?
@@ -478,7 +475,10 @@ fn schedule_gc(
 
 /// Does GC synchronously.
 fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: u64) -> Result<()> {
-    wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap()
+    wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap_or_else(|| {
+        error!("failed to receive result of gc");
+        Err(box_err!("gc_worker: failed to receive result of gc"))
+    })
 }
 
 /// The configurations of automatic GC.
@@ -498,7 +498,7 @@ pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
 
     /// This will be called when a round of GC has finished and goes back to idle state.
     /// This field is for test purpose.
-    pub on_leaving_working_state: Option<Box<Fn() + Send>>,
+    pub post_a_round_of_gc: Option<Box<Fn() + Send>>,
 }
 
 impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
@@ -510,7 +510,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
             self_store_id,
             poll_safe_point_interval: Duration::from_secs(POLL_SAFE_POINT_INTERVAL_SECS),
             always_check_safe_point: false,
-            on_leaving_working_state: None,
+            post_a_round_of_gc: None,
         }
     }
 
@@ -527,14 +527,14 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
             self_store_id,
             poll_safe_point_interval: Duration::from_millis(100),
             always_check_safe_point: true,
-            on_leaving_working_state: None,
+            post_a_round_of_gc: None,
         }
     }
 }
 
 /// The only error that will break `GCManager`'s process is that the `GCManager` is interrupted by
 /// others, maybe due to TiKV shutting down.
-#[derive(PartialEq, Debug)]
+#[derive(Debug)]
 enum GCManagerError {
     Stopped,
 }
@@ -554,7 +554,7 @@ struct GCManagerContext {
 }
 
 impl GCManagerContext {
-    /// Creates a new `GCManagerContext` with no
+    /// Creates a new `GCManagerContext`.
     pub fn new() -> Self {
         Self {
             stop_signal_receiver: None,
@@ -606,7 +606,8 @@ impl GCManagerContext {
                 }
                 Err(mpsc::TryRecvError::Empty) => Ok(()),
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    panic!("stop_signal_receiver unexpectedly disconnected")
+                    error!("stop_signal_receiver unexpectedly disconnected, gc_manager will stop");
+                    Err(GCManagerError::Stopped)
                 }
             },
             None => Ok(()),
@@ -623,11 +624,35 @@ fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
     ctx
 }
 
+/// Used to represent the state of `GCManager`.
+#[derive(PartialEq)]
+enum GCManagerState {
+    None,
+    Init,
+    Idle,
+    Working,
+}
+
+impl GCManagerState {
+    pub fn tag(&self) -> &str {
+        match self {
+            GCManagerState::None => "",
+            GCManagerState::Init => "initializing",
+            GCManagerState::Idle => "idle",
+            GCManagerState::Working => "working",
+        }
+    }
+}
+
 #[inline]
-fn set_status_metrics(state: &str) {
-    for s in &[STATE_INIT, STATE_IDLE, STATE_WORKING] {
+fn set_status_metrics(state: GCManagerState) {
+    for s in &[
+        GCManagerState::Init,
+        GCManagerState::Idle,
+        GCManagerState::Working,
+    ] {
         AUTO_GC_STATUS_GAUGE_VEC
-            .with_label_values(&[*s])
+            .with_label_values(&[s.tag()])
             .set(if state == *s { 1 } else { 0 });
     }
 }
@@ -669,7 +694,7 @@ struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
     worker_scheduler: worker::Scheduler<GCTask>,
 
     /// Holds the running status. It will tell us if `GCManager` should stop working and exit.
-    gc_worker_ctx: GCManagerContext,
+    gc_manager_ctx: GCManagerContext,
 }
 
 impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
@@ -682,7 +707,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             cfg,
             safe_point: 0,
             worker_scheduler,
-            gc_worker_ctx: GCManagerContext::new(),
+            gc_manager_ctx: GCManagerContext::new(),
         }
     }
 
@@ -690,7 +715,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// of it.
     fn start(mut self) -> Result<GCManagerHandle> {
         let (tx, rx) = mpsc::channel();
-        self.gc_worker_ctx.set_stop_signal_receiver(rx);
+        self.gc_manager_ctx.set_stop_signal_receiver(rx);
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
             .spawn(move || {
@@ -708,22 +733,22 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     fn run(&mut self) {
         info!("gc-manager is started");
         self.run_impl().unwrap_err();
-        set_status_metrics(STATE_NONE);
+        set_status_metrics(GCManagerState::None);
         info!("gc-manager is stopped");
     }
 
     fn run_impl(&mut self) -> GCManagerResult<()> {
-        set_status_metrics(STATE_INIT);
+        set_status_metrics(GCManagerState::Init);
         self.initialize()?;
 
         loop {
-            set_status_metrics(STATE_IDLE);
+            set_status_metrics(GCManagerState::Idle);
             self.poll_next_safe_point()?;
 
-            set_status_metrics(STATE_WORKING);
+            set_status_metrics(GCManagerState::Working);
             self.work()?;
 
-            if let Some(on_finished) = self.cfg.on_leaving_working_state.as_ref() {
+            if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
                 on_finished();
             }
         }
@@ -785,12 +810,12 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         let mut processed_regions = 0;
 
         info!(
-            "gc_worker: started auto gc with safe point {}",
+            "gc_worker: start auto gc with safe point {}",
             self.safe_point
         );
 
         loop {
-            self.gc_worker_ctx.check_stopped()?;
+            self.gc_manager_ctx.check_stopped()?;
 
             if need_rewind {
                 if progress.is_none() {
@@ -928,7 +953,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 return Ok(self.safe_point);
             }
 
-            self.gc_worker_ctx
+            self.gc_manager_ctx
                 .sleep_or_stop(self.cfg.poll_safe_point_interval)?;
         }
     }
@@ -942,7 +967,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         mut key: Key,
     ) -> GCManagerResult<(Option<Context>, Option<Key>)> {
         loop {
-            self.gc_worker_ctx.check_stopped()?;
+            self.gc_manager_ctx.check_stopped()?;
 
             let result;
             // Loop until successfully invoking seek_region

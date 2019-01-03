@@ -378,7 +378,7 @@ impl RegionCollector {
         {
             let region = event.get_region();
             if !self.check_region_range(region, true) {
-                info!("region_collector: Received stale event: {:?}", event);
+                debug!("region_collector: Received stale event: {:?}", event);
                 return;
             }
         }

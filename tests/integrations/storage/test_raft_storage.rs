@@ -289,7 +289,7 @@ fn test_auto_gc() {
             let tx = finish_signal_tx.clone();
 
             let mut cfg = AutoGCConfig::new_test_cfg(Arc::clone(&pd_client), engine.clone(), *id);
-            cfg.on_leaving_working_state = Some(box move || tx.send(()).unwrap());
+            cfg.post_a_round_of_gc = Some(box move || tx.send(()).unwrap());
             storage.start_auto_gc(cfg);
             (*id, storage)
         })
