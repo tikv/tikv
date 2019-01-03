@@ -41,7 +41,7 @@ impl ThreadLoad {
         self.term.load(Ordering::Acquire)
     }
 
-    /// Gets the current load. For example, 200 means the threads eat 200% CPU.
+    /// Gets the current load. For example, 200 means the threads consuming 200% of the CPU resources.
     #[allow(dead_code)]
     pub fn load(&self) -> usize {
         self.load.load(Ordering::Acquire)
