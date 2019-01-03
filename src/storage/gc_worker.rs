@@ -135,7 +135,7 @@ impl Display for GCTask {
     }
 }
 
-/// `GCRunner` is used to perform GC on the engine
+/// `GCRunner` is used to perform GC operations on the engine.
 struct GCRunner<E: Engine> {
     engine: E,
     local_storage: Option<Arc<DB>>,
@@ -862,7 +862,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 timer = Instant::now();
             }
 
-            progress = self.gc_once(progress.unwrap(), &mut processed_regions)?;
+            progress = self.gc_next_region(progress.unwrap(), &mut processed_regions)?;
         }
     }
 
@@ -875,7 +875,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
     /// GC the next region after `from_key`. Returns the end key of the region it processed.
     /// If we have processed to the end of all regions, returns `None`.
-    fn gc_once(
+    fn gc_next_region(
         &mut self,
         from_key: Key,
         processed_regions: &mut usize,
