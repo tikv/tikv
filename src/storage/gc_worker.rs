@@ -746,7 +746,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             self.poll_next_safe_point()?;
 
             set_status_metrics(GCManagerState::Working);
-            self.work()?;
+            self.gc_a_round()?;
 
             if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
                 on_finished();
@@ -769,9 +769,10 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Scans all regions on the TiKV whose leader is this TiKV, and does GC on all of them.
     /// Regions are scanned and GC-ed in lexicographical order.
     ///
-    /// While the `work` function is running, it will periodically check whether safe_point is
-    /// updated before the function `work` finishes. If so, *Rewinding* will occur. For example,
-    /// when we just starts to do GC, our progress is like this: ('^' means our current progress)
+    /// While the `gc_a_round` function is running, it will periodically check whether safe_point is
+    /// updated before the function `gc_a_round` finishes. If so, *Rewinding* will occur. For
+    /// example, when we just starts to do GC, our progress is like this: ('^' means our current
+    /// progress)
     ///
     ///      | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
     ///      ^
@@ -797,9 +798,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     ///
     /// Then GC finishes.
     /// If safe point updates again at some time, it will still try to GC all regions with the
-    /// latest safe point. If safe point always updates before `work` finishes, `work` may never
-    /// stop, but it doesn't matter.
-    fn work(&mut self) -> GCManagerResult<()> {
+    /// latest safe point. If safe point always updates before `gc_a_round` finishes, `gc_a_round`
+    /// may never stop, but it doesn't matter.
+    fn gc_a_round(&mut self) -> GCManagerResult<()> {
         let mut need_rewind = false;
         let mut end = None;
         let mut progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
@@ -1272,7 +1273,7 @@ mod tests {
         }
         test_util.gc_manager.as_mut().unwrap().initialize().unwrap();
 
-        test_util.gc_manager.as_mut().unwrap().work().unwrap();
+        test_util.gc_manager.as_mut().unwrap().gc_a_round().unwrap();
         test_util.stop();
 
         let gc_tasks: Vec<_> = test_util
@@ -1424,7 +1425,7 @@ mod tests {
             );
 
             let mut safe_points = vec![233, 233, 233, 234, 234, 234, 235];
-            // The logic of `work` wastes a loop when the last region's end_key is not null, so it
+            // The logic of `gc_a_round` wastes a loop when the last region's end_key is not null, so it
             // will check safe point one more time before GC-ing the first region after rewinding.
             if !regions.last().unwrap().1.is_empty() {
                 safe_points.insert(5, 234);
