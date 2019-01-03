@@ -805,7 +805,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// may never stop, but it doesn't matter.
     fn gc_a_round(&mut self) -> GCManagerResult<()> {
         let mut need_rewind = false;
+        // Represents where we should stop doing GC. `None` means the very end of the TiKV.
         let mut end = None;
+        // Represents where we have GC-ed to. `None` means the very end of the TiKV.
         let mut progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
 
         // Records how many region we have GC-ed.
@@ -822,8 +824,8 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         loop {
             self.gc_manager_ctx.check_stopped()?;
 
-            // Check the current GC progress and handle determine if we are going to rewind or we
-            // have finished the round of GC.
+            // Check the current GC progress and determine if we are going to rewind or we have
+            // finished the round of GC.
             if need_rewind {
                 if progress.is_none() {
                     // We have worked to the end and we need to rewind. Restart from beginning.
@@ -835,30 +837,36 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     );
                     processed_regions = 0;
                 }
-            } else if progress.is_none()
-                || (end.is_some() && progress.as_ref().unwrap() >= end.as_ref().unwrap())
-            {
-                // We have worked to the end or our progress has reached `end`, and we don't need to
-                // rewind. In this case, the round of GC has finished.
-                info!(
-                    "gc_worker: finished auto gc, {} regions processed",
-                    processed_regions
-                );
-                return Ok(());
+            } else {
+                // We are not going to rewind, So we will stop if `progress` reaches `end`.
+                let finished = match (progress.as_ref(), end.as_ref()) {
+                    (None, _) => true,
+                    (Some(p), Some(e)) => p >= e,
+                    _ => false,
+                };
+                if finished {
+                    // We have worked to the end of the TiKV or our progress has reached `end`, and we
+                    // don't need to rewind. In this case, the round of GC has finished.
+                    info!(
+                        "gc_worker: finished auto gc, {} regions processed",
+                        processed_regions
+                    );
+                    return Ok(());
+                }
             }
 
             assert!(progress.is_some());
 
             // Before doing GC, check whether safe_point is updated periodically to determine if
             // rewinding is needed.
-            self.check_need_rewind(&progress, &mut need_rewind, &mut end);
+            self.check_if_need_rewind(&progress, &mut need_rewind, &mut end);
 
             progress = self.gc_next_region(progress.unwrap(), &mut processed_regions)?;
         }
     }
 
     /// Checks whether we need to rewind in this round of GC. Only used in `gc_a_round`.
-    fn check_need_rewind(
+    fn check_if_need_rewind(
         &mut self,
         progress: &Option<Key>,
         need_rewind: &mut bool,
