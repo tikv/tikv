@@ -107,7 +107,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
     }
 }
 
-/// A store address resolver which is backended with a `PDClient`.
+/// A store address resolver which is backed by a `PDClient`.
 #[derive(Clone)]
 pub struct PdStoreAddrResolver {
     sched: Scheduler<Task>,
