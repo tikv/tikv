@@ -690,6 +690,8 @@ struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
     /// updated, `GCManager` will start to do GC on all regions.
     safe_point: u64,
 
+    safe_point_last_check_time: Instant,
+
     /// Used to schedule `GCTask`s.
     worker_scheduler: worker::Scheduler<GCTask>,
 
@@ -706,6 +708,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         GCManager {
             cfg,
             safe_point: 0,
+            safe_point_last_check_time: Instant::now(),
             worker_scheduler,
             gc_manager_ctx: GCManagerContext::new(),
         }
@@ -743,7 +746,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
         loop {
             set_status_metrics(GCManagerState::Idle);
-            self.poll_next_safe_point()?;
+            self.wait_for_next_safe_point()?;
 
             set_status_metrics(GCManagerState::Working);
             self.gc_a_round()?;
@@ -761,7 +764,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     fn initialize(&mut self) -> GCManagerResult<()> {
         info!("gc-manager is initializing");
         self.safe_point = 0;
-        self.poll_next_safe_point()?;
+        self.wait_for_next_safe_point()?;
         info!("gc-manager started at safe point {}", self.safe_point);
         Ok(())
     }
@@ -805,8 +808,6 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         let mut end = None;
         let mut progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
 
-        // Records last time checking safe point from PD.
-        let mut timer = Instant::now();
         // Records how many region we have GC-ed.
         let mut processed_regions = 0;
 
@@ -818,9 +819,11 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         loop {
             self.gc_manager_ctx.check_stopped()?;
 
+            // Check the current GC progress and handle determine if we are going to rewind or we
+            // have finished the round of GC.
             if need_rewind {
                 if progress.is_none() {
-                    // Worked to the end. restart from beginning
+                    // We have worked to the end and we need to rewind. Restart from beginning.
                     progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
                     need_rewind = false;
                     info!(
@@ -832,6 +835,8 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             } else if progress.is_none()
                 || (end.is_some() && progress.as_ref().unwrap() >= end.as_ref().unwrap())
             {
+                // We have worked to the end or our progress has reached `end`, and we don't need to
+                // rewind. In this case, the round of GC has finished.
                 info!(
                     "gc_worker: finished auto gc, {} regions processed",
                     processed_regions
@@ -841,36 +846,51 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
             assert!(progress.is_some());
 
-            // Update safe_point periodically
-            if self.need_update_safe_point(&timer) {
-                if self.try_update_safe_point() {
-                    if progress.as_ref().unwrap().as_encoded().is_empty() {
-                        // `progress` is empty means the starting. We don't need to rewind. We just
-                        // Continue GC to the end.
-                        need_rewind = false;
-                        end = None;
-                    } else {
-                        need_rewind = true;
-                        end = progress.clone();
-                        info!(
-                            "gc_worker: safe point updated to {}, auto gc will rewind to {}",
-                            self.safe_point,
-                            end.as_ref().unwrap()
-                        );
-                    }
-                }
-                timer = Instant::now();
-            }
+            // Before doing GC, check whether safe_point is updated periodically to determine if
+            // rewinding is needed.
+            self.check_need_rewind(&progress, &mut need_rewind, &mut end);
 
             progress = self.gc_next_region(progress.unwrap(), &mut processed_regions)?;
         }
     }
 
-    /// Checks whether we need to check safe point now.
-    #[inline]
-    fn need_update_safe_point(&self, last_update_time: &Instant) -> bool {
-        last_update_time.elapsed() >= self.cfg.poll_safe_point_interval
-            || self.cfg.always_check_safe_point
+    /// Checks whether we need to rewind in this round of GC. Only used in `gc_a_round`.
+    fn check_need_rewind(
+        &mut self,
+        progress: &Option<Key>,
+        need_rewind: &mut bool,
+        end: &mut Option<Key>,
+    ) {
+        if self.safe_point_last_check_time.elapsed() < self.cfg.poll_safe_point_interval
+            && !self.cfg.always_check_safe_point
+        {
+            // Skip this check
+            return;
+        }
+
+        if !self.try_update_safe_point() {
+            // Safe point not updated. Skip it.
+            return;
+        }
+
+        if progress.as_ref().unwrap().as_encoded().is_empty() {
+            // `progress` is empty means the starting. We don't need to rewind. We just
+            // Continue GC to the end.
+            *need_rewind = false;
+            *end = None;
+            info!(
+                "gc_worker: safe point updated to {}, auto gc will go to the end",
+                self.safe_point
+            );
+        } else {
+            *need_rewind = true;
+            *end = progress.clone();
+            info!(
+                "gc_worker: safe point updated to {}, auto gc will rewind to {}",
+                self.safe_point,
+                end.as_ref().unwrap()
+            );
+        }
     }
 
     /// GC the next region after `from_key`. Returns the end key of the region it processed.
@@ -919,6 +939,8 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
     /// Tries to update the safe point. Returns whether the safe point was successfully updated.
     fn try_update_safe_point(&mut self) -> bool {
+        self.safe_point_last_check_time = Instant::now();
+
         let safe_point = match self.cfg.safe_point_provider.get_safe_point() {
             Ok(res) => res,
             // Return false directly so we will check it a while later
@@ -948,7 +970,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
-    fn poll_next_safe_point(&mut self) -> GCManagerResult<u64> {
+    fn wait_for_next_safe_point(&mut self) -> GCManagerResult<u64> {
         loop {
             if self.try_update_safe_point() {
                 return Ok(self.safe_point);
@@ -1328,7 +1350,7 @@ mod tests {
         let (tx, rx) = channel();
         ThreadBuilder::new()
             .spawn(move || {
-                let safe_point = gc_manager.poll_next_safe_point().unwrap();
+                let safe_point = gc_manager.wait_for_next_safe_point().unwrap();
                 tx.send(safe_point).unwrap();
             })
             .unwrap();
