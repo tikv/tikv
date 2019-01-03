@@ -31,8 +31,8 @@ const TICK_INTERVAL_SEC: u64 = 1;
 
 /// A priority-aware thread pool for executing futures.
 ///
-/// It is specifically used for all sorts of read operations like Kv Get,
-/// Kv Scan and Coprocessor Read to improve performance.
+/// It is specifically used for all sorts of read operations like KV Get,
+/// KV Scan and Coprocessor Read to improve performance.
 pub struct ReadPool<T: futurepool::Context + 'static> {
     pool_high: FuturePool<T>,
     pool_normal: FuturePool<T>,

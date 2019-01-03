@@ -246,6 +246,7 @@ where
         Ok(store_id)
     }
 
+    // Exported for tests.
     #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
