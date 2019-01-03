@@ -940,7 +940,8 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         Ok(next_key)
     }
 
-    /// Tries to update the safe point. Returns whether the safe point was successfully updated.
+    /// Tries to update the safe point. Returns true if safe point has been updated to a greater
+    /// value. Returns false if safe point didn't change or we encountered an error.
     fn try_update_safe_point(&mut self) -> bool {
         self.safe_point_last_check_time = Instant::now();
 
