@@ -42,7 +42,7 @@ use util::worker::{FutureWorker, Worker};
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-/// Creates a new storage engine which is backended by the Raft consensus
+/// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
 pub fn create_raft_storage<S>(
     router: S,
