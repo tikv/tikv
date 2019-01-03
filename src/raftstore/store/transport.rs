@@ -15,7 +15,7 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use raftstore::Result;
 
-/// Transports messages between different raft peers.
+/// Transports messages between different Raft peers.
 pub trait Transport: Send + Clone {
     fn send(&self, msg: RaftMessage) -> Result<()>;
 
