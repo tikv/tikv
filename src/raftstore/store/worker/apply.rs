@@ -99,7 +99,7 @@ impl Debug for PendingCmd {
     }
 }
 
-// The commands waiting to be executed.
+/// Commands waiting to be committed and applied.
 #[derive(Default, Debug)]
 pub struct PendingCmdQueue {
     normals: VecDeque<PendingCmd>,
@@ -235,7 +235,7 @@ struct Stash {
     last_applied_index: u64,
 }
 
-// The core implementation of apply context.
+/// The core implementation of apply context.
 struct ApplyContextCore<'a> {
     host: &'a CoprocessorHost,
     importer: &'a SSTImporter,
@@ -251,11 +251,11 @@ struct ApplyContextCore<'a> {
     last_applied_index: u64,
     committed_count: usize,
 
-    // Indicates that wal can be synchronized when data is written to kv engine.
+    // Indicates that WAL can be synchronized when data is written to KV engine.
     enable_sync_log: bool,
-    // Indicates whether synchronize wal is prefered.
+    // Whether synchronize WAL is prefered.
     sync_log_hint: bool,
-    // Indicates whether to use the delete range API instead of deleting one by one.
+    // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 }
 
@@ -332,7 +332,7 @@ impl<'a> ApplyContextCore<'a> {
         self.wb_last_keys = self.wb().count() as u64;
     }
 
-    /// Writes all the changes into rocksdb.
+    /// Writes all the changes into RocksDB.
     pub fn write_to_db(&mut self, engine: &DB) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
@@ -406,7 +406,7 @@ impl<'a> ApplyContextCore<'a> {
     }
 }
 
-/// ApplyContext is the context for a region apply work.
+/// The context for a region apply work. It is used by apply delegate for every applies task.
 struct ApplyContext<'a, 'b: 'a> {
     core: &'a mut ApplyContextCore<'b>,
     // It is a reference of apply worker's `delegates`,
@@ -518,10 +518,10 @@ pub struct ApplyDelegate {
     /// the commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
 
-    /// We write apply_state to kv rocksdb, in one write batch together with kv data.
-    /// Because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
+    /// TiKV writes apply_state to KV RocksDB, in one write batch together with kv data.
+    /// Because if we write it to Raft RocksDB, apply_state and kv data (Put, Delete) are in
     /// separate WAL file. When power failure, for current raft log, apply_index may synced
-    /// to file, but kv data may not synced to file, so we will lose data.
+    /// to file, but KV data may not synced to file, so we will lose data.
     apply_state: RaftApplyState,
     /// the term of the raft log at applied index
     applied_index_term: u64,
@@ -760,7 +760,7 @@ impl ApplyDelegate {
     /// An apply operation can fail in the following situations:
     ///   1. it encounters an error that will occur on all stores, it can continue
     /// applying next entry safely, like stale epoch for example;
-    ///   2. it encounter an error that may not occur on all stores, in this case
+    ///   2. it encounters an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(
@@ -2094,7 +2094,7 @@ impl Runner {
         }
     }
 
-    /// Handles apply tasks, and it gets corresponding apply delegate to handle the committed entries.
+    /// Handles apply tasks, and gets corresponding apply delegate to handle the committed entries.
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let t = SlowTimer::new();
 
@@ -2193,7 +2193,7 @@ impl Runner {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    // Handles peer registration. When a peer is created, it will register a apply delegate.
+    /// Handles peer registration. When a peer is created, it will register a apply delegate.
     fn handle_registration(&mut self, s: Registration) {
         let peer_id = s.id;
         let region_id = s.region.get_id();
@@ -2211,7 +2211,7 @@ impl Runner {
         }
     }
 
-    // Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
+    /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy(&mut self, d: Destroy) {
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.

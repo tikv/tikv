@@ -116,7 +116,7 @@ struct StalePeerInfo {
     pub timeout: time::Instant,
 }
 
-/// PendingDeleteRanges records all ranges to be deleted with some delay.
+/// A structure records all ranges to be deleted with some delay.
 /// The delay is because there may be some coprocessor requests related to these ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
@@ -178,7 +178,9 @@ impl PendingDeleteRanges {
             .map(|peer_info| (peer_info.region_id, start_key.to_owned(), peer_info.end_key))
     }
 
-    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapped range.
+    /// Inserts a new range waiting to be deleted.
+    ///
+    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
@@ -196,7 +198,7 @@ impl PendingDeleteRanges {
         self.ranges.insert(start_key.to_owned(), info);
     }
 
-    // Gets all timeout ranges info.
+    /// Gets all timeout ranges info.
     pub fn timeout_ranges<'a>(
         &'a self,
         now: time::Instant,
@@ -248,7 +250,7 @@ impl SnapContext {
         Ok(())
     }
 
-    /// Handles generated snapshot task of the Region.
+    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
     fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
@@ -346,27 +348,7 @@ impl SnapContext {
         Ok(())
     }
 
-    /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
-    /// Returns true if the ingestion causes write stall.
-    fn ingest_maybe_stall(&self) -> bool {
-        for cf in SNAPSHOT_CFS {
-            // no need to check lock cf
-            if plain_file_used(cf) {
-                continue;
-            }
-
-            let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
-                if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Tries to apply the snapshot of the specified region.
+    /// Tries to apply the snapshot of the specified region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
@@ -508,6 +490,26 @@ impl SnapContext {
                 escape(&key)
             );
         }
+    }
+
+    /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
+    /// Returns true if the ingestion causes write stall.
+    fn ingest_maybe_stall(&self) -> bool {
+        for cf in SNAPSHOT_CFS {
+            // no need to check lock cf
+            if plain_file_used(cf) {
+                continue;
+            }
+
+            let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
+            if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
+                let options = self.engines.kv.get_options_cf(handle);
+                if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
