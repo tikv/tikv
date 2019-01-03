@@ -34,7 +34,7 @@ pub struct Config {
 }
 
 impl Config {
-    // A shortcut to constructs Config with the specified concurrency.
+    // A shortcut to construct Config with the specified concurrency.
     //
     // Note: it is only used in tests.
     #[doc(hidden)]
