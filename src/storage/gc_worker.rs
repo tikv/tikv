@@ -816,6 +816,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             self.safe_point
         );
 
+        // The following loop iterates all regions whose leader is on this TiKV and does GC on them.
+        // At the same time, check whether safe_point is updated periodically. If it's updated,
+        // rewinding will happen.
         loop {
             self.gc_manager_ctx.check_stopped()?;
 
@@ -945,7 +948,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later
             Err(e) => {
-                warn!("failed to get safe point from pd: {:?}", e);
+                error!("failed to get safe point from pd: {:?}", e);
                 return false;
             }
         };
@@ -1170,7 +1173,7 @@ mod tests {
 
     impl GCSafePointProvider for MockSafePointProvider {
         fn get_safe_point(&self) -> Result<u64> {
-            // Error will be ignored by GCManager, which is equivalent to that the safe_point
+            // Error will be ignored by `GCManager`, which is equivalent to that the safe_point
             // is not updated.
             self.rx.try_recv().map_err(|e| box_err!(e))
         }
