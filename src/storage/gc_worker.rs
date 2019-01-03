@@ -995,20 +995,22 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         loop {
             self.gc_manager_ctx.check_stopped()?;
 
-            let result;
-            // Loop until successfully invoking seek_region
-            // TODO: Sould there be any better error handling?
-            loop {
-                let res = self.cfg.region_info_provider.seek_region(
-                    key.as_encoded(),
-                    box |_, role| role == StateRole::Leader,
-                    GC_SEEK_REGION_LIMIT,
-                );
-                if let Ok(r) = res {
-                    result = r;
-                    break;
+            let res = self.cfg.region_info_provider.seek_region(
+                key.as_encoded(),
+                box |_, role| role == StateRole::Leader,
+                GC_SEEK_REGION_LIMIT,
+            );
+
+            let result = match res {
+                Ok(r) => r,
+                Err(e) => {
+                    error!(
+                        "gc_worker: failed to get next region information, err: {:?}",
+                        e
+                    );
+                    continue;
                 }
-            }
+            };
 
             match result {
                 SeekRegionResult::Found(mut region) => {
