@@ -19,7 +19,7 @@ use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
 
-/// monitor current process's threads.
+/// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = ThreadsCollector::new(pid, namespace);
@@ -156,6 +156,7 @@ impl Collector for ThreadsCollector {
     }
 }
 
+/// Gets thread ids of the given process id.
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     let mut tids = Vec::new();
     let dirs = fs::read_dir(format!("/proc/{}/task", pid))?;
@@ -187,6 +188,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     Ok(tids)
 }
 
+/// Gets the thread name and the index of the last character (including ')').
 fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     let start = stat.find('(');
     let end = stat.rfind(')');
@@ -200,7 +202,18 @@ fn get_thread_name(stat: &str) -> Result<(&str, usize)> {
     )))
 }
 
-// get thread name and the index of the last character(including ')').
+/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
+///
+/// Examples:
+///
+/// ```ignore
+/// assert_eq!(sanitize_thread_name(0, "ok123"), "ok123");
+/// assert_eq!(sanitize_thread_name(0, "Az_1"), "Az_1");
+/// assert_eq!(sanitize_thread_name(0, "a-b"), "a_b");
+/// assert_eq!(sanitize_thread_name(0, "a b"), "a_b");
+/// assert_eq!(sanitize_thread_name(1, "@123"), "123");
+/// assert_eq!(sanitize_thread_name(1, "@@@@"), "1");
+/// ```
 fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     let mut name = String::with_capacity(raw.len());
     // sanitize thread name.
@@ -234,10 +247,10 @@ pub struct Stat {
 }
 
 impl Stat {
-    /// See more man proc.
-    /// Index of utime and stime.
+    /// See more `man proc`.
+    /// Index of `utime` and `stime`.
     const CPU_INDEX: [usize; 2] = [14 - 1, 15 - 1];
-    /// Index of state.
+    /// Index of `state`.
     const PROCESS_STATE_INDEX: usize = 3 - 1;
 
     pub fn collect(pid: pid_t, tid: pid_t) -> Result<Stat> {
@@ -256,7 +269,7 @@ impl Stat {
     }
 }
 
-// Extracted from `Stat::collect`, for test purpose.
+/// Extracted from `Stat::collect`, for test purpose.
 fn get_thread_stat_internal(stat: &str) -> Result<Stat> {
     let (name, end) = get_thread_name(stat)?;
 
@@ -283,7 +296,7 @@ fn get_thread_stat_internal(stat: &str) -> Result<Stat> {
     })
 }
 
-// I/O statistics for threads.
+/// I/O statistics for threads.
 struct Io {
     // Attempt to count the number of bytes which this process really did cause
     // to be fetched from the storage layer.  This is accurate for block-backed
