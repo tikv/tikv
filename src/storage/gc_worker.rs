@@ -830,7 +830,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
                     need_rewind = false;
                     info!(
-                        "gc_worker: auto gc has rewound after gc {} regions",
+                        "gc_worker: auto gc rewinds after gc {} regions",
                         processed_regions
                     );
                     processed_regions = 0;
