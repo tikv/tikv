@@ -67,7 +67,7 @@ impl Drop for CaseTraceLogger {
 }
 
 // A help function to initial logger.
-pub fn init_log() -> GlobalLoggerGuard {
+pub fn init_log_for_test() -> GlobalLoggerGuard {
     let output = env::var("LOG_FILE").ok();
     let level = tikv::util::logger::get_level_by_string(
         &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
@@ -75,14 +75,32 @@ pub fn init_log() -> GlobalLoggerGuard {
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let drain = CaseTraceLogger { f: writer };
+
+    // Collects following targes.
+    const ENABLED_TARGETS: &[&str] = &[
+        "tikv::",
+        "tests::",
+        "benches::",
+        "integrations::",
+        "failpoints::",
+        "raft::",
+        // Collects logs for test components.
+        "test_",
+    ];
+    let filtered = drain.filter(|record| {
+        ENABLED_TARGETS
+            .iter()
+            .any(|target| record.module().starts_with(target))
+    });
+
     // CaseTraceLogger relies on test's thread name, however slog_async has
     // its own thread, and the name is "".
     // TODO: Enable the slog_async when the [Custom test frameworks][1] is mature,
     //       and hook the slog_async logger to every test cases.
     //
     // [1]: https://github.com/rust-lang/rfcs/blob/master/text/2318-custom-test-frameworks.md
-    //
-    // let drain = slog_async::Async::new(drain).build().fuse();
-    let logger = slog::Logger::root_typed(drain, slog_o!());
-    tikv::util::logger::init_log_for_tikv_only(logger, level).unwrap()
+    tikv::util::logger::init_log(
+        filtered, level, false, // disable async drainer
+        true,  // init std log
+    ).unwrap()
 }
