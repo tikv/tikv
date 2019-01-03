@@ -22,24 +22,22 @@ extern crate kvproto;
 extern crate libc;
 #[macro_use]
 extern crate log;
-extern crate protobuf;
-extern crate raft;
-extern crate rocksdb;
-#[macro_use]
-extern crate tikv;
-extern crate toml;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
 extern crate hex;
 #[cfg(unix)]
 extern crate nix;
+extern crate protobuf;
+extern crate raft;
 extern crate rand;
+extern crate rocksdb;
 #[cfg(unix)]
 extern crate signal;
+extern crate slog;
 extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
+extern crate tikv;
+extern crate toml;
 
 mod util;
 

@@ -11,64 +11,87 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::io::{self, Write};
-use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::path::Path;
+mod file_log;
 
-use chrono;
+use std::fmt;
+use std::io::{self, BufWriter, Write};
+use std::path::Path;
+use std::sync::Mutex;
+
+use chrono::{self, Duration};
 use grpc;
-use log;
-use log::SetLoggerError;
+use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
+use slog_async::{Async, OverflowStrategy};
 use slog_scope::{self, GlobalLoggerGuard};
 use slog_stdlog;
-use slog_term::{Decorator, RecordDecorator};
+use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
+
+use self::file_log::RotatingFileLogger;
 
 pub use slog::Level;
 
+// Default is 128.
+// Extended since blocking is set, and we don't want to block very often.
+const SLOG_CHANNEL_SIZE: usize = 10240;
+// Default is DropAndReport.
+// It is not desirable to have dropped logs in our use case.
+const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f";
-const ENABLED_TARGETS: &[&str] = &[
-    "tikv::",
-    "tests::",
-    "benches::",
-    "integrations::",
-    "failpoints::",
-    "raft::",
-    // Collects logs of components.
-    "test_",
-];
 
-pub fn init_log<D>(drain: D, level: Level) -> Result<GlobalLoggerGuard, SetLoggerError>
+pub fn init_log<D>(
+    drain: D,
+    level: Level,
+    use_async: bool,
+    init_stdlog: bool,
+) -> Result<GlobalLoggerGuard, SetLoggerError>
 where
-    D: Drain + Send + Sync + 'static + RefUnwindSafe + UnwindSafe,
-    <D as slog::Drain>::Err: ::std::fmt::Debug,
+    D: Drain + Send + 'static,
+    <D as Drain>::Err: ::std::fmt::Debug,
 {
     grpc::redirect_log();
 
-    let drain = drain.filter_level(level).fuse();
-
-    let logger = slog::Logger::root(drain, slog_o!());
+    let logger = if use_async {
+        let drain = Async::new(drain.fuse())
+            .chan_size(SLOG_CHANNEL_SIZE)
+            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
+            .thread_name(thd_name!("slogger"))
+            .build()
+            .fuse();
+        slog::Logger::root(drain, slog_o!())
+    } else {
+        let drain = Mutex::new(drain).fuse();
+        slog::Logger::root(drain, slog_o!())
+    };
 
     let guard = slog_scope::set_global_logger(logger);
-    slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))?;
+    if init_stdlog {
+        slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))?;
+    }
+
     Ok(guard)
 }
 
-pub fn init_log_for_tikv_only<D>(
-    drain: D,
-    level: Level,
-) -> Result<GlobalLoggerGuard, SetLoggerError>
-where
-    D: Drain + Send + Sync + 'static + RefUnwindSafe + UnwindSafe,
-    <D as slog::Drain>::Err: ::std::fmt::Debug,
-{
-    let filtered = drain.filter(|record| {
-        ENABLED_TARGETS
-            .iter()
-            .any(|target| record.module().starts_with(target))
-    });
-    init_log(filtered, level)
+/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
+// Avoid clippy type_complexity lint.
+pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
+
+/// Constructs a new file drainer which outputs log to a file at the specified
+/// path. The file drainer rotates for the specified timespan.
+pub fn file_drainer(
+    path: impl AsRef<Path>,
+    rotation_timespan: Duration,
+) -> io::Result<TikvFormat<RotatingFileDecorator>> {
+    let logger = BufWriter::new(RotatingFileLogger::new(path, rotation_timespan)?);
+    let decorator = PlainDecorator::new(logger);
+    let drain = TikvFormat::new(decorator);
+    Ok(drain)
+}
+
+/// Constructs a new terminal drainer which outputs logs to stderr.
+pub fn term_drainer() -> TikvFormat<TermDecorator> {
+    let decorator = TermDecorator::new().build();
+    TikvFormat::new(decorator)
 }
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
@@ -367,7 +390,6 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
 #[test]
 fn test_log_format() {
     use chrono::{TimeZone, Utc};
-    use slog::Logger;
     use slog_term::PlainSyncDecorator;
     use std::cell::RefCell;
     use std::io::Write;
@@ -392,7 +414,7 @@ fn test_log_format() {
     // Make the log
     let decorator = PlainSyncDecorator::new(TestWriter);
     let drain = TikvFormat::new(decorator).fuse();
-    let logger = Logger::root_typed(drain, slog_o!());
+    let logger = slog::Logger::root_typed(drain, slog_o!());
     slog_crit!(logger, "test");
 
     // Check the logged value.
@@ -401,10 +423,15 @@ fn test_log_format() {
         let output = from_utf8(&*buffer).unwrap();
 
         // This functions roughly as an assert to make sure that the log level and file name is logged.
-        let mut split_iter = output.split(" CRIT logger.rs:");
+        let mut split_iter = output.split(" CRIT mod.rs:");
         // The pre-split portion will contain a timestamp which we can check by parsing and ensuring it is valid.
         let datetime = split_iter.next().unwrap();
-        assert!(Utc.datetime_from_str(datetime, TIMESTAMP_FORMAT).is_ok());
+        assert!(
+            Utc.datetime_from_str(datetime, TIMESTAMP_FORMAT).is_ok(),
+            "{:?} | {:?}",
+            output,
+            datetime
+        );
         // The post-split portion will contain the line number of the file (which we validate is a number), and then the log message.
         let line_and_message = split_iter.next().unwrap();
         let mut split_iter = line_and_message.split(": ");
