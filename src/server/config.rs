@@ -152,7 +152,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Validates the configuration, returns an error if it is misconfigured.
+    /// Validates the configuration and returns an error if it is misconfigured.
     pub fn validate(&mut self) -> Result<()> {
         box_try!(config::check_addr(&self.addr));
         if !self.advertise_addr.is_empty() {
