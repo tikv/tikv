@@ -74,7 +74,7 @@ pub trait RaftStoreRouter: Send + Clone {
     }
 }
 
-/// A router that routes messages to the raftstore.
+/// A router that routes messages to the raftstore
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
