@@ -51,7 +51,7 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
     e
 }
 
-/// Service handles the rpc messages for the `Debug` service.
+/// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
