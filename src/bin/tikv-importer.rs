@@ -20,7 +20,6 @@ extern crate fs2;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
 extern crate libc;
-extern crate log;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;

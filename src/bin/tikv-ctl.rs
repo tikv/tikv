@@ -21,7 +21,6 @@ extern crate hex;
 extern crate jemallocator;
 extern crate kvproto;
 extern crate libc;
-extern crate log;
 #[cfg(unix)]
 extern crate nix;
 extern crate protobuf;

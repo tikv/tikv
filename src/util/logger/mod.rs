@@ -142,45 +142,6 @@ pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
         Level::Info => log::LogLevel::Info,
     }
 }
-
-pub fn convert_log_level_to_slog_level(lv: log::LogLevel) -> Level {
-    match lv {
-        log::LogLevel::Error => Level::Error,
-        log::LogLevel::Warn => Level::Warning,
-        log::LogLevel::Debug => Level::Debug,
-        log::LogLevel::Trace => Level::Trace,
-        log::LogLevel::Info => Level::Info,
-    }
-}
-
-#[test]
-fn test_log_level_conversion() {
-    assert_eq!(
-        Level::Error,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Critical))
-    );
-    assert_eq!(
-        Level::Error,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Error))
-    );
-    assert_eq!(
-        Level::Warning,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Warning))
-    );
-    assert_eq!(
-        Level::Debug,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Debug))
-    );
-    assert_eq!(
-        Level::Trace,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Trace))
-    );
-    assert_eq!(
-        Level::Info,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Info))
-    );
-}
-
 pub struct TikvFormat<D>
 where
     D: Decorator,

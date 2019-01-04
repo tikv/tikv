@@ -53,7 +53,7 @@ path = "benches/misc/mod.rs"
 [dependencies]
 hashbrown = { version = "0.1", features = ["serde"] }
 log = { version = "0.3", features = ["release_max_level_debug"] }
-slog = "2.3"
+slog = { version = "2.3", features = ["release_max_level_debug"] }
 slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git" }
 slog-stdlog = "3.0.4-pre"

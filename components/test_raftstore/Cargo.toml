@@ -12,7 +12,8 @@ futures = "0.1"
 tokio-timer = "0.2"
 grpcio = { version = "0.4", features = [ "secure" ] }
 rand = "0.3"
-log = "0.3.9"
+slog = { version = "2.3", features = ["release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git" }
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
