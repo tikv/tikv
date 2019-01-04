@@ -449,14 +449,9 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(
-    panic_abort: bool,
-    guard: Option<::slog_scope::GlobalLoggerGuard>,
-    data_dir: &str,
-) {
+pub fn set_exit_hook(panic_abort: bool, data_dir: &str) {
     use std::panic;
     use std::process;
-    use std::sync::Mutex;
 
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
@@ -473,15 +468,11 @@ pub fn set_exit_hook(
         .spawn(::backtrace::Backtrace::new)
         .unwrap();
 
-    // Hold the guard.
-    let log_guard = Mutex::new(guard);
-
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &panic::PanicInfo| {
         use slog::Drain;
-        let logger = ::slog_scope::logger();
-        if logger.is_enabled(::slog::Level::Error) {
+        if ::slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
                 None => match info.payload().downcast_ref::<String>() {
@@ -507,7 +498,7 @@ pub fn set_exit_hook(
         }
 
         // To collect remaining logs, drop the guard before exit.
-        drop(log_guard.lock().unwrap().take());
+        ::slog_global::clear_global();
 
         // If PANIC_MARK is true, create panic mark file.
         if panic_mark_is_on() {

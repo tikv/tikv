@@ -96,7 +96,7 @@ extern crate serde_json;
 extern crate slog;
 extern crate slog_async;
 #[macro_use]
-extern crate slog_scope;
+extern crate slog_global;
 extern crate slog_stdlog;
 extern crate slog_term;
 extern crate sys_info;

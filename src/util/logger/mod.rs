@@ -23,7 +23,6 @@ use grpc;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
-use slog_scope::{self, GlobalLoggerGuard};
 use slog_stdlog;
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
@@ -44,7 +43,7 @@ pub fn init_log<D>(
     level: Level,
     use_async: bool,
     init_stdlog: bool,
-) -> Result<GlobalLoggerGuard, SetLoggerError>
+) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
     <D as Drain>::Err: ::std::fmt::Debug,
@@ -64,12 +63,12 @@ where
         slog::Logger::root(drain, slog_o!())
     };
 
-    let guard = slog_scope::set_global_logger(logger);
+    ::slog_global::set_global(logger);
     if init_stdlog {
         slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))?;
     }
 
-    Ok(guard)
+    Ok(())
 }
 
 /// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.

@@ -1761,8 +1761,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             let task = SplitCheckTask::new(peer.region().clone(), true, CheckPolicy::SCAN);
             if let Err(e) = self.split_check_worker.schedule(task) {
-                let tag = self.tag.clone();
-                error!("{} failed to schedule split check: {}", tag, e);
+                error!("{} failed to schedule split check: {}", self.tag, e);
             }
             peer.size_diff_hint = 0;
             peer.compaction_declined_bytes = 0;
@@ -2000,20 +1999,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             match state {
                 StaleState::Valid => (),
                 StaleState::LeaderMissing => {
-                    let duration = self.cfg.abnormal_leader_missing_duration.0;
                     warn!(
                         "{} leader missing longer than abnormal_leader_missing_duration {:?}",
-                        peer.tag, duration,
+                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
                     );
                     leader_missing += 1;
                 }
                 StaleState::ToValidate => {
-                    let duration = self.cfg.abnormal_leader_missing_duration.0;
                     // for peer B in case 1 above
                     warn!(
                         "{} leader missing longer than max_leader_missing_duration {:?}. \
                          To check with pd whether it's still valid",
-                        peer.tag, duration,
+                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
                     );
                     let task = PdTask::ValidatePeer {
                         peer: peer.peer.clone(),

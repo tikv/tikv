@@ -126,13 +126,11 @@ impl Runnable<Task> for Runner {
             task.end_idx,
         ) {
             Err(e) => {
-                let region_id = task.region_id;
-                error!("[region {}] failed to gc: {:?}", region_id, e);
+                error!("[region {}] failed to gc: {:?}", task.region_id, e);
                 self.report_collected(0);
             }
             Ok(n) => {
-                let region_id = task.region_id;
-                debug!("[region {}] collected {} log entries", region_id, n);
+                debug!("[region {}] collected {} log entries", task.region_id, n);
                 self.report_collected(n);
             }
         }
