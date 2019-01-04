@@ -419,7 +419,7 @@ fn main() {
     // It is okay to use the config w/o `validata()`,
     // because `initial_logger()` handles various conditions.
     initial_logger(&config);
-    tikv_util::set_exit_hook(false, &config.storage.data_dir);
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     // Print version information.
     util::print_tikv_info();

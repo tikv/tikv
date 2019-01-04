@@ -109,7 +109,7 @@ fn main() {
 
     let config = setup_config(&matches);
     initial_logger(&config);
-    tikv_util::set_exit_hook(false, &config.storage.data_dir);
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
     util::print_tikv_info();

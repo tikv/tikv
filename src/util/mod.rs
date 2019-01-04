@@ -449,7 +449,7 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(panic_abort: bool, data_dir: &str) {
+pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     use std::panic;
     use std::process;
 
