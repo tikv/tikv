@@ -1613,7 +1613,7 @@ mod tests {
         let cases = vec![
             (
                 vec![
-            Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b",".to_vec()),
                     Datum::Bytes(b"abc".to_vec()),
                     Datum::Bytes(b"defg".to_vec()),
                 ],
