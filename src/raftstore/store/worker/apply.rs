@@ -2122,6 +2122,7 @@ impl Runner {
         }
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+
         slow_log!(
             t,
             "{} handle ready {} committed entries",

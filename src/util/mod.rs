@@ -497,7 +497,8 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             orig_hook(info);
         }
 
-        // To collect remaining logs, drop the guard before exit.
+        // Drop current logger to flush. (note: lazy_static will not call drop when process
+        // is exited)
         ::slog_global::clear_global();
 
         // If PANIC_MARK is true, create panic mark file.

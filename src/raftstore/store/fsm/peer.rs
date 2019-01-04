@@ -2010,7 +2010,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     warn!(
                         "{} leader missing longer than max_leader_missing_duration {:?}. \
                          To check with pd whether it's still valid",
-                        peer.tag, self.cfg.abnormal_leader_missing_duration.0,
+                        peer.tag, self.cfg.max_leader_missing_duration.0,
                     );
                     let task = PdTask::ValidatePeer {
                         peer: peer.peer.clone(),
