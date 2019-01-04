@@ -61,7 +61,7 @@ const GC_SEEK_REGION_LIMIT: u32 = 32;
 
 const BEGIN_KEY: &[u8] = b"";
 
-/// GCWorker can get safe point from something that implements `GCSafePointSourse`
+/// Provides safe point.
 /// TODO: Give it a better name?
 pub trait GCSafePointProvider: Send + 'static {
     fn get_safe_point(&self) -> Result<u64>;
@@ -135,7 +135,7 @@ impl Display for GCTask {
     }
 }
 
-/// `GCRunner` is used to perform GC operations on the engine.
+/// Used to perform GC operations on the engine.
 struct GCRunner<E: Engine> {
     engine: E,
     local_storage: Option<Arc<DB>>,
@@ -176,7 +176,7 @@ impl<E: Engine> GCRunner<E> {
         }.map_err(Error::from)
     }
 
-    /// Scan keys in the region. Returns scanned keys if any, and a key indicating scan progress
+    /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
     fn scan_keys(
         &mut self,
         ctx: &mut Context,
@@ -220,7 +220,7 @@ impl<E: Engine> GCRunner<E> {
         res
     }
 
-    /// Clean up outdated data.
+    /// Cleans up outdated data.
     fn gc_keys(
         &mut self,
         ctx: &mut Context,
@@ -502,7 +502,7 @@ pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
 }
 
 impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
-    /// Create a new config. Fields that are not mentioned in these params will be set to default.
+    /// Creates a new config.
     pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
         Self {
             safe_point_provider,
@@ -514,8 +514,8 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
         }
     }
 
-    /// Create a config that is better for tests. The poll interval is as short as 0.1s and during
-    /// GC it will never skip checking safe point.
+    /// Creates a config for test purpose. The interval to poll safe point is as short as 0.1s and
+    /// during GC it never skips checking safe point.
     pub fn new_test_cfg(
         safe_point_provider: S,
         region_info_provider: R,
@@ -541,7 +541,7 @@ enum GCManagerError {
 
 type GCManagerResult<T> = ::std::result::Result<T, GCManagerError>;
 
-/// `GCManagerContext` is used to check if `GCManager` should be stopped.
+/// Used to check if `GCManager` should be stopped.
 ///
 /// When `GCManager` is running, it might take very long time to GC a round. It should be able to
 /// break at any time so that we can shut down TiKV in time.
@@ -569,7 +569,7 @@ impl GCManagerContext {
     }
 
     /// Sleeps for a while. if a stop message is received, returns immediately with
-    /// `GCManagerError::Stopped`
+    /// `GCManagerError::Stopped`.
     fn sleep_or_stop(&mut self, timeout: Duration) -> GCManagerResult<()> {
         if self.is_stopped {
             return Err(GCManagerError::Stopped);
@@ -657,8 +657,7 @@ fn set_status_metrics(state: GCManagerState) {
     }
 }
 
-/// `GCWorkerThreadHandle` wraps `JoinHandle` of `GCWorkerThread` and helps to stop the
-/// `GCWorkerThread` synchronously
+/// Wraps `JoinHandle` of `GCManager` and helps to stop the `GCManager` synchronously.
 struct GCManagerHandle {
     join_handle: JoinHandle<()>,
     stop_signal_sender: mpsc::Sender<()>,
@@ -680,7 +679,7 @@ impl GCManagerHandle {
     }
 }
 
-/// `GCManager` manages GC that automatically runs on the TiKV.
+/// Controls how GC runs automatically on the TiKV.
 /// It polls safe point periodically, and when the safe point is updated, `GCManager` will start to
 /// scan all regions (whose leader is on this TiKV), and does GC on all those regions.
 struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
@@ -875,7 +874,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         if self.safe_point_last_check_time.elapsed() < self.cfg.poll_safe_point_interval
             && !self.cfg.always_check_safe_point
         {
-            // Skip this check
+            // Skip this check.
             return;
         }
 
@@ -904,7 +903,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         }
     }
 
-    /// GC the next region after `from_key`. Returns the end key of the region it processed.
+    /// Does GC on the next region after `from_key`. Returns the end key of the region it processed.
     /// If we have processed to the end of all regions, returns `None`.
     fn gc_next_region(
         &mut self,
@@ -955,7 +954,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
         let safe_point = match self.cfg.safe_point_provider.get_safe_point() {
             Ok(res) => res,
-            // Return false directly so we will check it a while later
+            // Return false directly so we will check it a while later.
             Err(e) => {
                 error!("failed to get safe point from pd: {:?}", e);
                 return false;
@@ -1023,9 +1022,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
             match result {
                 SeekRegionResult::Found(mut region) => {
-                    // It might be ok to leave other fields default
+                    // It might be ok to leave other fields default.
                     let end_key = Key::from_encoded(region.take_end_key());
-                    // Determine if it's the last region
+                    // Determine if it's the last region.
                     let end_key = if end_key.as_encoded().is_empty() {
                         None
                     } else {
@@ -1041,20 +1040,20 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     match end_key {
                         Some(k) => key = k,
                         None => {
-                            // Ended
+                            // Ended.
                             return Ok((None, None));
                         }
                     }
                 }
                 SeekRegionResult::Ended => return Ok((None, None)),
-                // Seek again from `next_key`
+                // Seek again from `next_key`.
                 SeekRegionResult::LimitExceeded { next_key } => key = Key::from_encoded(next_key),
             }
         }
     }
 }
 
-/// `GCWorker` is used to schedule GC operations
+/// Used to schedule GC operations.
 #[derive(Clone)]
 pub struct GCWorker<E: Engine> {
     engine: E,
@@ -1121,11 +1120,11 @@ impl<E: Engine> GCWorker<E> {
     }
 
     pub fn stop(&self) -> Result<()> {
-        // Stop GCWorkerThread
+        // Stop GCManager.
         if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
             h.stop()?;
         }
-        // Stop self
+        // Stop self.
         let h = self.worker.lock().unwrap().stop().unwrap();
         if let Err(e) = h.join() {
             Err(box_err!("failed to join gc_worker handle, err: {:?}", e))
@@ -1144,7 +1143,7 @@ impl<E: Engine> GCWorker<E> {
             .or_else(handle_gc_task_schedule_error)
     }
 
-    /// Clean up all keys in a range and quickly free the disk space. The range might span over
+    /// Cleans up all keys in a range and quickly free the disk space. The range might span over
     /// multiple regions, and the `ctx` doesn't indicate region. The request will be done directly
     /// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
     /// the range will never be accessed any more. However, `destroy_range` is allowed to be called
@@ -1268,7 +1267,7 @@ mod tests {
             }
         }
 
-        /// Collect `GCTask`s that GCManager tried to execute
+        /// Collect `GCTask`s that `GCManager` tried to execute.
         pub fn collect_scheduled_tasks(&self) -> Vec<GCTask> {
             self.gc_task_receiver.try_iter().collect()
         }
@@ -1323,7 +1322,7 @@ mod tests {
             })
             .collect();
 
-        // Following code asserts gc_tasks == expected_gc_tasks
+        // Following code asserts gc_tasks == expected_gc_tasks.
         assert_eq!(gc_tasks.len(), expected_gc_tasks.len());
         let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks.into_iter()).all(
             |((region, safe_point), (expect_region, expect_safe_point))| {
