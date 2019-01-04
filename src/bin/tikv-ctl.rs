@@ -1878,20 +1878,26 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     let ca_path = matches.value_of("ca_path");
     let cert_path = matches.value_of("cert_path");
     let key_path = matches.value_of("key_path");
-    let ciper_file = matches.value_of("cipher_file");
+    let cipher_file = matches.value_of("cipher_file");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() && ciper_file.is_none() {
+    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() && cipher_file.is_none() {
         return Arc::new(SecurityManager::new(&cfg).unwrap());
     }
 
-    if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
-        panic!("CA certificate and private key should all be set.");
+    if ca_path.is_some() || cert_path.is_some() || key_path.is_some() {
+        if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
+            panic!("CA certificate and private key should all be set.");
+        }
+        cfg.ca_path = ca_path.unwrap().to_owned();
+        cfg.cert_path = cert_path.unwrap().to_owned();
+        cfg.key_path = key_path.unwrap().to_owned();
     }
-    cfg.ca_path = ca_path.unwrap().to_owned();
-    cfg.cert_path = cert_path.unwrap().to_owned();
-    cfg.key_path = key_path.unwrap().to_owned();
-    cfg.cipher_file = ciper_file.unwrap().to_owned();
+
+    if cipher_file.is_some() {
+        cfg.cipher_file = cipher_file.unwrap().to_owned();
+    }
+
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
 }
 
