@@ -479,7 +479,9 @@ pub fn set_exit_hook(
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &panic::PanicInfo| {
-        if log_enabled!(::log::LogLevel::Error) {
+        use slog::Drain;
+        let logger = ::slog_scope::logger();
+        if logger.is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
                 None => match info.payload().downcast_ref::<String>() {

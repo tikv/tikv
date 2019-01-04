@@ -415,7 +415,7 @@ fn test_log_format() {
     let decorator = PlainSyncDecorator::new(TestWriter);
     let drain = TikvFormat::new(decorator).fuse();
     let logger = slog::Logger::root_typed(drain, slog_o!());
-    slog_crit!(logger, "test");
+    slog_error!(logger, "test");
 
     // Check the logged value.
     BUFFER.with(|buffer| {
@@ -423,7 +423,7 @@ fn test_log_format() {
         let output = from_utf8(&*buffer).unwrap();
 
         // This functions roughly as an assert to make sure that the log level and file name is logged.
-        let mut split_iter = output.split(" CRIT mod.rs:");
+        let mut split_iter = output.split(" ERRO mod.rs:");
         // The pre-split portion will contain a timestamp which we can check by parsing and ensuring it is valid.
         let datetime = split_iter.next().unwrap();
         assert!(

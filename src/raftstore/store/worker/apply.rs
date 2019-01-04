@@ -2122,12 +2122,13 @@ impl Runner {
         }
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
-
+        let tag = self.tag.clone();
+        let committed_count = core.committed_count;
         slow_log!(
             t,
             "{} handle ready {} committed entries",
-            self.tag,
-            core.committed_count
+            tag,
+            committed_count
         );
     }
 
