@@ -58,7 +58,7 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 
 impl<T: futurepool::Context + 'static> ReadPool<T> {
     /// Creates a new thread pool.
-    pub fn new<F>(name_prefix: &str, config: &Config) -> Self
+    pub fn new<F>(name_prefix: &str, config: &Config, context_factory: F) -> Self
     where
         F: Fn() -> T,
     {
