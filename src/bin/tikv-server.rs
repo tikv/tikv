@@ -408,8 +408,8 @@ fn main() {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
     // because `initial_logger()` handles various conditions.
-    let guard = initial_logger(&config);
-    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
+    initial_logger(&config).cancel_reset();
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     // Print version information.
     util::print_tikv_info();
