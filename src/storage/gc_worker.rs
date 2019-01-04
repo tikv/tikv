@@ -768,6 +768,51 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         Ok(())
     }
 
+    /// Waits until the safe_point updates. Returns the new safe point.
+    fn wait_for_next_safe_point(&mut self) -> GCManagerResult<u64> {
+        loop {
+            if self.try_update_safe_point() {
+                return Ok(self.safe_point);
+            }
+
+            self.gc_manager_ctx
+                .sleep_or_stop(self.cfg.poll_safe_point_interval)?;
+        }
+    }
+
+    /// Tries to update the safe point. Returns true if safe point has been updated to a greater
+    /// value. Returns false if safe point didn't change or we encountered an error.
+    fn try_update_safe_point(&mut self) -> bool {
+        self.safe_point_last_check_time = Instant::now();
+
+        let safe_point = match self.cfg.safe_point_provider.get_safe_point() {
+            Ok(res) => res,
+            // Return false directly so we will check it a while later.
+            Err(e) => {
+                error!("failed to get safe point from pd: {:?}", e);
+                return false;
+            }
+        };
+
+        match safe_point.cmp(&self.safe_point) {
+            Ordering::Less => {
+                error!(
+                    "got new safe point {} which is less than current safe point {}. \
+                     there must be something wrong.",
+                    safe_point, self.safe_point
+                );
+                self.safe_point = safe_point;
+                false
+            }
+            Ordering::Equal => false,
+            Ordering::Greater => {
+                info!("gc_worker: safe point updated");
+                self.safe_point = safe_point;
+                true
+            }
+        }
+    }
+
     /// Scans all regions on the TiKV whose leader is this TiKV, and does GC on all of them.
     /// Regions are scanned and GC-ed in lexicographical order.
     ///
@@ -945,51 +990,6 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         *processed_regions += 1;
 
         Ok(next_key)
-    }
-
-    /// Tries to update the safe point. Returns true if safe point has been updated to a greater
-    /// value. Returns false if safe point didn't change or we encountered an error.
-    fn try_update_safe_point(&mut self) -> bool {
-        self.safe_point_last_check_time = Instant::now();
-
-        let safe_point = match self.cfg.safe_point_provider.get_safe_point() {
-            Ok(res) => res,
-            // Return false directly so we will check it a while later.
-            Err(e) => {
-                error!("failed to get safe point from pd: {:?}", e);
-                return false;
-            }
-        };
-
-        match safe_point.cmp(&self.safe_point) {
-            Ordering::Less => {
-                error!(
-                    "got new safe point {} which is less than current safe point {}. \
-                     there must be something wrong.",
-                    safe_point, self.safe_point
-                );
-                self.safe_point = safe_point;
-                false
-            }
-            Ordering::Equal => false,
-            Ordering::Greater => {
-                info!("gc_worker: safe point updated");
-                self.safe_point = safe_point;
-                true
-            }
-        }
-    }
-
-    /// Waits until the safe_point updates. Returns the new safe point.
-    fn wait_for_next_safe_point(&mut self) -> GCManagerResult<u64> {
-        loop {
-            if self.try_update_safe_point() {
-                return Ok(self.safe_point);
-            }
-
-            self.gc_manager_ctx
-                .sleep_or_stop(self.cfg.poll_safe_point_interval)?;
-        }
     }
 
     /// Gets the next region with end_key greater than given key, and the current TiKV is its
