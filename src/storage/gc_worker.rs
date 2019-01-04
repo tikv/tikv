@@ -554,7 +554,6 @@ struct GCManagerContext {
 }
 
 impl GCManagerContext {
-    /// Creates a new `GCManagerContext`.
     pub fn new() -> Self {
         Self {
             stop_signal_receiver: None,
@@ -699,7 +698,6 @@ struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
 }
 
 impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
-    /// Creates an instance of `GCManager`.
     pub fn new(
         cfg: AutoGCConfig<S, R>,
         worker_scheduler: worker::Scheduler<GCTask>,
@@ -796,17 +794,15 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
         match safe_point.cmp(&self.safe_point) {
             Ordering::Less => {
-                error!(
+                panic!(
                     "got new safe point {} which is less than current safe point {}. \
                      there must be something wrong.",
                     safe_point, self.safe_point
                 );
-                self.safe_point = safe_point;
-                false
             }
             Ordering::Equal => false,
             Ordering::Greater => {
-                info!("gc_worker: safe point updated");
+                debug!("gc_worker: safe point updated to {}", safe_point);
                 self.safe_point = safe_point;
                 true
             }
@@ -930,7 +926,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
         if progress.as_ref().unwrap().as_encoded().is_empty() {
             // `progress` is empty means the starting. We don't need to rewind. We just
-            // Continue GC to the end.
+            // continue GC to the end.
             *need_rewind = false;
             *end = None;
             info!(
