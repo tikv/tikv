@@ -33,11 +33,13 @@ See [honggfuzz-rs documentation](https://github.com/rust-fuzz/honggfuzz-rs).
 cargo install afl
 ```
 
-Seed files should be placed in the `fuzz/fuzzer-afl/seeds/{target}/` directory, where `target` is the fuzz target name.
-
-If no seed file provided, `fuzz/fuzzer-afl/seeds/default/` will be used as seeds.
-
 For more details, see [the fuzz.rs book](https://fuzz.rs/book/afl/setup.html).
+
+### Seeds(optional)
+
+Proper seeds can make fuzzing faster, seed files for a specific target should be placed in the `fuzz/common/seeds/{target}/` directory, where `target` is the fuzz target name.
+
+If no seed file provided for the given target, `fuzz/common/seeds/default/` will be used as seeds.
 
 ## Usage
 
@@ -56,3 +58,5 @@ cargo run --package fuzz -- run [FUZZER] [TARGET]
 ```
 
 Valid values for `[FUZZER]` are "Libfuzzer", "Honggfuzz", and "Afl".
+
+The corpus dir of fuzzing is `fuzz/fuzzer-{FUZZER}/corpus-{TARGET}` for "Libfuzzer" and "Afl".

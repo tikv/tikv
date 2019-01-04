@@ -55,6 +55,7 @@ lazy_static! {
             .map(|x| format!("fuzz_{}", &x[1]));
         target_names.collect()
     };
+    static ref SEED_ROOT: PathBuf = FUZZ_ROOT.join("common/seeds");
 }
 
 #[derive(StructOpt, Debug)]
@@ -160,13 +161,37 @@ fn run(fuzzer: Fuzzer, target: &str) -> Result<(), Error> {
     }
 }
 
+/// Get input seeds for fuzz target
+fn get_seed_dir(target: &str) -> PathBuf {
+    let seeds_dir = SEED_ROOT.join(target);
+    if seeds_dir.exists() {
+        seeds_dir
+    } else {
+        SEED_ROOT.join("default")
+    }
+}
+
+/// Create corpus dir for fuzz target
+fn create_corpus_dir(base: &PathBuf, target: &str) -> Result<PathBuf, Error> {
+    let corpus_dir = base.join(&format!("corpus-{}", target));
+    fs::create_dir_all(&corpus_dir).context(format!(
+        "unable to create corpus dir for {}{}",
+        base.display(),
+        target
+    ))?;
+    Ok(corpus_dir)
+}
+
 /// Run one target fuzz test using AFL
 fn run_afl(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Afl;
 
+    let seed_dir = get_seed_dir(target);
+    let corpus_dir = create_corpus_dir(&PathBuf::from(fuzzer.directory()), target)?;
+
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
-        .args(&["afl", "build", "--bin", target, "--target-dir", "./target"])
+        .args(&["afl", "build", "--bin", target])
         .current_dir(fuzzer.directory())
         .spawn()
         .context(format!("Failed to build {}", fuzzer))?
@@ -180,24 +205,15 @@ fn run_afl(target: &str) -> Result<(), Error> {
         ))?;
     }
 
-    let input_seeds = format!("seeds/{}", target);
-    let input_seeds = if fuzzer.directory().join(&input_seeds).exists() {
-        &input_seeds
-    } else {
-        "seeds/default"
-    };
-
-    // 2. cargo afl fuzz -i {input_seeds} -o out target/debug/{instrumented_binary}
+    // 2. cargo afl fuzz -i {seed_dir} -o {corpus_dir} target/debug/{instrumented_binary}
+    let instrumented_bin = WORKSPACE_ROOT.join("target/debug").join(target);
     let fuzzer_bin = Command::new("cargo")
-        .args(&[
-            "afl",
-            "fuzz",
-            "-i",
-            input_seeds,
-            "-o",
-            "out",
-            &format!("target/debug/{}", target),
-        ])
+        .args(&["afl", "fuzz"])
+        .arg("-i")
+        .arg(&seed_dir)
+        .arg("-o")
+        .arg(&corpus_dir)
+        .arg(&instrumented_bin)
         .current_dir(fuzzer.directory())
         .spawn()
         .context(format!("Failed to run {}", fuzzer))?
@@ -222,8 +238,14 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
     rust_flags.push_str("-Z sanitizer=address");
 
-    let mut hfuzz_args = env::var("HFUZZ_RUN_ARGS").unwrap_or_default();
-    hfuzz_args.push_str("--exit_upon_crash --run_time 5");
+    let hfuzz_args = format!(
+        "-f {} \
+         --exit_upon_crash \
+         --run_time 5 \
+         {}",
+        get_seed_dir(target).to_string_lossy(),
+        env::var("HFUZZ_RUN_ARGS").unwrap_or_default()
+    );
 
     let fuzzer_bin = Command::new("cargo")
         .args(&["hfuzz", "run", target])
@@ -249,6 +271,8 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
 /// Run one target fuzz test using Libfuzzer
 fn run_libfuzzer(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Libfuzzer;
+    let seed_dir = get_seed_dir(target);
+    let corpus_dir = create_corpus_dir(&PathBuf::from(fuzzer.directory()), target)?;
 
     #[cfg(target_os = "macos")]
     let target_platform = "x86_64-apple-darwin";
@@ -278,6 +302,8 @@ fn run_libfuzzer(target: &str) -> Result<(), Error> {
 
     let fuzzer_bin = Command::new("cargo")
         .args(&["run", "--target", &target_platform, "--bin", target])
+        .arg(&corpus_dir)
+        .arg(&seed_dir)
         .env("RUSTFLAGS", &rust_flags)
         .env("ASAN_OPTIONS", &asan_options)
         .current_dir(fuzzer.directory())
