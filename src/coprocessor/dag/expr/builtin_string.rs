@@ -962,6 +962,7 @@ mod tests {
     use super::{encoded_size, TrimDirection};
     use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use coprocessor::codec::mysql::charset::CHARSET_BIN;
+    use std::{f64, i64};
     use tipb::expression::{Expr, ScalarFuncSig};
 
     use coprocessor::codec::Datum;
@@ -1896,6 +1897,90 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::Elt, &children);
+            let e = Expression::build(&ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_field_int() {
+        let cases = vec![
+            (
+                vec![Datum::I64(1), Datum::I64(-2), Datum::I64(3)],
+                Datum::I64(0),
+            ),
+            (
+                vec![Datum::I64(-1), Datum::I64(2), Datum::I64(-1), Datum::I64(2)],
+                Datum::I64(2),
+            ),
+            (
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(0),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(3),
+            ),
+            (
+                vec![Datum::Null, Datum::I64(0), Datum::I64(0)],
+                Datum::I64(0),
+            ),
+            (vec![Datum::Null, Datum::Null, Datum::I64(0)], Datum::I64(0)),
+            (vec![Datum::I64(100)], Datum::I64(0)),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::FieldInt, &children);
+            let e = Expression::build(&ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_field_real() {
+        let cases = vec![
+            (
+                vec![Datum::F64(1.0), Datum::F64(-2.0), Datum::F64(9.0)],
+                Datum::I64(0),
+            ),
+            (
+                vec![
+                    Datum::F64(-1.0),
+                    Datum::F64(2.0),
+                    Datum::F64(-1.0),
+                    Datum::F64(2.0),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                vec![
+                    Datum::F64(f64::MAX),
+                    Datum::F64(0.0),
+                    Datum::F64(f64::MIN),
+                    Datum::F64(f64::MAX),
+                ],
+                Datum::I64(3),
+            ),
+            (
+                vec![Datum::Null, Datum::F64(1.0), Datum::F64(1.0)],
+                Datum::I64(0),
+            ),
+            (
+                vec![Datum::Null, Datum::Null, Datum::F64(0.0)],
+                Datum::I64(0),
+            ),
+            (vec![Datum::F64(10.0)], Datum::I64(0)),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::FieldReal, &children);
             let e = Expression::build(&ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);
