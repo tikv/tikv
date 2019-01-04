@@ -13,6 +13,7 @@
 
 use base64;
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::i64;
 
@@ -22,7 +23,7 @@ use cop_datatype;
 use cop_datatype::prelude::*;
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use coprocessor::codec::{datum, Datum};
 use safemem;
 
 const SPACE: u8 = 0o40u8;
@@ -314,43 +315,49 @@ impl ScalarFunc {
 
     #[inline]
     pub fn field_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        // Pattern matching made explicit here.
         // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
-        let s = match self.children[0].eval_string(ctx, row) {
-            Err(e) => return Err(e),
-            Ok(None) => return Ok(Some(0)),
-            Ok(Some(res)) => res,
-        };
+        let val = try_opt_or!(self.children[0].eval_int(ctx, row), Some(0));
 
-        let mut i = 1;
-        while i < self.children.len() as i64 {
-            let tmp = try_opt!(self.children[i as usize].eval_string(ctx, row));
-            if s == tmp {
-                break;
+        for (i, exp) in self.children.iter().skip(1).enumerate() {
+            match exp.eval_int(ctx, row) {
+                Err(e) => return Err(e),
+                Ok(Some(v)) if v == val => return Ok(Some(i as i64 + 1)),
+                _ => (),
             }
-            i += 1;
         }
-
-        if i == self.children.len() as i64 {
-            Ok(Some(0))
-        } else {
-            Ok(Some(i))
-        }
+        Ok(Some(0))
     }
 
     #[inline]
-    pub fn field_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        Ok(Some(try_opt!(self.field_int(ctx, row)) as f64))
+    pub fn field_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let val = try_opt_or!(self.children[0].eval_real(ctx, row), Some(0));
+
+        for (i, exp) in self.children.iter().skip(1).enumerate() {
+            match exp.eval_real(ctx, row) {
+                Err(e) => return Err(e),
+                Ok(Some(v)) => match datum::cmp_f64(v, val) {
+                    Ok(Ordering::Equal) => return Ok(Some(i as i64 + 1)),
+                    Err(e) => return Err(e),
+                    _ => (),
+                },
+                _ => (),
+            }
+        }
+        Ok(Some(0))
     }
 
     #[inline]
-    pub fn field_string<'a, 'b: 'a>(
-        &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, [u8]>>> {
-        let i = try_opt!(self.field_int(ctx, row));
-        Ok(Some(Cow::Owned(i.to_string().into_bytes())))
+    pub fn field_string(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let val = try_opt_or!(self.children[0].eval_string(ctx, row), Some(0));
+
+        for (i, exp) in self.children.iter().skip(1).enumerate() {
+            match exp.eval_string(ctx, row) {
+                Err(e) => return Err(e),
+                Ok(Some(ref v)) if *v == val => return Ok(Some(i as i64 + 1)),
+                _ => (),
+            }
+        }
+        Ok(Some(0))
     }
 
     #[inline]
@@ -1896,7 +1903,7 @@ mod tests {
     }
 
     #[test]
-    fn test_field_int() {
+    fn test_field_string() {
         let cases = vec![
             (
                 vec![
@@ -1953,12 +1960,13 @@ mod tests {
                 ],
                 Datum::I64(0),
             ),
+            (vec![Datum::Bytes(b"Hello World!".to_vec())], Datum::I64(0)),
         ];
 
         let mut ctx = EvalContext::default();
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
-            let op = scalar_func_expr(ScalarFuncSig::FieldInt, &children);
+            let op = scalar_func_expr(ScalarFuncSig::FieldString, &children);
             let e = Expression::build(&ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);

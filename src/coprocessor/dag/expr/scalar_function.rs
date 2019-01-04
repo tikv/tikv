@@ -819,6 +819,8 @@ dispatch_call! {
         Length => length,
         BitCount => bit_count,
         FieldInt => field_int,
+        FieldReal => field_real,
+        FieldString => field_string,
         CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
@@ -881,8 +883,6 @@ dispatch_call! {
         Pow => pow,
         Cot => cot,
         Degrees => degrees,
-
-        FieldReal => field_real,
     }
     DEC_CALLS {
         CastIntAsDecimal => cast_int_as_decimal,
@@ -971,7 +971,6 @@ dispatch_call! {
         Uncompress => uncompress,
 
         Conv => conv,
-        FieldString => field_string,
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
         Trim3Args => trim_3_args,
