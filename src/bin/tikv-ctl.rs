@@ -16,27 +16,28 @@ extern crate clap;
 extern crate chrono;
 extern crate futures;
 extern crate grpcio;
+#[cfg(feature = "mem-profiling")]
+extern crate jemallocator;
 extern crate kvproto;
 extern crate libc;
 #[macro_use]
 extern crate log;
-extern crate protobuf;
-extern crate raft;
-extern crate rocksdb;
-#[macro_use]
-extern crate tikv;
-extern crate toml;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
 extern crate hex;
 #[cfg(unix)]
 extern crate nix;
+extern crate protobuf;
+extern crate raft;
+extern crate rand;
+extern crate rocksdb;
 #[cfg(unix)]
 extern crate signal;
+extern crate slog;
 extern crate slog_async;
 extern crate slog_scope;
 extern crate slog_stdlog;
 extern crate slog_term;
+extern crate tikv;
+extern crate toml;
 
 mod util;
 
@@ -489,6 +490,7 @@ trait DebugExecutor {
         mgr: Arc<SecurityManager>,
         cfg: &PdConfig,
         region_ids: Vec<u64>,
+        read_only: bool,
     ) {
         self.check_local_mode();
         let rpc_client =
@@ -508,7 +510,12 @@ trait DebugExecutor {
                 process::exit(-1);
             })
             .collect();
-        self.recover_regions(regions);
+        self.recover_regions(regions, read_only);
+    }
+
+    fn recover_mvcc_all(&self, threads: usize, read_only: bool) {
+        self.check_local_mode();
+        self.recover_all(threads, read_only);
     }
 
     fn get_all_meta_regions(&self) -> Vec<u64>;
@@ -540,7 +547,9 @@ trait DebugExecutor {
 
     fn set_region_tombstone(&self, regions: Vec<Region>);
 
-    fn recover_regions(&self, regions: Vec<Region>);
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool);
+
+    fn recover_all(&self, threads: usize, read_only: bool);
 
     fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
 
@@ -677,7 +686,11 @@ impl DebugExecutor for DebugClient {
         unimplemented!("only avaliable for local mode");
     }
 
-    fn recover_regions(&self, _: Vec<Region>) {
+    fn recover_regions(&self, _: Vec<Region>, _: bool) {
+        unimplemented!("only avaliable for local mode");
+    }
+
+    fn recover_all(&self, _: usize, _: bool) {
         unimplemented!("only avaliable for local mode");
     }
 
@@ -793,9 +806,9 @@ impl DebugExecutor for Debugger {
         }
     }
 
-    fn recover_regions(&self, regions: Vec<Region>) {
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
         let ret = self
-            .recover_regions(regions)
+            .recover_regions(regions, read_only)
             .unwrap_or_else(|e| perror_and_exit("Debugger::recover regions", e));
         if ret.is_empty() {
             println!("success!");
@@ -804,6 +817,11 @@ impl DebugExecutor for Debugger {
         for (region_id, error) in ret {
             eprintln!("region: {}, error: {}", region_id, error);
         }
+    }
+
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        Debugger::recover_all(self, threads, read_only)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::recover all", e));
     }
 
     fn print_bad_regions(&self) {
@@ -1264,10 +1282,18 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("recover-mvcc")
-                .about("recover mvcc data of regions on one node by deleting corrupted keys")
+                .about("recover mvcc data on one node by deleting corrupted keys")
+                .arg(
+                    Arg::with_name("all")
+                        .short("a")
+                        .long("all")
+                        .takes_value(false)
+                        .help("recover the whole db"),
+                )
                 .arg(
                     Arg::with_name("regions")
-                        .required(true)
+                        .required_unless("all")
+                        .conflicts_with("all")
                         .short("r")
                         .takes_value(true)
                         .multiple(true)
@@ -1278,7 +1304,7 @@ fn main() {
                 )
                 .arg(
                     Arg::with_name("pd")
-                        .required(true)
+                        .required_unless("all")
                         .short("p")
                         .takes_value(true)
                         .multiple(true)
@@ -1286,6 +1312,20 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .help("PD endpoints"),
+                )
+                .arg(
+                    Arg::with_name("threads")
+                        .long("threads")
+                        .takes_value(true)
+                        .default_value_if("all", None, "4")
+                        .requires("all")
+                        .help("the number of threads to do recover, only for --all mode"),
+                )
+                .arg(
+                    Arg::with_name("read-only")
+                        .short("R")
+                        .long("read-only")
+                        .help("skip write RocksDB"),
                 ),
         )
         .subcommand(
@@ -1541,6 +1581,19 @@ fn main() {
                         ),
                 )
                 .subcommand(SubCommand::with_name("list").about("List all fail points"))
+        )
+        .subcommand(
+            SubCommand::with_name("random-hex")
+                .about("Generate random bytes with specified length and print as hex")
+                .arg(
+                    Arg::with_name("len")
+                        .short("l")
+                        .long("len")
+                        .takes_value(true)
+                        .required(true)
+                        .default_value("1024")
+                        .help("the length"),
+                ),
         );
 
     // tikv-ctl just encapsulates the related module in rust-rocksdb. So, we don't need to parse
@@ -1557,6 +1610,11 @@ fn main() {
     if let Some(matches) = matches.subcommand_matches("dump-snap-meta") {
         let path = matches.value_of("file").unwrap();
         return dump_snap_meta_file(path);
+    } else if let Some(matches) = matches.subcommand_matches("random-hex") {
+        let len = value_t_or_exit!(matches.value_of("len"), usize);
+        let random_bytes = gen_random_bytes(len);
+        println!("{}", hex::encode_upper(&random_bytes));
+        return;
     }
 
     if matches.args.is_empty() {
@@ -1710,19 +1768,40 @@ fn main() {
         }
         debug_executor.set_region_tombstone_after_remove_peer(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("recover-mvcc") {
-        let regions = matches
-            .values_of("regions")
-            .unwrap()
-            .map(|r| r.parse())
-            .collect::<Result<Vec<_>, _>>()
-            .expect("parse regions fail");
-        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
-        let mut cfg = PdConfig::default();
-        cfg.endpoints = pd_urls;
-        if let Err(e) = cfg.validate() {
-            panic!("invalid pd configuration: {:?}", e);
+        let read_only = matches.is_present("read-only");
+        if matches.is_present("all") {
+            let threads = matches
+                .value_of("threads")
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+            if threads == 0 {
+                panic!("Number of threads can't be 0");
+            }
+            println!(
+                "Recover all, threads: {}, read_only: {}",
+                threads, read_only
+            );
+            debug_executor.recover_mvcc_all(threads, read_only);
+        } else {
+            let regions = matches
+                .values_of("regions")
+                .unwrap()
+                .map(|r| r.parse())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse regions fail");
+            let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+            let mut cfg = PdConfig::default();
+            println!(
+                "Recover regions: {:?}, pd: {:?}, read_only: {}",
+                regions, pd_urls, read_only
+            );
+            cfg.endpoints = pd_urls;
+            if let Err(e) = cfg.validate() {
+                panic!("invalid pd configuration: {:?}", e);
+            }
+            debug_executor.recover_regions_mvcc(mgr, &cfg, regions, read_only);
         }
-        debug_executor.recover_regions_mvcc(mgr, &cfg, regions);
     } else if let Some(matches) = matches.subcommand_matches("unsafe-recover") {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
             let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
@@ -1811,6 +1890,10 @@ fn main() {
     } else {
         let _ = app.print_help();
     }
+}
+
+fn gen_random_bytes(len: usize) -> Vec<u8> {
+    (0..len).map(|_| rand::random::<u8>()).collect()
 }
 
 fn get_module_type(module: &str) -> MODULE {
@@ -2034,7 +2117,7 @@ fn check_run_ldb_cmd() -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::from_hex;
+    use super::*;
 
     #[test]
     fn test_from_hex() {
@@ -2042,5 +2125,11 @@ mod tests {
         assert_eq!(from_hex("74").unwrap(), result);
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
+    }
+
+    #[test]
+    fn test_gen_random_bytes() {
+        assert_eq!(gen_random_bytes(8).len(), 8);
+        assert_eq!(gen_random_bytes(0).len(), 0);
     }
 }

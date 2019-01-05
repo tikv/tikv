@@ -46,6 +46,24 @@ fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> Rpc
 }
 
 #[test]
+fn test_retry_rpc_client() {
+    let eps_count = 1;
+    let mut server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+    let m_eps = eps.clone();
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let m_mgr = mgr.clone();
+    server.stop();
+    let child = thread::spawn(move || {
+        let cfg = new_config(m_eps);
+        assert_eq!(RpcClient::new(&cfg, m_mgr).is_ok(), true);
+    });
+    thread::sleep(Duration::from_millis(500));
+    server.start(&mgr, eps);
+    assert_eq!(child.join().is_ok(), true);
+}
+
+#[test]
 fn test_rpc_client() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);

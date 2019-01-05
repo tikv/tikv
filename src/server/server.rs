@@ -295,7 +295,7 @@ mod tests {
         let cop_read_pool = ReadPool::new(
             "cop-readpool",
             &readpool::Config::default_for_test(),
-            || || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
+            || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
         );
         let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
 

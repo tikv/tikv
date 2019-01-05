@@ -17,6 +17,7 @@ use tipb::schema::ColumnInfo;
 use coprocessor::codec::datum::Datum;
 use coprocessor::*;
 
+/// A `RequestHandler` that always produces errors.
 pub struct ErrorRequestHandler {
     error: Option<Error>,
 }

@@ -8,7 +8,7 @@ publish = false
 default = []
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-mem-profiling = ["jemallocator"]
+mem-profiling = ["jemallocator/profiling"]
 no-fail = ["fail/no_fail"]
 
 [lib]
@@ -42,9 +42,9 @@ harness = false
 path = "benches/coprocessor_executors/mod.rs"
 
 [[bench]]
-name = "engines"
+name = "hierarchy"
 harness = false
-path = "benches/engines/mod.rs"
+path = "benches/hierarchy/mod.rs"
 
 [[bench]]
 name = "misc"
@@ -132,10 +132,8 @@ features = ["nightly", "push", "process"]
 version = "0.1.4"
 
 [dependencies.jemallocator]
-git = "https://github.com/busyjay/jemallocator.git"
-branch = "dev"
-features = ["profiling"]
-optional = true
+features = ["unprefixed_malloc_on_supported_platforms"]
+version = "0.1.9"
 
 [dev-dependencies]
 test_util = { path = "components/test_util" }

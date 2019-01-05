@@ -13,6 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::sync::mpsc;
@@ -33,6 +34,9 @@ use util::{Either, HandyRwLock};
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 
+const MAX_RETRY_TIMES: u64 = 10;
+const RETRY_INTERVAL_MS: u64 = 300;
+
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
@@ -46,29 +50,42 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
-
-        Ok(RpcClient {
-            cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(env, security_mgr, client, members),
-        })
+        for _ in 0..MAX_RETRY_TIMES {
+            match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
+                Ok((client, members)) => {
+                    return Ok(RpcClient {
+                        cluster_id: members.get_header().get_cluster_id(),
+                        leader_client: LeaderClient::new(env, security_mgr, client, members),
+                    })
+                }
+                Err(e) => {
+                    warn!("validate PD endpoints failed: {:?}", e);
+                    thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
+                }
+            }
+        }
+        Err(box_err!("endpoints are invalid"))
     }
 
+    /// Creates a new request header.
     fn header(&self) -> pdpb::RequestHeader {
         let mut header = pdpb::RequestHeader::new();
         header.set_cluster_id(self.cluster_id);
         header
     }
 
+    /// Gets the leader of PD.
     pub fn get_leader(&self) -> Member {
         self.leader_client.get_leader()
     }
 
+    /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option() -> CallOption {
         CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
     }
 
+    /// Gets given key's Region and Region's leader from PD.
     fn get_region_and_leader(&self, key: &[u8]) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
