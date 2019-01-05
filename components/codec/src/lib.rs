@@ -20,6 +20,7 @@ extern crate quick_error;
 extern crate byteorder;
 #[cfg(test)]
 extern crate bytes;
+extern crate libc;
 #[cfg(test)]
 extern crate protobuf;
 #[cfg(test)]

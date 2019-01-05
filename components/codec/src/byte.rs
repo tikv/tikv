@@ -283,16 +283,24 @@ impl MemComparableByteCodec {
                 src_ptr = src_ptr_next;
                 dest_ptr = dest_ptr.offset(MEMCMP_GROUP_SIZE as isize);
 
+                // If there is a padding, check whether or not it is correct.
                 if ::std::intrinsics::unlikely(padding_size > 0) {
+                    // First check padding size.
                     if ::std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
                         return Err(Error::BadPadding);
                     }
-                    let src_slice = ::std::slice::from_raw_parts(
-                        dest_ptr.offset(-(padding_size as isize)),
-                        padding_size as usize,
-                    );
 
-                    if ::std::intrinsics::unlikely(src_slice != T::get_raw_padding(padding_size)) {
+                    // Then check padding content. Use `libc::memcmp` to compare two memory blocks
+                    // is faster than checking pad bytes one by one, since it will compare multiple
+                    // bytes at once.
+                    let base_padding_ptr = dest_ptr.offset(-(padding_size as isize));
+                    let expected_padding_ptr = T::get_raw_padding_ptr();
+                    let cmp_result = ::libc::memcmp(
+                        base_padding_ptr as *const ::libc::c_void,
+                        expected_padding_ptr as *const ::libc::c_void,
+                        padding_size,
+                    );
+                    if ::std::intrinsics::unlikely(cmp_result != 0) {
                         return Err(Error::BadPadding);
                     }
 
@@ -313,8 +321,8 @@ trait MemComparableCodecHelper {
     /// Given a raw padding size byte, interprets the padding size according to correct order.
     fn parse_padding_size(raw_marker: u8) -> usize;
 
-    /// Given a padding size, returns the raw padding bytes.
-    fn get_raw_padding(padding_size: usize) -> &'static [u8];
+    /// Returns a pointer to the raw padding bytes in 8 bytes for current ordering.
+    fn get_raw_padding_ptr() -> *const u8;
 }
 
 struct AscendingMemComparableCodecHelper;
@@ -330,8 +338,8 @@ impl MemComparableCodecHelper for AscendingMemComparableCodecHelper {
     }
 
     #[inline]
-    fn get_raw_padding(padding_size: usize) -> &'static [u8] {
-        &Self::PADDING[..padding_size]
+    fn get_raw_padding_ptr() -> *const u8 {
+        Self::PADDING.as_ptr()
     }
 }
 
@@ -344,8 +352,8 @@ impl MemComparableCodecHelper for DescendingMemComparableCodecHelper {
     }
 
     #[inline]
-    fn get_raw_padding(padding_size: usize) -> &'static [u8] {
-        &Self::PADDING[..padding_size]
+    fn get_raw_padding_ptr() -> *const u8 {
+        Self::PADDING.as_ptr()
     }
 }
 
