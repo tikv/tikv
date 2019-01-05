@@ -154,7 +154,7 @@ impl MemComparableByteCodec {
     /// Note that actual written data may be larger than `written_bytes`. Bytes more than
     /// `written_bytes` are junk and should be ignored.
     ///
-    /// If `src == dest`, please use `try_decode_first_in_place`.
+    /// If `src == dest`, please use `try_decode_first_in_place_desc`.
     ///
     /// # Panics
     ///
