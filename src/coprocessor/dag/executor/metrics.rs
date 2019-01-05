@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use coprocessor::util;
 use prometheus::local::LocalIntCounterVec;
 use std::time::Duration;
 use storage::engine::Statistics;
+use util::time::Instant;
 
 /// `ExecutorMetrics` is metrics collected from executors group by request.
 #[derive(Default, Debug)]
@@ -22,7 +22,7 @@ pub struct ExecutorMetrics {
     pub cf_stats: Statistics,
     pub scan_counter: ScanCounter,
     pub executor_count: ExecCounter,
-    pub runtime_stats: util::RuntimeStats,
+    pub runtime_stats: RuntimeStats,
 }
 
 impl ExecutorMetrics {
@@ -35,7 +35,13 @@ impl ExecutorMetrics {
         self.executor_count.merge(&mut other.executor_count);
     }
 
-    pub fn record_runtime_stats(&mut self, d: Duration) {
+    pub fn record_runtime_stats(&mut self, now: Instant) -> Guard {
+        return Guard {
+            now: now,
+            runtime_stats: &mut self.runtime_stats,
+        };
+
+        /*
         self.runtime_stats.record_and_set(
             d,
             self.scan_counter
@@ -43,6 +49,7 @@ impl ExecutorMetrics {
                 .checked_add(self.scan_counter.point)
                 .unwrap() as i64,
         );
+        */
     }
 }
 
@@ -124,5 +131,86 @@ impl ExecCounter {
         metrics
             .with_label_values(&["aggregation"])
             .inc_by(self.aggregation);
+    }
+}
+
+// RuntimeStats collects one executor's execution info.
+#[derive(Debug, Default)]
+pub struct RuntimeStats {
+    // executor consume time.
+    pub consume: Duration,
+    // executor's Next() called times.
+    pub count: i64,
+    // executor return row count.
+    pub rows: i64,
+}
+
+impl RuntimeStats {
+    // Record records executor's execution.
+    pub fn record(&mut self, d: Duration, row_num: i64) {
+        self.consume += d;
+        self.count += 1;
+        self.rows += row_num;
+    }
+
+    // Record and set records executor's elapsed time and set row_num
+    pub fn record_and_set(&mut self, d: Duration, row_num: i64) {
+        self.consume += d;
+        self.count += 1;
+        self.rows = row_num;
+    }
+}
+
+#[derive(Debug)]
+pub struct Guard<'a> {
+    //pub struct Guard {
+    pub now: Instant,
+    pub runtime_stats: &'a mut RuntimeStats,
+}
+
+impl<'a> Drop for Guard<'a> {
+    //impl Drop for Guard {
+    fn drop(&mut self) {
+        self.runtime_stats.consume += self.now.elapsed();
+        self.runtime_stats.rows += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record() {
+        let mut runtime_stats = RuntimeStats {
+            consume: Duration::new(0, 1),
+            count: 2,
+            rows: 3,
+        };
+        let cases = vec![(1, 1, 2, 3, 4), (2, 2, 4, 4, 6)];
+
+        for (d, row_num, exp_time, exp_count, exp_rows) in cases {
+            runtime_stats.record(Duration::from_nanos(d), row_num);
+            assert_eq!(runtime_stats.consume.as_nanos(), exp_time);
+            assert_eq!(runtime_stats.count, exp_count);
+            assert_eq!(runtime_stats.rows, exp_rows);
+        }
+    }
+
+    #[test]
+    fn test_record_and_set() {
+        let mut runtime_stats = RuntimeStats {
+            consume: Duration::new(0, 1),
+            count: 2,
+            rows: 3,
+        };
+        let cases = vec![(1, 1, 2, 3, 1), (2, 2, 4, 4, 2)];
+
+        for (d, row_num, exp_time, exp_count, exp_rows) in cases {
+            runtime_stats.record_and_set(Duration::from_nanos(d), row_num);
+            assert_eq!(runtime_stats.consume.as_nanos(), exp_time);
+            assert_eq!(runtime_stats.count, exp_count);
+            assert_eq!(runtime_stats.rows, exp_rows);
+        }
     }
 }

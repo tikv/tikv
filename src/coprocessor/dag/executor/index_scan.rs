@@ -29,12 +29,11 @@ use coprocessor::util;
 use coprocessor::*;
 
 use storage::{Key, Store};
+use util::time::Instant;
 
 use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
 use super::{Executor, Row};
-
-use util::time::Instant;
 
 /// Scans rows from table indexes.
 ///
@@ -179,12 +178,13 @@ impl<S: Store> IndexScanExecutor<S> {
 impl<S: Store> Executor for IndexScanExecutor<S> {
     fn next(&mut self) -> Result<Option<Row>> {
         let now = Instant::now_coarse();
+        self.metrics.runtime_stats.count += 1;
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
                 if let Some(counts) = self.counts.as_mut() {
                     counts.last_mut().map_or((), |val| *val += 1);
                 }
-                self.metrics.record_runtime_stats(now.elapsed());
+                let _guard = self.metrics.record_runtime_stats(now);
                 return Ok(Some(row));
             }
             if let Some(range) = self.key_ranges.next() {
@@ -197,7 +197,7 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
                         if let Some(counts) = self.counts.as_mut() {
                             counts.last_mut().map_or((), |val| *val += 1);
                         }
-                        self.metrics.record_runtime_stats(now.elapsed());
+                        let _guard = self.metrics.record_runtime_stats(now);
                         return Ok(Some(row));
                     }
                     continue;
