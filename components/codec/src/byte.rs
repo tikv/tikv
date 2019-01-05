@@ -17,7 +17,7 @@ use super::{Error, Result};
 pub struct MemComparableByteCodec;
 
 const MEMCMP_GROUP_SIZE: usize = 8;
-const MEMCMP_PADDING: u8 = 0;
+const MEMCMP_PAD_BYTE: u8 = 0;
 
 impl MemComparableByteCodec {
     /// Calculates the length of the value after encoding.
@@ -39,13 +39,14 @@ impl MemComparableByteCodec {
     /// You can calculate required space size via `encoded_len`.
     pub fn encode_all(src: &[u8], dest: &mut [u8]) -> usize {
         // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
-
-        assert!(dest.len() >= Self::encoded_len(src.len()));
-
         unsafe {
+            let src_len = src.len();
+            let dest_len = dest.len();
+            assert!(dest_len >= Self::encoded_len(src_len));
+
             let mut src_ptr = src.as_ptr();
             let mut dest_ptr = dest.as_mut_ptr();
-            let src_ptr_end = src_ptr.offset(src.len() as isize);
+            let src_ptr_end = src_ptr.offset(src_len as isize);
 
             // There must be 0 or more zero padding groups and 1 non-zero padding groups
             // in the output.
@@ -68,11 +69,11 @@ impl MemComparableByteCodec {
             ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
             ::std::ptr::write_bytes(
                 dest_ptr.offset(remaining_size as isize),
-                MEMCMP_PADDING,
+                MEMCMP_PAD_BYTE,
                 padding_size,
             );
             dest_ptr = dest_ptr.offset(MEMCMP_GROUP_SIZE as isize);
-            dest_ptr.write_unaligned(padding_marker);
+            dest_ptr.write(padding_marker);
             (dest_ptr.offset_from(dest.as_mut_ptr()) + 1) as usize
         }
     }
@@ -102,7 +103,6 @@ impl MemComparableByteCodec {
     /// Panics if there is not enough space in `dest` for writing encoded bytes.
     ///
     /// You can calculate required space size via `encoded_len`.
-    #[inline]
     pub fn encode_all_desc(src: &[u8], dest: &mut [u8]) -> usize {
         let encoded_len = Self::encode_all(src, dest);
         Self::flip_bytes_in_place(dest, encoded_len);
@@ -119,7 +119,7 @@ impl MemComparableByteCodec {
     /// Note that actual written data may be larger than `written_bytes`. Bytes more than
     /// `written_bytes` are junk and should be ignored.
     ///
-    /// This function works correctly when `src == dest`.
+    /// If `src == dest`, please use `try_decode_first_in_place`.
     ///
     /// # Panics
     ///
@@ -134,9 +134,14 @@ impl MemComparableByteCodec {
     /// Returns `Error::BadPadding` if padding in `src` is incorrect.
     ///
     /// When there is an error, `dest` may contain partially written data.
-    #[inline]
     pub fn try_decode_first(src: &[u8], dest: &mut [u8]) -> Result<(usize, usize)> {
-        Self::try_decode_first_internal(src, dest, AscendingMemComparableCodecHelper)
+        Self::try_decode_first_internal(
+            src.as_ptr(),
+            src.len(),
+            dest.as_mut_ptr(),
+            dest.len(),
+            AscendingMemComparableCodecHelper,
+        )
     }
 
     /// Decodes bytes in descending memory-comparable format in the `src` into `dest`.
@@ -149,7 +154,7 @@ impl MemComparableByteCodec {
     /// Note that actual written data may be larger than `written_bytes`. Bytes more than
     /// `written_bytes` are junk and should be ignored.
     ///
-    /// This function works correctly when `src == dest`.
+    /// If `src == dest`, please use `try_decode_first_in_place`.
     ///
     /// # Panics
     ///
@@ -164,10 +169,14 @@ impl MemComparableByteCodec {
     /// Returns `Error::BadPadding` if padding in `src` is incorrect.
     ///
     /// When there is an error, `dest` may contain partially written data.
-    #[inline]
     pub fn try_decode_first_desc(src: &[u8], dest: &mut [u8]) -> Result<(usize, usize)> {
-        let (read_bytes, written_bytes) =
-            Self::try_decode_first_internal(src, dest, DescendingMemComparableCodecHelper)?;
+        let (read_bytes, written_bytes) = Self::try_decode_first_internal(
+            src.as_ptr(),
+            src.len(),
+            dest.as_mut_ptr(),
+            dest.len(),
+            DescendingMemComparableCodecHelper,
+        )?;
         Self::flip_bytes_in_place(dest, written_bytes);
         Ok((read_bytes, written_bytes))
     }
@@ -175,7 +184,7 @@ impl MemComparableByteCodec {
     /// Decodes bytes in ascending memory-comparable format in place, i.e. decoded data will
     /// overwrite the encoded data.
     ///
-    /// If there are multiple encoded byte slices in `src`, only the first one will be decoded.
+    /// If there are multiple encoded byte slices in `buffer`, only the first one will be decoded.
     ///
     /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number of bytes read
     /// and `written_bytes` is the number of bytes written.
@@ -185,24 +194,25 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `src` is drained while expecting more data.
+    /// Returns `Error::UnexpectedEOF` if `buffer` is drained while expecting more data.
     ///
-    /// Returns `Error::BadPadding` if padding in `src` is incorrect.
+    /// Returns `Error::BadPadding` if padding in `buffer` is incorrect.
     ///
     /// When there is an error, `dest` may contain partially written data.
-    #[inline]
-    pub fn try_decode_first_in_place(src: &mut [u8]) -> Result<(usize, usize)> {
-        let ptr = src.as_mut_ptr();
-        let len = src.len();
-        let src = unsafe { ::std::slice::from_raw_parts(ptr, len) };
-        let dest = unsafe { ::std::slice::from_raw_parts_mut(ptr, len) };
-        Self::try_decode_first(src, dest)
+    pub fn try_decode_first_in_place(buffer: &mut [u8]) -> Result<(usize, usize)> {
+        Self::try_decode_first_internal(
+            buffer.as_ptr(),
+            buffer.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            AscendingMemComparableCodecHelper,
+        )
     }
 
     /// Decodes bytes in descending memory-comparable format in place, i.e. decoded data will
     /// overwrite the encoded data.
     ///
-    /// If there are multiple encoded byte slices in `src`, only the first one will be decoded.
+    /// If there are multiple encoded byte slices in `buffer`, only the first one will be decoded.
     ///
     /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number of bytes read
     /// and `written_bytes` is the number of bytes written.
@@ -212,39 +222,55 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `src` is drained while expecting more data.
+    /// Returns `Error::UnexpectedEOF` if `buffer` is drained while expecting more data.
     ///
-    /// Returns `Error::BadPadding` if padding in `src` is incorrect.
+    /// Returns `Error::BadPadding` if padding in `buffer` is incorrect.
     ///
     /// When there is an error, `dest` may contain partially written data.
-    #[inline]
-    pub fn try_decode_first_in_place_desc(src: &mut [u8]) -> Result<(usize, usize)> {
-        let ptr = src.as_mut_ptr();
-        let len = src.len();
-        let src = unsafe { ::std::slice::from_raw_parts(ptr, len) };
-        let dest = unsafe { ::std::slice::from_raw_parts_mut(ptr, len) };
-        Self::try_decode_first_desc(src, dest)
+    pub fn try_decode_first_in_place_desc(buffer: &mut [u8]) -> Result<(usize, usize)> {
+        let (read_bytes, written_bytes) = Self::try_decode_first_internal(
+            buffer.as_ptr(),
+            buffer.len(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            DescendingMemComparableCodecHelper,
+        )?;
+        Self::flip_bytes_in_place(buffer, written_bytes);
+        Ok((read_bytes, written_bytes))
     }
 
-    /// The internal implementation for both `try_decode_first` and `try_decode_first_desc`.
+    /// The internal implementation for:
+    /// - `try_decode_first`
+    /// - `try_decode_first_desc`
+    /// - `try_decode_first_in_place`
+    /// - `try_decode_first_in_place_desc`
     ///
-    /// It uses generics to specialize different code path for ascending and descending decoding.
-    /// Please refer to `try_decode_first` to see the meaning of return values, panics and errors.
+    /// This function uses pointers to accept the scenario that `src == dest`.
+    ///
+    /// This function also uses generics to specialize different code path for ascending and
+    /// descending decoding, which performs better than inlining a flag.
+    ///
+    /// Please refer to `try_decode_first` for the meaning of return values, panics and errors.
+    #[inline(always)]
     fn try_decode_first_internal<T: MemComparableCodecHelper>(
-        src: &[u8],
-        dest: &mut [u8],
+        mut src_ptr: *const u8,
+        src_len: usize,
+        mut dest_ptr: *mut u8,
+        dest_len: usize,
         _helper: T,
     ) -> Result<(usize, usize)> {
-        assert!(dest.len() >= src.len());
+        assert!(dest_len >= src_len);
+
+        // Make copies for the original pointer for calculating filled / read bytes.
+        let src_ptr_untouched = src_ptr;
+        let dest_ptr_untouched = dest_ptr;
 
         unsafe {
-            let mut src_ptr = src.as_ptr();
-            let mut dest_ptr = dest.as_mut_ptr();
-            let src_ptr_end = src_ptr.offset(src.len() as isize);
+            let src_ptr_end = src_ptr.offset(src_len as isize);
 
             loop {
                 let src_ptr_next = src_ptr.offset((MEMCMP_GROUP_SIZE + 1) as isize);
-                if src_ptr_next > src_ptr_end {
+                if ::std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
                     return Err(Error::UnexpectedEOF);
                 }
 
@@ -257,8 +283,8 @@ impl MemComparableByteCodec {
                 src_ptr = src_ptr_next;
                 dest_ptr = dest_ptr.offset(MEMCMP_GROUP_SIZE as isize);
 
-                if padding_size > 0 {
-                    if padding_size > MEMCMP_GROUP_SIZE {
+                if ::std::intrinsics::unlikely(padding_size > 0) {
+                    if ::std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
                         return Err(Error::BadPadding);
                     }
                     let src_slice = ::std::slice::from_raw_parts(
@@ -266,12 +292,13 @@ impl MemComparableByteCodec {
                         padding_size as usize,
                     );
 
-                    if src_slice != T::get_raw_padding(padding_size) {
+                    if ::std::intrinsics::unlikely(src_slice != T::get_raw_padding(padding_size)) {
                         return Err(Error::BadPadding);
                     }
 
-                    let read_bytes = src_ptr.offset_from(src.as_ptr()) as usize;
-                    let written_bytes = dest_ptr.offset_from(dest.as_ptr()) as usize - padding_size;
+                    let read_bytes = src_ptr.offset_from(src_ptr_untouched) as usize;
+                    let written_bytes =
+                        dest_ptr.offset_from(dest_ptr_untouched) as usize - padding_size;
 
                     return Ok((read_bytes, written_bytes));
                 }
@@ -295,7 +322,7 @@ struct AscendingMemComparableCodecHelper;
 struct DescendingMemComparableCodecHelper;
 
 impl MemComparableCodecHelper for AscendingMemComparableCodecHelper {
-    const PADDING: [u8; MEMCMP_GROUP_SIZE] = [MEMCMP_PADDING; MEMCMP_GROUP_SIZE];
+    const PADDING: [u8; MEMCMP_GROUP_SIZE] = [MEMCMP_PAD_BYTE; MEMCMP_GROUP_SIZE];
 
     #[inline]
     fn parse_padding_size(raw_marker: u8) -> usize {
@@ -309,7 +336,7 @@ impl MemComparableCodecHelper for AscendingMemComparableCodecHelper {
 }
 
 impl MemComparableCodecHelper for DescendingMemComparableCodecHelper {
-    const PADDING: [u8; MEMCMP_GROUP_SIZE] = [!MEMCMP_PADDING; MEMCMP_GROUP_SIZE];
+    const PADDING: [u8; MEMCMP_GROUP_SIZE] = [!MEMCMP_PAD_BYTE; MEMCMP_GROUP_SIZE];
 
     #[inline]
     fn parse_padding_size(raw_marker: u8) -> usize {
@@ -792,7 +819,7 @@ mod benches {
                     ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
                     ::std::ptr::write_bytes(
                         dest_ptr.offset(remaining_size as isize),
-                        super::MEMCMP_PADDING,
+                        super::MEMCMP_PAD_BYTE,
                         padding_size,
                     );
                 }

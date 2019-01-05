@@ -396,9 +396,6 @@ impl NumberCodec {
     /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
     #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
-        // This efficient implementation is ported and modified from facebook/folly.
-        // Copyright 2013-present Facebook, Inc.
-
         #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
         unsafe {
             let mut ptr = buf.as_ptr();
