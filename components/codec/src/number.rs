@@ -378,7 +378,7 @@ impl NumberCodec {
                 // We have already checked buffer size at the beginning so that it is safe to
                 // directly access the buffer.
                 *ptr = 0x80 | (v & 0x7f) as u8;
-                ptr = ptr.offset(1);
+                ptr = ptr.add(1);
                 v >>= 7;
             }
             *ptr = v as u8;
@@ -412,20 +412,20 @@ impl NumberCodec {
                     if b < 0x80 {
                         return Ok((val, i));
                     }
-                    ptr = ptr.offset(1);
+                    ptr = ptr.add(1);
                     shift += 7;
                 }
                 b = *ptr as u64;
                 val |= (b & 0x01) << shift;
                 Ok((val, 10))
             } else {
-                let ptr_end = buf.as_ptr().offset(len as isize);
+                let ptr_end = buf.as_ptr().add(len);
                 // Slow path
                 let mut shift = 0;
                 while ptr != ptr_end && *ptr >= 0x80 {
                     val |= ((*ptr & 0x7f) as u64) << shift;
                     shift += 7;
-                    ptr = ptr.offset(1);
+                    ptr = ptr.add(1);
                 }
                 if ::std::intrinsics::unlikely(ptr == ptr_end) {
                     return Err(Error::BufferTooSmall);

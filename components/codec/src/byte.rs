@@ -46,7 +46,7 @@ impl MemComparableByteCodec {
 
             let mut src_ptr = src.as_ptr();
             let mut dest_ptr = dest.as_mut_ptr();
-            let src_ptr_end = src_ptr.offset(src_len as isize);
+            let src_ptr_end = src_ptr.add(src_len);
 
             // There must be 0 or more zero padding groups and 1 non-zero padding groups
             // in the output.
@@ -55,11 +55,11 @@ impl MemComparableByteCodec {
             // Let's first write these zero padding groups.
             for _ in 0..zero_padding_groups {
                 ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
-                src_ptr = src_ptr.offset(MEMCMP_GROUP_SIZE as isize);
-                dest_ptr = dest_ptr.offset(MEMCMP_GROUP_SIZE as isize);
+                src_ptr = src_ptr.add(MEMCMP_GROUP_SIZE);
+                dest_ptr = dest_ptr.add(MEMCMP_GROUP_SIZE);
 
                 dest_ptr.write(!0);
-                dest_ptr = dest_ptr.offset(1);
+                dest_ptr = dest_ptr.add(1);
             }
 
             // Then, write the last group, which should never be zero padding.
@@ -67,12 +67,8 @@ impl MemComparableByteCodec {
             let padding_size = MEMCMP_GROUP_SIZE - remaining_size;
             let padding_marker = !(padding_size as u8);
             ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
-            ::std::ptr::write_bytes(
-                dest_ptr.offset(remaining_size as isize),
-                MEMCMP_PAD_BYTE,
-                padding_size,
-            );
-            dest_ptr = dest_ptr.offset(MEMCMP_GROUP_SIZE as isize);
+            ::std::ptr::write_bytes(dest_ptr.add(remaining_size), MEMCMP_PAD_BYTE, padding_size);
+            dest_ptr = dest_ptr.add(MEMCMP_GROUP_SIZE);
             dest_ptr.write(padding_marker);
             (dest_ptr.offset_from(dest.as_mut_ptr()) + 1) as usize
         }
@@ -266,10 +262,10 @@ impl MemComparableByteCodec {
         let dest_ptr_untouched = dest_ptr;
 
         unsafe {
-            let src_ptr_end = src_ptr.offset(src_len as isize);
+            let src_ptr_end = src_ptr.add(src_len);
 
             loop {
-                let src_ptr_next = src_ptr.offset((MEMCMP_GROUP_SIZE + 1) as isize);
+                let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
                 if ::std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
                     return Err(Error::UnexpectedEOF);
                 }
@@ -278,10 +274,9 @@ impl MemComparableByteCodec {
                 // length according to padding size if it is the last block.
                 ::std::ptr::copy(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
 
-                let padding_size =
-                    T::parse_padding_size(*src_ptr.offset(MEMCMP_GROUP_SIZE as isize));
+                let padding_size = T::parse_padding_size(*src_ptr.add(MEMCMP_GROUP_SIZE));
                 src_ptr = src_ptr_next;
-                dest_ptr = dest_ptr.offset(MEMCMP_GROUP_SIZE as isize);
+                dest_ptr = dest_ptr.add(MEMCMP_GROUP_SIZE);
 
                 // If there is a padding, check whether or not it is correct.
                 if ::std::intrinsics::unlikely(padding_size > 0) {
@@ -293,7 +288,7 @@ impl MemComparableByteCodec {
                     // Then check padding content. Use `libc::memcmp` to compare two memory blocks
                     // is faster than checking pad bytes one by one, since it will compare multiple
                     // bytes at once.
-                    let base_padding_ptr = dest_ptr.offset(-(padding_size as isize));
+                    let base_padding_ptr = dest_ptr.sub(padding_size);
                     let expected_padding_ptr = T::get_raw_padding_ptr();
                     let cmp_result = ::libc::memcmp(
                         base_padding_ptr as *const ::libc::c_void,
@@ -618,7 +613,7 @@ mod tests {
             // Test `dest` overlaps `src`
             let mut buffer = payload_encoded.clone();
             let output_len = unsafe {
-                let src_ptr = buffer.as_mut_ptr().offset(encoded_prefix_len as isize);
+                let src_ptr = buffer.as_mut_ptr().add(encoded_prefix_len);
                 let slice_len = buffer.len() - encoded_prefix_len;
                 let src = ::std::slice::from_raw_parts(src_ptr, slice_len);
                 let dest = ::std::slice::from_raw_parts_mut(src_ptr, slice_len);
@@ -808,13 +803,13 @@ mod benches {
         unsafe {
             let mut src_ptr = src.as_ptr();
             let mut dest_ptr = dest.as_mut_ptr();
-            let src_ptr_end = src_ptr.offset(src.len() as isize);
-            let dest_ptr_end = dest_ptr.offset(dest.len() as isize);
+            let src_ptr_end = src_ptr.add(src.len());
+            let dest_ptr_end = dest_ptr.add(dest.len());
 
             while src_ptr <= src_ptr_end {
                 // We needs to write GROUP_SIZE + 1 bytes then, so we assert a bound.
                 assert!(
-                    dest_ptr.offset(super::MEMCMP_GROUP_SIZE as isize + 1) <= dest_ptr_end,
+                    dest_ptr.add(super::MEMCMP_GROUP_SIZE + 1) <= dest_ptr_end,
                     "dest out of bound"
                 );
                 let remaining_size = src_ptr_end.offset_from(src_ptr) as usize;
@@ -826,17 +821,17 @@ mod benches {
                     padding_size = super::MEMCMP_GROUP_SIZE - remaining_size;
                     ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
                     ::std::ptr::write_bytes(
-                        dest_ptr.offset(remaining_size as isize),
+                        dest_ptr.add(remaining_size),
                         super::MEMCMP_PAD_BYTE,
                         padding_size,
                     );
                 }
-                src_ptr = src_ptr.offset(super::MEMCMP_GROUP_SIZE as isize);
-                dest_ptr = dest_ptr.offset(super::MEMCMP_GROUP_SIZE as isize);
+                src_ptr = src_ptr.add(super::MEMCMP_GROUP_SIZE);
+                dest_ptr = dest_ptr.add(super::MEMCMP_GROUP_SIZE);
 
                 let padding_marker = !(padding_size as u8);
                 dest_ptr.write(padding_marker);
-                dest_ptr = dest_ptr.offset(1);
+                dest_ptr = dest_ptr.add(1);
             }
 
             dest_ptr.offset_from(dest.as_mut_ptr()) as usize
@@ -967,8 +962,8 @@ mod benches {
                 // and the src and dest may overlap
                 // if src == dest do nothing
                 ::std::ptr::copy(
-                    data.as_ptr().offset(read_offset as isize),
-                    data.as_mut_ptr().offset(write_offset as isize),
+                    data.as_ptr().add(read_offset),
+                    data.as_mut_ptr().add(write_offset),
                     ENC_GROUP_SIZE,
                 );
             }
