@@ -34,9 +34,9 @@ pub struct Config {
 }
 
 impl Config {
-    // A shortcut to construct Config with the specified concurrency.
-    //
-    // Note: it is only used in tests.
+    /// A shortcut to construct Config with the specified concurrency.
+    ///
+    /// Note: it is only used in tests.
     #[doc(hidden)]
     pub fn default_with_concurrency(concurrency: usize) -> Self {
         Self {
