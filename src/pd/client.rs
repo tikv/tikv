@@ -13,6 +13,7 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::sync::mpsc;
@@ -33,6 +34,9 @@ use util::{Either, HandyRwLock};
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 
+const MAX_RETRY_TIMES: u64 = 10;
+const RETRY_INTERVAL_MS: u64 = 300;
+
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
@@ -46,12 +50,21 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
-
-        Ok(RpcClient {
-            cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(env, security_mgr, client, members),
-        })
+        for _ in 0..MAX_RETRY_TIMES {
+            match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
+                Ok((client, members)) => {
+                    return Ok(RpcClient {
+                        cluster_id: members.get_header().get_cluster_id(),
+                        leader_client: LeaderClient::new(env, security_mgr, client, members),
+                    })
+                }
+                Err(e) => {
+                    warn!("validate PD endpoints failed: {:?}", e);
+                    thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
+                }
+            }
+        }
+        Err(box_err!("endpoints are invalid"))
     }
 
     /// Creates a new request header.
@@ -479,5 +492,32 @@ impl PdClient for RpcClient {
 
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
         self.leader_client.on_reconnect(Box::new(f))
+    }
+
+    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetGCSafePointRequest::new();
+        req.set_header(self.header());
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetGCSafePointRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client
+                .rl()
+                .client
+                .get_gc_safe_point_async_opt(&req, option)
+                .unwrap();
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_gc_safe_point"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(resp.get_safe_point())
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 }
