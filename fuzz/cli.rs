@@ -35,7 +35,7 @@ extern crate regex;
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use failure::{Error, ResultExt};
@@ -172,7 +172,8 @@ fn get_seed_dir(target: &str) -> PathBuf {
 }
 
 /// Create corpus dir for fuzz target
-fn create_corpus_dir(base: &PathBuf, target: &str) -> Result<PathBuf, Error> {
+fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf, Error> {
+    let base = base.as_ref();
     let corpus_dir = base.join(&format!("corpus-{}", target));
     fs::create_dir_all(&corpus_dir).context(format!(
         "unable to create corpus dir for {}{}",
@@ -187,7 +188,7 @@ fn run_afl(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Afl;
 
     let seed_dir = get_seed_dir(target);
-    let corpus_dir = create_corpus_dir(&PathBuf::from(fuzzer.directory()), target)?;
+    let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
@@ -241,7 +242,6 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
     let hfuzz_args = format!(
         "-f {} \
          --exit_upon_crash \
-         --run_time 5 \
          {}",
         get_seed_dir(target).to_string_lossy(),
         env::var("HFUZZ_RUN_ARGS").unwrap_or_default()
@@ -272,7 +272,7 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
 fn run_libfuzzer(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Libfuzzer;
     let seed_dir = get_seed_dir(target);
-    let corpus_dir = create_corpus_dir(&PathBuf::from(fuzzer.directory()), target)?;
+    let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
     #[cfg(target_os = "macos")]
     let target_platform = "x86_64-apple-darwin";
@@ -301,7 +301,7 @@ fn run_libfuzzer(target: &str) -> Result<(), Error> {
     asan_options.push_str(" detect_odr_violation=0");
 
     let fuzzer_bin = Command::new("cargo")
-        .args(&["run", "--target", &target_platform, "--bin", target])
+        .args(&["run", "--target", &target_platform, "--bin", target, "--"])
         .arg(&corpus_dir)
         .arg(&seed_dir)
         .env("RUSTFLAGS", &rust_flags)
