@@ -490,8 +490,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let mut res = val.to_duration()?;
-        res.round_frac(self.field_type.decimal() as i8)?;
+        let res = val
+            .to_duration()?
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -501,8 +502,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut res = val.into_owned();
-        res.round_frac(self.field_type.decimal() as i8)?;
+        let res = val
+            .into_owned()
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -595,7 +597,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let mut val = val.into_owned();
-        val.fsp = mysql::MAX_FSP as u8;
+        val.set_fsp(mysql::MAX_FSP as u8);
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }
@@ -1640,7 +1642,7 @@ mod tests {
             let data = res.unwrap().into_owned();
             let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
-                expt.fsp = to_fsp as u8;
+                expt.set_fsp(to_fsp as u8);
             }
             assert_eq!(
                 data.to_string(),
