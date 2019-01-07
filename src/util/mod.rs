@@ -449,14 +449,11 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(
-    panic_abort: bool,
-    guard: Option<::slog_scope::GlobalLoggerGuard>,
-    data_dir: &str,
-) {
+pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
+    extern crate log;
+
     use std::panic;
     use std::process;
-    use std::sync::Mutex;
 
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
@@ -472,9 +469,6 @@ pub fn set_exit_hook(
         .name(thd_name!("backtrace-loader"))
         .spawn(::backtrace::Backtrace::new)
         .unwrap();
-
-    // Hold the guard.
-    let log_guard = Mutex::new(guard);
 
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
@@ -504,8 +498,20 @@ pub fn set_exit_hook(
             orig_hook(info);
         }
 
-        // To collect remaining logs, drop the guard before exit.
-        drop(log_guard.lock().unwrap().take());
+        // HACK! To collect remaining logs and avoid no global logger,
+        // replace the old logger with a terminal logger.
+        if let Some(level) = log::max_log_level().to_log_level() {
+            info!("logger switched, outputs further logs to stderr");
+            let drainer = logger::term_drainer();
+            if let Ok(g) = logger::init_log(
+                drainer,
+                logger::convert_log_level_to_slog_level(level),
+                false, // Use sync logger to avoid an unnecessary log thread.
+                false, // It is initialized already.
+            ) {
+                g.cancel_reset();
+            }
+        }
 
         // If PANIC_MARK is true, create panic mark file.
         if panic_mark_is_on() {
