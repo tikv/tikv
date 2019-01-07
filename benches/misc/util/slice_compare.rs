@@ -23,16 +23,12 @@ fn gen_rand_str(len: usize) -> Vec<u8> {
 
 fn bench_slice_compare_less(b: &mut Bencher, n: usize) {
     let (s1, s2) = (gen_rand_str(n), gen_rand_str(n));
-    b.iter(|| {
-        &s1 < &s2
-    });
+    b.iter(|| s1 < s2);
 }
 
 fn bench_slice_compare_greater(b: &mut Bencher, n: usize) {
     let (s1, s2) = (gen_rand_str(n), gen_rand_str(n));
-    b.iter(|| {
-        &s1 > &s2
-    });
+    b.iter(|| s1 > s2);
 }
 
 #[bench]

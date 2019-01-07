@@ -125,7 +125,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         }
         if let Some(ref u) = upper_bound {
             if let Some(b) = self.snapshot.physical_upper_bound() {
-                if !b.is_empty() && (u.as_encoded().as_slice() > b || u.is_empty()) {
+                if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     return Err(Error::InvalidReqRange {
                         start: lower_bound.map(|b| b.into_encoded()),
                         end: Some(u.as_encoded().clone()),

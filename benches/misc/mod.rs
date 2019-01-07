@@ -40,8 +40,8 @@ mod coprocessor;
 mod raftkv;
 mod serialization;
 mod storage;
-mod writebatch;
 mod util;
+mod writebatch;
 
 #[bench]
 fn _bench_check_requirement(_: &mut test::Bencher) {
