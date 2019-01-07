@@ -479,7 +479,8 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
         }
     }
 
-    // When write batch contains more than `recommended` keys, write the batch to engine.
+    // When write batch contains more than `recommended` keys, write the batch
+    // to engine.
     if wb_keys >= WRITE_BATCH_MAX_KEYS {
         return true;
     }
@@ -498,7 +499,19 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
-/// The apply deletgate of the Region which is responsible to handle committed raft entries of a Region.
+/// The apply deletgate of a Region which is responsible to handle committed
+/// raft log entries of a Region.
+///
+/// `Apply` is a term of Raft, which means executing the actual commands.
+/// In Raft, once some log entries are committed, for every peer of the Raft
+/// group will apply the logs one by one. For write commands, it does write or
+/// delete to local engine; for admin commands, it does some meta change of the
+/// Raft group.
+///
+/// `Delegate` is just a structure to congregate all apply related fields of a
+/// Region. The apply worker receives all the apply tasks of different Regions
+/// located at this store, and it will get the corresponding apply delegate to
+/// handle the apply task to make the code logic more clear.
 #[derive(Debug)]
 pub struct ApplyDelegate {
     /// the ID of the peer
