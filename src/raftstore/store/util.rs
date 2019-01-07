@@ -1350,7 +1350,8 @@ mod tests {
 
     #[test]
     fn test_region_maybe_inaccurate_approximate_size() {
-        let path = TempDir::new("_test_raftstore_region_maybe_inaccurate_approximate_size").expect("");
+        let path =
+            TempDir::new("_test_raftstore_region_maybe_inaccurate_approximate_size").expect("");
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
