@@ -466,7 +466,7 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
     cb.invoke_with_response(resp);
 }
 
-/// Checks if a write is needed to be issued before handle the command.
+/// Checks if a write is needed to be issued before handling the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
@@ -512,14 +512,15 @@ pub struct ApplyDelegate {
     /// the local engine to write kv and raft data
     engines: Engines,
 
-    /// It is set to true when removing ourself because of ConfChangeType::RemoveNode, and then
+    /// It is set to true when removing ourself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
     /// the commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
 
     /// TiKV writes apply_state to KV RocksDB, in one write batch together with kv data.
-    /// Because if we write it to Raft RocksDB, apply_state and kv data (Put, Delete) are in
+    ///
+    /// If we write it to Raft RocksDB, apply_state and kv data (Put, Delete) are in
     /// separate WAL file. When power failure, for current raft log, apply_index may synced
     /// to file, but KV data may not synced to file, so we will lose data.
     apply_state: RaftApplyState,
@@ -898,7 +899,6 @@ impl ExecContext {
     }
 }
 
-// Here we implement all commands.
 impl ApplyDelegate {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(

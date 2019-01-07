@@ -203,7 +203,7 @@ fn collect_ranges_need_compact(
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
-    // Checks the SST properties for each range, and TiKV will compact a range if the range
+    // Check the SST properties for each range, and TiKV will compact a range if the range
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
@@ -211,7 +211,7 @@ fn collect_ranges_need_compact(
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
-        // Gets total entries and total versions in this range and checks if it needs to be compacted.
+        // Get total entries and total versions in this range and checks if it needs to be compacted.
         if let Some((num_ent, num_ver)) =
             get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
@@ -239,7 +239,7 @@ fn collect_ranges_need_compact(
         }
     }
 
-    // Saves the last range that needs to be compacted.
+    // Save the last range that needs to be compacted.
     if compact_start.is_some() {
         ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
     }
@@ -278,7 +278,7 @@ mod tests {
 
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 
-        // Generates the first SST file.
+        // Generate the first SST file.
         let wb = WriteBatch::new();
         for i in 0..1000 {
             let k = format!("key_{}", i);
@@ -288,7 +288,7 @@ mod tests {
         db.write(wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
-        // Generates another SST file has the same content with first SST file.
+        // Generate another SST file has the same content with first SST file.
         let wb = WriteBatch::new();
         for i in 0..1000 {
             let k = format!("key_{}", i);
@@ -298,12 +298,12 @@ mod tests {
         db.write(wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
-        // Gets the total SST files size.
+        // Get the total SST files size.
         let old_sst_files_size = db
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
 
-        // Schedules compact range task.
+        // Schedule compact range task.
         runner.run(Task::Compact {
             cf_name: String::from(CF_DEFAULT),
             start_key: None,
@@ -311,7 +311,7 @@ mod tests {
         });
         sleep(Duration::from_secs(5));
 
-        // Gets the total SST files size after compact range.
+        // Get the total SST files size after compact range.
         let new_sst_files_size = db
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
