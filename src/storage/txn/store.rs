@@ -125,7 +125,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         }
         if let Some(ref u) = upper_bound {
             if let Some(b) = self.snapshot.physical_upper_bound() {
-                if !b.is_empty() && u.as_encoded().as_slice() > b {
+                if !b.is_empty() && (u.as_encoded().as_slice() > b || u.is_empty()) {
                     return Err(Error::InvalidReqRange {
                         start: lower_bound.map(|b| b.into_encoded()),
                         end: Some(u.as_encoded().clone()),
@@ -316,10 +316,14 @@ mod tests {
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{Engine, RocksEngine, RocksSnapshot};
+    use raftstore::store::engine::IterOption;
+    use storage::engine::{Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode};
     use storage::mvcc::Error as MvccError;
     use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, Statistics, TestEngineBuilder};
+    use storage::{
+        CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
+        TestEngineBuilder, Value,
+    };
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -393,6 +397,89 @@ mod tests {
                 IsolationLevel::SI,
                 true,
             )
+        }
+    }
+
+    // Snapshot with bound
+    #[derive(Clone)]
+    struct MockRangeSnapshot {
+        start: Vec<u8>,
+        end: Vec<u8>,
+    }
+
+    #[derive(Default)]
+    struct MockRangeSnapshotIter {}
+
+    impl Iterator for MockRangeSnapshotIter {
+        fn next(&mut self) -> bool {
+            true
+        }
+        fn prev(&mut self) -> bool {
+            true
+        }
+        fn seek(&mut self, _: &Key) -> EngineResult<bool> {
+            Ok(true)
+        }
+        fn seek_for_prev(&mut self, _: &Key) -> EngineResult<bool> {
+            Ok(true)
+        }
+        fn seek_to_first(&mut self) -> bool {
+            true
+        }
+        fn seek_to_last(&mut self) -> bool {
+            true
+        }
+        fn valid(&self) -> bool {
+            true
+        }
+        fn validate_key(&self, _: &Key) -> EngineResult<()> {
+            Ok(())
+        }
+        fn key(&self) -> &[u8] {
+            b""
+        }
+        fn value(&self) -> &[u8] {
+            b""
+        }
+    }
+
+    impl MockRangeSnapshot {
+        fn new(start: Vec<u8>, end: Vec<u8>) -> Self {
+            Self { start, end }
+        }
+    }
+
+    impl Snapshot for MockRangeSnapshot {
+        type Iter = MockRangeSnapshotIter;
+
+        fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn iter(&self, _: IterOption, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+            Ok(Cursor::new(
+                MockRangeSnapshotIter::default(),
+                ScanMode::Forward,
+            ))
+        }
+        fn iter_cf(
+            &self,
+            _: CfName,
+            _: IterOption,
+            _: ScanMode,
+        ) -> EngineResult<Cursor<Self::Iter>> {
+            Ok(Cursor::new(
+                MockRangeSnapshotIter::default(),
+                ScanMode::Forward,
+            ))
+        }
+        fn physical_lower_bound(&self) -> Option<&[u8]> {
+            Some(self.start.as_slice())
+        }
+        fn physical_upper_bound(&self) -> Option<&[u8]> {
+            Some(self.end.as_slice())
         }
     }
 
@@ -515,6 +602,37 @@ mod tests {
             result.push(k);
         }
         assert_eq!(result, expected.into_iter().rev().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_scanner_verify_bound() {
+        let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
+        let store = SnapshotStore::new(snap, 0, IsolationLevel::SI, true);
+        let bound_a = Key::from_encoded(b"a".to_vec());
+        let bound_b = Key::from_encoded(b"b".to_vec());
+        let bound_c = Key::from_encoded(b"c".to_vec());
+        let bound_d = Key::from_encoded(b"d".to_vec());
+        assert!(store.scanner(false, false, None, None).is_ok());
+        assert!(
+            store
+                .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
+                .is_ok()
+        );
+        assert!(
+            store
+                .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
+                .is_err()
+        );
     }
 
     fn gen_fixture_store() -> FixtureStore {

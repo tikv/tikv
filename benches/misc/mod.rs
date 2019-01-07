@@ -41,6 +41,7 @@ mod raftkv;
 mod serialization;
 mod storage;
 mod writebatch;
+mod util;
 
 #[bench]
 fn _bench_check_requirement(_: &mut test::Bencher) {
