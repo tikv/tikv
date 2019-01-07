@@ -32,9 +32,31 @@ fn bench_slice_compare_greater(b: &mut Bencher, n: usize) {
 }
 
 #[bench]
-fn bench_slice_compare(b: &mut Bencher) {
-    for n in &[16, 32, 64, 128, 256, 512, 1024] {
-        bench_slice_compare_less(b, *n as usize);
-        bench_slice_compare_greater(b, *n as usize);
-    }
+fn bench_slice_compare_less_32(b: &mut Bencher) {
+    bench_slice_compare_less(b, 32)
+}
+
+#[bench]
+fn bench_slice_compare_less_64(b: &mut Bencher) {
+    bench_slice_compare_less(b, 64)
+}
+
+#[bench]
+fn bench_slice_compare_less_128(b: &mut Bencher) {
+    bench_slice_compare_less(b, 128)
+}
+
+#[bench]
+fn bench_slice_compare_greater_32(b: &mut Bencher) {
+    bench_slice_compare_greater(b, 32)
+}
+
+#[bench]
+fn bench_slice_compare_greater_64(b: &mut Bencher) {
+    bench_slice_compare_greater(b, 64)
+}
+
+#[bench]
+fn bench_slice_compare_greater_128(b: &mut Bencher) {
+    bench_slice_compare_greater(b, 128)
 }
