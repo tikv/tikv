@@ -36,6 +36,7 @@
 pub mod dag;
 pub mod executor;
 pub mod expr;
+mod pipeline;
 
 pub use self::dag::DAGContext;
 pub use self::executor::{ScanOn, Scanner};
