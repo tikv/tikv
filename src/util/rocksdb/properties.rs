@@ -555,10 +555,10 @@ impl RangeProperties {
             Some((_, v)) => v.get(kind),
             None => 0,
         };
-        let mut range = self.offsets.range::<[u8], _>((Included(end), Unbounded));
-        let end_offset = match range.next() {
+        let range = self.offsets.range::<[u8], _>((Unbounded, Included(end)));
+        let end_offset = match range.last() {
             Some((_, v)) => v.get(kind),
-            None => self.offsets.iter().last().map_or(0, |(_, v)| v.get(kind)),
+            None => 0,
         };
         if end_offset < start_offset {
             panic!(
@@ -923,8 +923,8 @@ mod tests {
             ("k", "k", k, k),
             ("a", "k", k, a),
             ("a", "i", i, a),
-            ("e", "h", i, e),
-            ("g", "h", i, e),
+            ("e", "h", e, e),
+            ("b", "h", e, a),
             ("g", "g", i, i),
         ];
         for &(start, end, end_idx, start_idx) in &cases {
