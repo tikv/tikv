@@ -112,6 +112,28 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<StoreScanner<S>> {
+        // Check request bounds with physical bound
+        if let Some(ref l) = lower_bound {
+            if let Some(b) = self.snapshot.physical_lower_bound() {
+                if !b.is_empty() && l.as_encoded().as_slice() < b {
+                    return Err(Error::InvalidReqRange {
+                        start: Some(l.as_encoded().clone()),
+                        end: upper_bound.map(|b| b.into_encoded()),
+                    });
+                }
+            }
+        }
+        if let Some(ref u) = upper_bound {
+            if let Some(b) = self.snapshot.physical_upper_bound() {
+                if !b.is_empty() && u.as_encoded().as_slice() > b {
+                    return Err(Error::InvalidReqRange {
+                        start: lower_bound.map(|b| b.into_encoded()),
+                        end: Some(u.as_encoded().clone()),
+                    });
+                }
+            }
+        }
+
         let (forward_scanner, backward_scanner) = if !desc {
             let forward_scanner = ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
                 .range(lower_bound, upper_bound)

@@ -23,6 +23,7 @@ pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store, StoreScanner};
+use util::escape;
 
 quick_error! {
     #[derive(Debug)]
@@ -64,6 +65,10 @@ quick_error! {
                         start_ts,
                         commit_ts)
         }
+        InvalidReqRange { start: Option<Vec<u8>>, end: Option<Vec<u8>> } {
+            description("Invalid request range")
+            display("Invalid request range, start:{:?}, end:{:?}", start.as_ref().map(|s| escape(&s)), end.as_ref().map(|e| escape(&e)))
+        }
     }
 }
 
@@ -79,6 +84,10 @@ impl Error {
             } => Some(Error::InvalidTxnTso {
                 start_ts,
                 commit_ts,
+            }),
+            Error::InvalidReqRange { ref start, ref end } => Some(Error::InvalidReqRange {
+                start: start.clone(),
+                end: end.clone(),
             }),
             Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
         }
