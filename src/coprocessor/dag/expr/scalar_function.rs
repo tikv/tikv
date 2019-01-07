@@ -133,6 +133,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SubstringBinary2Args
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDurationAndDuration
+            | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::Strcmp => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -368,7 +369,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringDecimal
             | ScalarFuncSig::AddDateStringInt
             | ScalarFuncSig::AddDateStringString
-            | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
             | ScalarFuncSig::AddTimeDurationNull
@@ -1022,6 +1022,7 @@ dispatch_call! {
         CaseWhenDuration => case_when_duration,
 
         AddDurationAndDuration => add_duration_and_duration,
+        AddDurationAndString => add_duration_and_string,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1161,6 +1162,8 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+                    ScalarFuncSig::AddDurationAndString,
+                    ScalarFuncSig::AddDurationAndDuration,
                 ],
                 2,
                 2,
@@ -1438,7 +1441,6 @@ mod tests {
             ScalarFuncSig::AddDateStringDecimal,
             ScalarFuncSig::AddDateStringInt,
             ScalarFuncSig::AddDateStringString,
-            ScalarFuncSig::AddDurationAndString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
             ScalarFuncSig::AddTimeDurationNull,
