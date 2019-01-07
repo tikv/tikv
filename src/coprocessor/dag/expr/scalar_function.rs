@@ -1166,7 +1166,7 @@ mod tests {
                     ScalarFuncSig::AddDurationAndString,
                     ScalarFuncSig::AddDurationAndDuration,
                     ScalarFuncSig::Locate2Args,
-                    ScalarFuncSig::LocateBinary2Args
+                    ScalarFuncSig::LocateBinary2Args,
                 ],
                 2,
                 2,

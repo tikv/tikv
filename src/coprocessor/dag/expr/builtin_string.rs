@@ -74,7 +74,7 @@ impl ScalarFunc {
         let s = s.to_lowercase();
         let result = match s.find(&substr) {
             None => 0,
-            Some(i) => 1 + s[..i].chars().count() as i64
+            Some(i) => 1 + s[..i].chars().count() as i64,
         };
         Ok(Some(result))
     }
@@ -98,19 +98,17 @@ impl ScalarFunc {
             return Ok(Some(pos + 1));
         }
 
-        let slice = s.char_indices()
+        let slice = s
+            .char_indices()
             .nth(pos as usize)
-            .map(|(offset,_)| &s[offset..]);
+            .map(|(offset, _)| &s[offset..]);
 
         let result = match slice {
-            Some(slice) => {
-                let result = match slice.find(&substr) {
-                    None => 0,
-                    Some(idx) => 1 + pos + slice[..idx].chars().count() as i64
-                };
-                result
+            Some(slice) => match slice.find(&substr) {
+                None => 0,
+                Some(idx) => 1 + pos + slice[..idx].chars().count() as i64,
             },
-            None => 0
+            None => 0,
         };
         Ok(Some(result))
     }
@@ -119,7 +117,7 @@ impl ScalarFunc {
     pub fn locate_binary_2_args(
         &self,
         ctx: &mut EvalContext,
-        row: &[Datum]
+        row: &[Datum],
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
@@ -134,7 +132,7 @@ impl ScalarFunc {
     pub fn locate_binary_3_args(
         &self,
         ctx: &mut EvalContext,
-        row: &[Datum]
+        row: &[Datum],
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
@@ -151,7 +149,9 @@ impl ScalarFunc {
             return Ok(Some(pos + 1));
         }
 
-        let idx = s[pos as usize..].windows(substr.len()).position(|w| w == &*substr);
+        let idx = s[pos as usize..]
+            .windows(substr.len())
+            .position(|w| w == &*substr);
         Ok(Some(idx.map(|i| pos + i as i64 + 1).unwrap_or(0)))
     }
 
@@ -1072,7 +1072,7 @@ mod tests {
         let null_cases = vec![
             (Datum::Null, Datum::Bytes(b"foobar".to_vec()), Datum::Null),
             (Datum::Bytes(b"bar".to_vec()), Datum::Null, Datum::Null),
-            (Datum::Null, Datum::Null, Datum::Null)
+            (Datum::Null, Datum::Null, Datum::Null),
         ];
         for (substr, s, exp) in null_cases {
             let got = eval_func(ScalarFuncSig::Locate2Args, &[substr, s]).unwrap();
@@ -1087,7 +1087,11 @@ mod tests {
             ("", "", 1),
             ("BaR", "foobArbar", 0),
             ("bar", "foobArbar", 7),
-            ("好世", "你好世界", 1 + "你好世界".find("好世").unwrap() as i64)
+            (
+                "好世",
+                "你好世界",
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
         ];
 
         for (substr, s, exp) in cases {
@@ -1100,7 +1104,7 @@ mod tests {
         let null_cases = vec![
             (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
             (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
-            (Datum::Null, Datum::Null, Datum::Null)
+            (Datum::Null, Datum::Null, Datum::Null),
         ];
 
         for (substr, s, exp) in null_cases {
@@ -1125,7 +1129,7 @@ mod tests {
             ("bAr", "foobarBaR", 5, 7),
             ("", "aa", 2, 2),
             ("", "aa", 3, 3),
-            ("", "aa", 4, 0)
+            ("", "aa", 4, 0),
         ];
 
         for (substr, s, pos, exp) in cases {
@@ -1138,10 +1142,30 @@ mod tests {
 
         let null_cases = vec![
             (Datum::Null, Datum::Null, Datum::I64(1), Datum::Null),
-            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::I64(1), Datum::Null),
-            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::I64(1), Datum::Null),
-            (Datum::Bytes(b"foo".to_vec()), Datum::Null, Datum::I64(-1), Datum::Null),
-            (Datum::Null, Datum::Bytes(b"bar".to_vec()), Datum::I64(0), Datum::Null)
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Null,
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"foo".to_vec()),
+                Datum::Null,
+                Datum::I64(-1),
+                Datum::Null,
+            ),
+            (
+                Datum::Null,
+                Datum::Bytes(b"bar".to_vec()),
+                Datum::I64(0),
+                Datum::Null,
+            ),
         ];
 
         for (substr, s, pos, exp) in null_cases {
@@ -1162,7 +1186,12 @@ mod tests {
             ("", "", 1, 1),
             ("BaR", "foobArbar", 3, 0),
             ("bar", "foobArbar", 1, 7),
-            ("好世", "你好世界", 1, 1 + "你好世界".find("好世").unwrap() as i64)
+            (
+                "好世",
+                "你好世界",
+                1,
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
         ];
 
         for (substr, s, pos, exp) in cases {
@@ -1174,9 +1203,19 @@ mod tests {
         }
 
         let null_cases = vec![
-            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::I64(1), Datum::Null),
-            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null, Datum::Null),
-            (Datum::Null, Datum::Null, Datum::Null, Datum::Null)
+            (
+                Datum::Null,
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+                Datum::Null,
+                Datum::Null,
+            ),
+            (Datum::Null, Datum::Null, Datum::Null, Datum::Null),
         ];
 
         for (substr, s, pos, exp) in null_cases {
