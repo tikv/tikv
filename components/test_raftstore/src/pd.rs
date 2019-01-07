@@ -229,6 +229,8 @@ struct Cluster {
     down_peers: HashMap<u64, pdpb::PeerStats>,
     pending_peers: HashMap<u64, metapb::Peer>,
     is_bootstraped: bool,
+
+    gc_safe_point: u64,
 }
 
 impl Cluster {
@@ -253,6 +255,8 @@ impl Cluster {
             down_peers: HashMap::default(),
             pending_peers: HashMap::default(),
             is_bootstraped: false,
+
+            gc_safe_point: 0,
         }
     }
 
@@ -586,6 +590,14 @@ impl Cluster {
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
     }
+
+    fn set_gc_safe_point(&mut self, safe_point: u64) {
+        self.gc_safe_point = safe_point;
+    }
+
+    fn get_gc_safe_point(&self) -> u64 {
+        self.gc_safe_point
+    }
 }
 
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
@@ -896,6 +908,10 @@ impl TestPdClient {
     pub fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_approximate_keys(region_id)
     }
+
+    pub fn set_gc_safe_point(&self, safe_point: u64) {
+        self.cluster.wl().set_gc_safe_point(safe_point);
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1097,5 +1113,14 @@ impl PdClient for TestPdClient {
         }
         self.cluster.wl().split_count += regions.len() - 1;
         Box::new(ok(()))
+    }
+
+    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::new(err(e));
+        }
+
+        let safe_point = self.cluster.rl().get_gc_safe_point();
+        Box::new(ok(safe_point))
     }
 }
