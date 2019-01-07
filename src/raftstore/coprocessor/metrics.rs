@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{exponential_buckets, Histogram};
+use prometheus::{exponential_buckets, Histogram, IntGaugeVec};
 
 lazy_static! {
     pub static ref REGION_SIZE_HISTOGRAM: Histogram = register_histogram!(
@@ -24,4 +24,10 @@ lazy_static! {
         "Bucketed histogram of approximate region keys.",
         exponential_buckets(1.0, 2.0, 30).unwrap()
     ).unwrap();
+    pub static ref REGION_COLLECTOR_REGION_COUNT: IntGaugeVec =
+        register_int_gauge_vec!(
+            "tikv_raftstore_region_collector_region_count",
+            "Number of regions collected in region_collector",
+            &["role"]
+        ).unwrap();
 }

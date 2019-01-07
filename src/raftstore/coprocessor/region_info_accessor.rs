@@ -16,6 +16,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 
+use super::metrics::*;
 use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
@@ -397,6 +398,31 @@ impl RegionCollector {
                 self.handle_role_change(region, role);
             }
         }
+
+        let mut leaders = 0;
+        let mut followers = 0;
+        let mut candidates = 0;
+        let mut pre_candidates = 0;
+        for r in self.regions.values() {
+            match r.role {
+                StateRole::Leader => leaders += 1,
+                StateRole::Follower => followers += 1,
+                StateRole::Candidate => candidates += 1,
+                StateRole::PreCandidate => pre_candidates += 1,
+            }
+        }
+        REGION_COLLECTOR_REGION_COUNT
+            .with_label_values(&["leader"])
+            .set(leaders);
+        REGION_COLLECTOR_REGION_COUNT
+            .with_label_values(&["follower"])
+            .set(followers);
+        REGION_COLLECTOR_REGION_COUNT
+            .with_label_values(&["candidate"])
+            .set(candidates);
+        REGION_COLLECTOR_REGION_COUNT
+            .with_label_values(&["pre_candidate"])
+            .set(pre_candidates);
     }
 }
 
