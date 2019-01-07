@@ -350,20 +350,20 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn get_gc_safe_point(
         &mut self,
-        _ctx: RpcContext,
-        _req: GetGCSafePointRequest,
-        _sink: UnarySink<GetGCSafePointResponse>,
+        ctx: RpcContext,
+        req: GetGCSafePointRequest,
+        sink: UnarySink<GetGCSafePointResponse>,
     ) {
-        unimplemented!()
+        hijack_unary(self, ctx, sink, |c| c.get_gc_safe_point(&req))
     }
 
     fn update_gc_safe_point(
         &mut self,
-        _ctx: RpcContext,
-        _req: UpdateGCSafePointRequest,
-        _sink: UnarySink<UpdateGCSafePointResponse>,
+        ctx: RpcContext,
+        req: UpdateGCSafePointRequest,
+        sink: UnarySink<UpdateGCSafePointResponse>,
     ) {
-        unimplemented!()
+        hijack_unary(self, ctx, sink, |c| c.update_gc_safe_point(&req))
     }
 
     fn sync_regions(
