@@ -231,6 +231,9 @@ mod tests {
         fn report_batch_split(&self, _: Vec<metapb::Region>) -> PdFuture<()> {
             unimplemented!();
         }
+        fn get_gc_safe_point(&self) -> PdFuture<u64> {
+            unimplemented!();
+        }
     }
 
     fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {
