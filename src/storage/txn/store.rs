@@ -119,6 +119,8 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     return Err(Error::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
                         end: upper_bound.map(|b| b.into_encoded()),
+                        lower_bound: Some(b.to_vec()),
+                        upper_bound: self.snapshot.physical_upper_bound().map(|b| b.to_vec()),
                     });
                 }
             }
@@ -129,6 +131,8 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     return Err(Error::InvalidReqRange {
                         start: lower_bound.map(|b| b.into_encoded()),
                         end: Some(u.as_encoded().clone()),
+                        lower_bound: self.snapshot.physical_lower_bound().map(|b| b.to_vec()),
+                        upper_bound: Some(b.to_vec()),
                     });
                 }
             }
