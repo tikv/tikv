@@ -555,7 +555,7 @@ impl RangeProperties {
             Some((_, v)) => v.get(kind),
             None => 0,
         };
-        let mut range = self.offsets.range::<[u8], _>((Unbounded, Included(end)));
+        let range = self.offsets.range::<[u8], _>((Unbounded, Included(end)));
         let end_offset = match range.last() {
             Some((_, v)) => v.get(kind),
             None => 0,
