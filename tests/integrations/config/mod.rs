@@ -490,6 +490,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
         max_open_engines: 2,
+        wait_before_scatter_ms: 8,
     };
 
     let custom = read_file_in_project_dir("tests/integrations/config/test-custom.toml");

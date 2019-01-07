@@ -125,7 +125,7 @@ impl<Client: ImportClient> PrepareJob<Client> {
     fn run_prepare_job(&self, range: RangeInfo) -> Result<bool> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
         let tag = format!("[PrepareRangeJob {}:{}]", self.engine.uuid(), id);
-        let job = PrepareRangeJob::new(tag, range, Arc::clone(&self.client));
+        let job = PrepareRangeJob::new(tag, range, Arc::clone(&self.client), self.cfg.clone());
         job.run()
     }
 }
@@ -136,6 +136,7 @@ struct PrepareRangeJob<Client> {
     tag: String,
     range: RangeInfo,
     client: Arc<Client>,
+    cfg: Config,
 }
 
 impl<Client: ImportClient> PrepareRangeJob<Client> {
