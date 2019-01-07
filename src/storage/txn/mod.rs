@@ -70,7 +70,7 @@ quick_error! {
                         lower_bound: Option<Vec<u8>>,
                         upper_bound: Option<Vec<u8>>} {
             description("Invalid request range")
-            display("Request range exceeds bound, start:{:?}, end:{:?}, lower_bound:{:?}, upper_bound:{:?}",
+            display("Request range exceeds bound, request range:[{:?}, end:{:?}), physical bound:[{:?}, {:?})",
                         start.as_ref().map(|s| escape(&s)),
                         end.as_ref().map(|e| escape(&e)),
                         lower_bound.as_ref().map(|s| escape(&s)),
