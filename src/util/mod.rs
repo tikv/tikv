@@ -497,9 +497,18 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             orig_hook(info);
         }
 
-        // Drop current logger to flush. (note: lazy_static will not call drop when process
-        // is exited)
-        ::slog_global::clear_global();
+        // There might be remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one with a
+        // terminal logger.
+        if let Some(level) = ::log::max_log_level().to_log_level() {
+            let drainer = logger::term_drainer();
+            logger::init_log(
+                drainer,
+                logger::convert_log_level_to_slog_level(level),
+                false, // Use sync logger to avoid an unnecessary log thread.
+                false, // It is initialized already.
+            );
+        }
 
         // If PANIC_MARK is true, create panic mark file.
         if panic_mark_is_on() {
