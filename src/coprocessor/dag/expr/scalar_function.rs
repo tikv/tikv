@@ -134,7 +134,9 @@ impl ScalarFunc {
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
-            | ScalarFuncSig::Strcmp => (2, 2),
+            | ScalarFuncSig::Strcmp
+            | ScalarFuncSig::Locate2Args
+            | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -305,7 +307,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::Rpad
-            | ScalarFuncSig::RpadBinary => (3, 3),
+            | ScalarFuncSig::RpadBinary
+            | ScalarFuncSig::Locate3Args
+            | ScalarFuncSig::LocateBinary3Args => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -414,10 +418,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
-            | ScalarFuncSig::Locate2Args
-            | ScalarFuncSig::Locate3Args
-            | ScalarFuncSig::LocateBinary2Args
-            | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
@@ -817,6 +817,10 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        Locate2Args => locate_2_args,
+        Locate3Args => locate_3_args,
+        LocateBinary2Args => locate_binary_2_args,
+        LocateBinary3Args => locate_binary_3_args,
         BitCount => bit_count,
         CharLength => char_length,
         BitLength => bit_length,
@@ -1161,6 +1165,8 @@ mod tests {
                     ScalarFuncSig::Strcmp,
                     ScalarFuncSig::AddDurationAndString,
                     ScalarFuncSig::AddDurationAndDuration,
+                    ScalarFuncSig::Locate2Args,
+                    ScalarFuncSig::LocateBinary2Args
                 ],
                 2,
                 2,
@@ -1332,6 +1338,8 @@ mod tests {
                     ScalarFuncSig::LpadBinary,
                     ScalarFuncSig::Rpad,
                     ScalarFuncSig::RpadBinary,
+                    ScalarFuncSig::Locate3Args,
+                    ScalarFuncSig::LocateBinary3Args,
                 ],
                 3,
                 3,
@@ -1483,10 +1491,6 @@ mod tests {
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
-            ScalarFuncSig::Locate2Args,
-            ScalarFuncSig::Locate3Args,
-            ScalarFuncSig::LocateBinary2Args,
-            ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,
