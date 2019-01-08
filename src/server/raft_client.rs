@@ -89,42 +89,43 @@ impl Conn {
             .then(move |r| {
                 drop(batch_receiver);
                 match r {
-                    Ok(_) => info!("batch_raft RPC finished success"),
-                    Err(ref e) => error!("batch_raft RPC finished fail: {}", e),
-                };
-                r
-            })
-            .then(move |result| match result {
-                Ok(_) => box future::ok(()) as Box<Future<Item = (), Error = GrpcError> + Send>,
-                Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
-                    if status == RpcStatusCode::Unimplemented =>
-                {
-                    // Fallback to raft RPC.
-                    warn!("RaftClient batch_raft fail, fallback to raft");
-                    let (sink, receiver) = client2.raft().unwrap();
-                    let msgs = Reusable(rx2)
-                        .map(|msgs| {
-                            let len = msgs.len();
-                            let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
-                                if i < len - 1 {
-                                    (v, WriteFlags::default().buffer_hint(true))
-                                } else {
-                                    (v, WriteFlags::default())
-                                }
-                            });
-                            stream::iter_ok::<_, GrpcError>(grpc_msgs)
+                    Ok(_) => {
+                        info!("batch_raft RPC finished success");
+                        box future::ok(()) as Box<Future<Item = (), Error = GrpcError> + Send>
+                    }
+                    Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
+                        if status == RpcStatusCode::Unimplemented =>
+                    {
+                        // Fallback to raft RPC.
+                        warn!("batch_raft fail, fallback to raft");
+                        let (sink, receiver) = client2.raft().unwrap();
+                        let msgs = Reusable(rx2)
+                            .map(|msgs| {
+                                let len = msgs.len();
+                                let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
+                                    if i < len - 1 {
+                                        (v, WriteFlags::default().buffer_hint(true))
+                                    } else {
+                                        (v, WriteFlags::default())
+                                    }
+                                });
+                                stream::iter_ok::<_, GrpcError>(grpc_msgs)
+                            })
+                            .flatten();
+                        box sink.send_all(msgs).map(|_| ()).then(move |r| {
+                            drop(receiver);
+                            match r {
+                                Ok(_) => info!("raft RPC finished success"),
+                                Err(ref e) => error!("raft RPC finished fail: {}", e),
+                            };
+                            r
                         })
-                        .flatten();
-                    box sink.send_all(msgs).map(|_| ()).then(move |r| {
-                        drop(receiver);
-                        match r {
-                            Ok(_) => info!("raft RPC finished success"),
-                            Err(ref e) => error!("raft RPC finished fail: {}", e),
-                        };
-                        r
-                    })
+                    }
+                    Err(e) => {
+                        error!("batch_raft RPC finished fail: {}", e);
+                        box future::err(e)
+                    }
                 }
-                Err(e) => box future::err(e),
             });
 
         let addr = addr.to_owned();
@@ -203,7 +204,7 @@ impl RaftClient {
             .stream
             .send(msg)
         {
-            error!("RaftClient send fail");
+            error!("RaftClient fails to send");
             let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
             self.conns.remove(&(addr.to_owned(), index));
 

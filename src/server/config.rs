@@ -29,7 +29,7 @@ const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
-const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
+const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
 // Number of rows in each chunk.
@@ -143,9 +143,9 @@ impl Default for Config {
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
-            // 100 means gRPC threads are under heavy load if their total CPU usage
-            // is greater than 100%.
-            heavy_load_threshold: 100,
+            // 300 means gRPC threads are under heavy load if their total CPU usage
+            // is greater than 300%.
+            heavy_load_threshold: 300,
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
         }
