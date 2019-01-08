@@ -353,9 +353,12 @@ mod tests {
     fn new_temp_engine(path: &TempDir) -> Engines {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
-            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap()),
             Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+            ),
+            Arc::new(
+                rocksdb::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             ),
         )
     }

@@ -2243,10 +2243,16 @@ mod tests {
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
         let db = Arc::new(
-            rocksdb::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None).unwrap(),
+            rocksdb::new_engine(
+                path.path().join("db").to_str().unwrap(),
+                None,
+                ALL_CFS,
+                None,
+            ).unwrap(),
         );
         let raft_db = Arc::new(
-            rocksdb::new_engine(path.path().join("raft").to_str().unwrap(), &[], None).unwrap(),
+            rocksdb::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
+                .unwrap(),
         );
         (path, Engines::new(db, raft_db))
     }

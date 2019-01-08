@@ -53,11 +53,12 @@ fn test_node_bootstrap_with_prepared_data() {
     let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
-    let engine =
-        Arc::new(rocksdb::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
+    let engine = Arc::new(
+        rocksdb::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+    );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine =
-        Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[], None).unwrap());
+        Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap());
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 

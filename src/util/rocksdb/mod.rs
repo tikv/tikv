@@ -86,8 +86,16 @@ impl<'a> CFOptions<'a> {
     }
 }
 
-pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<DB, String> {
-    let mut db_opts = DBOptions::new();
+pub fn new_engine(
+    path: &str,
+    db_opts: Option<DBOptions>,
+    cfs: &[&str],
+    opts: Option<Vec<CFOptions>>,
+) -> Result<DB, String> {
+    let mut db_opts = match db_opts {
+        Some(opt) => opt,
+        None => DBOptions::new(),
+    };
     db_opts.enable_statistics(true);
     let cf_opts = match opts {
         Some(opts_vec) => opts_vec,
@@ -693,7 +701,7 @@ mod tests {
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, &[cf_name], None).unwrap();
+        let db = new_engine(path_str, None, &[cf_name], None).unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
@@ -742,6 +750,7 @@ mod tests {
         ];
         let db = new_engine(
             temp_dir.path().to_str().unwrap(),
+            None,
             &["default", "test"],
             Some(cfs_opts),
         ).unwrap();

@@ -437,8 +437,9 @@ mod tests {
     fn test_base() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine =
-            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap());
+        let engine = Arc::new(
+            rocksdb::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+        );
 
         let mut r = Region::new();
         r.set_id(10);
@@ -486,7 +487,7 @@ mod tests {
     fn test_peekable() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap();
+        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -501,8 +502,9 @@ mod tests {
     fn test_scan() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine =
-            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), &[cf], None).unwrap());
+        let engine = Arc::new(
+            rocksdb::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+        );
         let handle = engine.cf_handle(cf).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();

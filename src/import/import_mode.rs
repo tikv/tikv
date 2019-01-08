@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn test_import_mode_switcher() {
         let temp_dir = TempDir::new("test_import_mode_switcher").unwrap();
-        let db = new_engine(temp_dir.path().to_str().unwrap(), &["a", "b"], None).unwrap();
+        let db = new_engine(temp_dir.path().to_str().unwrap(), None, &["a", "b"], None).unwrap();
 
         let import_options = ImportModeOptions::new();
         let normal_options = ImportModeOptions::new_options_cf(&db, "default");
