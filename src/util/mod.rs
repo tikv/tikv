@@ -32,7 +32,6 @@ pub mod codec;
 pub mod collections;
 pub mod config;
 pub mod file;
-pub mod file_log;
 pub mod future;
 pub mod futurepool;
 pub mod io_limiter;
@@ -171,9 +170,9 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     }
 }
 
-// A helper function to parse SocketAddr for mio.
-// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
-// but it is just ok for "ip:port", not "host:port".
+/// A helper function to parse SocketAddr for mio.
+/// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
+/// but it is just ok for "ip:port", not "host:port".
 pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
     let addrs = addr.to_socket_addrs()?;
     Ok(addrs.collect::<Vec<SocketAddr>>()[0])
@@ -262,7 +261,7 @@ pub fn unescape(s: &str) -> Vec<u8> {
     buf
 }
 
-/// Convert a borrow to a slice.
+/// Converts a borrow to a slice.
 pub fn as_slice<T>(t: &T) -> &[T] {
     unsafe {
         let ptr = t as *const T;
@@ -270,7 +269,7 @@ pub fn as_slice<T>(t: &T) -> &[T] {
     }
 }
 
-/// `TryInsertWith` is a helper trait for `Entry` to accept a failable closure.
+/// A helper trait for `Entry` to accept a failable closure.
 pub trait TryInsertWith<'a, V, E> {
     fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
 }
@@ -294,7 +293,7 @@ pub fn get_tag_from_thread_name() -> Option<String> {
         .map(From::from)
 }
 
-/// `DeferContext` will invoke the wrapped closure when dropped.
+/// Invokes the wrapped closure when dropped.
 pub struct DeferContext<T: FnOnce()> {
     t: Option<T>,
 }
@@ -394,7 +393,7 @@ impl<T> RingQueue<T> {
     }
 }
 
-// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+/// Returns a Vec of cf which is in `a' but not in `b'.
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
         .filter(|x| b.iter().find(|y| y == x).is_none())
@@ -450,14 +449,11 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(
-    panic_abort: bool,
-    guard: Option<::slog_scope::GlobalLoggerGuard>,
-    data_dir: &str,
-) {
+pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
+    extern crate log;
+
     use std::panic;
     use std::process;
-    use std::sync::Mutex;
 
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
@@ -473,9 +469,6 @@ pub fn set_exit_hook(
         .name(thd_name!("backtrace-loader"))
         .spawn(::backtrace::Backtrace::new)
         .unwrap();
-
-    // Hold the guard.
-    let log_guard = Mutex::new(guard);
 
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
@@ -505,8 +498,20 @@ pub fn set_exit_hook(
             orig_hook(info);
         }
 
-        // To collect remaining logs, drop the guard before exit.
-        drop(log_guard.lock().unwrap().take());
+        // HACK! To collect remaining logs and avoid no global logger,
+        // replace the old logger with a terminal logger.
+        if let Some(level) = log::max_log_level().to_log_level() {
+            info!("logger switched, outputs further logs to stderr");
+            let drainer = logger::term_drainer();
+            if let Ok(g) = logger::init_log(
+                drainer,
+                logger::convert_log_level_to_slog_level(level),
+                false, // Use sync logger to avoid an unnecessary log thread.
+                false, // It is initialized already.
+            ) {
+                g.cancel_reset();
+            }
+        }
 
         // If PANIC_MARK is true, create panic mark file.
         if panic_mark_is_on() {

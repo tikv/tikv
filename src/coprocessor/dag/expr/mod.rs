@@ -21,6 +21,7 @@ use rand::XorShiftRng;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 use coprocessor::codec::mysql::charset;
 use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use coprocessor::codec::{self, Datum};
@@ -207,6 +208,11 @@ impl Expression {
             Expression::ColumnRef(ref column) => column.eval_json(row),
             Expression::ScalarFn(ref f) => f.eval_json(ctx, row),
         }
+    }
+
+    #[inline]
+    pub fn is_unsigned(&self) -> bool {
+        self.field_type().flag().contains(FieldTypeFlag::UNSIGNED)
     }
 }
 

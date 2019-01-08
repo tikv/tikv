@@ -16,7 +16,10 @@ use futures::Future;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
-use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::{
+    AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
+    Result, Storage, Value,
+};
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv::util::collections::HashMap;
 
@@ -70,6 +73,13 @@ pub struct SyncTestStorage<E: Engine> {
 }
 
 impl<E: Engine> SyncTestStorage<E> {
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &mut self,
+        cfg: AutoGCConfig<S, R>,
+    ) {
+        self.store.start_auto_gc(cfg).unwrap();
+    }
+
     pub fn get_storage(&self) -> Storage<E> {
         self.store.clone()
     }

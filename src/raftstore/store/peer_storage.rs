@@ -83,8 +83,9 @@ impl PartialEq for SnapState {
     }
 }
 
-// Discard all log entries prior to compact_index. We must guarantee
-// that the compact_index is not greater than applied index.
+/// Updates the `state` with given `compact_index` and `compact_term`.
+///
+/// Remember the Raft log is not deleted here.
 pub fn compact_raft_log(
     tag: &str,
     state: &mut RaftApplyState,
@@ -290,11 +291,16 @@ pub struct ApplySnapResult {
     pub region: metapb::Region,
 }
 
+/// Returned by `PeerStorage::handle_raft_ready`, used for recording changed status of
+/// `RaftLocalState` and `RaftApplyState`.
 pub struct InvokeContext {
     pub region_id: u64,
+    /// Changed RaftLocalState is stored into `raft_state`.
     pub raft_state: RaftLocalState,
+    /// Changed RaftApplyState is stored into `apply_state`.
     pub apply_state: RaftApplyState,
     last_term: u64,
+    /// The old region is stored here if there is a snapshot.
     pub snap_region: Option<Region>,
 }
 
@@ -700,6 +706,8 @@ impl PeerStorage {
         true
     }
 
+    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
+    /// snapshot.
     pub fn snapshot(&self) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();

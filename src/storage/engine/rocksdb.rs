@@ -235,7 +235,6 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
 }
 
 impl Engine for RocksEngine {
-    type Iter = DBIterator<Arc<DB>>;
     type Snap = RocksSnapshot;
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {

@@ -34,6 +34,10 @@ use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
 use super::{Executor, Row};
 
+/// Scans rows from table indexes.
+///
+/// Index values are in the key. Additionally, for unique index, `row_id` is in the value and for
+/// normal index, `row_id` is in the key. All of them are processed.
 pub struct IndexScanExecutor<S: Store> {
     store: S,
     desc: bool,
