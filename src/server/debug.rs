@@ -352,7 +352,7 @@ impl Debugger {
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
         let db = &self.engines.kv;
 
-        println!("Calculating split keys...");
+        v1!("Calculating split keys...");
         let split_keys = divide_db(db, threads).unwrap().into_iter().map(|k| {
             let k = Key::from_encoded(keys::origin_key(&k).to_vec())
                 .truncate_ts()
@@ -374,7 +374,7 @@ impl Debugger {
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
-                    println!(
+                    v1!(
                         "thread {}: started on range [\"{}\", \"{}\")",
                         thread_index,
                         escape(&start_key),
@@ -767,10 +767,10 @@ fn recover_mvcc_for_range(
             write_opts.set_sync(true);
             box_try!(db.write_opt(wb, &write_opts));
         } else {
-            println!("thread {}: skip write {} rows", thread_index, batch_size);
+            v1!("thread {}: skip write {} rows", thread_index, batch_size);
         }
 
-        println!(
+        v1!(
             "thread {}: total fix default: {}, lock: {}, write: {}",
             thread_index,
             mvcc_checker.default_fix_count,
@@ -779,7 +779,7 @@ fn recover_mvcc_for_range(
         );
 
         if batch_size < wb_limit {
-            println!("thread {} has finished working.", thread_index);
+            v1!("thread {} has finished working.", thread_index);
             return Ok(());
         }
     }
@@ -867,9 +867,10 @@ impl MvccChecker {
     fn check_mvcc_key(&mut self, wb: &WriteBatch, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
-            println!(
+            v1!(
                 "thread {}: scan {} rows",
-                self.thread_index, self.scan_count
+                self.thread_index,
+                self.scan_count
             );
         }
 
@@ -895,7 +896,7 @@ impl MvccChecker {
                 // All write records' ts should be less than lock's ts.
                 if let Some((commit_ts, _)) = write {
                     if l.ts <= commit_ts {
-                        println!(
+                        v1!(
                             "thread {}: LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
                             self.thread_index,
                             escape(key),
@@ -917,7 +918,7 @@ impl MvccChecker {
                             next_default = true;
                         }
                         _ => {
-                            println!(
+                            v1!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
                                 escape(key),
@@ -957,7 +958,7 @@ impl MvccChecker {
             }
 
             if next_default {
-                println!(
+                v1!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
                     escape(key),
@@ -969,7 +970,7 @@ impl MvccChecker {
 
             if next_write {
                 if let Some((commit_ts, ref w)) = write {
-                    println!(
+                    v1!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
                         escape(key),
@@ -1316,7 +1317,7 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
         );
     }
 
-    println!(
+    v1!(
         "({} points found, {} points selected for dividing)",
         found_keys_count,
         keys.len()
