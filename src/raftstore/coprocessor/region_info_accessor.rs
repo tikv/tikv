@@ -377,6 +377,10 @@ impl RegionCollector {
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
+            if region.get_region_epoch().get_version() == 0 {
+                // Ignore messages with version 0.
+                return;
+            }
             if !self.check_region_range(region, true) {
                 debug!("region_collector: Received stale event: {:?}", event);
                 return;
@@ -667,6 +671,26 @@ mod tests {
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.role, role);
         }
+    }
+
+    #[test]
+    fn test_ignore_invalid_version() {
+        let mut c = RegionCollector::new();
+
+        c.handle_raftstore_event(RaftStoreEvent::CreateRegion {
+            region: new_region(1, b"k1", b"k3", 0),
+            role: StateRole::Follower,
+        });
+        c.handle_raftstore_event(RaftStoreEvent::UpdateRegion {
+            region: new_region(2, b"k2", b"k4", 0),
+            role: StateRole::Follower,
+        });
+        c.handle_raftstore_event(RaftStoreEvent::RoleChange {
+            region: new_region(1, b"k1", b"k2", 0),
+            role: StateRole::Leader,
+        });
+
+        check_collection(&c, &[]);
     }
 
     #[test]
