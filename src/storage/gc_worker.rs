@@ -818,23 +818,23 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// progress)
     ///
     /// ```text
-    ///     | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///     ^
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ^
     /// ```
     ///
     /// And after a while, our GC progress is like this:
     ///
     /// ```text
-    ///     | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///     ----------------------^
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ----------------------^
     /// ```
     ///
     /// At this time we found that safe point was updated, so rewinding will happen. First we
     /// continue working to the end: ('#' indicates the position that safe point updates)
     ///
     /// ```text
-    ///     | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///     ----------------------#------------------------------------------^
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ----------------------#------------------------------------------^
     /// ```
     ///
     /// Then region 1-2 were GC-ed with the old safe point and region 3-6 were GC-ed with the new
@@ -842,9 +842,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// point updates:
     ///
     /// ```text
-    ///     | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///     ----------------------#------------------------------------------^
-    ///     ----------------------^
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ----------------------#------------------------------------------^
+    /// ----------------------^
     /// ```
     ///
     /// Then GC finishes.
