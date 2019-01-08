@@ -23,14 +23,15 @@ use storage::Store;
 
 use super::executor::{Executor, ExecutorMetrics};
 
-pub struct DAGContext {
+/// Handles Coprocessor DAG requests.
+pub struct DAGRequestHandler {
     deadline: Deadline,
     executor: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
 
-impl DAGContext {
+impl DAGRequestHandler {
     pub fn build<S: Store + 'static>(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
@@ -57,7 +58,7 @@ impl DAGContext {
         if req.has_is_strict_sql_mode() {
             eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
         }
-        let executor = super::pipeline::ExecutorPipelineBuilder::build_normal(
+        let executor = super::builder::DAGBuilder::build_normal(
             req.take_executors().into_vec(),
             store,
             ranges,
@@ -92,7 +93,7 @@ impl DAGContext {
     }
 }
 
-impl RequestHandler for DAGContext {
+impl RequestHandler for DAGRequestHandler {
     fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();

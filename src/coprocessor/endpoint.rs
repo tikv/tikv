@@ -133,7 +133,13 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                     );
-                    dag::DAGContext::build(dag, ranges, store, req_ctx.deadline, batch_row_limit)
+                    dag::DAGRequestHandler::build(
+                        dag,
+                        ranges,
+                        store,
+                        req_ctx.deadline,
+                        batch_row_limit,
+                    )
                 };
             }
             REQ_TYPE_ANALYZE => {

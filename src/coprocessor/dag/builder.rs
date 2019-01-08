@@ -25,22 +25,32 @@ use super::executor::{
 use coprocessor::dag::expr::EvalConfig;
 use coprocessor::*;
 
-pub struct ExecutorPipelineBuilder;
+/// Utilities to build an executor DAG.
+///
+/// Currently all executors are executed in sequence and there is no task schedulers, so this
+/// builder is in fact a pipeline builder. The builder will finally build a `Box<Executor>` which
+/// may contain another executor as its source, embedded in the field, one after another. These
+/// nested executors forms an executor pipeline that a single iteration at the out-most executor
+/// (i.e. calling `next()`) will drive the whole pipeline.
+pub struct DAGBuilder;
 
-impl ExecutorPipelineBuilder {
+impl DAGBuilder {
+    /// Builds a normal executor pipeline.
+    ///
+    /// Normal executors iterate rows one by one.
     pub fn build_normal<S: Store + 'static>(
-        execs: Vec<executor::Executor>,
+        exec_descriptors: Vec<executor::Executor>,
         store: S,
         ranges: Vec<KeyRange>,
         ctx: Arc<EvalConfig>,
         collect: bool,
     ) -> Result<Box<Executor + Send>> {
-        let mut execs = execs.into_iter();
-        let first = execs
+        let mut exec_descriptors = exec_descriptors.into_iter();
+        let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
         let mut src = Self::build_normal_first_executor(first, store, ranges, collect)?;
-        for mut exec in execs {
+        for mut exec in exec_descriptors {
             let curr: Box<Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"))
@@ -70,6 +80,10 @@ impl ExecutorPipelineBuilder {
         Ok(src)
     }
 
+    /// Builds the inner-most executor for the normal executor pipeline, which can produce rows to
+    /// other executors and never receive rows from other executors.
+    ///
+    /// The inner-most executor must be a table scan executor or an index scan executor.
     fn build_normal_first_executor<S: Store + 'static>(
         mut first: executor::Executor,
         store: S,
