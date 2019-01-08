@@ -830,7 +830,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
     fn test_error_streaming_response() {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
