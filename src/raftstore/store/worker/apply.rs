@@ -2058,8 +2058,8 @@ impl Runner {
         }
         Runner {
             engines: store.engines(),
-            host: Arc::clone(&store.coprocessor_host),
-            importer: Arc::clone(&store.importer),
+            host: store.coprocessor_host(),
+            importer: store.importer(),
             delegates,
             notifier,
             sync_log,

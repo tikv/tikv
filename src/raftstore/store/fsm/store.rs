@@ -174,7 +174,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             importer,
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
-            entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
+            entry_cache_metrics: Rc::new(RefCell::new(CacheQueryStats::default())),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag,
             start_time: time::get_time(),
@@ -392,6 +392,18 @@ impl<T, C> Store<T, C> {
 
     pub fn config(&self) -> Rc<Config> {
         Rc::clone(&self.cfg)
+    }
+
+    pub fn importer(&self) -> Arc<SSTImporter> {
+        Arc::clone(&self.importer)
+    }
+
+    pub fn coprocessor_host(&self) -> Arc<CoprocessorHost> {
+        Arc::clone(&self.coprocessor_host)
+    }
+
+    pub fn entry_cache_metrics(&self) -> Rc<RefCell<CacheQueryStats>> {
+        Rc::clone(&self.entry_cache_metrics)
     }
 }
 

@@ -203,7 +203,7 @@ fn collect_ranges_need_compact(
     tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and we will compact a range if the range
-    // contains too much RocksDB tombstones. we will merge multiple neighbouring ranges
+    // contains too much RocksDB tombstones. we will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
     let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));

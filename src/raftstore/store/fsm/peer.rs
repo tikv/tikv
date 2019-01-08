@@ -155,7 +155,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         timer.observe_duration();
 
         self.raft_metrics.flush();
-        self.entry_cache_metries.borrow_mut().flush();
+        self.entry_cache_metrics.borrow_mut().flush();
 
         self.register_raft_base_tick(event_loop);
     }
@@ -468,7 +468,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // on this store is stale, the peers on other stores are already merged. The epoch
         // in merge target is the state of target peer at the time when source peer is merged.
         // So here we need to check the target peer on this store to decide whether the source
-        // to destory or wait target peer to catch up logs.
+        // to destroy or wait target peer to catch up logs.
         if let Some(epoch) = self.pending_cross_snap.get(&target_region_id).or_else(|| {
             self.region_peers
                 .get(&target_region_id)
@@ -486,7 +486,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
-            // Wait till the target peer has catched up logs and source peer will be destroyed at that time.
+            // Wait till the target peer has caught up logs and source peer will be destroyed at that time.
             return Ok(false);
         }
 

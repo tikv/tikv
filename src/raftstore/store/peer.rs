@@ -384,7 +384,7 @@ impl Peer {
             region,
             sched,
             tag.clone(),
-            Rc::clone(&store.entry_cache_metries),
+            store.entry_cache_metrics(),
         )?;
 
         let applied_index = ps.applied_index();
@@ -421,7 +421,7 @@ impl Peer {
             recent_added_peer: RecentAddedPeer::new(
                 cfg.raft_reject_transfer_leader_duration.as_secs(),
             ),
-            coprocessor_host: Arc::clone(&store.coprocessor_host),
+            coprocessor_host: store.coprocessor_host(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
