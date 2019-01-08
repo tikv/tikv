@@ -18,6 +18,7 @@ use coprocessor::dag::executor::{Executor, Row};
 use coprocessor::dag::expr::EvalWarnings;
 use coprocessor::Result;
 
+/// Retrieves rows from the source executor and only produces part of the rows.
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,

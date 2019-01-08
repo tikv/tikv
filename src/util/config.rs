@@ -24,6 +24,7 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use rocksdb::DBCompressionType;
 use util;
 
 quick_error! {
@@ -48,6 +49,34 @@ quick_error! {
         FileSystem(msg: String) {
             description(msg)
             display("config fs: {}", msg)
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompressionType {
+    No,
+    Snappy,
+    Zlib,
+    Bz2,
+    Lz4,
+    Lz4hc,
+    Zstd,
+    ZstdNotFinal,
+}
+
+impl Into<DBCompressionType> for CompressionType {
+    fn into(self) -> DBCompressionType {
+        match self {
+            CompressionType::No => DBCompressionType::No,
+            CompressionType::Snappy => DBCompressionType::Snappy,
+            CompressionType::Zlib => DBCompressionType::Zlib,
+            CompressionType::Bz2 => DBCompressionType::Bz2,
+            CompressionType::Lz4 => DBCompressionType::Lz4,
+            CompressionType::Lz4hc => DBCompressionType::Lz4hc,
+            CompressionType::Zstd => DBCompressionType::Zstd,
+            CompressionType::ZstdNotFinal => DBCompressionType::ZstdNotFinal,
         }
     }
 }

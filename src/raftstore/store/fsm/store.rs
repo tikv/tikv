@@ -30,6 +30,8 @@ use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 
+use raft::StateRole;
+
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -240,8 +242,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
-            self.coprocessor_host
-                .on_region_changed(region, RegionChangeEvent::Create);
+            self.coprocessor_host.on_region_changed(
+                region,
+                RegionChangeEvent::Create,
+                StateRole::Follower,
+            );
             Ok(true)
         })?;
 
@@ -969,11 +974,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let from_key = data_key(from_key);
         for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
             let peer = &self.region_peers[region_id];
-            if filter(peer) {
-                callback(SeekRegionResult::Found {
-                    local_peer: peer.peer.clone(),
-                    region: peer.region().clone(),
-                });
+            if filter(peer.region(), peer.raft_group.raft.state) {
+                callback(SeekRegionResult::Found(peer.region().clone()));
                 return;
             }
 

@@ -12,31 +12,19 @@
 // limitations under the License.
 
 use std::env;
-use std::io::BufWriter;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
 use chrono;
 use clap::ArgMatches;
-use slog::{Drain, Logger};
-use slog_async::{Async, OverflowStrategy};
 use slog_scope::GlobalLoggerGuard;
-use slog_term::{PlainDecorator, TermDecorator};
 
 use tikv::config::{MetricConfig, TiKvConfig};
-use tikv::util;
 use tikv::util::collections::HashMap;
-use tikv::util::file_log::RotatingFileLogger;
-use tikv::util::logger;
+use tikv::util::{self, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
-// Default is 128.
-// Extended since blocking is set, and we don't want to block very often.
-const SLOG_CHANNEL_SIZE: usize = 10240;
-// Default is DropAndReport.
-// It is not desirable to have dropped logs in our use case.
-const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
 
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({
@@ -50,43 +38,27 @@ macro_rules! fatal {
 }
 
 #[allow(dead_code)]
-pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
+pub fn initial_logger(config: &TiKvConfig) -> GlobalLoggerGuard {
     let log_rotation_timespan = chrono::Duration::from_std(
         config.log_rotation_timespan.clone().into(),
     ).expect("config.log_rotation_timespan is an invalid duration.");
     let guard = if config.log_file.is_empty() {
-        let decorator = TermDecorator::new().build();
-        let drain = logger::TikvFormat::new(decorator).fuse();
-        let drain = Async::new(drain)
-            .chan_size(SLOG_CHANNEL_SIZE)
-            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
-            .thread_name(thd_name!("term-slogger"))
-            .build()
-            .fuse();
-        let logger = Logger::root_typed(drain, slog_o!());
-        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
+        let drainer = logger::term_drainer();
+        // use async drainer and init std log.
+        logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         })
     } else {
-        let logger = BufWriter::new(
-            RotatingFileLogger::new(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
+        let drainer =
+            logger::file_drainer(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
                 fatal!(
                     "failed to initialize log with file {:?}: {:?}",
                     config.log_file,
                     e
                 );
-            }),
-        );
-        let decorator = PlainDecorator::new(logger);
-        let drain = logger::TikvFormat::new(decorator).fuse();
-        let drain = Async::new(drain)
-            .chan_size(SLOG_CHANNEL_SIZE)
-            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
-            .thread_name(thd_name!("file-slogger"))
-            .build()
-            .fuse();
-        let logger = Logger::root_typed(drain, slog_o!());
-        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
+            });
+        // use async drainer and init std log.
+        logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
         })
     };
