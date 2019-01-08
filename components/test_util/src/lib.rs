@@ -43,4 +43,5 @@ pub fn setup_for_ci() {
         // but also stops tests immediately.
         tikv::util::set_panic_hook(true, "./");
     }
+    tikv::util::check_environment_variables();
 }
