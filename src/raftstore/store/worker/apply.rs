@@ -499,7 +499,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
-/// The apply deletgate of a Region which is responsible to handle committed
+/// The apply delegate of a Region which is responsible for handling committed
 /// raft log entries of a Region.
 ///
 /// `Apply` is a term of Raft, which means executing the actual commands.
@@ -525,7 +525,7 @@ pub struct ApplyDelegate {
     /// the local engine to write kv and raft data
     engines: Engines,
 
-    /// It is set to true when removing ourself because of `ConfChangeType::RemoveNode`, and then
+    /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
     /// any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
     /// the commands waiting to be committed and applied
@@ -545,7 +545,7 @@ pub struct ApplyDelegate {
     /// records the epoch version after the last merge
     last_merge_version: u64,
 
-    /// the local metrics, and it will be flushed periodly
+    /// the local metrics, and it will be flushed periodically
     metrics: ApplyMetrics,
 }
 
@@ -1451,7 +1451,7 @@ impl ApplyDelegate {
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
         // Note that the split requests only contain ids for new regions, so we need
-        // to handle new regions and old region seperately.
+        // to handle new regions and old region separately.
         if right_derive {
             // So the range of new regions is [old_start_key, split_key1, ..., last_split_key].
             keys.push_front(derived.get_start_key().to_vec());
@@ -2206,7 +2206,7 @@ impl Runner {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
-    /// Handles peer registration. When a peer is created, it will register a apply delegate.
+    /// Handles peer registration. When a peer is created, it will register an apply delegate.
     fn handle_registration(&mut self, s: Registration) {
         let peer_id = s.id;
         let region_id = s.region.get_id();
