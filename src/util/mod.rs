@@ -536,11 +536,6 @@ pub fn check_environment_variables() {
             "environment variable `GRPC_POLL_STRATEGY` is present, {}",
             var
         );
-    } else if cfg!(target_os = "linux") {
-        // Set gRPC event engine to epollex if it is missing.
-        // See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
-        //           /src/core/lib/iomgr/ev_posix.cc#L149
-        env::set_var("GRPC_POLL_STRATEGY", "epollex");
     }
 
     for proxy in &["http_proxy", "https_proxy"] {
