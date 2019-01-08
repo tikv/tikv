@@ -20,8 +20,6 @@ extern crate fs2;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
 extern crate libc;
-#[macro_use]
-extern crate log;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
@@ -29,9 +27,20 @@ extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
+#[macro_use(
+    slog_kv,
+    slog_error,
+    slog_warn,
+    slog_info,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static,
+)]
 extern crate slog;
 extern crate slog_async;
-extern crate slog_scope;
+#[macro_use]
+extern crate slog_global;
 extern crate slog_stdlog;
 extern crate slog_term;
 extern crate tikv;
@@ -98,7 +107,7 @@ fn main() {
         .get_matches();
 
     let config = setup_config(&matches);
-    initial_logger(&config).cancel_reset();
+    initial_logger(&config);
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
