@@ -379,6 +379,14 @@ impl RegionCollector {
             let region = event.get_region();
             if region.get_region_epoch().get_version() == 0 {
                 // Ignore messages with version 0.
+                // In raftstore `Peer::replicate`, the region meta's fields are all initialized with
+                // default value expect region_id. So if there are more than one region replicating
+                // when the TiKV just starts, the assertion "Any two region with different ids and
+                // overlapping ranges must have different version" fails.
+                //
+                // Since 0 is actually an invalid value of version, we can simply ignore the
+                // messages with version 0. The region will be created later when the region's epoch
+                // is properly set and an Update message was sent.
                 return;
             }
             if !self.check_region_range(region, true) {
