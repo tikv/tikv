@@ -153,7 +153,11 @@ pub struct RaftClient {
     pub addrs: HashMap<u64, String>,
     cfg: Arc<Config>,
     security_mgr: Arc<SecurityManager>,
+
+    // To access CPU load of gRPC threads.
     grpc_thread_load: Arc<ThreadLoad>,
+    // When message senders want to delay the notification to the gRPC client,
+    // it can put a tokio::timer::Delay to the runtime.
     async_runtime: Arc<Runtime>,
 }
 
