@@ -7,4 +7,4 @@ publish = false
 tikv = { path = "../../" }
 time = "0.1"
 rand = "0.5"
-slog = { version = "2.3", features = ["release_max_level_debug"] }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

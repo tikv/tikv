@@ -12,7 +12,7 @@ futures = "0.1"
 tokio-timer = "0.2"
 grpcio = { version = "0.4", features = [ "secure" ] }
 rand = "0.3"
-slog = { version = "2.3", features = ["release_max_level_debug"] }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git" }
 
 [dependencies.kvproto]
