@@ -103,14 +103,12 @@ impl ScalarFunc {
             .nth(pos as usize)
             .map(|(offset, _)| &s[offset..]);
 
-        let result = match slice {
-            Some(slice) => match slice.find(&substr) {
-                None => 0,
-                Some(idx) => 1 + pos + slice[..idx].chars().count() as i64,
-            },
-            None => 0,
-        };
-        Ok(Some(result))
+        if let Some(slice) = slice {
+            if let Some(idx) = slice.find(&substr) {
+                return Ok(Some(1 + pos + slice[..idx].chars().count() as i64));
+            }
+        }
+        Ok(Some(0))
     }
 
     #[inline]
