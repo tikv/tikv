@@ -540,7 +540,7 @@ pub struct ApplyDelegate {
     /// the term of the raft log at applied index
     applied_index_term: u64,
 
-    /// indicates the peer is in merging, if that compact log will not performed
+    /// indicates the peer is in merging, if that compact log won't be performed
     is_merging: bool,
     /// records the epoch version after the last merge
     last_merge_version: u64,
