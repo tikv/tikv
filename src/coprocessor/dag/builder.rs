@@ -27,11 +27,11 @@ use coprocessor::*;
 
 /// Utilities to build an executor DAG.
 ///
-/// Currently all executors are executed in sequence and there is no task schedulers, so this
+/// Currently all executors are executed in sequence and there is no task scheduler, so this
 /// builder is in fact a pipeline builder. The builder will finally build a `Box<Executor>` which
 /// may contain another executor as its source, embedded in the field, one after another. These
-/// nested executors forms an executor pipeline that a single iteration at the out-most executor
-/// (i.e. calling `next()`) will drive the whole pipeline.
+/// nested executors together form an executor pipeline that a single iteration at the out-most
+/// executor (i.e. calling `next()`) will drive the whole pipeline.
 pub struct DAGBuilder;
 
 impl DAGBuilder {
