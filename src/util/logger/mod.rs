@@ -56,10 +56,11 @@ where
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
             .build()
+            .filter_level(level)
             .fuse();
         slog::Logger::root(drain, slog_o!())
     } else {
-        let drain = Mutex::new(drain).fuse();
+        let drain = Mutex::new(drain).filter_level(level).fuse();
         slog::Logger::root(drain, slog_o!())
     };
 
