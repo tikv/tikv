@@ -30,6 +30,7 @@ use util::transport::SendCh;
 use util::worker::Scheduler;
 use util::HandyRwLock;
 
+/// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
@@ -37,20 +38,20 @@ pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg.
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
-    // Send RaftMessage to local store.
+    /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::RaftMessage(msg))
     }
 
-    // Send RaftCmdRequest to local store.
+    /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
-    // Send significant message. We should guarantee that the message can't be dropped.
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()>;
 
-    // Report the peer of the region is unreachable.
+    /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
         self.significant_send(SignificantMsg::Unreachable {
             region_id,
@@ -58,7 +59,7 @@ pub trait RaftStoreRouter: Send + Clone {
         })
     }
 
-    // Report the sending snapshot status to the peer of the region.
+    /// Reports the sending snapshot status to the peer of the Region.
     fn report_snapshot_status(
         &self,
         region_id: u64,
@@ -73,6 +74,7 @@ pub trait RaftStoreRouter: Send + Clone {
     }
 }
 
+/// A router that routes messages to the raftstore
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
@@ -81,6 +83,7 @@ pub struct ServerRaftStoreRouter {
 }
 
 impl ServerRaftStoreRouter {
+    /// Creates a new router.
     pub fn new(
         raftstore_ch: SendCh<StoreMsg>,
         significant_msg_sender: Sender<SignificantMsg>,

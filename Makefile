@@ -50,7 +50,7 @@ clippy: pre-clippy
 		-A implicit_hasher -A large_enum_variant -A new_without_default \
 		-A new_without_default_derive -A neg_cmp_op_on_partial_ord \
 		-A too_many_arguments -A excessive_precision -A collapsible_if \
-		-A blacklisted_name
+		-A blacklisted_name -A needless_range_loop
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
