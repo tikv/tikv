@@ -393,7 +393,7 @@ impl Debugger {
             .map(|h: JoinHandle<Result<()>>| h.join())
             .map(|r| {
                 if let Err(e) = &r {
-                    eprintln!("{:?}", e);
+                    ve1!("{:?}", e);
                 }
                 r
             })
