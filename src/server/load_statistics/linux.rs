@@ -20,6 +20,7 @@ use libc::{getpid, pid_t};
 use server::load_statistics::ThreadLoad;
 use util::metrics::{get_thread_ids, Stat};
 
+/// A Linux-specific `ThreadLoadStatistics`. It collects threads load metrics.
 pub struct ThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,

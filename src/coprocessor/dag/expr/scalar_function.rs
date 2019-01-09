@@ -324,6 +324,9 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
+            | ScalarFuncSig::FieldInt
+            | ScalarFuncSig::FieldReal
+            | ScalarFuncSig::FieldString
             | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
@@ -391,9 +394,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ExportSet5Arg
             | ScalarFuncSig::ExtractDatetime
             | ScalarFuncSig::ExtractDuration
-            | ScalarFuncSig::FieldInt
-            | ScalarFuncSig::FieldReal
-            | ScalarFuncSig::FieldString
             | ScalarFuncSig::FindInSet
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
@@ -818,6 +818,9 @@ dispatch_call! {
 
         Length => length,
         BitCount => bit_count,
+        FieldInt => field_int,
+        FieldReal => field_real,
+        FieldString => field_string,
         CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
@@ -1359,6 +1362,9 @@ mod tests {
                     ScalarFuncSig::CaseWhenTime,
                     ScalarFuncSig::Concat,
                     ScalarFuncSig::ConcatWS,
+                    ScalarFuncSig::FieldInt,
+                    ScalarFuncSig::FieldReal,
+                    ScalarFuncSig::FieldString,
                 ],
                 1,
                 usize::MAX,
@@ -1460,9 +1466,6 @@ mod tests {
             ScalarFuncSig::ExportSet5Arg,
             ScalarFuncSig::ExtractDatetime,
             ScalarFuncSig::ExtractDuration,
-            ScalarFuncSig::FieldInt,
-            ScalarFuncSig::FieldReal,
-            ScalarFuncSig::FieldString,
             ScalarFuncSig::FindInSet,
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
