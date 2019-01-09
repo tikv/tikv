@@ -152,7 +152,7 @@ mod tests {
             Datum::F64(124.32),
             Datum::Dec(dec.clone()),
             Datum::Bytes(s.clone()),
-            Datum::Dur(dur.clone()),
+            Datum::Dur(dur),
         ];
 
         let expecteds = vec![
@@ -162,7 +162,7 @@ mod tests {
             EvalResults(None, Some(124.32), None, None, None, None, None),
             EvalResults(None, None, Some(dec.clone()), None, None, None, None),
             EvalResults(None, None, None, Some(s.clone()), None, None, None),
-            EvalResults(None, None, None, None, None, Some(dur.clone()), None),
+            EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 
         let mut ctx = EvalContext::default();

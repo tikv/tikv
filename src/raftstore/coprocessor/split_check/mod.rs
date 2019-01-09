@@ -74,8 +74,8 @@ impl Host {
         false
     }
 
-    pub fn split_keys(self) -> Vec<Vec<u8>> {
-        for mut checker in self.checkers {
+    pub fn split_keys(&mut self) -> Vec<Vec<u8>> {
+        for checker in &mut self.checkers {
             let keys = checker.split_keys();
             if !keys.is_empty() {
                 return keys;
@@ -84,7 +84,7 @@ impl Host {
         vec![]
     }
 
-    pub fn approximate_split_keys(mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
+    pub fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
         for checker in &mut self.checkers {
             let keys = box_try!(checker.approximate_split_keys(region, engine));
             if !keys.is_empty() {

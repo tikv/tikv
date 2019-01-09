@@ -491,6 +491,9 @@ pub fn get_region_approximate_split_keys(
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+    if default_cf_size + write_cf_size == 0 {
+        return Err(box_err!("default cf and write cf is empty"));
+    }
 
     // assume the size of keys is uniform distribution in both cfs.
     let (cf, cf_split_size) = if default_cf_size >= write_cf_size {
@@ -544,6 +547,18 @@ pub fn get_region_approximate_split_keys_cf(
     if keys.len() == 1 {
         return Ok(vec![]);
     }
+    if keys.is_empty() || total_size == 0 || split_size == 0 {
+        return Err(box_err!(
+            "unexpected key len {} or total_size {} or split size {}, len of collection {}, cf {}, start {}, end {}",
+            keys.len(),
+            total_size,
+            split_size,
+            collection.len(),
+            cfname,
+            escape(&start),
+            escape(&end)
+        ));
+    }
     keys.sort();
 
     // use total size of this range and the number of keys in this range to
@@ -551,8 +566,16 @@ pub fn get_region_approximate_split_keys_cf(
     // split_key every `split_size / distance` keys.
     let len = keys.len();
     let distance = total_size as f64 / len as f64;
-    assert!(split_size != 0);
     let n = (split_size as f64 / distance).ceil() as usize;
+    if n == 0 {
+        return Err(box_err!(
+            "unexpected n == 0, total_size: {}, split_size: {}, len: {}, distance: {}",
+            total_size,
+            split_size,
+            keys.len(),
+            distance
+        ));
+    }
 
     // cause first element of the iterator will always be returned by step_by(),
     // so the first key returned may not the desired split key. Note that, the
@@ -1325,6 +1348,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_region_maybe_inaccurate_approximate_size() {
+        let path =
+            TempDir::new("_test_raftstore_region_maybe_inaccurate_approximate_size").expect("");
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_disable_auto_compactions(true);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocksdb_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut cf_size = 0;
+        for i in 0..100 {
+            let k1 = keys::data_key(format!("k1{}", i).as_bytes());
+            let k2 = keys::data_key(format!("k9{}", i).as_bytes());
+            let v = vec![0; 4096];
+            cf_size += k1.len() + k2.len() + v.len() * 2;
+            let cf = db.cf_handle("default").unwrap();
+            db.put_cf(cf, &k1, &v).unwrap();
+            db.put_cf(cf, &k2, &v).unwrap();
+            db.flush_cf(cf, true).unwrap();
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        let size = get_region_approximate_size(&db, &region).unwrap();
+        assert_eq!(size, cf_size as u64);
+
+        let region = make_region(1, b"k2".to_vec(), b"k8".to_vec());
+        let size = get_region_approximate_size(&db, &region).unwrap();
+        assert_eq!(size, 0);
+    }
+
     fn check_data(db: &DB, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
             let handle = get_cf_handle(db, cf).unwrap();
@@ -1694,6 +1754,42 @@ mod tests {
             .into_raw()
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
+    }
+
+    #[test]
+    fn test_get_region_approximate_split_keys_error() {
+        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        let region = make_region(1, vec![], vec![]);
+        assert_eq!(
+            get_region_approximate_split_keys(&engine, &region, 3, 5, 1).is_err(),
+            true
+        );
+
+        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat(b'v').take(256));
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+        assert_eq!(
+            get_region_approximate_split_keys(&engine, &region, 3, 5, 1).is_err(),
+            true
+        );
     }
 
     #[test]
