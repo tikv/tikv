@@ -450,8 +450,6 @@ impl<T> Drop for MustConsumeVec<T> {
 
 /// Exit the whole process when panic.
 pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
-    extern crate log;
-
     use std::panic;
     use std::process;
 
@@ -473,7 +471,8 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &panic::PanicInfo| {
-        if log_enabled!(::log::LogLevel::Error) {
+        use slog::Drain;
+        if ::slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
                 None => match info.payload().downcast_ref::<String>() {
@@ -498,19 +497,17 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             orig_hook(info);
         }
 
-        // HACK! To collect remaining logs and avoid no global logger,
-        // replace the old logger with a terminal logger.
-        if let Some(level) = log::max_log_level().to_log_level() {
-            info!("logger switched, outputs further logs to stderr");
+        // There might be remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one with a
+        // terminal logger.
+        if let Some(level) = ::log::max_log_level().to_log_level() {
             let drainer = logger::term_drainer();
-            if let Ok(g) = logger::init_log(
+            let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),
                 false, // Use sync logger to avoid an unnecessary log thread.
                 false, // It is initialized already.
-            ) {
-                g.cancel_reset();
-            }
+            );
         }
 
         // If PANIC_MARK is true, create panic mark file.
