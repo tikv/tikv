@@ -33,15 +33,15 @@
 //!
 //!   Obviously, this kind of executor must not be the first executor in the pipeline.
 
-pub mod batch_dag;
 pub mod batch_executor;
-pub mod dag;
+pub mod batch_handler;
+mod builder;
 pub mod executor;
 pub mod expr;
-mod pipeline;
+pub mod handler;
 pub mod rpn_expr;
 mod scanner;
 
-pub use self::batch_dag::BatchDAGHandler;
-pub use self::dag::DAGContext;
+pub use self::batch_handler::BatchDAGHandler;
+pub use self::handler::DAGRequestHandler;
 pub use self::scanner::{ScanOn, Scanner};

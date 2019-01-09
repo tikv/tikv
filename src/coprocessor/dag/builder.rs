@@ -30,7 +30,14 @@ use coprocessor::dag::expr::EvalConfig;
 use coprocessor::dag::rpn_expr::RpnFunction;
 use coprocessor::*;
 
-pub struct ExecutorPipelineBuilder;
+/// Utilities to build an executor DAG.
+///
+/// Currently all executors are executed in sequence and there is no task scheduler, so this
+/// builder is in fact a pipeline builder. The builder will finally build a `Box<Executor>` which
+/// may contain another executor as its source, embedded in the field, one after another. These
+/// nested executors together form an executor pipeline that a single iteration at the out-most
+/// executor (i.e. calling `next()`) will drive the whole pipeline.
+pub struct DAGBuilder;
 
 fn check_condition(c: &Expr) -> bool {
     use cop_datatype::FieldTypeAccessor;
@@ -69,7 +76,7 @@ fn check_condition(c: &Expr) -> bool {
     true
 }
 
-impl ExecutorPipelineBuilder {
+impl DAGBuilder {
     /// Given a list of executor descriptors and returns whether all executor descriptors can
     /// be used to build batch executors.
     pub fn can_build_batch(exec_descriptors: &[executor::Executor]) -> bool {
@@ -216,6 +223,9 @@ impl ExecutorPipelineBuilder {
         Ok((executor, executor_context))
     }
 
+    /// Builds a normal executor pipeline.
+    ///
+    /// Normal executors iterate rows one by one.
     pub fn build_normal<S: Store + 'static>(
         execs: Vec<executor::Executor>,
         store: S,
@@ -258,6 +268,10 @@ impl ExecutorPipelineBuilder {
         Ok(src)
     }
 
+    /// Builds the inner-most executor for the normal executor pipeline, which can produce rows to
+    /// other executors and never receive rows from other executors.
+    ///
+    /// The inner-most executor must be a table scan executor or an index scan executor.
     fn build_normal_first_executor<S: Store + 'static>(
         mut first: executor::Executor,
         store: S,

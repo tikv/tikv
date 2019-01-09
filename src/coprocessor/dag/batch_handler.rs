@@ -20,7 +20,7 @@ use super::batch_executor::interface::{BatchExecutor, ExecutorContext};
 use super::executor::ExecutorMetrics;
 use coprocessor::*;
 
-/// Must be built from DAGContext.
+/// Must be built from DAGRequestHandler.
 pub struct BatchDAGHandler {
     out_most_executor: Box<BatchExecutor>,
     output_offsets: Vec<u32>,

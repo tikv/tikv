@@ -809,7 +809,7 @@ fn bench_dag_handle(
     store: &Store<RocksEngine>,
     enable_batch: bool,
 ) {
-    use tikv::coprocessor::dag::DAGContext;
+    use tikv::coprocessor::dag::DAGRequestHandler;
     use tikv::coprocessor::Deadline;
     use tipb::select::DAGRequest;
 
@@ -818,7 +818,7 @@ fn bench_dag_handle(
 
     b.iter_with_setup(
         || {
-            DAGContext::build(
+            DAGRequestHandler::build(
                 dag.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),
@@ -834,7 +834,7 @@ fn bench_dag_handle(
     );
 }
 
-/// Integrate DAGContext + TableScan, scans a range with 1000 keys, 1 interested column (PK).
+/// Integrate DAGRequestHandler + TableScan, scans a range with 1000 keys, 1 interested column (PK).
 fn bench_dag_table_scan_primary_key(c: &mut Criterion) {
     use tipb::executor::ExecType;
 
@@ -878,7 +878,7 @@ fn bench_dag_table_scan_primary_key(c: &mut Criterion) {
     bench(c, "dag_batch_table_scan_primary_key", true);
 }
 
-/// Integrate DAGContext + TableScan, scans a range with 1000 keys, 1 interested column, which is
+/// Integrate DAGRequestHandler + TableScan, scans a range with 1000 keys, 1 interested column, which is
 /// at the front in a 100 columns row.
 fn bench_dag_table_scan_datum_front(c: &mut Criterion) {
     use tipb::executor::ExecType;
@@ -925,7 +925,7 @@ fn bench_dag_table_scan_datum_front(c: &mut Criterion) {
     bench(c, "dag_batch_table_scan_datum_front", true);
 }
 
-/// Integrate DAGContext + TableScan, scans a range with 1000 keys, all column are interested and
+/// Integrate DAGRequestHandler + TableScan, scans a range with 1000 keys, all column are interested and
 /// there are 100 columns in the row.
 fn bench_dag_table_scan_datum_all(c: &mut Criterion) {
     use tipb::executor::ExecType;
@@ -972,7 +972,7 @@ fn bench_dag_table_scan_datum_all(c: &mut Criterion) {
     bench(c, "dag_batch_table_scan_datum_all", true);
 }
 
-/// Integrate DAGContext + TableScan, scans a range with 1000 keys, 2 interested column: PK & front
+/// Integrate DAGRequestHandler + TableScan, scans a range with 1000 keys, 2 interested column: PK & front
 /// column.
 fn bench_dag_table_scan_pk_front(c: &mut Criterion) {
     use tipb::executor::ExecType;
@@ -1019,7 +1019,7 @@ fn bench_dag_table_scan_pk_front(c: &mut Criterion) {
 }
 
 // TODO: Remove this test.
-/// Integrate DAGContext + TableScan + Selection, scans a range with 1000 keys and retain 500 keys,
+/// Integrate DAGRequestHandler + TableScan + Selection, scans a range with 1000 keys and retain 500 keys,
 /// 2 interested column, PK & the column to filter.
 fn bench_dag_table_scan_selection_pk_front(c: &mut Criterion) {
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};

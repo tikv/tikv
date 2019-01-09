@@ -23,14 +23,15 @@ use storage::Store;
 
 use super::executor::{Executor, ExecutorMetrics};
 
-pub struct DAGContext {
+/// Handles Coprocessor DAG requests.
+pub struct DAGRequestHandler {
     deadline: Deadline,
     executor: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
 
-impl DAGContext {
+impl DAGRequestHandler {
     fn build_dag<S: Store + 'static>(
         eval_cfg: EvalConfig,
         mut req: DAGRequest,
@@ -39,7 +40,7 @@ impl DAGContext {
         deadline: Deadline,
         batch_row_limit: usize,
     ) -> Result<Self> {
-        let executor = super::pipeline::ExecutorPipelineBuilder::build_normal(
+        let executor = super::builder::DAGBuilder::build_normal(
             req.take_executors().into_vec(),
             store,
             ranges,
@@ -59,15 +60,14 @@ impl DAGContext {
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         store: S,
-    ) -> Result<super::batch_dag::BatchDAGHandler> {
-        let (out_most_executor, executor_context) =
-            super::pipeline::ExecutorPipelineBuilder::build_batch(
-                req.take_executors().into_vec(),
-                store,
-                ranges,
-                eval_config,
-            )?;
-        Ok(super::batch_dag::BatchDAGHandler::new(
+    ) -> Result<super::batch_handler::BatchDAGHandler> {
+        let (out_most_executor, executor_context) = super::builder::DAGBuilder::build_batch(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            eval_config,
+        )?;
+        Ok(super::batch_handler::BatchDAGHandler::new(
             out_most_executor,
             req.take_output_offsets(),
             executor_context,
@@ -105,7 +105,7 @@ impl DAGContext {
 
         let is_batch = enable_batch_if_possible
             && !is_streaming
-            && super::pipeline::ExecutorPipelineBuilder::can_build_batch(req.get_executors());
+            && super::builder::DAGBuilder::can_build_batch(req.get_executors());
 
         if is_batch {
             Ok(Self::build_batch_dag(eval_cfg, req, ranges, store)?.into_boxed())
@@ -136,7 +136,7 @@ impl DAGContext {
     }
 }
 
-impl RequestHandler for DAGContext {
+impl RequestHandler for DAGRequestHandler {
     fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();

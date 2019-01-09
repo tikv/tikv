@@ -85,7 +85,7 @@ impl AsBool for Option<Duration> {
     fn as_bool(&self) -> bool {
         match self {
             None => false,
-            Some(ref v) => !v.is_empty(),
+            Some(ref v) => !v.is_zero(),
         }
     }
 }
