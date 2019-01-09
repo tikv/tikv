@@ -384,7 +384,7 @@ impl ScalarFunc {
             Some(result) => result,
             None => return Err(box_err!("add duration {} and duration {} overflow", d0, d1)),
         };
-        let res = match MyDuration::from_nanos(add, d0.get_fsp().max(d1.get_fsp()) as i8) {
+        let res = match MyDuration::from_nanos(add, d0.fsp().max(d1.fsp()) as i8) {
             Ok(result) => result,
             Err(e) => return Err(e),
         };
@@ -408,7 +408,7 @@ impl ScalarFunc {
             None => return Err(box_err!("add duration {} and string {} overflow", arg0, s)),
         };
 
-        let res = MyDuration::from_nanos(add, arg0.get_fsp().max(arg1.get_fsp()) as i8)?;
+        let res = MyDuration::from_nanos(add, arg0.fsp().max(arg1.fsp()) as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 }

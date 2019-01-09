@@ -499,9 +499,9 @@ impl Time {
         }
         if time_type == TimeType::Date {
             let t = t.date().and_hms(0, 0, 0); // TODO: might panic!
-            Time::new(t, time_type, d.fsp as i8)
+            Time::new(t, time_type, d.fsp() as i8)
         } else {
-            Time::new(t, time_type, d.fsp as i8)
+            Time::new(t, time_type, d.fsp() as i8)
         }
     }
 
