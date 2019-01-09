@@ -443,11 +443,11 @@ impl Snapshot for RegionSnapshot {
         RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
     }
 
-    fn physical_lower_bound(&self) -> Option<&[u8]> {
+    fn lower_bound(&self) -> Option<&[u8]> {
         Some(self.get_start_key())
     }
 
-    fn physical_upper_bound(&self) -> Option<&[u8]> {
+    fn upper_bound(&self) -> Option<&[u8]> {
         Some(self.get_end_key())
     }
 }

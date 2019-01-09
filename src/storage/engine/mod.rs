@@ -126,10 +126,10 @@ pub trait Snapshot: Send + Clone {
     fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
-    fn physical_lower_bound(&self) -> Option<&[u8]> {
+    fn lower_bound(&self) -> Option<&[u8]> {
         None
     }
-    fn physical_upper_bound(&self) -> Option<&[u8]> {
+    fn upper_bound(&self) -> Option<&[u8]> {
         None
     }
 }
