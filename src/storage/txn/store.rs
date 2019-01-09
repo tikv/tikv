@@ -113,7 +113,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         upper_bound: Option<Key>,
     ) -> Result<StoreScanner<S>> {
         // Check request bounds with physical bound
-        let (lower_bound, upper_bound) = self.verify_range(lower_bound, upper_bound)?;
+        self.verify_range(&lower_bound, &upper_bound)?;
 
         let (forward_scanner, backward_scanner) = if !desc {
             let forward_scanner = ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -155,17 +155,13 @@ impl<S: Snapshot> SnapshotStore<S> {
         }
     }
 
-    fn verify_range(
-        &self,
-        lower_bound: Option<Key>,
-        upper_bound: Option<Key>,
-    ) -> Result<(Option<Key>, Option<Key>)> {
+    fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
         if let Some(ref l) = lower_bound {
             if let Some(b) = self.snapshot.lower_bound() {
                 if !b.is_empty() && l.as_encoded().as_slice() < b {
                     return Err(Error::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
-                        end: upper_bound.map(|b| b.into_encoded()),
+                        end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         lower_bound: Some(b.to_vec()),
                         upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
                     });
@@ -176,7 +172,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             if let Some(b) = self.snapshot.upper_bound() {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     return Err(Error::InvalidReqRange {
-                        start: lower_bound.map(|b| b.into_encoded()),
+                        start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
                         lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
                         upper_bound: Some(b.to_vec()),
@@ -185,7 +181,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             }
         }
 
-        Ok((lower_bound, upper_bound))
+        Ok(())
     }
 }
 
