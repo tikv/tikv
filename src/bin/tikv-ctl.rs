@@ -323,9 +323,14 @@ trait DebugExecutor {
         }
         if to_key.is_empty() || (to_key[0] != b'z' && to_key != [b'z' + 1]) {
             eprintln!(
-                "to_key should start with 'z' or equal to \"{}\"",
+                "to_key should start with 'z' or equal \"{}\"",
                 escape(&[b'z' + 1])
             );
+            process::exit(-1);
+        }
+
+        if cf == CF_WRITE && from_key.len() < 8 {
+            eprintln!("from_key should not be shorter than 8 bytes when scanning write cf");
             process::exit(-1);
         }
 
@@ -829,7 +834,9 @@ impl DebugExecutor for Debugger {
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
-        let res = self.raw_scan(from_key, end_key, limit, cf).unwrap();
+        let res = self
+            .raw_scan(from_key, end_key, limit, cf)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::raw_scan_impl", e));
 
         for (k, v) in &res {
             println!("key: \"{}\", value: \"{}\"", escape(k), escape(v));

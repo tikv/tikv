@@ -122,7 +122,7 @@ key: "zt\200\000\000\000\000\000\000\377\025_r\200\000\000\000\000\377\000\000\0
 Total scanned keys: 2
 ```
 
-There's a limitation: if you are trying to scan write cf, the keys you provides shouldn't be shorter than 8 bytes.
+There's a limitation: if you are trying to scan write cf, the from_key you provides shouldn't be shorter than 8 bytes.
 
 ### Print a specific key value
 
