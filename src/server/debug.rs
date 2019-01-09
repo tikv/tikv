@@ -291,6 +291,7 @@ impl Debugger {
         let db = &self.engines.kv;
         let cf_handle = get_cf_handle(db, cf).unwrap();
         let mut read_opt = ReadOptions::new();
+        read_opt.set_total_order_seek(true);
         read_opt.set_iterate_lower_bound(start);
         if !end.is_empty() {
             read_opt.set_iterate_upper_bound(end);

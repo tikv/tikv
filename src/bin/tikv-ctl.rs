@@ -317,11 +317,6 @@ trait DebugExecutor {
             process::exit(-1);
         }
 
-        if cf == CF_WRITE && from_key.len() < 8 {
-            eprintln!("from_key should not be shorter than 8 bytes when scanning write cf");
-            process::exit(-1);
-        }
-
         self.raw_scan_impl(from_key, to_key, limit, cf);
     }
 
