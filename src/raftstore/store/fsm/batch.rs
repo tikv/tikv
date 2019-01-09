@@ -45,14 +45,19 @@ pub trait Fsm {
     fn is_stopped(&self) -> bool;
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, _mailbox: Cow<BasicMailbox<Self>>)
     where
-        Self: Sized;
+        Self: Sized,
+    {
+    }
     /// Take the mailbox from Fsm. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
     where
-        Self: Sized;
+        Self: Sized,
+    {
+        None
+    }
 }
 
 /// A unify type for FSMs so that they can be sent to channel easily.
@@ -361,7 +366,7 @@ pub trait HandlerBuilder<N, C> {
 /// task while Control FSM creates normal FSM instances.
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: String,
-    router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
+    router: BatchRouter<N, C>,
     receiver: channel::Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
@@ -373,6 +378,10 @@ where
     N: Fsm + Send + 'static,
     C: Fsm + Send + 'static,
 {
+    pub fn router(&self) -> &BatchRouter<N, C> {
+        &self.router
+    }
+
     /// Start the batch system.
     pub fn spawn<B>(&mut self, mut builder: B)
     where

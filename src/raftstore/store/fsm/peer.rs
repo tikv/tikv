@@ -44,6 +44,9 @@ use super::{store::register_timer, Key};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::cmd_resp::{bind_term, new_error};
 use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
+use raftstore::store::fsm::{
+    ApplyMetrics, ApplyRes, ApplyTask, ApplyTaskRes, ChangePeer, ExecResult,
+};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::*;
@@ -51,10 +54,8 @@ use raftstore::store::msg::Callback;
 use raftstore::store::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use raftstore::store::peer_storage::ApplySnapResult;
 use raftstore::store::transport::Transport;
-use raftstore::store::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use raftstore::store::worker::{
-    ApplyTask, ApplyTaskRes, CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask,
-    SplitCheckTask,
+    CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, SplitCheckTask,
 };
 use raftstore::store::{util, Msg, SignificantMsg, SnapKey, SnapshotDeleter, Store, Tick};
 
@@ -190,9 +191,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         );
                     }
                 },
-                Ok(ApplyTaskRes::Destroy(p)) => {
+                Ok(ApplyTaskRes::Destroy { region_id, id }) => {
                     let store_id = self.store_id();
-                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()), false);
+                    self.destroy_peer(region_id, util::new_peer(store_id, id), false);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -669,25 +670,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
-        let mut region_proposals = Vec::with_capacity(pending_count);
-        let (kv_wb, raft_wb, append_res, sync_log) = {
+        // TODO: make the flag as a field of transport instead.
+        let (kv_wb, raft_wb, append_res, sync_log, need_flush) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
                     if let Some(region_proposal) = peer.take_apply_proposals() {
-                        region_proposals.push(region_proposal);
+                        let t = ApplyTask::Proposals(region_proposal);
+                        self.apply_router.schedule_task(region_id, t);
                     }
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
-            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
+            (
+                ctx.kv_wb,
+                ctx.raft_wb,
+                ctx.ready_res,
+                ctx.sync_log,
+                ctx.need_flush,
+            )
         };
 
-        if !region_proposals.is_empty() {
-            self.apply_worker
-                .schedule(ApplyTask::Proposals(region_proposals))
-                .unwrap();
-
+        if need_flush {
             // In most cases, if the leader proposes a message, it will also
             // broadcast the message to other followers, so we should flush the
             // messages ASAP.
@@ -764,19 +768,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
 
         if !ready_results.is_empty() {
-            let mut apply_tasks = Vec::with_capacity(ready_results.len());
             for (region_id, ready, res) in ready_results {
                 self.region_peers
                     .get_mut(&region_id)
                     .unwrap()
-                    .handle_raft_ready_apply(ready, &mut apply_tasks);
+                    .handle_raft_ready_apply(ready, &self.apply_router);
                 if let Some(apply_result) = res {
                     self.on_ready_apply_snapshot(apply_result);
                 }
             }
-            self.apply_worker
-                .schedule(ApplyTask::applies(apply_tasks))
-                .unwrap();
         }
 
         let dur = t.elapsed();
@@ -801,9 +801,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     pub fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
-            self.apply_worker
-                .schedule(ApplyTask::destroy(job.region_id))
-                .unwrap();
+            self.apply_router
+                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id));
         }
         if job.async_remove {
             info!(
@@ -847,6 +846,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.local_reader
             .schedule(ReadTask::destroy(region_id))
             .unwrap();
+        self.apply_router
+            .schedule_task(region_id, ApplyTask::destroy(region_id));
         // Trigger region change observer
         self.coprocessor_host.on_region_changed(
             p.region(),

@@ -38,9 +38,10 @@ use raft::{
 };
 use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
-use raftstore::store::worker::{
-    apply, apply::ApplyMetrics, Apply, ApplyTask, Proposal, ReadProgress, ReadTask, RegionProposal,
+use raftstore::store::fsm::{
+    apply, Apply, ApplyMetrics, ApplyRouter, ApplyTask, Proposal, RegionProposal,
 };
+use raftstore::store::worker::{ReadProgress, ReadTask};
 use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use raftstore::{Error, Result};
 use util::collections::{HashMap, HashSet};
@@ -165,6 +166,7 @@ pub struct ReadyContext<'a, T: 'a> {
     pub trans: &'a T,
     /// All `Ready`s and their `InvokeContext`s will be stored into `ready_res`.
     pub ready_res: Vec<(Ready, InvokeContext)>,
+    pub need_flush: bool,
 }
 
 impl<'a, T> ReadyContext<'a, T> {
@@ -176,6 +178,7 @@ impl<'a, T> ReadyContext<'a, T> {
             metrics,
             trans,
             ready_res: Vec::with_capacity(cap),
+            need_flush: false,
         }
     }
 }
@@ -298,7 +301,7 @@ pub struct Peer {
     // When entry exceed max size, reject to propose the entry.
     pub raft_entry_max_size: u64,
 
-    apply_scheduler: Scheduler<ApplyTask>,
+    apply_router: ApplyRouter,
     read_scheduler: Scheduler<ReadTask>,
 
     pub pending_remove: bool,
@@ -427,7 +430,7 @@ impl Peer {
             approximate_size: None,
             approximate_keys: None,
             compaction_declined_bytes: 0,
-            apply_scheduler: store.apply_scheduler(),
+            apply_router: store.apply_router(),
             read_scheduler: store.read_scheduler(),
             pending_remove: false,
             marked_to_be_checked: false,
@@ -463,9 +466,8 @@ impl Peer {
     /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate(&self) {
-        self.apply_scheduler
-            .schedule(ApplyTask::register(self))
-            .unwrap();
+        self.apply_router
+            .schedule_task(self.region_id, ApplyTask::register(self));
         self.read_scheduler
             .schedule(ReadTask::register(self))
             .unwrap();
@@ -974,6 +976,7 @@ impl Peer {
         if !self.pending_messages.is_empty() {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
+            ctx.need_flush = true;
             self.send(ctx.trans, messages, &mut ctx.metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
@@ -1010,6 +1013,7 @@ impl Peer {
         if self.is_leader() {
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
+            ctx.need_flush = true;
             self.send(ctx.trans, msgs, &mut ctx.metrics.message)
                 .unwrap_or_else(|e| {
                     // We don't care that the message is sent failed, so here just log this error.
@@ -1079,7 +1083,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_router: &ApplyRouter) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -1145,7 +1149,8 @@ impl Peer {
                     self.raft_group.skip_bcast_commit(true);
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
-                apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
+                let apply = Apply::new(self.region_id, self.term(), committed_entries);
+                apply_router.schedule_task(self.region_id, ApplyTask::apply(apply));
             }
         }
 
