@@ -43,7 +43,6 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_stdlog;
 extern crate slog_term;
 extern crate tikv;
 extern crate toml;
