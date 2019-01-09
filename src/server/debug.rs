@@ -292,7 +292,9 @@ impl Debugger {
         let cf_handle = get_cf_handle(db, cf).unwrap();
         let mut read_opt = ReadOptions::new();
         read_opt.set_iterate_lower_bound(start);
-        read_opt.set_iterate_upper_bound(end);
+        if !end.is_empty() {
+            read_opt.set_iterate_upper_bound(end);
+        }
         let mut iter = db.iter_cf_opt(cf_handle, read_opt);
         if !iter.seek_to_first() {
             return Ok(vec![]);

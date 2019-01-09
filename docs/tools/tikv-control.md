@@ -109,7 +109,7 @@ In this command, the key is also the escaped form of raw key.
 
 ### Scan raw keys
 
-The `raw-scan` subcommand is similar to `scan`, except that it doesn't try to interpret the keys as MVCC keys but prints the raw keys directly.
+The `raw-scan` command scans directly from the RocksDB. Note that to scan data keys you need to add a `'z'` prefix to keys.
 
 Use `--from` and `--to` options to specify the range to scan (unbounded by default). Use `--limit` to limit at most how
 many keys to print out (30 by default). Use `--cf` to specify which cf to scan (can be `default`, `write` or `lock`).

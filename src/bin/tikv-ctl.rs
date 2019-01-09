@@ -304,7 +304,7 @@ trait DebugExecutor {
             eprintln!("CF \"{}\" doesn't exist.", cf);
             process::exit(-1);
         }
-        if from_key >= to_key {
+        if !to_key.is_empty() && from_key >= to_key {
             eprintln!(
                 "to_key should be greater than from_key, but got from_key: \"{}\", to_key: \"{}\"",
                 escape(from_key),
@@ -314,18 +314,6 @@ trait DebugExecutor {
         }
         if limit == 0 {
             eprintln!("limit should be greater than 0");
-            process::exit(-1);
-        }
-
-        if from_key.is_empty() || from_key[0] != b'z' {
-            eprintln!("from_key should start with 'z'");
-            process::exit(-1);
-        }
-        if to_key.is_empty() || (to_key[0] != b'z' && to_key != [b'z' + 1]) {
-            eprintln!(
-                "to_key should start with 'z' or equal \"{}\"",
-                escape(&[b'z' + 1])
-            );
             process::exit(-1);
         }
 
@@ -1191,7 +1179,7 @@ fn main() {
                         .short("f")
                         .long("from")
                         .takes_value(true)
-                        .default_value("z")
+                        .default_value("")
                         .help(raw_key_hint)
                 )
                 .arg(
@@ -1199,7 +1187,7 @@ fn main() {
                         .short("t")
                         .long("to")
                         .takes_value(true)
-                        .default_value("\\173") // 'z' + 1
+                        .default_value("")
                         .help(raw_key_hint)
                 )
                 .arg(
