@@ -126,7 +126,7 @@ impl<E: Engine> Endpoint<E> {
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = box move |snap, req_ctx: &ReqContext| {
-                    // See rust-lang#41078 to know why we have `: &_` here.
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     let store = SnapshotStore::new(
                         snap,
                         dag.get_start_ts(),
@@ -158,6 +158,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(analyze.get_start_ts()),
                 );
                 builder = box move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(analyze, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
                 };
@@ -176,6 +177,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(checksum.get_start_ts()),
                 );
                 builder = box move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     checksum::ChecksumContext::new(checksum, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
                 };

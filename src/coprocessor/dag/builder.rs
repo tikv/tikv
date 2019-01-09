@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -227,18 +227,18 @@ impl DAGBuilder {
     ///
     /// Normal executors iterate rows one by one.
     pub fn build_normal<S: Store + 'static>(
-        execs: Vec<executor::Executor>,
+        exec_descriptors: Vec<executor::Executor>,
         store: S,
         ranges: Vec<KeyRange>,
         ctx: Arc<EvalConfig>,
         collect: bool,
     ) -> Result<Box<Executor + Send>> {
-        let mut execs = execs.into_iter();
-        let first = execs
+        let mut exec_descriptors = exec_descriptors.into_iter();
+        let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
         let mut src = Self::build_normal_first_executor(first, store, ranges, collect)?;
-        for mut exec in execs {
+        for mut exec in exec_descriptors {
             let curr: Box<Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"))
