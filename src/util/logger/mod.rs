@@ -23,7 +23,6 @@ use grpc;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
-use slog_scope::{self, GlobalLoggerGuard};
 use slog_stdlog;
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
@@ -41,10 +40,10 @@ const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f";
 
 pub fn init_log<D>(
     drain: D,
-    level: Level,
+    level: Level, // TODO: Use slog level
     use_async: bool,
     init_stdlog: bool,
-) -> Result<GlobalLoggerGuard, SetLoggerError>
+) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
     <D as Drain>::Err: ::std::fmt::Debug,
@@ -64,12 +63,12 @@ where
         slog::Logger::root(drain, slog_o!())
     };
 
-    let guard = slog_scope::set_global_logger(logger);
+    ::slog_global::set_global(logger);
     if init_stdlog {
         slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))?;
     }
 
-    Ok(guard)
+    Ok(())
 }
 
 /// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
@@ -90,7 +89,7 @@ pub fn file_drainer(
 
 /// Constructs a new terminal drainer which outputs logs to stderr.
 pub fn term_drainer() -> TikvFormat<TermDecorator> {
-    let decorator = TermDecorator::new().build();
+    let decorator = TermDecorator::new().stderr().build();
     TikvFormat::new(decorator)
 }
 
@@ -120,16 +119,6 @@ pub fn get_string_by_level(lv: Level) -> &'static str {
     }
 }
 
-pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
-    match lv {
-        Level::Critical | Level::Error => log::LogLevel::Error,
-        Level::Warning => log::LogLevel::Warn,
-        Level::Debug => log::LogLevel::Debug,
-        Level::Trace => log::LogLevel::Trace,
-        Level::Info => log::LogLevel::Info,
-    }
-}
-
 #[test]
 fn test_get_level_by_string() {
     // Ensure UPPER, Capitalized, and lower case all map over.
@@ -142,6 +131,54 @@ fn test_get_level_by_string() {
     // Ensure that all non-defined values map to `Info`.
     assert_eq!(None, get_level_by_string("Off"));
     assert_eq!(None, get_level_by_string("definitely not an option"));
+}
+
+pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
+    match lv {
+        Level::Critical | Level::Error => log::LogLevel::Error,
+        Level::Warning => log::LogLevel::Warn,
+        Level::Debug => log::LogLevel::Debug,
+        Level::Trace => log::LogLevel::Trace,
+        Level::Info => log::LogLevel::Info,
+    }
+}
+
+pub fn convert_log_level_to_slog_level(lv: log::LogLevel) -> Level {
+    match lv {
+        log::LogLevel::Error => Level::Error,
+        log::LogLevel::Warn => Level::Warning,
+        log::LogLevel::Debug => Level::Debug,
+        log::LogLevel::Trace => Level::Trace,
+        log::LogLevel::Info => Level::Info,
+    }
+}
+
+#[test]
+fn test_log_level_conversion() {
+    assert_eq!(
+        Level::Error,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Critical))
+    );
+    assert_eq!(
+        Level::Error,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Error))
+    );
+    assert_eq!(
+        Level::Warning,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Warning))
+    );
+    assert_eq!(
+        Level::Debug,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Debug))
+    );
+    assert_eq!(
+        Level::Trace,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Trace))
+    );
+    assert_eq!(
+        Level::Info,
+        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Info))
+    );
 }
 
 pub struct TikvFormat<D>
@@ -415,7 +452,7 @@ fn test_log_format() {
     let decorator = PlainSyncDecorator::new(TestWriter);
     let drain = TikvFormat::new(decorator).fuse();
     let logger = slog::Logger::root_typed(drain, slog_o!());
-    slog_crit!(logger, "test");
+    slog_error!(logger, "test");
 
     // Check the logged value.
     BUFFER.with(|buffer| {
@@ -423,7 +460,7 @@ fn test_log_format() {
         let output = from_utf8(&*buffer).unwrap();
 
         // This functions roughly as an assert to make sure that the log level and file name is logged.
-        let mut split_iter = output.split(" CRIT mod.rs:");
+        let mut split_iter = output.split(" ERRO mod.rs:");
         // The pre-split portion will contain a timestamp which we can check by parsing and ensuring it is valid.
         let datetime = split_iter.next().unwrap();
         assert!(

@@ -4,8 +4,12 @@ version = "0.0.1"
 publish = false
 
 [dependencies]
+libc = "0.2"
+byteorder = "1.2"
 quick-error = "1.2"
 panic_hook = { path = "../panic_hook" }
 
 [dev-dependencies]
+protobuf = "2.0"
+bytes = "0.4.10"
 rand = "0.5"
