@@ -96,10 +96,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-
         let snap_worker = Worker::new("snap-handler");
 
-        let kv_service = KvService::new(storage, cop, raft_router.clone(), snap_worker.scheduler());
+        let kv_service = KvService::new(
+            storage,
+            cop,
+            raft_router.clone(),
+            snap_worker.scheduler(),
+            cfg.heavy_load_threshold,
+            Arc::clone(&stats_runtime),
+            Arc::clone(&thread_load),
+        );
+
         let addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
@@ -133,6 +141,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&env),
             Arc::clone(cfg),
             Arc::clone(security_mgr),
+            Arc::clone(&thread_load),
+            Arc::clone(&stats_runtime),
         )));
 
         let trans = ServerTransport::new(

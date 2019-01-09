@@ -75,9 +75,24 @@ lazy_static! {
         "Total number of handle grpc message failure",
         &["type"]
     ).unwrap();
+    pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
+        "tikv_server_grpc_req_super_batch_size",
+        "Super batch size of gRPC requests",
+        exponential_buckets(1f64, 2f64, 10).unwrap()
+    ).unwrap();
+    pub static ref GRPC_RESP_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
+        "tikv_server_grpc_resp_super_batch_size",
+        "Super batch size of gRPC responses",
+        exponential_buckets(1f64, 2f64, 10).unwrap()
+    ).unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"
+    ).unwrap();
+    pub static ref RAFT_MESSAGE_BATCH_SIZE: Histogram = register_histogram!(
+        "tikv_server_raft_message_batch_size",
+        "Raft messages batch size",
+        exponential_buckets(1f64, 2f64, 10).unwrap()
     ).unwrap();
     pub static ref RESOLVE_STORE_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_resolve_store_total",
