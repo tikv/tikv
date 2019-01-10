@@ -77,12 +77,12 @@ lazy_static! {
     ).unwrap();
     pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
         "tikv_server_grpc_req_super_batch_size",
-        "Super batch size of gRPC requests",
+        "grpc batch size of gRPC requests",
         exponential_buckets(1f64, 2f64, 10).unwrap()
     ).unwrap();
     pub static ref GRPC_RESP_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
         "tikv_server_grpc_resp_super_batch_size",
-        "Super batch size of gRPC responses",
+        "grpc batch size of gRPC responses",
         exponential_buckets(1f64, 2f64, 10).unwrap()
     ).unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(

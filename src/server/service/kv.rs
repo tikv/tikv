@@ -52,6 +52,8 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
+const DELAY_DURATION: Duration = Duration::from_millis(1);
+
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
@@ -90,7 +92,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
     }
 
     fn send_fail_status<M>(
-        &mut self,
+        &self,
         ctx: RpcContext,
         sink: UnarySink<M>,
         err: Error,
@@ -269,7 +271,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    // WARNING: Currently this API may leave some dirty keys in TiKV. Be careful using this API.
     fn kv_delete_range(
         &mut self,
         ctx: RpcContext,
@@ -485,7 +486,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     fn coprocessor(&mut self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
-            .map_err(Error::from)
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
@@ -618,19 +618,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
 
-        let storage = self.storage.clone();
-
         let key = Key::from_raw(req.get_key());
-        let (cb, future) = paired_future_callback();
-        let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
+        let (cb, f) = paired_future_callback();
+        let res = self
+            .storage
+            .async_mvcc_by_key(req.take_context(), key.clone(), cb);
 
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
                 let mut resp = MvccGetByKeyResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
@@ -642,9 +637,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
                 }
-                resp
+                sink.success(resp).map_err(Error::from)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "mvcc_get_by_key", e);
@@ -791,7 +785,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             future::ok::<_, _>(())
         });
 
-        ctx.spawn(request_handler.map_err(|e| error!("batch_commands error: {}", e)));
+        ctx.spawn(request_handler.map_err(|e| error!("batch commands error: {}", e)));
 
         let thread_load = Arc::clone(&self.thread_load);
         let response_retriever = BatchReceiver::new(
@@ -846,7 +840,7 @@ fn response_batch_commands_request<F>(
         if let Some(notifier) = tx.get_notifier() {
             if thread_load.in_heavy_load() {
                 executor1.spawn(
-                    Delay::new(Instant::now() + Duration::from_millis(1))
+                    Delay::new(Instant::now() + DELAY_DURATION)
                         .map_err(|_| error!("BatchCommands RPC delay responses error"))
                         .inspect(move |_| notifier.notify()),
                 );
@@ -898,9 +892,7 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
             response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
-        BatchCommandsRequest_Request_oneof_cmd::Import(_) => {
-            panic!("unimplemented");
-        }
+        BatchCommandsRequest_Request_oneof_cmd::Import(_) => unimplemented!(),
         BatchCommandsRequest_Request_oneof_cmd::Cleanup(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
             let resp = future_cleanup(&storage, req)
@@ -1605,6 +1597,10 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             warn!("txn conflicts: {:?}", err);
             key_error.set_retryable(format!("{:?}", err));
         }
+        storage::Error::Closed => {
+            warn!("tikv server is closing");
+            key_error.set_retryable(format!("{:?}", err));
+        }
         _ => {
             error!("txn aborts: {:?}", err);
             key_error.set_abort(format!("{:?}", err));
@@ -1737,5 +1733,4 @@ mod tests {
         let got = extract_key_error(&case);
         assert_eq!(got, expect);
     }
-
 }
