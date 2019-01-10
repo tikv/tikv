@@ -542,9 +542,9 @@ impl ApplyDelegate {
         &mut self,
         apply_ctx: &mut ApplyContext,
         mut committed_entries: Vec<Entry>,
-    ) -> Option<WaitSourceMergeState> {
+    ) {
         if committed_entries.is_empty() {
-            return None;
+            return;
         }
         apply_ctx.prepare_for(self);
         apply_ctx.committed_count += committed_entries.len();
@@ -595,18 +595,18 @@ impl ApplyDelegate {
                     pending_entries.push(entry);
                     pending_entries.extend(drainer);
                     apply_ctx.finish_for(self, results);
-                    return Some(WaitSourceMergeState {
+                    self.wait_merge_state = Some(WaitSourceMergeState {
                         pending_entries,
                         pending_msgs: Vec::default(),
                         ready_to_merge,
                         catch_up_logs: None,
                     });
+                    return;
                 }
             }
         }
 
         apply_ctx.finish_for(self, results);
-        None
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -2092,11 +2092,7 @@ impl ApplyFsm {
         self.delegate = ApplyDelegate::from_registration(reg);
     }
 
-    fn handle_apply(
-        &mut self,
-        apply_ctx: &mut ApplyContext,
-        apply: Apply,
-    ) -> Option<WaitSourceMergeState> {
+    fn handle_apply(&mut self, apply_ctx: &mut ApplyContext, apply: Apply) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(SlowTimer::new());
         }
@@ -2106,24 +2102,21 @@ impl ApplyFsm {
             || self.delegate.pending_remove
             || self.delegate.stopped
         {
-            return None;
+            return;
         }
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
 
-        match self
-            .delegate
-            .handle_raft_committed_entries(apply_ctx, apply.entries)
-        {
-            None => {}
-            Some(state) => return Some(state),
+        self.delegate
+            .handle_raft_committed_entries(apply_ctx, apply.entries);
+        if self.delegate.wait_merge_state.is_some() {
+            return;
         }
 
         if self.delegate.pending_remove {
             self.delegate.destroy(apply_ctx);
         }
-        None
     }
 
     fn handle_proposal(&mut self, region_proposal: RegionProposal) {
@@ -2180,17 +2173,13 @@ impl ApplyFsm {
             ctx.timer = Some(SlowTimer::new());
         }
         if !state.pending_entries.is_empty() {
-            match self
-                .delegate
-                .handle_raft_committed_entries(ctx, state.pending_entries)
-            {
-                None => {}
+            self.delegate
+                .handle_raft_committed_entries(ctx, state.pending_entries);
+            if let Some(ref mut s) = self.delegate.wait_merge_state {
                 // So the delegate is executing another `CommitMerge`.
-                Some(mut s) => {
-                    s.pending_msgs = state.pending_msgs;
-                    self.delegate.wait_merge_state = Some(s);
-                    return false;
-                }
+                s.pending_msgs = state.pending_msgs;
+                s.catch_up_logs = state.catch_up_logs;
+                return false;
             }
         }
 
@@ -2234,15 +2223,15 @@ impl ApplyFsm {
             if entries.is_empty() {
                 break 'check;
             }
-            match self.delegate.handle_raft_committed_entries(ctx, entries) {
+            self.delegate.handle_raft_committed_entries(ctx, entries);
+            match self.delegate.wait_merge_state {
                 None => {
                     ctx.apply_res.last_mut().unwrap().merged = true;
                 }
-                Some(mut state) => {
+                Some(ref mut state) => {
                     // Free redundant memory.
                     catch_up_logs.merge.entries.clear();
                     state.catch_up_logs = Some(catch_up_logs);
-                    self.delegate.wait_merge_state = Some(state);
                     return;
                 }
             }
@@ -2265,13 +2254,10 @@ impl ApplyFsm {
                     if channel_timer.is_none() {
                         channel_timer = Some(start);
                     }
-                    match self.handle_apply(apply_ctx, apply) {
-                        None => {}
-                        Some(mut state) => {
-                            state.pending_msgs = drainer.collect();
-                            self.delegate.wait_merge_state = Some(state);
-                            break;
-                        }
+                    self.handle_apply(apply_ctx, apply);
+                    if let Some(ref mut state) = self.delegate.wait_merge_state {
+                        state.pending_msgs = drainer.collect();
+                        break;
                     }
                 }
                 Some(Msg::Proposal(prop)) => self.handle_proposal(prop),
