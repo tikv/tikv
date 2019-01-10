@@ -215,8 +215,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         // None: related Rollback has been collapsed.
                         // Rollback: rollback by concurrent transaction.
                         info!(
-                            "txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
-                            key, self.start_ts, commit_ts
+                            "txn conflict (lock not found)";
+                            "key" => %key,
+                            "start_ts" => self.start_ts,
+                            "commit_ts" => commit_ts,
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
@@ -262,10 +264,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         } else {
                             MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                             info!(
-                                "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                                key.clone(),
-                                self.start_ts,
-                                ts
+                                "txn conflict (committed)";
+                                "key" => %key,
+                                "start_ts" => self.start_ts,
+                                "commit_ts" => ts,
                             );
                             Err(Error::Committed { commit_ts: ts })
                         }

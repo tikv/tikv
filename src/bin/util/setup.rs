@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
 use chrono;
 use clap::ArgMatches;
-use slog_scope::GlobalLoggerGuard;
 
 use tikv::config::{MetricConfig, TiKvConfig};
 use tikv::util::collections::HashMap;
@@ -37,16 +36,16 @@ macro_rules! fatal {
 }
 
 #[allow(dead_code)]
-pub fn initial_logger(config: &TiKvConfig) -> GlobalLoggerGuard {
+pub fn initial_logger(config: &TiKvConfig) {
     let log_rotation_timespan = chrono::Duration::from_std(
         config.log_rotation_timespan.clone().into(),
     ).expect("config.log_rotation_timespan is an invalid duration.");
-    let guard = if config.log_file.is_empty() {
+    if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
-        })
+        });
     } else {
         let drainer =
             logger::file_drainer(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
@@ -59,10 +58,9 @@ pub fn initial_logger(config: &TiKvConfig) -> GlobalLoggerGuard {
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {:?}", e);
-        })
+        });
     };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
-    guard
 }
 
 #[allow(dead_code)]
