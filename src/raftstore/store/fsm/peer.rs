@@ -191,9 +191,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         );
                     }
                 },
-                Ok(ApplyTaskRes::Destroy { region_id, id }) => {
+                Ok(ApplyTaskRes::Destroy { region_id, peer_id }) => {
                     let store_id = self.store_id();
-                    self.destroy_peer(region_id, util::new_peer(store_id, id), false);
+                    self.destroy_peer(region_id, util::new_peer(store_id, peer_id), false);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),

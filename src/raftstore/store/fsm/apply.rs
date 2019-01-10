@@ -210,9 +210,14 @@ pub enum ExecResult {
     },
 }
 
+/// The possible returned value when applying logs.
 pub enum ApplyResult {
     None,
+    /// Additional result that needs to be sent back to raftstore.
     Res(ExecResult),
+    /// It is unable to apply the `CommitMerge` until the source peer
+    /// has applied to the required position and sets the atomic boolean
+    /// to true.
     WaitMergeSource(Arc<AtomicBool>),
 }
 
@@ -448,28 +453,29 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
-/// A struct that store the state related to Merge.
+/// A struct that stores the state related to Merge.
 ///
-/// When executing a `CommitMerge`, source region may have not applied
-/// to the required index, so target region has to abort current execution
+/// When executing a `CommitMerge`, the source peer may have not applied
+/// to the required index, so the target peer has to abort current execution
 /// and wait for it asynchronously.
 ///
 /// When rolling the stack, all states required to recover are stored in
 /// this struct.
-/// TODO: check whether generator/coroutine is a good choise in this case.
+/// TODO: check whether generator/coroutine is a good choice in this case.
 struct WaitSourceMergeState {
-    /// All of entries that need to be continue to apply after
-    /// source region has applied its logs.
+    /// All of the entries that need to continue to be applied after
+    /// the source peer has applied its logs.
     pending_entries: Vec<Entry>,
-    /// All of messages that need to be continue to handle after
-    /// source region has applied its logs and pending entries
+    /// All of messages that need to continue to be handled after
+    /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg>,
-    /// A flag that indicates whether source region has applied to the required
+    /// A flag that indicates whether the source peer has applied to the required
     /// index.
     ready_to_merge: Arc<AtomicBool>,
-    /// Apply request if current state happens when handling `CatchUpLogs` command.
-    /// This can happen when there is merge cascade, especially in follower.
+    /// If current state is created when handling `CatchUpLogs` command, the command
+    /// will be stored in this field. This can happen when there is a merge cascade,
+    /// especially in follower.
     catch_up_logs: Option<CatchUpLogs>,
 }
 
@@ -492,10 +498,10 @@ pub struct ApplyDelegate {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
-    // Mark the delegate as merged by CommitMerge.
+    // Marks the delegate as merged by CommitMerge.
     merged: bool,
-    // A temporary state that keep track of the progress of source region state when
-    // CommitMerge is unable to commit fast.
+    // A temporary state that keeps track of the progress of the source peer state when
+    // CommitMerge is unable to be executed fast.
     wait_merge_state: Option<WaitSourceMergeState>,
     // we write apply_state to kv rocksdb, in one writebatch together with kv data.
     // because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
@@ -2052,7 +2058,7 @@ pub enum TaskRes {
         // ID of region that has been destroyed.
         region_id: u64,
         // ID of peer that has been destroyed.
-        id: u64,
+        peer_id: u64,
     },
 }
 
@@ -2156,7 +2162,7 @@ impl ApplyFsm {
             ctx.notifier
                 .send(TaskRes::Destroy {
                     region_id: self.delegate.region_id(),
-                    id: self.delegate.id,
+                    peer_id: self.delegate.id,
                 })
                 .unwrap();
         }
@@ -2340,27 +2346,27 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     }
 
     fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
-        let mut mark = None;
+        let mut expected_msg_count = None;
         if normal.delegate.wait_merge_state.is_some() {
             // We need to query the length first, otherwise there is a race
             // condition that new messages are queued after resuming and before
             // query the length.
-            mark = Some(normal.receiver.len());
+            expected_msg_count = Some(normal.receiver.len());
             if !normal.resume_pending_merge(&mut self.apply_ctx) {
-                return mark;
+                return expected_msg_count;
             }
-            mark = None;
+            expected_msg_count = None;
         }
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    mark = Some(0);
+                    expected_msg_count = Some(0);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     normal.delegate.stopped = true;
-                    mark = Some(0);
+                    expected_msg_count = Some(0);
                     break;
                 }
             }
@@ -2368,13 +2374,13 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
         if normal.delegate.merged {
             normal.delegate.destroy(&mut self.apply_ctx);
-            // Set mark to 0 to clear all messages remained in queue.
-            mark = Some(0);
+            // Set it to 0 to clear all messages remained in queue.
+            expected_msg_count = Some(0);
         } else if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
-            mark = Some(0);
+            expected_msg_count = Some(0);
         }
-        mark
+        expected_msg_count
     }
 
     fn end(&mut self) {
@@ -2778,11 +2784,11 @@ mod tests {
         });
 
         router.schedule_task(2, Msg::destroy(2));
-        let (region_id, id) = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(TaskRes::Destroy { region_id, id }) => (region_id, id),
+        let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(TaskRes::Destroy { region_id, peer_id }) => (region_id, peer_id),
             e => panic!("expected destroy result, but got {:?}", e),
         };
-        assert_eq!(id, 1);
+        assert_eq!(peer_id, 1);
         assert_eq!(region_id, 2);
 
         // Stopped peer should be removed.

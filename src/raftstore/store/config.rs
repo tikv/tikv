@@ -335,10 +335,10 @@ impl Config {
         }
 
         if self.apply_pool_size == 0 {
-            return Err(box_err!("apply-pool-size should not be 0."));
+            return Err(box_err!("apply-pool-size should be greater than 0"));
         }
         if self.apply_max_batch_size == 0 {
-            return Err(box_err!("apply-max-batch-size should be greeter than 0"));
+            return Err(box_err!("apply-max-batch-size should be greater than 0"));
         }
         Ok(())
     }
