@@ -47,8 +47,6 @@ where
     D: Drain + Send + 'static,
     <D as Drain>::Err: ::std::fmt::Debug,
 {
-    grpc::redirect_log();
-
     let logger = if use_async {
         let drain = Async::new(drain.fuse())
             .chan_size(SLOG_CHANNEL_SIZE)
@@ -66,6 +64,7 @@ where
     ::slog_global::set_global(logger);
     if init_stdlog {
         ::slog_global::redirect_std_log(Some(level))?;
+        grpc::redirect_log();
     }
 
     Ok(())
