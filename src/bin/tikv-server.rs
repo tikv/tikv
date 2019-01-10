@@ -79,7 +79,7 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, check_environment_variables, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
