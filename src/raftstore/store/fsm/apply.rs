@@ -2221,7 +2221,10 @@ impl ApplyFsm {
                 self.delegate
                     .load_entries_for_merge(ctx, &catch_up_logs.merge, apply_index);
             if entries.is_empty() {
-                break 'check;
+                panic!(
+                    "{} failed to load entries for {:?}",
+                    self.delegate.tag, catch_up_logs.merge
+                );
             }
             self.delegate.handle_raft_committed_entries(ctx, entries);
             match self.delegate.wait_merge_state {
