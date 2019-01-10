@@ -195,7 +195,7 @@ impl Default for Config {
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_max_batch_size: 1024,
-            apply_pool_size: 1,
+            apply_pool_size: 2,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

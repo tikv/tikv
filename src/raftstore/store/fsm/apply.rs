@@ -210,7 +210,7 @@ pub enum ExecResult {
     },
 }
 
-pub enum ApplyOptions {
+pub enum ApplyResult {
     None,
     Res(ExecResult),
     WaitMergeSource(Arc<AtomicBool>),
@@ -448,10 +448,28 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     false
 }
 
+/// A struct that store the state related to Merge.
+///
+/// When executing a `CommitMerge`, source region may have not applied
+/// to the required index, so target region has to abort current execution
+/// and wait for it asynchronously.
+///
+/// When rolling the stack, all states required to recover are stored in
+/// this struct.
+/// TODO: check whether generator/coroutine is a good choise in this case.
 struct WaitSourceMergeState {
+    /// All of entries that need to be continue to apply after
+    /// source region has applied its logs.
     pending_entries: Vec<Entry>,
+    /// All of messages that need to be continue to handle after
+    /// source region has applied its logs and pending entries
+    /// are all handled.
     pending_msgs: Vec<Msg>,
+    /// A flag that indicates whether source region has applied to the required
+    /// index.
     ready_to_merge: Arc<AtomicBool>,
+    /// Apply request if current state happens when handling `CatchUpLogs` command.
+    /// This can happen when there is merge cascade, especially in follower.
     catch_up_logs: Option<CatchUpLogs>,
 }
 
@@ -468,11 +486,16 @@ pub struct ApplyDelegate {
     // peer_tag, "[region region_id] peer_id"
     tag: String,
     region: Region,
+    // If the delegate should be stopped from polling.
+    // A delegate can be stopped in conf change, merge or requested by destroy message.
     stopped: bool,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
+    // Mark the delegate as merged by CommitMerge.
     merged: bool,
+    // A temporary state that keep track of the progress of source region state when
+    // CommitMerge is unable to commit fast.
     wait_merge_state: Option<WaitSourceMergeState>,
     // we write apply_state to kv rocksdb, in one writebatch together with kv data.
     // because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
@@ -562,11 +585,13 @@ impl ApplyDelegate {
             };
 
             match res {
-                ApplyOptions::None => {}
-                ApplyOptions::Res(res) => results.push(res),
-                ApplyOptions::WaitMergeSource(ready_to_merge) => {
+                ApplyResult::None => {}
+                ApplyResult::Res(res) => results.push(res),
+                ApplyResult::WaitMergeSource(ready_to_merge) => {
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
+                    // Note that CommitMerge is skipped when `WaitMergeSource` is returned.
+                    // So we need to enqueue it again and execute it again when resuming.
                     pending_entries.push(entry);
                     pending_entries.extend(drainer);
                     apply_ctx.finish_for(self, results);
@@ -611,7 +636,7 @@ impl ApplyDelegate {
         &mut self,
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
-    ) -> ApplyOptions {
+    ) -> ApplyResult {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -640,24 +665,24 @@ impl ApplyDelegate {
                 .unwrap()
                 .push(cmd.cb.take(), cmd_resp::err_resp(Error::StaleCommand, term));
         }
-        ApplyOptions::None
+        ApplyResult::None
     }
 
     fn handle_raft_entry_conf_change(
         &mut self,
         apply_ctx: &mut ApplyContext,
         entry: &Entry,
-    ) -> ApplyOptions {
+    ) -> ApplyResult {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = util::parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
-            ApplyOptions::None => {
-                // If failed, tell raft that the config change was aborted.
-                ApplyOptions::Res(ExecResult::ChangePeer(Default::default()))
+            ApplyResult::None => {
+                // If failed, tell Raft that the ConfigChange was aborted.
+                ApplyResult::Res(ExecResult::ChangePeer(Default::default()))
             }
-            ApplyOptions::Res(mut res) => {
+            ApplyResult::Res(mut res) => {
                 if let ExecResult::ChangePeer(ref mut cp) = res {
                     cp.conf_change = conf_change;
                 } else {
@@ -666,9 +691,9 @@ impl ApplyDelegate {
                         self.tag, res, conf_change, index
                     );
                 }
-                ApplyOptions::Res(res)
+                ApplyResult::Res(res)
             }
-            ApplyOptions::WaitMergeSource(_) => unreachable!(),
+            ApplyResult::WaitMergeSource(_) => unreachable!(),
         }
     }
 
@@ -700,7 +725,7 @@ impl ApplyDelegate {
         index: u64,
         term: u64,
         cmd: RaftCmdRequest,
-    ) -> ApplyOptions {
+    ) -> ApplyResult {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -715,7 +740,7 @@ impl ApplyDelegate {
         let is_conf_change = get_change_peer_cmd(&cmd).is_some();
         apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, cmd);
-        if let ApplyOptions::WaitMergeSource(_) = exec_result {
+        if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
 
@@ -742,7 +767,7 @@ impl ApplyDelegate {
         index: u64,
         term: u64,
         req: RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyOptions) {
+    ) -> (RaftCmdResponse, ApplyResult) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -757,10 +782,10 @@ impl ApplyDelegate {
                     Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
                     _ => error!("{} execute raft command err: {:?}", self.tag, e),
                 }
-                (cmd_resp::new_error(e), ApplyOptions::None)
+                (cmd_resp::new_error(e), ApplyResult::None)
             }
         };
-        if let ApplyOptions::WaitMergeSource(_) = exec_result {
+        if let ApplyResult::WaitMergeSource(_) = exec_result {
             return (resp, exec_result);
         }
 
@@ -770,7 +795,7 @@ impl ApplyDelegate {
         self.apply_state = exec_ctx.apply_state;
         self.applied_index_term = term;
 
-        if let ApplyOptions::Res(ref exec_result) = exec_result {
+        if let ApplyResult::Res(ref exec_result) = exec_result {
             match *exec_result {
                 ExecResult::ChangePeer(ref cp) => {
                     self.region = cp.region.clone();
@@ -855,15 +880,15 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyOptions)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult)> {
         // Include region for stale epoch after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(&req, &self.region, include_region)?;
         if req.has_admin_request() {
-            self.exec_admin_cmd(ctx, &req, req.get_admin_request())
+            self.exec_admin_cmd(ctx, &req)
         } else {
-            self.exec_write_cmd(ctx, &req, req.get_requests())
+            self.exec_write_cmd(ctx, &req)
         }
     }
 
@@ -871,8 +896,8 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &RaftCmdRequest,
-        request: &AdminRequest,
-    ) -> Result<(RaftCmdResponse, ApplyOptions)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult)> {
+        let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog {
             info!(
@@ -913,7 +938,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
@@ -1065,7 +1090,7 @@ impl ApplyDelegate {
 
         Ok((
             resp,
-            ApplyOptions::Res(ExecResult::ChangePeer(ChangePeer {
+            ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
@@ -1077,7 +1102,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         info!(
             "{} split is deprecated, redirect to use batch split.",
             self.tag
@@ -1098,7 +1123,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         let apply_before_split = || {
             fail_point!(
                 "apply_before_split_1_3",
@@ -1202,7 +1227,7 @@ impl ApplyDelegate {
 
         Ok((
             resp,
-            ApplyOptions::Res(ExecResult::SplitRegion { regions, derived }),
+            ApplyResult::Res(ExecResult::SplitRegion { regions, derived }),
         ))
     }
 
@@ -1210,7 +1235,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "all"])
             .inc();
@@ -1260,7 +1285,7 @@ impl ApplyDelegate {
 
         Ok((
             AdminResponse::new(),
-            ApplyOptions::Res(ExecResult::PrepareMerge {
+            ApplyResult::Res(ExecResult::PrepareMerge {
                 region,
                 state: merging_state,
             }),
@@ -1309,6 +1334,7 @@ impl ApplyDelegate {
         entries
     }
 
+    /// Check whether source region has applied to the required log index.
     fn is_source_up_to_date(
         &self,
         ctx: &mut ApplyContext,
@@ -1332,7 +1358,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         {
             let apply_before_commit_merge = || {
                 fail_point!(
@@ -1352,22 +1378,21 @@ impl ApplyDelegate {
         let source_region = merge.get_source();
         if !self.is_source_up_to_date(ctx, merge, source_region.get_id()) {
             info!(
-                "{} source region {} is not up to date, postponding",
+                "{} source region {} is not up to date, so postpond it",
                 self.tag,
                 source_region.get_id()
             );
             let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
             let ready_to_merge = Arc::new(AtomicBool::new(false));
-            let catch_up_logs = Msg::CatchUpLogs(CatchUpLogs {
+            let msg = Msg::CatchUpLogs(CatchUpLogs {
                 target_mailbox: mailbox,
                 merge: merge.to_owned(),
                 ready_to_merge: ready_to_merge.clone(),
             });
-            ctx.router
-                .schedule_task(source_region.get_id(), catch_up_logs);
+            ctx.router.schedule_task(source_region.get_id(), msg);
             return Ok((
                 AdminResponse::default(),
-                ApplyOptions::WaitMergeSource(ready_to_merge),
+                ApplyResult::WaitMergeSource(ready_to_merge),
             ));
         }
         let region_state_key = keys::region_state_key(source_region.get_id());
@@ -1433,7 +1458,7 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((
             resp,
-            ApplyOptions::Res(ExecResult::CommitMerge {
+            ApplyResult::Res(ExecResult::CommitMerge {
                 region,
                 source: source_region.to_owned(),
             }),
@@ -1444,7 +1469,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "all"])
             .inc();
@@ -1480,7 +1505,7 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((
             resp,
-            ApplyOptions::Res(ExecResult::RollbackMerge {
+            ApplyResult::Res(ExecResult::RollbackMerge {
                 region,
                 commit: rollback.get_commit(),
             }),
@@ -1491,7 +1516,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["compact", "all"])
             .inc();
@@ -1505,14 +1530,14 @@ impl ApplyDelegate {
                 "{} compact index {} <= first index {}, no need to compact",
                 self.tag, compact_index, first_index
             );
-            return Ok((resp, ApplyOptions::None));
+            return Ok((resp, ApplyResult::None));
         }
         if self.is_merging {
             info!(
                 "{} is in merging mode, skip compact {}",
                 self.tag, compact_index
             );
-            return Ok((resp, ApplyOptions::None));
+            return Ok((resp, ApplyResult::None));
         }
 
         let compact_term = req.get_compact_log().get_compact_term();
@@ -1538,7 +1563,7 @@ impl ApplyDelegate {
 
         Ok((
             resp,
-            ApplyOptions::Res(ExecResult::CompactLog {
+            ApplyResult::Res(ExecResult::CompactLog {
                 state: apply_state.get_truncated_state().clone(),
                 first_index,
             }),
@@ -1549,8 +1574,8 @@ impl ApplyDelegate {
         &mut self,
         ctx: &ApplyContext,
         req: &RaftCmdRequest,
-        requests: &[Request],
-    ) -> Result<(RaftCmdResponse, ApplyOptions)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult)> {
+        let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         let mut ranges = vec![];
@@ -1591,11 +1616,11 @@ impl ApplyDelegate {
 
         assert!(ranges.is_empty() || ssts.is_empty());
         let exec_res = if !ranges.is_empty() {
-            ApplyOptions::Res(ExecResult::DeleteRange { ranges })
+            ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            ApplyOptions::Res(ExecResult::IngestSST { ssts })
+            ApplyResult::Res(ExecResult::IngestSST { ssts })
         } else {
-            ApplyOptions::None
+            ApplyResult::None
         };
 
         Ok((resp, exec_res))
@@ -1824,11 +1849,11 @@ impl ApplyDelegate {
         &self,
         ctx: &ApplyContext,
         _: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         let resp = AdminResponse::new();
         Ok((
             resp,
-            ApplyOptions::Res(ExecResult::ComputeHash {
+            ApplyResult::Res(ExecResult::ComputeHash {
                 region: self.region.clone(),
                 index: ctx.exec_ctx.as_ref().unwrap().index,
                 // This snapshot may be held for a long time, which may cause too many
@@ -1844,14 +1869,14 @@ impl ApplyDelegate {
         &self,
         _: &ApplyContext,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyOptions)> {
+    ) -> Result<(AdminResponse, ApplyResult)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
         let hash = verify_req.get_hash().to_vec();
         let resp = AdminResponse::new();
         Ok((
             resp,
-            ApplyOptions::Res(ExecResult::VerifyHash { index, hash }),
+            ApplyResult::Res(ExecResult::VerifyHash { index, hash }),
         ))
     }
 }
@@ -1931,9 +1956,19 @@ pub struct Destroy {
     region_id: u64,
 }
 
+/// A message that asks the delegate to apply to the given logs and then reply to
+/// target mailbox.
 pub struct CatchUpLogs {
+    /// Mailbox to notify when given logs are applied.
     target_mailbox: DelegateMailbox,
+    /// Merge request that contains logs to be applied.
     merge: CommitMergeRequest,
+    /// A flag indicate that all logs are applied.
+    ///
+    /// This is still necessary although we have a mailbox field already.
+    /// Mailbox is used to notify target region, and trigger a round of polling.
+    /// But due to the FIFO natural of channel, we need a flag to check if it's
+    /// ready when polling.
     ready_to_merge: Arc<AtomicBool>,
 }
 
@@ -1946,7 +1981,7 @@ pub enum Msg {
         apply: Apply,
     },
     Registration(Registration),
-    Proposals(RegionProposal),
+    Proposal(RegionProposal),
     CatchUpLogs(CatchUpLogs),
     LogsUpToDate(u64),
     Destroy(Destroy),
@@ -1975,7 +2010,7 @@ impl Debug for Msg {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
-            Msg::Proposals(ref p) => write!(f, "[region {}] {} region proposal", p.region_id, p.id),
+            Msg::Proposal(ref p) => write!(f, "[region {}] {} region proposal", p.region_id, p.id),
             Msg::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
@@ -2013,7 +2048,12 @@ pub struct ApplyRes {
 #[derive(Debug)]
 pub enum TaskRes {
     Applies(Vec<ApplyRes>),
-    Destroy { region_id: u64, id: u64 },
+    Destroy {
+        // ID of region that has been destroyed.
+        region_id: u64,
+        // ID of peer that has been destroyed.
+        id: u64,
+    },
 }
 
 pub struct ApplyFsm {
@@ -2086,7 +2126,7 @@ impl ApplyFsm {
         None
     }
 
-    fn handle_proposals(&mut self, region_proposal: RegionProposal) {
+    fn handle_proposal(&mut self, region_proposal: RegionProposal) {
         let propose_num = region_proposal.props.len();
         assert_eq!(self.delegate.id, region_proposal.id);
         if self.delegate.stopped {
@@ -2116,8 +2156,6 @@ impl ApplyFsm {
     }
 
     fn handle_destroy(&mut self, ctx: &mut ApplyContext, d: Destroy) {
-        // Only respond when the meta exists. Otherwise if destroy is triggered
-        // multiple times, the store may destroy wrong target peer.
         assert_eq!(d.region_id, self.delegate.region_id());
         if !self.delegate.stopped {
             info!("{} remove from apply delegates", self.delegate.tag);
@@ -2147,6 +2185,7 @@ impl ApplyFsm {
                 .handle_raft_committed_entries(ctx, state.pending_entries)
             {
                 None => {}
+                // So the delegate is executing another `CommitMerge`.
                 Some(mut s) => {
                     s.pending_msgs = state.pending_msgs;
                     self.delegate.wait_merge_state = Some(s);
@@ -2160,6 +2199,8 @@ impl ApplyFsm {
         }
 
         match self.delegate.wait_merge_state {
+            // So the delegate is executing another `CommitMerge` when handling
+            // `pending_msgs`.
             Some(ref mut s) => {
                 s.catch_up_logs = state.catch_up_logs;
                 false
@@ -2233,7 +2274,7 @@ impl ApplyFsm {
                         }
                     }
                 }
-                Some(Msg::Proposals(props)) => self.handle_proposals(props),
+                Some(Msg::Proposal(prop)) => self.handle_proposal(prop),
                 Some(Msg::Registration(reg)) => self.handle_registration(reg),
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
@@ -2312,6 +2353,9 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn handle_normal(&mut self, normal: &mut ApplyFsm) -> Option<usize> {
         let mut mark = None;
         if normal.delegate.wait_merge_state.is_some() {
+            // We need to query the length first, otherwise there is a race
+            // condition that new messages are queued after resuming and before
+            // query the length.
             mark = Some(normal.receiver.len());
             if !normal.resume_pending_merge(&mut self.apply_ctx) {
                 return mark;
@@ -2335,6 +2379,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
         if normal.delegate.merged {
             normal.delegate.destroy(&mut self.apply_ctx);
+            // Set mark to 0 to clear all messages remained in queue.
             mark = Some(0);
         } else if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
@@ -2430,7 +2475,7 @@ impl ApplyRouter {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
                 Msg::Registration(reg) => reg,
-                Msg::Proposals(props) => {
+                Msg::Proposal(props) => {
                     info!(
                         "[region {}] target region is not found, drop proposals.",
                         region_id
@@ -2649,7 +2694,7 @@ mod tests {
             }),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
-        router.schedule_task(1, Msg::Proposals(region_proposal));
+        router.schedule_task(1, Msg::Proposal(region_proposal));
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
@@ -2668,7 +2713,7 @@ mod tests {
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
-        router.schedule_task(2, Msg::Proposals(region_proposal));
+        router.schedule_task(2, Msg::Proposal(region_proposal));
         validate(&router, 2, move |delegate| {
             assert_eq!(
                 delegate.pending_cmds.normals.back().map(|c| c.index),
@@ -2683,7 +2728,7 @@ mod tests {
 
         let p = Proposal::new(true, 4, 0, Callback::None);
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        router.schedule_task(2, Msg::Proposals(region_proposal));
+        router.schedule_task(2, Msg::Proposal(region_proposal));
         validate(&router, 2, |delegate| {
             assert_eq!(
                 delegate.pending_cmds.conf_change.as_ref().map(|c| c.index),
@@ -2762,7 +2807,7 @@ mod tests {
             }),
         );
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        router.schedule_task(2, Msg::Proposals(region_proposal));
+        router.schedule_task(2, Msg::Proposal(region_proposal));
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(
@@ -2807,7 +2852,7 @@ mod tests {
             );
             router.schedule_task(
                 region_id,
-                Msg::Proposals(RegionProposal::new(id, region_id, vec![prop])),
+                Msg::Proposal(RegionProposal::new(id, region_id, vec![prop])),
             );
             self
         }

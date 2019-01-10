@@ -231,7 +231,7 @@
 ## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
 
-## Use how many theads to handle log apply
+## Use how many threads to handle log apply
 # apply-pool-size = 2
 
 [coprocessor]

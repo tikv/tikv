@@ -676,7 +676,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
                     if let Some(region_proposal) = peer.take_apply_proposals() {
-                        let t = ApplyTask::Proposals(region_proposal);
+                        let t = ApplyTask::Proposal(region_proposal);
                         self.apply_router.schedule_task(region_id, t);
                     }
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
