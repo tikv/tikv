@@ -17,7 +17,7 @@ use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::{cmp, mem, usize};
@@ -218,7 +218,7 @@ pub enum ApplyResult {
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
-    WaitMergeSource(Arc<AtomicBool>),
+    WaitMergeSource(Arc<AtomicU64>),
 }
 
 struct ApplyCallback {
@@ -247,6 +247,7 @@ impl ApplyCallback {
 }
 
 struct ApplyContext {
+    tag: String,
     timer: Option<SlowTimer>,
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
@@ -255,7 +256,6 @@ struct ApplyContext {
     engines: Engines,
     wb: Option<WriteBatch>,
     cbs: MustConsumeVec<ApplyCallback>,
-    merged_regions: Vec<u64>,
     apply_res: Vec<ApplyRes>,
     wb_last_bytes: u64,
     wb_last_keys: u64,
@@ -272,6 +272,7 @@ struct ApplyContext {
 
 impl ApplyContext {
     pub fn new(
+        tag: String,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
         engines: Engines,
@@ -280,6 +281,7 @@ impl ApplyContext {
         cfg: &Config,
     ) -> ApplyContext {
         ApplyContext {
+            tag,
             timer: None,
             host,
             importer,
@@ -288,7 +290,6 @@ impl ApplyContext {
             notifier,
             wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
-            merged_regions: vec![],
             apply_res: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
@@ -351,6 +352,7 @@ impl ApplyContext {
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
+            self.sync_log_hint = false;
         }
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -389,6 +391,40 @@ impl ApplyContext {
     #[inline]
     pub fn wb_mut(&mut self) -> &mut WriteBatch {
         self.wb.as_mut().unwrap()
+    }
+
+    pub fn flush(&mut self) {
+        // TODO: this check is too hacky, need to be more verbose and less buggy.
+        let t = match self.timer.take() {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Write to engine
+        // raftsotre.sync-log = true means we need prevent data loss when power failure.
+        // take raft log gc for example, we write kv WAL first, then write raft WAL,
+        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
+        // so we use sync-log flag here.
+        self.write_to_db();
+
+        if !self.apply_res.is_empty() {
+            self.notifier
+                .send(TaskRes::Applies(mem::replace(
+                    &mut self.apply_res,
+                    Vec::default(),
+                )))
+                .unwrap();
+        }
+
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+
+        slow_log!(
+            t,
+            "{} handle ready {} committed entries",
+            self.tag,
+            self.committed_count
+        );
+        self.committed_count = 0;
     }
 }
 
@@ -471,8 +507,9 @@ struct WaitSourceMergeState {
     /// are all handled.
     pending_msgs: Vec<Msg>,
     /// A flag that indicates whether the source peer has applied to the required
-    /// index.
-    ready_to_merge: Arc<AtomicBool>,
+    /// index. If the source peer is ready, this flag should be set to the region id
+    /// of source peer.
+    ready_to_merge: Arc<AtomicU64>,
     /// If current state is created when handling `CatchUpLogs` command, the command
     /// will be stored in this field. This can happen when there is a merge cascade,
     /// especially in follower.
@@ -501,8 +538,10 @@ pub struct ApplyDelegate {
     // Marks the delegate as merged by CommitMerge.
     merged: bool,
     // A temporary state that keeps track of the progress of the source peer state when
-    // CommitMerge is unable to be executed fast.
+    // CommitMerge is unable to be executed.
     wait_merge_state: Option<WaitSourceMergeState>,
+    // ID of last region that reports ready.
+    ready_source_region_id: u64,
     // we write apply_state to kv rocksdb, in one writebatch together with kv data.
     // because if we write it to raft rocksdb, apply_state and kv data (Put, Delete) are in
     // separate WAL file. when power failure, for current raft log, apply_index may synced
@@ -528,6 +567,7 @@ impl ApplyDelegate {
             term: reg.term,
             stopped: false,
             merged: false,
+            ready_source_region_id: 0,
             wait_merge_state: None,
             is_merging: false,
             pending_cmds: Default::default(),
@@ -820,13 +860,9 @@ impl ApplyDelegate {
                     self.region = region.clone();
                     self.is_merging = true;
                 }
-                ExecResult::CommitMerge {
-                    ref region,
-                    ref source,
-                } => {
+                ExecResult::CommitMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.last_merge_version = region.get_region_epoch().get_version();
-                    ctx.merged_regions.push(source.get_id());
                 }
                 ExecResult::RollbackMerge { ref region, .. } => {
                     self.region = region.clone();
@@ -1340,26 +1376,6 @@ impl ApplyDelegate {
         entries
     }
 
-    /// Check whether source region has applied to the required log index.
-    fn is_source_up_to_date(
-        &self,
-        ctx: &mut ApplyContext,
-        merge: &CommitMergeRequest,
-        source_region_id: u64,
-    ) -> bool {
-        let apply_state_key = keys::apply_state_key(source_region_id);
-        let apply_state: RaftApplyState = match ctx.engines.kv.get_msg_cf(CF_RAFT, &apply_state_key)
-        {
-            Ok(Some(s)) => s,
-            e => panic!(
-                "{} failed to get apply state of region {}: {:?}",
-                self.tag, source_region_id, e
-            ),
-        };
-        let apply_index = apply_state.get_applied_index();
-        apply_index >= merge.get_commit()
-    }
-
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1382,26 +1398,40 @@ impl ApplyDelegate {
 
         let merge = req.get_commit_merge();
         let source_region = merge.get_source();
-        if !self.is_source_up_to_date(ctx, merge, source_region.get_id()) {
+        let source_region_id = source_region.get_id();
+
+        // No matter whether the source peer has applied to the required index,
+        // it's a race to write apply state in both source delegate and target
+        // delegate. So asking the source delegate to stop first.
+        if self.ready_source_region_id != source_region_id {
+            if self.ready_source_region_id != 0 {
+                panic!(
+                    "{} unexpected ready source region {}, expecting {}",
+                    self.tag, self.ready_source_region_id, source_region_id
+                );
+            }
             info!(
-                "{} source region {} is not up to date, so postpond it",
-                self.tag,
-                source_region.get_id()
+                "{} is asking source region {} delegate to stop.",
+                self.tag, source_region_id
             );
+
             let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
-            let ready_to_merge = Arc::new(AtomicBool::new(false));
+            let ready_to_merge = Arc::new(AtomicU64::new(0));
             let msg = Msg::CatchUpLogs(CatchUpLogs {
                 target_mailbox: mailbox,
                 merge: merge.to_owned(),
                 ready_to_merge: ready_to_merge.clone(),
             });
-            ctx.router.schedule_task(source_region.get_id(), msg);
+            ctx.router.schedule_task(source_region_id, msg);
             return Ok((
                 AdminResponse::default(),
                 ApplyResult::WaitMergeSource(ready_to_merge),
             ));
         }
-        let region_state_key = keys::region_state_key(source_region.get_id());
+
+        self.ready_source_region_id = 0;
+
+        let region_state_key = keys::region_state_key(source_region_id);
         let state: RegionLocalState = match ctx.engines.kv.get_msg_cf(CF_RAFT, &region_state_key) {
             Ok(Some(s)) => s,
             e => panic!(
@@ -1975,7 +2005,7 @@ pub struct CatchUpLogs {
     /// Mailbox is used to notify target region, and trigger a round of polling.
     /// But due to the FIFO natural of channel, we need a flag to check if it's
     /// ready when polling.
-    ready_to_merge: Arc<AtomicBool>,
+    ready_to_merge: Arc<AtomicU64>,
 }
 
 type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
@@ -2103,11 +2133,7 @@ impl ApplyFsm {
             apply_ctx.timer = Some(SlowTimer::new());
         }
 
-        if apply.entries.is_empty()
-            || apply_ctx.merged_regions.contains(&apply.region_id)
-            || self.delegate.pending_remove
-            || self.delegate.stopped
-        {
+        if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
 
@@ -2154,11 +2180,20 @@ impl ApplyFsm {
         APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
+    fn destroy(&mut self, ctx: &mut ApplyContext) {
+        let region_id = self.delegate.region_id();
+        if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
+            // Flush before destroying to avoid reordering messages.
+            ctx.flush();
+        }
+        info!("{} remove from apply delegates", self.delegate.tag);
+        self.delegate.destroy(ctx);
+    }
+
     fn handle_destroy(&mut self, ctx: &mut ApplyContext, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
         if !self.delegate.stopped {
-            info!("{} remove from apply delegates", self.delegate.tag);
-            self.delegate.destroy(ctx);
+            self.destroy(ctx);
             ctx.notifier
                 .send(TaskRes::Destroy {
                     region_id: self.delegate.region_id(),
@@ -2170,10 +2205,13 @@ impl ApplyFsm {
 
     fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
         let mut state = self.delegate.wait_merge_state.take().unwrap();
-        if !state.ready_to_merge.load(Ordering::SeqCst) {
+        let source_region_id = state.ready_to_merge.load(Ordering::SeqCst);
+        if source_region_id == 0 {
             self.delegate.wait_merge_state = Some(state);
             return false;
         }
+
+        self.delegate.ready_source_region_id = source_region_id;
 
         if ctx.timer.is_none() {
             ctx.timer = Some(SlowTimer::new());
@@ -2201,12 +2239,16 @@ impl ApplyFsm {
                 false
             }
             None => {
+                info!("{} all pending logs are applied.", self.delegate.tag);
                 if let Some(mut catch_up_logs) = state.catch_up_logs {
                     ctx.write_to_db();
-                    catch_up_logs.ready_to_merge.store(true, Ordering::SeqCst);
+                    let region_id = self.delegate.region_id();
+                    catch_up_logs
+                        .ready_to_merge
+                        .store(region_id, Ordering::SeqCst);
                     let _ = catch_up_logs
                         .target_mailbox
-                        .force_send(Msg::LogsUpToDate(self.delegate.region_id()));
+                        .force_send(Msg::LogsUpToDate(region_id));
                 }
                 true
             }
@@ -2246,12 +2288,15 @@ impl ApplyFsm {
             }
         }
 
-        ctx.write_to_db();
-        catch_up_logs.ready_to_merge.store(true, Ordering::SeqCst);
+        let region_id = self.delegate.region_id();
+        self.destroy(ctx);
+        catch_up_logs
+            .ready_to_merge
+            .store(region_id, Ordering::SeqCst);
         info!("{} logs are all applied now.", self.delegate.tag);
         let _ = catch_up_logs
             .target_mailbox
-            .force_send(Msg::LogsUpToDate(self.delegate.region_id()));
+            .force_send(Msg::LogsUpToDate(region_id));
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
@@ -2332,7 +2377,6 @@ impl Fsm for ControlFsm {
 
 pub struct ApplyPoller {
     msg_buf: Vec<Msg>,
-    tag: String,
     apply_ctx: ApplyContext,
     messages_per_tick: usize,
 }
@@ -2384,37 +2428,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     }
 
     fn end(&mut self) {
-        // TODO: this check is too hacky, need to be more verbose and less buggy.
-        let t = match self.apply_ctx.timer.take() {
-            Some(t) => t,
-            None => return,
-        };
-
-        // Write to engine
-        // raftsotre.sync-log = true means we need prevent data loss when power failure.
-        // take raft log gc for example, we write kv WAL first, then write raft WAL,
-        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
-        // so we use sync-log flag here.
-        self.apply_ctx.write_to_db();
-
-        if !self.apply_ctx.apply_res.is_empty() {
-            self.apply_ctx
-                .notifier
-                .send(TaskRes::Applies(mem::replace(
-                    &mut self.apply_ctx.apply_res,
-                    Vec::default(),
-                )))
-                .unwrap();
-        }
-
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
-
-        slow_log!(
-            t,
-            "{} handle ready {} committed entries",
-            self.tag,
-            self.apply_ctx.committed_count
-        );
+        self.apply_ctx.flush();
     }
 }
 
@@ -2448,8 +2462,8 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     fn build(&mut self) -> ApplyPoller {
         ApplyPoller {
             msg_buf: Vec::with_capacity(self.cfg.messages_per_tick),
-            tag: self.tag.clone(),
             apply_ctx: ApplyContext::new(
+                self.tag.clone(),
                 self.coprocessor_host.clone(),
                 self.importer.clone(),
                 self.engines.clone(),
