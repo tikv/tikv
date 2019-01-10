@@ -15,13 +15,11 @@ use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::ops::Deref;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::{io, u64};
-use std::{slice, thread};
+use std::{env, io, slice, thread, u64};
 
 use protobuf::Message;
 use rand::{self, ThreadRng};
@@ -521,6 +519,27 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             process::exit(1);
         }
     })
+}
+
+/// Checks environment variables that affect TiKV.
+pub fn check_environment_variables() {
+    if cfg!(unix) && env::var("TZ").is_err() {
+        env::set_var("TZ", ":/etc/localtime");
+        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
+    }
+
+    if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
+        info!(
+            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
+            var
+        );
+    }
+
+    for proxy in &["http_proxy", "https_proxy"] {
+        if let Ok(var) = env::var(proxy) {
+            info!("environment variable `{}` is present, `{}`", proxy, var);
+        }
+    }
 }
 
 #[cfg(test)]
