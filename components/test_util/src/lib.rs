@@ -42,4 +42,10 @@ pub fn setup_for_ci() {
         // but also stops tests immediately.
         tikv::util::set_panic_hook(true, "./");
     }
+
+    // HACK! Always use epollex in tests.
+    // See more: https://github.com/grpc/grpc/blob/v1.17.2/src/core/lib/iomgr/ev_posix.cc#L124
+    env::set_var("GRPC_POLL_STRATEGY", "epollex");
+
+    tikv::util::check_environment_variables();
 }

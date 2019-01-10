@@ -30,7 +30,6 @@ extern crate signal;
 #[macro_use(
     slog_kv,
     slog_error,
-    slog_warn,
     slog_info,
     slog_log,
     slog_record,
@@ -58,7 +57,7 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util as tikv_util;
+use tikv::util::{self as tikv_util, check_environment_variables};
 
 fn main() {
     let matches = App::new("TiKV Importer")
