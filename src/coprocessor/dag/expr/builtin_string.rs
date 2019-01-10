@@ -1068,7 +1068,9 @@ mod tests {
         }
 
         let null_cases = vec![
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
             (Datum::Null, Datum::Bytes(b"foobar".to_vec()), Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
             (Datum::Bytes(b"bar".to_vec()), Datum::Null, Datum::Null),
             (Datum::Null, Datum::Null, Datum::Null),
         ];
@@ -1083,6 +1085,7 @@ mod tests {
         let cases = vec![
             ("", "foobArbar", 1),
             ("", "", 1),
+            ("xxx", "", 0),
             ("BaR", "foobArbar", 0),
             ("bar", "foobArbar", 7),
             (
