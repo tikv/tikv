@@ -14,7 +14,8 @@ tokio = "0.1"
 grpcio = { version = "0.4", features = [ "secure" ] }
 rand = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git" }
+# better to not use slog-global, but pass in the logger
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
