@@ -55,8 +55,7 @@ hashbrown = { version = "0.1", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git" }
-slog-stdlog = "3.0.4-pre"
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 slog-term = "2.4"
 byteorder = "1.2"
 rand = "0.3"
