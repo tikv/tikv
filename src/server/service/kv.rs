@@ -664,19 +664,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
             .mvcc_get_by_start_ts
             .start_coarse_timer();
 
-        let storage = self.storage.clone();
+        let (cb, f) = paired_future_callback();
+        let res = self
+            .storage
+            .async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
 
-        let (cb, future) = paired_future_callback();
-
-        let res = storage.async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
-        if let Err(e) = res {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
-            return;
-        }
-
-        let future = future
-            .map_err(Error::from)
-            .map(|v| {
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
                 let mut resp = MvccGetByStartTsResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
@@ -692,9 +686,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                         Err(e) => resp.set_error(format!("{}", e)),
                     }
                 }
-                resp
+                sink.success(resp).map_err(Error::from)
             })
-            .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
                 debug!("{} failed: {:?}", "mvcc_get_by_start_ts", e);
@@ -1036,25 +1029,25 @@ fn future_get<E: Engine>(
     storage: &Storage<E>,
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
-    let get_result = storage.async_get(
-        req.take_context(),
-        Key::from_raw(req.get_key()),
-        req.get_version(),
-    );
-
-    get_result.then(|v| {
-        let mut resp = GetResponse::new();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else {
-            match v {
-                Ok(Some(val)) => resp.set_value(val),
-                Ok(None) => (),
-                Err(e) => resp.set_error(extract_key_error(&e)),
+    storage
+        .async_get(
+            req.take_context(),
+            Key::from_raw(req.get_key()),
+            req.get_version(),
+        )
+        .then(|v| {
+            let mut resp = GetResponse::new();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                match v {
+                    Ok(Some(val)) => resp.set_value(val),
+                    Ok(None) => (),
+                    Err(e) => resp.set_error(extract_key_error(&e)),
+                }
             }
-        }
-        Ok(resp)
-    })
+            Ok(resp)
+        })
 }
 
 fn future_scan<E: Engine>(
@@ -1070,24 +1063,25 @@ fn future_scan<E: Engine>(
     let mut options = Options::default();
     options.key_only = req.get_key_only();
     options.reverse_scan = req.get_reverse();
-    let scan_result = storage.async_scan(
-        req.take_context(),
-        Key::from_raw(req.get_start_key()),
-        end_key,
-        req.get_limit() as usize,
-        req.get_version(),
-        options,
-    );
 
-    scan_result.then(|v| {
-        let mut resp = ScanResponse::new();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else {
-            resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
-        }
-        Ok(resp)
-    })
+    storage
+        .async_scan(
+            req.take_context(),
+            Key::from_raw(req.get_start_key()),
+            end_key,
+            req.get_limit() as usize,
+            req.get_version(),
+            options,
+        )
+        .then(|v| {
+            let mut resp = ScanResponse::new();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+            }
+            Ok(resp)
+        })
 }
 
 fn future_prewrite<E: Engine>(
@@ -1108,26 +1102,24 @@ fn future_prewrite<E: Engine>(
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
 
-    let (cb, future) = paired_future_callback();
-    let prewrite_result = future::result(storage.async_prewrite(
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_prewrite(
         req.take_context(),
         mutations,
         req.take_primary_lock(),
         req.get_start_version(),
         options,
         cb,
-    )).map_err(Error::from);
+    );
 
-    prewrite_result.and_then(|_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = PrewriteResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = PrewriteResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+        }
+        resp
     })
 }
 
@@ -1136,25 +1128,23 @@ fn future_commit<E: Engine>(
     mut req: CommitRequest,
 ) -> impl Future<Item = CommitResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let (cb, future) = paired_future_callback();
-    let commit_result = future::result(storage.async_commit(
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_commit(
         req.take_context(),
         keys,
         req.get_start_version(),
         req.get_commit_version(),
         cb,
-    )).map_err(Error::from);
+    );
 
-    commit_result.and_then(|_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = CommitResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(extract_key_error(&e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = CommitResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(extract_key_error(&e));
+        }
+        resp
     })
 }
 
@@ -1162,28 +1152,26 @@ fn future_cleanup<E: Engine>(
     storage: &Storage<E>,
     mut req: CleanupRequest,
 ) -> impl Future<Item = CleanupResponse, Error = Error> {
-    let (cb, future) = paired_future_callback();
-    let cleanup_result = future::result(storage.async_cleanup(
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_cleanup(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_start_version(),
         cb,
-    )).map_err(Error::from);
+    );
 
-    cleanup_result.and_then(|_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = CleanupResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                if let Some(ts) = extract_committed(&e) {
-                    resp.set_commit_version(ts);
-                } else {
-                    resp.set_error(extract_key_error(&e));
-                }
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = CleanupResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            if let Some(ts) = extract_committed(&e) {
+                resp.set_commit_version(ts);
+            } else {
+                resp.set_error(extract_key_error(&e));
             }
-            resp
-        })
+        }
+        resp
     })
 }
 
@@ -1196,17 +1184,17 @@ fn future_batch_get<E: Engine>(
         .into_iter()
         .map(|x| Key::from_raw(x))
         .collect();
-
-    let get_result = storage.async_batch_get(req.take_context(), keys, req.get_version());
-    get_result.then(|v| {
-        let mut resp = BatchGetResponse::new();
-        if let Some(err) = extract_region_error(&v) {
-            resp.set_region_error(err);
-        } else {
-            resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
-        }
-        Ok(resp)
-    })
+    storage
+        .async_batch_get(req.take_context(), keys, req.get_version())
+        .then(|v| {
+            let mut resp = BatchGetResponse::new();
+            if let Some(err) = extract_region_error(&v) {
+                resp.set_region_error(err);
+            } else {
+                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+            }
+            Ok(resp)
+        })
 }
 
 fn future_batch_rollback<E: Engine>(
@@ -1219,24 +1207,17 @@ fn future_batch_rollback<E: Engine>(
         .map(|x| Key::from_raw(x))
         .collect();
 
-    let (cb, future) = paired_future_callback();
-    let rollback_result = future::result(storage.async_rollback(
-        req.take_context(),
-        keys,
-        req.get_start_version(),
-        cb,
-    )).map_err(Error::from);
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_rollback(req.take_context(), keys, req.get_start_version(), cb);
 
-    rollback_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = BatchRollbackResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(extract_key_error(&e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = BatchRollbackResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(extract_key_error(&e));
+        }
+        resp
     })
 }
 
@@ -1244,28 +1225,26 @@ fn future_scan_lock<E: Engine>(
     storage: &Storage<E>,
     mut req: ScanLockRequest,
 ) -> impl Future<Item = ScanLockResponse, Error = Error> {
-    let (cb, future) = paired_future_callback();
-    let scan_result = future::result(storage.async_scan_locks(
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_scan_locks(
         req.take_context(),
         req.get_max_version(),
         req.take_start_key(),
         req.get_limit() as usize,
         cb,
-    )).map_err(Error::from);
+    );
 
-    scan_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = ScanLockResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else {
-                match v {
-                    Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
-                    Err(e) => resp.set_error(extract_key_error(&e)),
-                }
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = ScanLockResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
+                Err(e) => resp.set_error(extract_key_error(&e)),
             }
-            resp
-        })
+        }
+        resp
     })
 }
 
@@ -1286,41 +1265,35 @@ fn future_resolve_lock<E: Engine>(
         )
     };
 
-    let (cb, future) = paired_future_callback();
-    let resolve_result =
-        future::result(storage.async_resolve_lock(req.take_context(), txn_status, cb))
-            .map_err(Error::from);
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_resolve_lock(req.take_context(), txn_status, cb);
 
-    resolve_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = ResolveLockResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(extract_key_error(&e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = ResolveLockResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(extract_key_error(&e));
+        }
+        resp
     })
 }
+
 fn future_gc<E: Engine>(
     storage: &Storage<E>,
     mut req: GCRequest,
 ) -> impl Future<Item = GCResponse, Error = Error> {
-    let (cb, future) = paired_future_callback();
-    let gc_result = future::result(storage.async_gc(req.take_context(), req.get_safe_point(), cb))
-        .map_err(Error::from);
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
 
-    gc_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = GCResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(extract_key_error(&e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = GCResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(extract_key_error(&e));
+        }
+        resp
     })
 }
 
@@ -1328,24 +1301,22 @@ fn future_delete_range<E: Engine>(
     storage: &Storage<E>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
-    let (cb, future) = paired_future_callback();
-    let delete_result = future::result(storage.async_delete_range(
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_delete_range(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
         Key::from_raw(req.get_end_key()),
         cb,
-    )).map_err(Error::from);
+    );
 
-    delete_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = DeleteRangeResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = DeleteRangeResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
     })
 }
 
@@ -1393,24 +1364,22 @@ fn future_raw_put<E: Engine>(
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
     let (cb, future) = paired_future_callback();
-    let put_result = future::result(storage.async_raw_put(
+    let res = storage.async_raw_put(
         req.take_context(),
         req.take_cf(),
         req.take_key(),
         req.take_value(),
         cb,
-    )).map_err(Error::from);
+    );
 
-    put_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = RawPutResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
+    AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
+        let mut resp = RawPutResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
     })
 }
 
@@ -1425,20 +1394,17 @@ fn future_raw_batch_put<E: Engine>(
         .map(|mut x| (x.take_key(), x.take_value()))
         .collect();
 
-    let (cb, future) = paired_future_callback();
-    let put_result = future::result(storage.async_raw_batch_put(req.take_context(), cf, pairs, cb))
-        .map_err(Error::from);
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_raw_batch_put(req.take_context(), cf, pairs, cb);
 
-    put_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = RawBatchPutResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawBatchPutResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
     })
 }
 
@@ -1446,24 +1412,17 @@ fn future_raw_delete<E: Engine>(
     storage: &Storage<E>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
-    let (cb, future) = paired_future_callback();
-    let delete_result = future::result(storage.async_raw_delete(
-        req.take_context(),
-        req.take_cf(),
-        req.take_key(),
-        cb,
-    )).map_err(Error::from);
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
-    delete_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = RawDeleteResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawDeleteResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
     })
 }
 
@@ -1473,21 +1432,17 @@ fn future_raw_batch_delete<E: Engine>(
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
     let cf = req.take_cf();
     let keys = req.take_keys().into_vec();
-    let (cb, future) = paired_future_callback();
-    let delete_result =
-        future::result(storage.async_raw_batch_delete(req.take_context(), cf, keys, cb))
-            .map_err(Error::from);
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_raw_batch_delete(req.take_context(), cf, keys, cb);
 
-    delete_result.and_then(move |_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = RawBatchDeleteResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawBatchDeleteResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
     })
 }
 
@@ -1549,25 +1504,23 @@ fn future_raw_delete_range<E: Engine>(
     storage: &Storage<E>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
-    let (cb, future) = paired_future_callback();
-    let delete_result = future::result(storage.async_raw_delete_range(
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_raw_delete_range(
         req.take_context(),
         req.take_cf(),
         req.take_start_key(),
         req.take_end_key(),
         cb,
-    )).map_err(Error::from);
+    );
 
-    delete_result.and_then(|_| {
-        future.map_err(Error::from).map(|v| {
-            let mut resp = RawDeleteRangeResponse::new();
-            if let Some(err) = extract_region_error(&v) {
-                resp.set_region_error(err);
-            } else if let Err(e) = v {
-                resp.set_error(format!("{}", e));
-            }
-            resp
-        })
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = RawDeleteRangeResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        resp
     })
 }
 
