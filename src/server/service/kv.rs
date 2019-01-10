@@ -18,9 +18,9 @@ use grpc::{
 };
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb;
-use kvproto::kvrpcpb::*;
+use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_serverpb::*;
+use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc;
 use protobuf::RepeatedField;
 use std::iter::{self, FromIterator};
@@ -936,17 +936,52 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     let status = match res {
                         Err(e) => {
                             let msg = format!("{:?}", e);
-                            error!("send raft msg to raft store fail: {}", msg);
+                            error!("dispatch raft msg from gRPC to raftstore fail: {}", msg);
                             RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
                         }
                         Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
                     };
                     sink.fail(status)
-                })
-                .map_err(|e| {
-                    error!("send response fail: {:?}", e);
+                        .map_err(|e| error!("KvService::raft send response fail: {:?}", e))
                 }),
         );
+    }
+
+    fn batch_raft(
+        &mut self,
+        ctx: RpcContext,
+        stream: RequestStream<BatchRaftMessage>,
+        sink: ClientStreamingSink<Done>,
+    ) {
+        info!("batch_raft RPC is called, new gRPC stream established");
+        let ch = self.ch.clone();
+        ctx.spawn(
+            stream
+                .map_err(Error::from)
+                .for_each(move |mut msgs| {
+                    let len = msgs.get_msgs().len();
+                    RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
+                    RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
+                    for msg in msgs.take_msgs().into_iter() {
+                        if let Err(e) = ch.send_raft_msg(msg) {
+                            return Err(Error::from(e));
+                        }
+                    }
+                    Ok(())
+                })
+                .then(|res| {
+                    let status = match res {
+                        Err(e) => {
+                            let msg = format!("{:?}", e);
+                            error!("dispatch raft msg from gRPC to raftstore fail: {}", msg);
+                            RpcStatus::new(RpcStatusCode::Unknown, Some(msg))
+                        }
+                        Ok(_) => RpcStatus::new(RpcStatusCode::Unknown, None),
+                    };
+                    sink.fail(status)
+                        .map_err(|e| error!("KvService::batch_raft send response fail: {:?}", e))
+                }),
+        )
     }
 
     fn snapshot(
