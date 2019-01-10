@@ -64,7 +64,6 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
 
-    heavy_load_threshold: usize,
     // A futures::Executor used to collect responses for batch_commands interface.
     collect_runtime: Arc<Runtime>,
     thread_load: Arc<ThreadLoad>,
@@ -77,20 +76,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        mut heavy_load_threshold: usize,
         collect_runtime: Arc<Runtime>,
         thread_load: Arc<ThreadLoad>,
     ) -> Self {
-        // Because here we returns messages to clients, `heavy_load_threshold` shouldn't be too
-        // small. We set the lower limit to 100 for now.
-        // TODO: make it configuable and fix the best default value.
-        heavy_load_threshold = ::std::cmp::max(heavy_load_threshold, 100);
         Service {
             storage,
             cop,
             ch,
             snap_scheduler,
-            heavy_load_threshold,
             collect_runtime,
             thread_load,
         }
@@ -782,7 +775,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let storage = self.storage.clone();
         let cop = self.cop.clone();
         let thread_load = Arc::clone(&self.thread_load);
-        let heavy_load_threshold = self.heavy_load_threshold;
 
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids().into_iter();
@@ -801,7 +793,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     req,
                     tx.clone(),
                     Arc::clone(&thread_load),
-                    heavy_load_threshold,
                 );
             }
             future::ok::<_, _>(())
@@ -847,7 +838,6 @@ fn response_batch_commands_request<F>(
     tx: Sender<(u64, BatchCommandsResponse_Response)>,
     timer: HistogramTimer,
     thread_load: Arc<ThreadLoad>,
-    _heavy_load_threshold: usize,
 ) where
     F: Future<Item = BatchCommandsResponse_Response_oneof_cmd, Error = ()> + Send + 'static,
 {
@@ -885,7 +875,6 @@ fn handle_batch_commands_request<E: Engine>(
     req: BatchCommandsRequest_Request_oneof_cmd,
     tx: Sender<(u64, BatchCommandsResponse_Response)>,
     thread_load: Arc<ThreadLoad>,
-    heavy_load_threshold: usize,
 ) {
     match req {
         BatchCommandsRequest_Request_oneof_cmd::Get(req) => {
@@ -893,60 +882,28 @@ fn handle_batch_commands_request<E: Engine>(
             let resp = future_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Get)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::Scan(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
             let resp = future_scan(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Scan)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::Prewrite(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
             let resp = future_prewrite(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Prewrite)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::Commit(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
             let resp = future_commit(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Commit)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::Import(_) => {
             panic!("unimplemented");
@@ -956,30 +913,14 @@ fn handle_batch_commands_request<E: Engine>(
             let resp = future_cleanup(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::Cleanup)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::BatchGet(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
             let resp = future_batch_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::BatchGet)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::BatchRollback(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -988,225 +929,105 @@ fn handle_batch_commands_request<E: Engine>(
             let resp = future_batch_rollback(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::BatchRollback)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::ScanLock(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
             let resp = future_scan_lock(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::ScanLock)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::ResolveLock(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_resolve_lock.start_coarse_timer();
             let resp = future_resolve_lock(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::ResolveLock)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::GC(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
             let resp = future_gc(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::GC)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::DeleteRange(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_delete_range.start_coarse_timer();
             let resp = future_delete_range(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::DeleteRange)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawGet(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
             let resp = future_raw_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawGet)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawBatchGet(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_get.start_coarse_timer();
             let resp = future_raw_batch_get(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchGet)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawPut(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
             let resp = future_raw_put(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawPut)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_put.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawBatchPut(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_put.start_coarse_timer();
             let resp = future_raw_batch_put(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchPut)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawDelete(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete.start_coarse_timer();
             let resp = future_raw_delete(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawDelete)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawBatchDelete(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_delete.start_coarse_timer();
             let resp = future_raw_batch_delete(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchDelete)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawScan(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
             let resp = future_raw_scan(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawScan)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_scan.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawDeleteRange(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete_range.start_coarse_timer();
             let resp = future_raw_delete_range(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawDeleteRange)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::RawBatchScan(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_scan.start_coarse_timer();
             let resp = future_raw_batch_scan(&storage, req)
                 .map(BatchCommandsResponse_Response_oneof_cmd::RawBatchScan)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         BatchCommandsRequest_Request_oneof_cmd::Coprocessor(req) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
             let resp = future_cop(&cop, req, Some(peer))
                 .map(BatchCommandsResponse_Response_oneof_cmd::Coprocessor)
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
-            response_batch_commands_request(
-                executor,
-                id,
-                resp,
-                tx,
-                timer,
-                thread_load,
-                heavy_load_threshold,
-            );
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
     }
 }
