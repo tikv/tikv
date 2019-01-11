@@ -137,10 +137,7 @@ impl ScalarFunc {
         let mut pos = try_opt!(self.children[2].eval_int(ctx, row));
 
         pos -= 1; // transfer 1-based argument to 0-based real index
-        if pos < 0 {
-            return Ok(Some(0));
-        }
-        if pos > (s.len() as i64 - substr.len() as i64) {
+        if pos < 0 || pos > (s.len() as i64 - substr.len() as i64) {
             return Ok(Some(0));
         }
         if substr.is_empty() {
