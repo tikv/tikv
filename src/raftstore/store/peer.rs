@@ -166,6 +166,9 @@ pub struct ReadyContext<'a, T: 'a> {
     pub trans: &'a T,
     /// All `Ready`s and their `InvokeContext`s will be stored into `ready_res`.
     pub ready_res: Vec<(Ready, InvokeContext)>,
+    /// Whether `trans` needs to be flushed. It's set to true when any message is sent via
+    /// `trans`.
+    /// TODO: better move it into `trans`.
     pub need_flush: bool,
 }
 

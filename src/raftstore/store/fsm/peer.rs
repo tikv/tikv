@@ -670,7 +670,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
-        // TODO: make the flag as a field of transport instead.
         let (kv_wb, raft_wb, append_res, sync_log, need_flush) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
