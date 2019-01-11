@@ -16,6 +16,7 @@ use prometheus_static_metric::*;
 
 make_static_metric! {
     pub label_enum GrpcTypeKind {
+        invalid,
         kv_get,
         kv_scan,
         kv_prewrite,
