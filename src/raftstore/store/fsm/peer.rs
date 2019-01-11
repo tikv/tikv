@@ -351,7 +351,7 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
     fn resume_handling_pending_apply(&mut self) -> bool {
         let pending_apply = self.peer.pending_merge_apply.take().unwrap();
         let mut res = pending_apply.res;
-        debug!("{} resume handling apply result {:?}", self.peer.tag, res);
+        info!("{} resume handling apply result {:?}", self.peer.tag, res);
         if let Some(rx) = self.on_ready_exec_results(res.merged, &mut res.exec_res) {
             self.peer.pending_merge_apply = Some(MergeAsyncWait { res, poller: rx });
             return false;
