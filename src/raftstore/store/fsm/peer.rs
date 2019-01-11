@@ -1726,13 +1726,13 @@ impl<'a, T: Transport, C: PdClient> Peer<'a, T, C> {
             return;
         }
 
-        let term = self
-            .peer
-            .raft_group
-            .raft
-            .raft_log
-            .term(compact_idx)
-            .unwrap();
+        let term = match self.peer.raft_group.raft.raft_log.term(compact_idx) {
+            Ok(res) => res,
+            Err(e) => panic!(
+                "{} fail to load term for log at index {}: {:?}",
+                self.peer.tag, compact_idx, e
+            ),
+        };
 
         // Create a compact log request and notify directly.
         let request =
