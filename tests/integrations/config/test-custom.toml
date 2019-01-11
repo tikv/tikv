@@ -42,6 +42,7 @@ snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
+heavy-load-wait-duration = "2ms"
 
 [server.labels]
 a = "b"
