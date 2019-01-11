@@ -725,7 +725,7 @@ impl ApplyDelegate {
         let cmd = util::parse_data_at(conf_change.get_context(), index, &self.tag);
         match self.process_raft_cmd(apply_ctx, index, term, cmd) {
             ApplyResult::None => {
-                // If failed, tell Raft that the ConfigChange was aborted.
+                // If failed, tell Raft that the `ConfChange` was aborted.
                 ApplyResult::Res(ExecResult::ChangePeer(Default::default()))
             }
             ApplyResult::Res(mut res) => {
@@ -2204,14 +2204,20 @@ impl ApplyFsm {
     }
 
     fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
-        let mut state = self.delegate.wait_merge_state.take().unwrap();
-        let source_region_id = state.ready_to_merge.load(Ordering::SeqCst);
-        if source_region_id == 0 {
-            self.delegate.wait_merge_state = Some(state);
-            return false;
+        match self.delegate.wait_merge_state {
+            Some(ref state) => {
+                let source_region_id = state.ready_to_merge.load(Ordering::SeqCst);
+                if source_region_id == 0 {
+                    return false;
+                }
+                self.delegate.ready_source_region_id = source_region_id;
+            }
+            None => panic!(
+                "{} is not in waiting state, can't be resume.",
+                self.delegate.tag
+            ),
         }
-
-        self.delegate.ready_source_region_id = source_region_id;
+        let mut state = self.delegate.wait_merge_state.take().unwrap();
 
         if ctx.timer.is_none() {
             ctx.timer = Some(SlowTimer::new());
