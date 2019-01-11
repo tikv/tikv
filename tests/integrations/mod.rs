@@ -26,6 +26,7 @@ extern crate rocksdb;
 extern crate tempdir;
 extern crate test;
 extern crate tipb;
+extern crate tokio;
 extern crate toml;
 extern crate uuid;
 #[macro_use(
@@ -55,6 +56,7 @@ mod coprocessor;
 mod import;
 mod pd;
 mod raftstore;
+mod server;
 mod storage;
 
 // The prefix "_" here is to guarantee running this case first.

@@ -41,7 +41,6 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_stdlog;
 extern crate slog_term;
 extern crate tikv;
 extern crate toml;
@@ -80,7 +79,7 @@ use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
 use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, check_environment_variables, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
