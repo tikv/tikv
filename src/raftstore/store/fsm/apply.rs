@@ -510,9 +510,12 @@ struct WaitSourceMergeState {
     /// index. If the source peer is ready, this flag should be set to the region id
     /// of source peer.
     ready_to_merge: Arc<AtomicU64>,
-    /// If current state is created when handling `CatchUpLogs` command, the command
-    /// will be stored in this field. This can happen when there is a merge cascade,
-    /// especially in follower.
+    /// When handling `CatchUpLogs` message, maybe there is a merge cascade, namely,
+    /// a source peer to catch up logs whereas the logs contain a `CommitMerge`.
+    /// In this case, the source peer needs to merge another source peer first, so storing the
+    /// `CatchUpLogs` message in this field, and once the cascaded merge and all other pending
+    /// msgs are handled, the source peer will check this field and then send `LogsUpToDate`
+    /// message to its target peer.
     catch_up_logs: Option<CatchUpLogs>,
 }
 
@@ -2238,15 +2241,16 @@ impl ApplyFsm {
         }
 
         match self.delegate.wait_merge_state {
-            // So the delegate is executing another `CommitMerge` when handling
-            // `pending_msgs`.
             Some(ref mut s) => {
+                // So the delegate is executing another `CommitMerge` when handling
+                // `pending_msgs`.
                 s.catch_up_logs = state.catch_up_logs;
                 false
             }
             None => {
                 info!("{} all pending logs are applied.", self.delegate.tag);
                 if let Some(mut catch_up_logs) = state.catch_up_logs {
+                    // There is a merge cascade, need to notify the source peer.
                     ctx.write_to_db();
                     let region_id = self.delegate.region_id();
                     catch_up_logs
@@ -2286,7 +2290,11 @@ impl ApplyFsm {
                     ctx.apply_res.last_mut().unwrap().merged = true;
                 }
                 Some(ref mut state) => {
-                    // Free redundant memory.
+                    // So the peer is executing a CommitMerge while catching up
+                    // logs, we need to store the catch up logs command to notify
+                    // the target peer when all pending entries are handled. Note that
+                    // all pending entries are stored in `wait_merge_state` now,
+                    // the command field can be cleared.
                     catch_up_logs.merge.entries.clear();
                     state.catch_up_logs = Some(catch_up_logs);
                     return;
