@@ -29,6 +29,7 @@ pub struct Config {
     pub region_split_size: ReadableSize,
     pub stream_channel_window: usize,
     pub max_open_engines: usize,
+    pub wait_before_scatter_ms: u64,
 }
 
 impl Default for Config {
@@ -42,6 +43,7 @@ impl Default for Config {
             region_split_size: ReadableSize::mb(SPLIT_SIZE_MB),
             stream_channel_window: 128,
             max_open_engines: 8,
+            wait_before_scatter_ms: 10,
         }
     }
 }

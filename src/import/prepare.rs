@@ -139,8 +139,18 @@ struct PrepareRangeJob<Client> {
 }
 
 impl<Client: ImportClient> PrepareRangeJob<Client> {
-    fn new(tag: String, range: RangeInfo, client: Arc<Client>) -> PrepareRangeJob<Client> {
-        PrepareRangeJob { tag, range, client }
+    fn new(
+        tag: String,
+        range: RangeInfo,
+        client: Arc<Client>,
+        cfg: Config,
+    ) -> PrepareRangeJob<Client> {
+        PrepareRangeJob {
+            tag,
+            range,
+            client,
+            cfg,
+        }
     }
 
     fn run(&self) -> Result<bool> {
@@ -185,6 +195,13 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         }
         match self.split_region(&region) {
             Ok(new_region) => {
+                // We have to wait for few milliseconds because the PD may haven't received
+                // any heartbeat from the new split region, such that the PD cannot create
+                // scatter operator for the new split region because it doesn't have the
+                // meta data of the new split region
+                if self.cfg.wait_before_scatter_ms > 0 {
+                    thread::sleep(Duration::from_millis(self.cfg.wait_before_scatter_ms));
+                }
                 self.scatter_region(&new_region)?;
                 Ok(true)
             }

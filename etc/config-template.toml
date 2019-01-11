@@ -687,3 +687,4 @@
 
 ## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
+# wait-before-scatter-ms = 10
