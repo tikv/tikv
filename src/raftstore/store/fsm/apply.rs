@@ -521,7 +521,12 @@ struct WaitSourceMergeState {
 
 impl Debug for WaitSourceMergeState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "WaitSourceMergeState [pending_entries: {}, pending_msgs: {}, ready_to_merge: {:?}, has_catch_up_logs: {}]", self.pending_entries.len(), self.pending_msgs.len(), self.ready_to_merge, self.catch_up_logs.is_some())
+        f.debug_struct("WaitSourceMergeState")
+            .field("pending_entries", &self.pending_entries.len())
+            .field("pending_msgs", &self.pending_msgs.len())
+            .field("ready_to_merge", &self.ready_to_merge)
+            .field("catch_up_logs", &self.catch_up_logs.is_some())
+            .finish()
     }
 }
 
