@@ -957,7 +957,6 @@ impl ApplyDelegate {
     }
 }
 
-
 impl ApplyDelegate {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(
