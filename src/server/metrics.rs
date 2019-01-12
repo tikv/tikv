@@ -107,6 +107,10 @@ lazy_static! {
     ).unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_flush_total",
-        "Total number of raft messages flushed"
+        "Total number of raft messages flushed immediately"
+    ).unwrap();
+    pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER: IntCounter = register_int_counter!(
+        "tikv_server_raft_message_delay_flush_total",
+        "Total number of raft messages flushed delay"
     ).unwrap();
 }
