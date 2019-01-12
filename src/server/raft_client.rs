@@ -218,24 +218,25 @@ impl RaftClient {
     }
 
     pub fn flush(&mut self) {
-        let mut counter = 0;
+        let (mut counter, mut delay_counter) = (0, 0);
         for conn in self.conns.values_mut() {
             if let Some(notifier) = conn.stream.get_notifier() {
-                if self.grpc_thread_load.in_heavy_load() {
-                    let wait = self.cfg.heavy_load_wait_duration.0;
-                    self.async_runtime.executor().spawn(
-                        Delay::new(Instant::now() + wait)
-                            .map_err(|_| error!("RaftClient delay flush error"))
-                            .inspect(move |_| notifier.notify()),
-                    );
-                } else {
+                if !self.grpc_thread_load.in_heavy_load() {
                     notifier.notify();
                     counter += 1;
+                    continue;
                 }
+                let wait = self.cfg.heavy_load_wait_duration.0;
+                self.async_runtime.executor().spawn(
+                    Delay::new(Instant::now() + wait)
+                        .map_err(|_| error!("RaftClient delay flush error"))
+                        .inspect(move |_| notifier.notify()),
+                );
             }
+            delay_counter += 1;
         }
-        // Only update the metrics when flush immediately.
         RAFT_MESSAGE_FLUSH_COUNTER.inc_by(i64::from(counter));
+        RAFT_MESSAGE_DELAY_FLUSH_COUNTER.inc_by(i64::from(delay_counter));
     }
 }
 
