@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod kv_service;
 mod raft_client;
 
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use grpc::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
-use kvproto::tikvpb::BatchRaftMessage;
+use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
 use kvproto::tikvpb_grpc::{create_tikv, Tikv};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
@@ -42,9 +43,18 @@ macro_rules! sstream_call {
     }
 }
 
-macro_rules! bstream_call {
+macro_rules! cstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
+            let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
+            ctx.spawn(sink.fail(status).map_err(|_| ()));
+        }
+    }
+}
+
+macro_rules! bstream_call {
+    ($name:tt, $req_name:tt, $resp_name:tt) => {
+        fn $name(&mut self, ctx: RpcContext, _: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
             let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
@@ -67,9 +77,17 @@ macro_rules! sstream_call_dispatch {
     }
 }
 
-macro_rules! bstream_call_dispatch {
+macro_rules! cstream_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
         fn $name(&mut self, ctx: RpcContext, req: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
+            (self.0).$name(ctx, req, sink)
+        }
+    }
+}
+
+macro_rules! bstream_call_dispatch {
+    ($name:tt, $req_name:tt, $resp_name:tt) => {
+        fn $name(&mut self, ctx: RpcContext, req: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
             (self.0).$name(ctx, req, sink)
         }
     }
@@ -119,9 +137,9 @@ trait MockKvService {
     );
     unary_call!(coprocessor, Request, Response);
     sstream_call!(coprocessor_stream, Request, Response);
-    bstream_call!(raft, RaftMessage, Done);
-    bstream_call!(batch_raft, BatchRaftMessage, Done);
-    bstream_call!(snapshot, SnapshotChunk, Done);
+    cstream_call!(raft, RaftMessage, Done);
+    cstream_call!(batch_raft, BatchRaftMessage, Done);
+    cstream_call!(snapshot, SnapshotChunk, Done);
     unary_call!(
         mvcc_get_by_start_ts,
         MvccGetByStartTsRequest,
@@ -129,6 +147,7 @@ trait MockKvService {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
+    bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 
 impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
@@ -172,9 +191,9 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call_dispatch!(coprocessor, Request, Response);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);
-    bstream_call_dispatch!(raft, RaftMessage, Done);
-    bstream_call_dispatch!(batch_raft, BatchRaftMessage, Done);
-    bstream_call_dispatch!(snapshot, SnapshotChunk, Done);
+    cstream_call_dispatch!(raft, RaftMessage, Done);
+    cstream_call_dispatch!(batch_raft, BatchRaftMessage, Done);
+    cstream_call_dispatch!(snapshot, SnapshotChunk, Done);
     unary_call_dispatch!(
         mvcc_get_by_start_ts,
         MvccGetByStartTsRequest,
@@ -182,6 +201,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
+    bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 
 fn mock_kv_service<T>(kv: MockKv<T>, ip: &str, port: u16) -> Result<Server>
