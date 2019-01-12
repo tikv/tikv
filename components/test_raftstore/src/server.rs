@@ -13,14 +13,14 @@
 
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
-use std::thread;
 use std::time::Duration;
+use std::{thread, usize};
 
 use grpc::{EnvBuilder, Error as GrpcError};
-use tempdir::TempDir;
-
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
+use tempdir::TempDir;
+use tokio::runtime::Builder as RuntimeBuilder;
 
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
@@ -28,6 +28,7 @@ use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::{store, Result};
+use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
@@ -77,13 +78,20 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+        let raft_client = RaftClient::new(
+            env,
+            Arc::new(Config::default()),
+            security_mgr,
+            Arc::new(ThreadLoad::with_threshold(usize::MAX)),
+            Arc::new(RuntimeBuilder::new().core_threads(1).build().unwrap()),
+        );
         ServerCluster {
             metas: HashMap::default(),
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
             snap_paths: HashMap::default(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            raft_client,
         }
     }
 
@@ -135,7 +143,7 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-future-worker");
         let storage_read_pool =
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-                || storage::ReadPoolContext::new(pd_worker.scheduler())
+                storage::ReadPoolContext::new(pd_worker.scheduler())
             });
         let store = create_raft_storage(
             sim_router.clone(),
@@ -165,7 +173,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-            || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
+            coprocessor::ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;

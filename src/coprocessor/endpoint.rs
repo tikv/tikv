@@ -25,7 +25,7 @@ use tipb::select::DAGRequest;
 
 use server::readpool::{self, ReadPool};
 use server::Config;
-use storage::{self, Engine};
+use storage::{self, Engine, SnapshotStore};
 use util::Either;
 
 use coprocessor::dag::executor::ExecutorMetrics;
@@ -125,10 +125,21 @@ impl<E: Engine> Endpoint<E> {
                     Some(dag.get_start_ts()),
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                builder = box move |snap, req_ctx: &_| {
-                    // See rust-lang#41078 to know why we have `: &_` here.
-                    dag::DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
-                        .map(|h| h.into_boxed())
+                builder = box move |snap, req_ctx: &ReqContext| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
+                    let store = SnapshotStore::new(
+                        snap,
+                        dag.get_start_ts(),
+                        req_ctx.context.get_isolation_level(),
+                        !req_ctx.context.get_not_fill_cache(),
+                    );
+                    dag::DAGRequestHandler::build(
+                        dag,
+                        ranges,
+                        store,
+                        req_ctx.deadline,
+                        batch_row_limit,
+                    )
                 };
             }
             REQ_TYPE_ANALYZE => {
@@ -145,6 +156,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(analyze.get_start_ts()),
                 );
                 builder = box move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(analyze, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
                 };
@@ -163,6 +175,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(checksum.get_start_ts()),
                 );
                 builder = box move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     checksum::ChecksumContext::new(checksum, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
                 };
@@ -648,7 +661,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -685,7 +698,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(
             &Config {
@@ -725,7 +738,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -744,7 +757,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -770,7 +783,7 @@ mod tests {
                 max_tasks_per_worker_normal: 2,
                 ..readpool::Config::default_for_test()
             },
-            || || ReadPoolContext::new(pd_worker.scheduler()),
+            || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -815,7 +828,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -830,12 +843,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
     fn test_error_streaming_response() {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -880,7 +892,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -900,7 +912,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -986,7 +998,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(
             &Config {
@@ -1041,7 +1053,7 @@ mod tests {
         let read_pool = ReadPool::new(
             "readpool",
             &readpool::Config::default_with_concurrency(1),
-            || || ReadPoolContext::new(pd_worker.scheduler()),
+            || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =
