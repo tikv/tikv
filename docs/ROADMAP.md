@@ -12,7 +12,7 @@ This document defines the roadmap for TiKV development.
 - [ ] Pluggable Engine Interface - Clean up the engine wrapper code and provide more extendibility
 
 ## Raft
-- [ ] Joint Consensus - Change multi members safely.
+- [ ] Joint Consensus - Change multi members safely
 - [ ] Quiescent Region - Reduce the heartbeat cost of inactive Regions
 - [ ] Raft engine - Customize engine to replace RocksDB
 - [ ] Remove KV RocksDB WAL - Use Raft log as the WAL of state machine engine
@@ -36,7 +36,7 @@ This document defines the roadmap for TiKV development.
 - [ ] Common expression pipeline optimization 
 - [ ] Batch executor - Process multiple rows at a time
 - [ ] Vectorized expression evaluation - Evaluate expressions by column
-- [ ] Chunk - Compute over continuous memory
+- [ ] Chunk - Compute continuous memory
 - [ ] Explain support - Evaluate the cost of execution
 
 ## Tools
@@ -58,5 +58,5 @@ This document defines the roadmap for TiKV development.
 
 ## Misc
 
-- [ ] Tolerate corrupted Region - TiKV can be started even when the data in some Regions is corrupted. 
-- [ ] Support huge Region whose size is larger than 1 GB.
+- [ ] Tolerate corrupted Region - TiKV can be started even when the data in some Regions is corrupted
+- [ ] Support huge Region whose size is larger than 1 GB

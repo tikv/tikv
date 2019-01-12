@@ -13,9 +13,9 @@ This document defines the roadmap for TiKV development.
 - [x] Split Region in Batch - Speed up Region split for large Regions
 - [x] Raft Learner - Support Raft learner to smooth the configuration change process
 - [x] Raft Pre-vote - Support Raft pre-vote to avoid unnecessary leader election on network isolation
-- [ ] Joint Consensus - Change multi members safely.
+- [ ] Joint Consensus - Change multi members safely
 - [ ] Multi-thread Raftstore - Process Region Raft logic in multiple threads
-- [ ] Multi-thread apply pool - Apply Region Raft committed entries in multiple threads
+- [ ] Multi-thread Apply Pool - Apply Region Raft committed entries in multiple threads
 
 ## Engine
 - [ ] Titan - Separate large key-values from LSM-Tree
@@ -37,8 +37,8 @@ This document defines the roadmap for TiKV development.
 - [x] TiKV Importer - Speed up data importing by SST file ingestion
 
 ## Client
-- [ ] TiKV client (Rust crate)
+- [ ] TiKV Client (Rust crate)
 - [ ] Batch gRPC Message - Reduce message overhead
 
 ## PD
-- [ ] Optimize Region metadata - Save Region metadata in detached storage engine
+- [ ] Optimize Region Metadata - Save Region metadata in detached storage engine
