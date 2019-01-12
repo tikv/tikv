@@ -175,7 +175,7 @@ impl<C: Sender<Msg>> Runner<C> {
         }
     }
 
-    /// Checks a region with split checkers to produce split keys and generates split admin command.
+    /// Checks a Region with split checkers to produce split keys and generates split admin command.
     fn check_split(&mut self, task: Task) {
         let region = &task.region;
         let region_id = region.get_id();

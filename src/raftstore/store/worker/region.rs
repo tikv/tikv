@@ -269,7 +269,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
-    /// Applies snapshot data of the region.
+    /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("[region {}] begin apply snap data", region_id);
         fail_point!("region_apply_snap");
@@ -348,7 +348,7 @@ impl SnapContext {
         Ok(())
     }
 
-    /// Tries to apply the snapshot of the specified region. It calls `apply_snap` to do the actual work.
+    /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
