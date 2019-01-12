@@ -48,6 +48,7 @@ use util::{rocksdb, sys as util_sys, RingQueue};
 use import::SSTImporter;
 use raftstore::store::config::Config;
 use raftstore::store::engine::{Iterable, Mutable, Peekable};
+use raftstore::store::fsm::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter};
 use raftstore::store::keys::{
     self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key, DATA_MAX_KEY,
 };
@@ -57,9 +58,8 @@ use raftstore::store::peer::Peer;
 use raftstore::store::peer_storage::{self, CacheQueryStats};
 use raftstore::store::transport::Transport;
 use raftstore::store::worker::{
-    ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask,
-    SplitCheckRunner,
+    CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
+    LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask, SplitCheckRunner,
 };
 use raftstore::store::{
     util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
@@ -145,6 +145,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .registry
             .register_admin_observer(100, box SplitObserver);
 
+        let (apply_router, apply_system) = create_apply_batch_system(&cfg);
+
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
@@ -161,7 +163,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_worker,
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
-            apply_worker: Worker::new("apply-worker"),
+            apply_router,
+            apply_system,
             apply_res_receiver: None,
             local_reader,
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
@@ -362,8 +365,8 @@ impl<T, C> Store<T, C> {
         self.region_worker.scheduler()
     }
 
-    pub fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
-        self.apply_worker.scheduler()
+    pub fn apply_router(&self) -> ApplyRouter {
+        self.apply_router.clone()
     }
 
     pub fn read_scheduler(&self) -> Scheduler<ReadTask> {
@@ -460,9 +463,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
         self.apply_res_receiver = Some(rx);
-        box_try!(self.apply_worker.start(apply_runner));
+        let builder = ApplyPollerBuilder::new(self, tx, self.apply_router.clone());
+        self.apply_system.spawn(builder);
+        self.apply_system.schedule_all(&self.region_peers);
 
         let reader = LocalReader::new(self);
         let timer = LocalReader::new_timer();
@@ -493,8 +497,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.cleanup_sst_worker.stop());
-        handles.push(self.apply_worker.stop());
         handles.push(self.local_reader.stop());
+
+        self.apply_system.shutdown();
 
         for h in handles {
             if let Some(h) = h {
