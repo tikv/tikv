@@ -23,7 +23,6 @@ use grpc;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
-use slog_stdlog;
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
 use self::file_log::RotatingFileLogger;
@@ -40,7 +39,7 @@ const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f";
 
 pub fn init_log<D>(
     drain: D,
-    level: Level, // TODO: Use slog level
+    level: Level,
     use_async: bool,
     init_stdlog: bool,
 ) -> Result<(), SetLoggerError>
@@ -48,24 +47,24 @@ where
     D: Drain + Send + 'static,
     <D as Drain>::Err: ::std::fmt::Debug,
 {
-    grpc::redirect_log();
-
     let logger = if use_async {
         let drain = Async::new(drain.fuse())
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
             .build()
+            .filter_level(level)
             .fuse();
         slog::Logger::root(drain, slog_o!())
     } else {
-        let drain = Mutex::new(drain).fuse();
+        let drain = Mutex::new(drain).filter_level(level).fuse();
         slog::Logger::root(drain, slog_o!())
     };
 
     ::slog_global::set_global(logger);
     if init_stdlog {
-        slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))?;
+        ::slog_global::redirect_std_log(Some(level))?;
+        grpc::redirect_log();
     }
 
     Ok(())

@@ -21,7 +21,7 @@ use storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
-pub trait Store {
+pub trait Store: Send {
     type Scanner: Scanner;
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
@@ -37,7 +37,7 @@ pub trait Store {
     ) -> Result<Self::Scanner>;
 }
 
-pub trait Scanner {
+pub trait Scanner: Send {
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
     fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {

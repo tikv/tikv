@@ -79,6 +79,11 @@ lazy_static! {
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"
     ).unwrap();
+    pub static ref RAFT_MESSAGE_BATCH_SIZE: Histogram = register_histogram!(
+        "tikv_server_raft_message_batch_size",
+        "Raft messages batch size",
+        exponential_buckets(1f64, 2f64, 10).unwrap()
+    ).unwrap();
     pub static ref RESOLVE_STORE_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_resolve_store_total",
         "Total number of resolving store",
