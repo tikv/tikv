@@ -125,6 +125,9 @@ pub struct Config {
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
+    pub apply_max_batch_size: usize,
+    pub apply_pool_size: usize,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -191,6 +194,8 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
+            apply_max_batch_size: 1024,
+            apply_pool_size: 2,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -328,6 +333,13 @@ impl Config {
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
+
+        if self.apply_pool_size == 0 {
+            return Err(box_err!("apply-pool-size should be greater than 0"));
+        }
+        if self.apply_max_batch_size == 0 {
+            return Err(box_err!("apply-max-batch-size should be greater than 0"));
+        }
         Ok(())
     }
 }
@@ -411,6 +423,14 @@ mod tests {
 
         cfg = Config::new();
         cfg.local_read_batch_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.apply_max_batch_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.apply_pool_size = 0;
         assert!(cfg.validate().is_err());
     }
 }
