@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_thread_stat_io() {
-        let name = "threadnametest66";
+        let name = "theadnametest66";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
         let h = thread::Builder::new()
