@@ -172,7 +172,7 @@ pub struct SteadyTimer {
 }
 
 impl SteadyTimer {
-    /// Create a delay future that will be notified after the given duration.
+    /// Creates a delay future that will be notified after the given duration.
     pub fn delay(&self, dur: Duration) -> Delay {
         self.handle.delay(self.clock.now() + dur)
     }
@@ -194,7 +194,7 @@ fn start_global_steady_timer() -> SteadyTimer {
     let clock = SteadyClock::default();
     let clock_ = clock.clone();
     Builder::new()
-        .name(thd_name!("steady timer"))
+        .name(thd_name!("steady-timer"))
         .spawn(move || {
             let c = Clock::new_with_now(clock_);
             let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
