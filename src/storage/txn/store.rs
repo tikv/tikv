@@ -616,6 +616,7 @@ mod tests {
 
     #[test]
     fn test_scanner_verify_bound() {
+        // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
         let store = SnapshotStore::new(snap, 0, IsolationLevel::SI, true);
         let bound_a = Key::from_encoded(b"a".to_vec());
@@ -642,6 +643,26 @@ mod tests {
             store
                 .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
                 .is_err()
+        );
+
+        // Store with whole range
+        let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
+        let store2 = SnapshotStore::new(snap, 0, IsolationLevel::SI, true);
+        assert!(store2.scanner(false, false, None, None).is_ok());
+        assert!(
+            store2
+                .scanner(false, false, Some(bound_a.clone()), None)
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(false, false, None, Some(bound_c.clone()))
+                .is_ok()
         );
     }
 
