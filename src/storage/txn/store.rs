@@ -647,7 +647,7 @@ mod tests {
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
-        let store2 = SnapshotStore::new(snap, 0, IsolationLevel::SI, true);
+        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::SI, true);
         assert!(store2.scanner(false, false, None, None).is_ok());
         assert!(
             store2
