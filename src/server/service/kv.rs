@@ -836,7 +836,7 @@ fn response_batch_commands_request<F>(
             if thread_load.in_heavy_load() {
                 executor1.spawn(
                     Delay::new(Instant::now() + DELAY_DURATION)
-                        .map_err(|_| error!("BatchCommands RPC delay responses error"))
+                        .map_err(|e| error!("batch commands delay error: {:?}", e))
                         .inspect(move |_| notifier.notify()),
                 );
             } else {
