@@ -50,8 +50,10 @@ pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
+    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
+    TestEngineBuilder,
 };
+pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
@@ -473,7 +475,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
             ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-                || ReadPoolContext::new(pd_worker.scheduler())
+                ReadPoolContext::new(pd_worker.scheduler())
             })
         };
         Storage::from_engine(
@@ -534,8 +536,8 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage ({} engine) referenced (reference count before operation: {})",
-            self.engine, refs
+            "Storage referenced (reference count before operation: {})",
+            refs
         );
 
         Self {
@@ -556,8 +558,8 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage ({} engine) de-referenced (reference count before operation: {})",
-            self.engine, refs
+            "Storage de-referenced (reference count before operation: {})",
+            refs
         );
 
         if refs != 1 {
@@ -581,7 +583,7 @@ impl<E: Engine> Drop for Storage<E> {
             error!("Failed to stop gc_worker: {:?}", e);
         }
 
-        info!("Storage ({} engine) stopped.", self.engine);
+        info!("Storage stopped.");
     }
 }
 
@@ -618,7 +620,7 @@ impl<E: Engine> Storage<E> {
         worker.lock().unwrap().start(runner)?;
         gc_worker.start()?;
 
-        info!("Storage ({} engine) started.", engine);
+        info!("Storage started.");
 
         Ok(Storage {
             engine,
@@ -629,6 +631,14 @@ impl<E: Engine> Storage<E> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
         })
+    }
+
+    /// Starts running GC automatically.
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &self,
+        cfg: AutoGCConfig<S, R>,
+    ) -> Result<()> {
+        self.gc_worker.start_auto_gc(cfg)
     }
 
     /// Get the underlying `Engine` of the `Storage`.

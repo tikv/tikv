@@ -22,6 +22,7 @@ use util::metrics::{cpu_total, get_thread_ids};
 
 use procinfo::pid;
 
+/// A Linux-specific `ThreadLoadStatistics`. It collects threads load metrics.
 pub struct ThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,

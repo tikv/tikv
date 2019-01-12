@@ -17,12 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
+use hex;
 
 use storage::mvcc::{Lock, Write};
+use util::codec;
 use util::codec::bytes;
 use util::codec::bytes::BytesEncoder;
 use util::codec::number::{self, NumberEncoder};
-use util::{codec, escape};
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -224,7 +225,7 @@ impl Clone for Key {
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", escape(&self.0))
+        write!(f, "{}", hex::encode_upper(&self.0))
     }
 }
 

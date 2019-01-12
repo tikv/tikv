@@ -132,6 +132,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::SubstringBinary2Args
             | ScalarFuncSig::DateDiff
+            | ScalarFuncSig::AddDurationAndDuration
+            | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::Strcmp => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -322,6 +324,9 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
+            | ScalarFuncSig::FieldInt
+            | ScalarFuncSig::FieldReal
+            | ScalarFuncSig::FieldString
             | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
@@ -364,8 +369,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringDecimal
             | ScalarFuncSig::AddDateStringInt
             | ScalarFuncSig::AddDateStringString
-            | ScalarFuncSig::AddDurationAndDuration
-            | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
             | ScalarFuncSig::AddTimeDurationNull
@@ -391,9 +394,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ExportSet5Arg
             | ScalarFuncSig::ExtractDatetime
             | ScalarFuncSig::ExtractDuration
-            | ScalarFuncSig::FieldInt
-            | ScalarFuncSig::FieldReal
-            | ScalarFuncSig::FieldString
             | ScalarFuncSig::FindInSet
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
@@ -818,6 +818,9 @@ dispatch_call! {
 
         Length => length,
         BitCount => bit_count,
+        FieldInt => field_int,
+        FieldReal => field_real,
+        FieldString => field_string,
         CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
@@ -1017,6 +1020,9 @@ dispatch_call! {
 
         CoalesceDuration => coalesce_duration,
         CaseWhenDuration => case_when_duration,
+
+        AddDurationAndDuration => add_duration_and_duration,
+        AddDurationAndString => add_duration_and_string,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1156,6 +1162,8 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+                    ScalarFuncSig::AddDurationAndString,
+                    ScalarFuncSig::AddDurationAndDuration,
                 ],
                 2,
                 2,
@@ -1354,6 +1362,9 @@ mod tests {
                     ScalarFuncSig::CaseWhenTime,
                     ScalarFuncSig::Concat,
                     ScalarFuncSig::ConcatWS,
+                    ScalarFuncSig::FieldInt,
+                    ScalarFuncSig::FieldReal,
+                    ScalarFuncSig::FieldString,
                 ],
                 1,
                 usize::MAX,
@@ -1430,8 +1441,6 @@ mod tests {
             ScalarFuncSig::AddDateStringDecimal,
             ScalarFuncSig::AddDateStringInt,
             ScalarFuncSig::AddDateStringString,
-            ScalarFuncSig::AddDurationAndDuration,
-            ScalarFuncSig::AddDurationAndString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
             ScalarFuncSig::AddTimeDurationNull,
@@ -1457,9 +1466,6 @@ mod tests {
             ScalarFuncSig::ExportSet5Arg,
             ScalarFuncSig::ExtractDatetime,
             ScalarFuncSig::ExtractDuration,
-            ScalarFuncSig::FieldInt,
-            ScalarFuncSig::FieldReal,
-            ScalarFuncSig::FieldString,
             ScalarFuncSig::FindInSet,
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,

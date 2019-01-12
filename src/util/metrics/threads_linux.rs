@@ -21,7 +21,7 @@ use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
 
 use procinfo::pid;
 
-/// monitor current process's threads.
+/// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
     let tc = ThreadsCollector::new(pid, namespace);
@@ -152,6 +152,7 @@ impl Collector for ThreadsCollector {
     }
 }
 
+/// Gets thread ids of the given process id.
 pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
     Ok(fs::read_dir(format!("/proc/{}/task", pid))?
         .filter_map(|task| {
@@ -180,7 +181,18 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
         .collect())
 }
 
-// get thread name and the index of the last character(including ')').
+/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
+///
+/// Examples:
+///
+/// ```ignore
+/// assert_eq!(sanitize_thread_name(0, "ok123"), "ok123");
+/// assert_eq!(sanitize_thread_name(0, "Az_1"), "Az_1");
+/// assert_eq!(sanitize_thread_name(0, "a-b"), "a_b");
+/// assert_eq!(sanitize_thread_name(0, "a b"), "a_b");
+/// assert_eq!(sanitize_thread_name(1, "@123"), "123");
+/// assert_eq!(sanitize_thread_name(1, "@@@@"), "1");
+/// ```
 fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     let mut name = String::with_capacity(raw.len());
     // sanitize thread name.
@@ -247,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_thread_stat_io() {
-        let name = "thread_name_test66";
+        let name = "threadnametest66";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
         let h = thread::Builder::new()
@@ -257,7 +269,7 @@ mod tests {
                 let mut tmp = temp_dir();
                 tmp.push(name);
                 tmp.set_extension("txt");
-                fs::write(tmp.as_path(), name);
+                fs::write(tmp.as_path(), name).unwrap();
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
             })
