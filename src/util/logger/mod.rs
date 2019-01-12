@@ -23,8 +23,6 @@ use grpc;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
-use slog_scope::{self, GlobalLoggerGuard};
-use slog_stdlog;
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
 use self::file_log::RotatingFileLogger;
@@ -44,32 +42,32 @@ pub fn init_log<D>(
     level: Level,
     use_async: bool,
     init_stdlog: bool,
-) -> Result<GlobalLoggerGuard, SetLoggerError>
+) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
     <D as Drain>::Err: ::std::fmt::Debug,
 {
-    grpc::redirect_log();
-
     let logger = if use_async {
         let drain = Async::new(drain.fuse())
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
             .build()
+            .filter_level(level)
             .fuse();
         slog::Logger::root(drain, slog_o!())
     } else {
-        let drain = Mutex::new(drain).fuse();
+        let drain = Mutex::new(drain).filter_level(level).fuse();
         slog::Logger::root(drain, slog_o!())
     };
 
-    let guard = slog_scope::set_global_logger(logger);
+    ::slog_global::set_global(logger);
     if init_stdlog {
-        slog_stdlog::init_with_level(convert_slog_level_to_log_level(level))?;
+        ::slog_global::redirect_std_log(Some(level))?;
+        grpc::redirect_log();
     }
 
-    Ok(guard)
+    Ok(())
 }
 
 /// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
@@ -453,7 +451,7 @@ fn test_log_format() {
     let decorator = PlainSyncDecorator::new(TestWriter);
     let drain = TikvFormat::new(decorator).fuse();
     let logger = slog::Logger::root_typed(drain, slog_o!());
-    slog_crit!(logger, "test");
+    slog_error!(logger, "test");
 
     // Check the logged value.
     BUFFER.with(|buffer| {
@@ -461,7 +459,7 @@ fn test_log_format() {
         let output = from_utf8(&*buffer).unwrap();
 
         // This functions roughly as an assert to make sure that the log level and file name is logged.
-        let mut split_iter = output.split(" CRIT mod.rs:");
+        let mut split_iter = output.split(" ERRO mod.rs:");
         // The pre-split portion will contain a timestamp which we can check by parsing and ensuring it is valid.
         let datetime = split_iter.next().unwrap();
         assert!(

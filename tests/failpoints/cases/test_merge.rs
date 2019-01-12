@@ -279,6 +279,7 @@ fn test_node_merge_multiple_snapshots_together() {
 // }
 
 fn test_node_merge_multiple_snapshots(together: bool) {
+    let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);

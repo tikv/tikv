@@ -46,6 +46,10 @@ const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
+/// The TiKV server
+///
+/// It hosts various internal components, including gRPC, the raftstore router
+/// and a snapshot worker.
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
     // Grpc server.
@@ -92,7 +96,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-
         let snap_worker = Worker::new("snap-handler");
 
         let kv_service = KvService::new(storage, cop, raft_router.clone(), snap_worker.scheduler());
@@ -129,6 +132,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&env),
             Arc::clone(cfg),
             Arc::clone(security_mgr),
+            Arc::clone(&thread_load),
+            Arc::clone(&stats_runtime),
         )));
 
         let trans = ServerTransport::new(
@@ -157,6 +162,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
+    /// Starts the TiKV server.
     pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
@@ -185,6 +191,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         Ok(())
     }
 
+    /// Stops the TiKV server.
     pub fn stop(&mut self) -> Result<()> {
         self.snap_worker.stop();
         self.grpc_server.shutdown();
