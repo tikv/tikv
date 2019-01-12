@@ -23,8 +23,6 @@ use tikv::util::HandyRwLock;
 
 #[test]
 fn test_batch_commands() {
-    ::test_util::setup_for_ci();
-
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
