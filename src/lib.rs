@@ -107,6 +107,7 @@ extern crate time;
 extern crate tipb;
 extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_executor;
 extern crate tokio_timer;
 #[cfg(test)]
 extern crate toml;
