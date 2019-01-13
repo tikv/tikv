@@ -310,6 +310,16 @@ where
         }
     }
 
+    pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<N>)>) {
+        let mut normals = self.normals.lock().unwrap();
+        normals.reserve(mailboxes.len());
+        for (addr, mailbox) in mailboxes {
+            if let Some(m) = normals.insert(addr, mailbox) {
+                m.close();
+            }
+        }
+    }
+
     /// Get the mailbox of specified address.
     pub fn mailbox(&self, addr: u64) -> Option<Mailbox<N, Ns>> {
         self.check_do(addr, |mailbox| {

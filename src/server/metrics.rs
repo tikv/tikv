@@ -16,6 +16,7 @@ use prometheus_static_metric::*;
 
 make_static_metric! {
     pub label_enum GrpcTypeKind {
+        invalid,
         kv_get,
         kv_scan,
         kv_prewrite,
@@ -75,6 +76,16 @@ lazy_static! {
         "Total number of handle grpc message failure",
         &["type"]
     ).unwrap();
+    pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
+        "tikv_server_grpc_req_batch_size",
+        "grpc batch size of gRPC requests",
+        exponential_buckets(1f64, 2f64, 10).unwrap()
+    ).unwrap();
+    pub static ref GRPC_RESP_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
+        "tikv_server_grpc_resp_batch_size",
+        "grpc batch size of gRPC responses",
+        exponential_buckets(1f64, 2f64, 10).unwrap()
+    ).unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"
@@ -96,6 +107,10 @@ lazy_static! {
     ).unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_flush_total",
-        "Total number of raft messages flushed"
+        "Total number of raft messages flushed immediately"
+    ).unwrap();
+    pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER: IntCounter = register_int_counter!(
+        "tikv_server_raft_message_delay_flush_total",
+        "Total number of raft messages flushed delay"
     ).unwrap();
 }
