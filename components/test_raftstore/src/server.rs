@@ -25,7 +25,7 @@ use tokio::runtime::Builder as RuntimeBuilder;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::{store, Result};
 use tikv::server::load_statistics::ThreadLoad;
@@ -64,6 +64,7 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, SimulateEngine>,
+    pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
@@ -90,6 +91,7 @@ impl ServerCluster {
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
+            region_info_accessors: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client,
         }
@@ -217,7 +219,13 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        region_info_accessor.start();
+
+        self.region_info_accessors
+            .insert(node_id, region_info_accessor);
 
         node.start(
             event_loop,
