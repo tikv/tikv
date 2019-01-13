@@ -97,7 +97,6 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_stdlog;
 extern crate slog_term;
 extern crate sys_info;
 extern crate tempdir;
@@ -107,6 +106,7 @@ extern crate time;
 extern crate tipb;
 extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_executor;
 extern crate tokio_timer;
 #[cfg(test)]
 extern crate toml;

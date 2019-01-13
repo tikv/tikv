@@ -32,7 +32,6 @@ extern crate signal;
 #[macro_use(
     slog_kv,
     slog_error,
-    slog_warn,
     slog_info,
     slog_log,
     slog_record,
@@ -43,7 +42,6 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_stdlog;
 extern crate slog_term;
 extern crate tikv;
 extern crate toml;
