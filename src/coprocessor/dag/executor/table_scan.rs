@@ -86,7 +86,6 @@ impl<S: Store, C1: CountCollector, C2: ExecutionSummaryCollector> TableScanExecu
             current_range: None,
             scan_range: KeyRange::default(),
             scanner: None,
-            // counts,
             metrics: Default::default(),
             count_collector,
             exec_detail_collector,
