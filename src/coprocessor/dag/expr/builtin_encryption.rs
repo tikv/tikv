@@ -644,7 +644,7 @@ mod tests {
             let origin = datum_expr(Datum::Bytes(origin.as_bytes().to_vec()));
             let key = datum_expr(Datum::Bytes(key.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::AesEncrypt, &[aes_name, origin, key]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let crypt = Datum::Bytes(hex::decode(crypt.as_bytes().to_vec()).unwrap());
             assert_eq!(got, crypt);
@@ -662,7 +662,7 @@ mod tests {
             ));
             let key = datum_expr(Datum::Bytes(key.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::AesDecrypt, &[aes_name, crypt, key]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let origin = Datum::Bytes(origin.as_bytes().to_vec());
             assert_eq!(got, origin);
@@ -681,7 +681,7 @@ mod tests {
             ScalarFuncSig::AesDecrypt,
             &[aes_name, crypt, datum_expr(Datum::Null)],
         );
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::Null);
 
@@ -692,7 +692,7 @@ mod tests {
             ScalarFuncSig::AesDecrypt,
             &[aes_name, datum_expr(Datum::Null), key],
         );
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::Null);
 
@@ -703,7 +703,7 @@ mod tests {
             ScalarFuncSig::AesEncrypt,
             &[aes_name, origin, datum_expr(Datum::Null)],
         );
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::Null);
 
@@ -714,7 +714,7 @@ mod tests {
             ScalarFuncSig::AesEncrypt,
             &[aes_name, datum_expr(Datum::Null), key],
         );
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::Null);
     }
@@ -729,7 +729,7 @@ mod tests {
         ));
         let key = datum_expr(Datum::Bytes(b"1234567890123456".to_vec()));
         let op = scalar_func_expr(ScalarFuncSig::AesDecrypt, &[aes_name, crypt, key]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::Null);
 
@@ -738,7 +738,7 @@ mod tests {
         let origin = datum_expr(Datum::Bytes(b"pingcap".to_vec()));
         let key = datum_expr(Datum::Bytes(b"1234567890123456".to_vec()));
         let op = scalar_func_expr(ScalarFuncSig::AesEncrypt, &[aes_name, origin, key]);
-        let op = Expression::build(&mut ctx, op).unwrap();
+        let op = Expression::build(&ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         assert_eq!(got, Datum::Null);
     }
