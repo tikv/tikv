@@ -130,6 +130,8 @@ extern crate panic_hook;
 extern crate safemem;
 extern crate smallvec;
 extern crate tokio_threadpool;
+#[macro_use]
+extern crate vlog;
 
 #[macro_use]
 pub mod util;

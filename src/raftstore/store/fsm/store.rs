@@ -49,9 +49,7 @@ use import::SSTImporter;
 use raftstore::store::config::Config;
 use raftstore::store::engine::{Iterable, Mutable, Peekable};
 use raftstore::store::fsm::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter};
-use raftstore::store::keys::{
-    self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key, DATA_MAX_KEY,
-};
+use raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::*;
 use raftstore::store::peer::Peer;
@@ -62,8 +60,7 @@ use raftstore::store::worker::{
     LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask, SplitCheckRunner,
 };
 use raftstore::store::{
-    util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
-    SnapManager, SnapshotDeleter, Store, Tick,
+    util, Engines, Msg, SignificantMsg, SnapManager, SnapshotDeleter, Store, Tick,
 };
 
 type Key = Vec<u8>;
@@ -965,42 +962,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
-    /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(
-        &self,
-        from_key: &[u8],
-        filter: SeekRegionFilter,
-        mut limit: u32,
-        callback: SeekRegionCallback,
-    ) {
-        assert!(limit > 0);
-
-        let from_key = data_key(from_key);
-        for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
-            let peer = &self.region_peers[region_id];
-            if filter(peer.region(), peer.raft_group.raft.state) {
-                callback(SeekRegionResult::Found(peer.region().clone()));
-                return;
-            }
-
-            limit -= 1;
-            if limit == 0 {
-                // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
-                // than `LimitExceeded`.
-                if end_key.as_slice() >= DATA_MAX_KEY {
-                    break;
-                }
-
-                callback(SeekRegionResult::LimitExceeded {
-                    next_key: origin_key(end_key).to_vec(),
-                });
-                return;
-            }
-        }
-        callback(SeekRegionResult::Ended);
-    }
-
     fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
         let start_key = data_key(start_key);
         let end_key = data_end_key(end_key);
@@ -1098,12 +1059,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch, policy),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
-            Msg::SeekRegion {
-                from_key,
-                filter,
-                limit,
-                callback,
-            } => self.seek_region(&from_key, filter, limit, callback),
             Msg::ClearRegionSizeInRange { start_key, end_key } => {
                 self.clear_region_size_in_range(&start_key, &end_key)
             }

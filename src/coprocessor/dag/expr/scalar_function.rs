@@ -361,7 +361,9 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonInsertSig
             | ScalarFuncSig::JsonReplaceSig => (3, usize::MAX),
 
-            ScalarFuncSig::AddTimeDateTimeNull | ScalarFuncSig::PI => (0, 0),
+            ScalarFuncSig::AddTimeDateTimeNull
+            | ScalarFuncSig::AddTimeDurationNull
+            | ScalarFuncSig::PI => (0, 0),
 
             // unimplement signature
             ScalarFuncSig::AddDateAndDuration
@@ -375,7 +377,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
-            | ScalarFuncSig::AddTimeDurationNull
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::AesDecrypt
             | ScalarFuncSig::AesEncrypt
@@ -1027,6 +1028,7 @@ dispatch_call! {
 
         AddDurationAndDuration => add_duration_and_duration,
         AddDurationAndString => add_duration_and_string,
+        AddTimeDurationNull => add_time_duration_null,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1416,7 +1418,11 @@ mod tests {
                 usize::MAX,
             ),
             (
-                vec![ScalarFuncSig::AddTimeDateTimeNull, ScalarFuncSig::PI],
+                vec![
+                    ScalarFuncSig::AddTimeDateTimeNull,
+                    ScalarFuncSig::AddTimeDurationNull,
+                    ScalarFuncSig::PI,
+                ],
                 0,
                 0,
             ),
@@ -1451,7 +1457,6 @@ mod tests {
             ScalarFuncSig::AddDateStringString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
-            ScalarFuncSig::AddTimeDurationNull,
             ScalarFuncSig::AddTimeStringNull,
             ScalarFuncSig::AesDecrypt,
             ScalarFuncSig::AesEncrypt,
