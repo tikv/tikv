@@ -666,7 +666,7 @@ mod tests {
     fn test_month_name() {
         let cases = vec![
             (
-                Datum::Time(Time::parse_utc_datetime("2018-00-01 00:00:00.000000", 6).unwrap()),
+                Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00.000000", 6).unwrap()),
                 Datum::Null,
             ),
             (
