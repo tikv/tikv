@@ -18,6 +18,8 @@ use tipb::executor::{self, ExecType};
 
 use storage::Store;
 
+use super::executor::{CountCollectorDisabled, CountCollectorNormal};
+use super::executor::{ExecutionSummaryCollectorDisabled, ExecutionSummaryCollectorNormal};
 use super::executor::{
     Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
     StreamAggExecutor, TableScanExecutor, TopNExecutor,
@@ -43,13 +45,21 @@ impl DAGBuilder {
         store: S,
         ranges: Vec<KeyRange>,
         ctx: Arc<EvalConfig>,
-        collect: bool,
+        collect_count: bool,
+        collect_exec_summary: bool,
     ) -> Result<Box<Executor + Send>> {
         let mut exec_descriptors = exec_descriptors.into_iter();
         let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-        let mut src = Self::build_normal_first_executor(first, store, ranges, collect)?;
+        let mut src = Self::build_normal_first_executor(
+            0,
+            first,
+            store,
+            ranges,
+            collect_count,
+            collect_exec_summary,
+        )?;
         for mut exec in exec_descriptors {
             let curr: Box<Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
@@ -85,20 +95,57 @@ impl DAGBuilder {
     ///
     /// The inner-most executor must be a table scan executor or an index scan executor.
     fn build_normal_first_executor<S: Store + 'static>(
+        executor_index: usize,
         mut first: executor::Executor,
         store: S,
         ranges: Vec<KeyRange>,
-        collect: bool,
+        collect_count: bool,
+        collect_exec_summary: bool,
     ) -> Result<Box<Executor + Send>> {
         match first.get_tp() {
             ExecType::TypeTableScan => {
-                let ex = Box::new(TableScanExecutor::new(
-                    first.take_tbl_scan(),
-                    ranges,
-                    store,
-                    collect,
-                )?);
-                Ok(ex)
+                let meta = first.take_tbl_scan();
+                if collect_count {
+                    if collect_exec_summary {
+                        let ex = Box::new(TableScanExecutor::new(
+                            meta,
+                            ranges,
+                            store,
+                            CountCollectorNormal::default(),
+                            ExecutionSummaryCollectorNormal::new(executor_index),
+                        )?);
+                        Ok(ex)
+                    } else {
+                        let ex = Box::new(TableScanExecutor::new(
+                            meta,
+                            ranges,
+                            store,
+                            CountCollectorNormal::default(),
+                            ExecutionSummaryCollectorDisabled,
+                        )?);
+                        Ok(ex)
+                    }
+                } else {
+                    if collect_exec_summary {
+                        let ex = Box::new(TableScanExecutor::new(
+                            meta,
+                            ranges,
+                            store,
+                            CountCollectorDisabled,
+                            ExecutionSummaryCollectorNormal::new(executor_index),
+                        )?);
+                        Ok(ex)
+                    } else {
+                        let ex = Box::new(TableScanExecutor::new(
+                            meta,
+                            ranges,
+                            store,
+                            CountCollectorDisabled,
+                            ExecutionSummaryCollectorDisabled,
+                        )?);
+                        Ok(ex)
+                    }
+                }
             }
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
@@ -107,7 +154,7 @@ impl DAGBuilder {
                     ranges,
                     store,
                     unique,
-                    collect,
+                    collect_count,
                 )?);
                 Ok(ex)
             }

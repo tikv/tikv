@@ -64,6 +64,7 @@ impl DAGRequestHandler {
             ranges,
             Arc::new(eval_cfg),
             req.get_collect_range_counts(),
+            false, // TODO: Change it dynamically
         )?;
         let handler = Self {
             deadline,

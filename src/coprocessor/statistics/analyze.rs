@@ -22,7 +22,10 @@ use tipb::executor::TableScan;
 use storage::{Snapshot, SnapshotStore};
 
 use coprocessor::codec::datum;
-use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
+use coprocessor::dag::executor::{
+    CountCollectorDisabled, ExecutionSummaryCollectorDisabled, ExecutorMetrics,
+};
+use coprocessor::dag::executor::{Executor, IndexScanExecutor, TableScanExecutor};
 use coprocessor::*;
 
 use super::cmsketch::CMSketch;
@@ -154,7 +157,11 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<SnapshotStore<S>>,
+    data: TableScanExecutor<
+        SnapshotStore<S>,
+        CountCollectorDisabled,
+        ExecutionSummaryCollectorDisabled,
+    >,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
@@ -186,7 +193,13 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(meta, ranges, snap, false)?;
+        let table_scanner = TableScanExecutor::new(
+            meta,
+            ranges,
+            snap,
+            CountCollectorDisabled,
+            ExecutionSummaryCollectorDisabled,
+        )?;
         Ok(Self {
             data: table_scanner,
             col_len,

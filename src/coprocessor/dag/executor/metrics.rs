@@ -113,3 +113,160 @@ impl ExecCounter {
             .inc_by(self.aggregation);
     }
 }
+
+/// Collector that collects the number of scanned keys of each range.
+pub trait CountCollector {
+    /// Notifies the collector that a new range is started.
+    fn handle_new_range(&mut self);
+
+    /// Increases the counting of number of scanned keys of current range. If no range is started
+    /// this function has no effect.
+    fn inc_counter(&mut self);
+
+    /// Takes and appends number of scanned keys into `target`.
+    fn collect(&mut self, _target: &mut Vec<i64>);
+}
+
+/// A normal `CountCollector`.
+#[derive(Default)]
+pub struct CountCollectorNormal {
+    counts: Vec<i64>,
+}
+
+impl CountCollector for CountCollectorNormal {
+    #[inline]
+    fn handle_new_range(&mut self) {
+        self.counts.push(0);
+    }
+
+    #[inline]
+    fn inc_counter(&mut self) {
+        self.counts.last_mut().map_or((), |val| *val += 1);
+    }
+
+    #[inline]
+    fn collect(&mut self, target: &mut Vec<i64>) {
+        target.append(&mut self.counts);
+        self.counts.push(0);
+    }
+}
+
+/// A `CountCollector` that does not collect anything.
+pub struct CountCollectorDisabled;
+
+impl CountCollector for CountCollectorDisabled {
+    #[inline]
+    fn handle_new_range(&mut self) {}
+
+    #[inline]
+    fn inc_counter(&mut self) {}
+
+    #[inline]
+    fn collect(&mut self, _target: &mut Vec<i64>) {}
+}
+
+#[derive(Default)]
+pub struct ExecutionSummary {
+    /// Total time cost in this executor.
+    pub time_processed_ms: ::std::sync::Arc<::std::sync::atomic::AtomicUsize>,
+
+    /// How many rows this executor produced totally.
+    pub num_produced_rows: usize,
+
+    /// How many times executor's `next()` is called.
+    pub num_iterations: usize,
+}
+
+pub trait ExecutionSummaryCollector {
+    type TimeRecorderGuard;
+
+    /// Creates a guard that will record and accumulate processed time when it is dropped.
+    fn accumulate_time(&self) -> Self::TimeRecorderGuard;
+
+    /// Increases produced rows counter.
+    fn inc_produced_rows(&mut self);
+
+    /// Increases iterations counter.
+    fn inc_iterations(&mut self);
+
+    /// Takes and appends current execution summary into `target`.
+    fn collect(&mut self, _target: &mut [ExecutionSummary]);
+}
+
+pub struct ExecutionSummaryTimeGuard {
+    start_time: ::util::time::Instant,
+    collect_target: ::std::sync::Arc<::std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for ExecutionSummaryTimeGuard {
+    #[inline]
+    fn drop(&mut self) {
+        let elapsed = (self.start_time.elapsed_secs() * 1000f64) as usize;
+        self.collect_target
+            .fetch_add(elapsed, ::std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A normal `ExecutionSummaryCollector`.
+pub struct ExecutionSummaryCollectorNormal {
+    output_index: usize,
+    counts: ExecutionSummary,
+}
+
+impl ExecutionSummaryCollectorNormal {
+    pub fn new(output_index: usize) -> ExecutionSummaryCollectorNormal {
+        ExecutionSummaryCollectorNormal {
+            output_index,
+            counts: Default::default(),
+        }
+    }
+}
+
+impl ExecutionSummaryCollector for ExecutionSummaryCollectorNormal {
+    type TimeRecorderGuard = ExecutionSummaryTimeGuard;
+
+    #[inline]
+    fn accumulate_time(&self) -> Self::TimeRecorderGuard {
+        ExecutionSummaryTimeGuard {
+            start_time: ::util::time::Instant::now_coarse(),
+            collect_target: self.counts.time_processed_ms.clone(),
+        }
+    }
+
+    #[inline]
+    fn inc_produced_rows(&mut self) {
+        self.counts.num_produced_rows += 1;
+    }
+
+    #[inline]
+    fn inc_iterations(&mut self) {
+        self.counts.num_iterations += 1;
+    }
+
+    #[inline]
+    fn collect(&mut self, target: &mut [ExecutionSummary]) {
+        let current_summary = ::std::mem::replace(&mut self.counts, ExecutionSummary::default());
+        target[self.output_index] = current_summary;
+    }
+}
+
+/// A `ExecutionSummaryCollector` that does not collect anything.
+pub struct ExecutionSummaryCollectorDisabled;
+
+impl ExecutionSummaryCollector for ExecutionSummaryCollectorDisabled {
+    type TimeRecorderGuard = ();
+
+    #[inline]
+    fn accumulate_time(&self) -> Self::TimeRecorderGuard {
+        ()
+    }
+
+    #[inline]
+    fn inc_produced_rows(&mut self) {}
+
+    #[inline]
+    fn inc_iterations(&mut self) {}
+
+    #[inline]
+    fn collect(&mut self, _target: &mut [ExecutionSummary]) {}
+}

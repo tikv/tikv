@@ -25,7 +25,7 @@ use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::*;
 
 use super::aggregate::{self, AggrFunc};
-use super::ExecutorMetrics;
+use super::{ExecutionSummary, ExecutorMetrics};
 use super::{Executor, ExprColumnRefVisitor, Row};
 
 struct AggFuncExpr {
@@ -153,6 +153,12 @@ impl AggExecutor {
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
+
+    #[inline]
+    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+        // TODO: Collect self
+        self.src.collect_execution_summary(target)
+    }
 }
 // HashAggExecutor deals with the aggregate functions.
 // When Next() is called, it reads all the data from src
@@ -244,20 +250,29 @@ impl Executor for HashAggExecutor {
         }
     }
 
+    #[inline]
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.inner.collect_output_counts(counts);
     }
 
+    #[inline]
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.inner.collect_metrics_into(metrics)
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.inner.take_eval_warnings()
     }
 
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
+    }
+
+    #[inline]
+    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+        self.inner.collect_execution_summary(target)
     }
 }
 
@@ -292,20 +307,30 @@ impl Executor for StreamAggExecutor {
         Ok(Some(self.get_partial_result()?))
     }
 
+    #[inline]
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.inner.collect_output_counts(counts);
     }
 
+    #[inline]
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.inner.collect_metrics_into(metrics)
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.inner.take_eval_warnings()
     }
 
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
+    }
+
+    #[inline]
+    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+        // TODO: Collect self
+        self.inner.collect_execution_summary(target)
     }
 }
 
@@ -417,6 +442,7 @@ mod tests {
     use super::super::scanner::tests::{get_range, new_col_info, Data, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::super::topn::tests::gen_table_data;
+    use super::super::{CountCollectorNormal, ExecutionSummaryCollectorDisabled};
     use super::*;
 
     #[inline]
@@ -733,7 +759,13 @@ mod tests {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, true).unwrap();
+        let ts_ect = TableScanExecutor::new(
+            table_scan,
+            key_ranges,
+            store,
+            CountCollectorNormal::default(),
+            ExecutionSummaryCollectorDisabled,
+        ).unwrap();
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();

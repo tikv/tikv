@@ -13,7 +13,7 @@
 
 use tipb::executor::Limit;
 
-use super::ExecutorMetrics;
+use super::{ExecutionSummary, ExecutorMetrics};
 use coprocessor::dag::executor::{Executor, Row};
 use coprocessor::dag::expr::EvalWarnings;
 use coprocessor::Result;
@@ -50,10 +50,12 @@ impl<'a> Executor for LimitExecutor<'a> {
         }
     }
 
+    #[inline]
     fn collect_output_counts(&mut self, _: &mut Vec<i64>) {
         // We do not know whether `limit` has consumed all of it's source, so just ignore it.
     }
 
+    #[inline]
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
@@ -62,12 +64,20 @@ impl<'a> Executor for LimitExecutor<'a> {
         }
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         self.src.take_eval_warnings()
     }
 
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    #[inline]
+    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+        // TODO: Collect self
+        self.src.collect_execution_summary(target);
     }
 }
 
@@ -84,6 +94,7 @@ mod tests {
     use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::super::topn::tests::gen_table_data;
+    use super::super::{CountCollectorDisabled, ExecutionSummaryCollectorDisabled};
     use super::*;
 
     #[test]
@@ -116,7 +127,13 @@ mod tests {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, false).unwrap();
+        let ts_ect = TableScanExecutor::new(
+            table_scan,
+            key_ranges,
+            store,
+            CountCollectorDisabled,
+            ExecutionSummaryCollectorDisabled,
+        ).unwrap();
 
         // init Limit meta
         let mut limit_meta = Limit::default();

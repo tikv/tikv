@@ -24,7 +24,7 @@ use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
 
 use super::topn_heap::TopNHeap;
-use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use super::{ExecutionSummary, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -132,10 +132,12 @@ impl Executor for TopNExecutor {
         }
     }
 
+    #[inline]
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
     }
 
+    #[inline]
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
         self.src.collect_metrics_into(metrics);
         if self.first_collect {
@@ -144,6 +146,7 @@ impl Executor for TopNExecutor {
         }
     }
 
+    #[inline]
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             if let Some(mut topn_warnings) = self.eval_warnings.take() {
@@ -155,8 +158,15 @@ impl Executor for TopNExecutor {
         }
     }
 
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    #[inline]
+    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+        // TODO: Collect self
+        self.src.collect_execution_summary(target);
     }
 }
 
@@ -182,6 +192,9 @@ pub mod tests {
 
     use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
+    use super::super::{
+        CountCollectorDisabled, CountCollectorNormal, ExecutionSummaryCollectorDisabled,
+    };
     use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
@@ -429,7 +442,13 @@ pub mod tests {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, snap, true).unwrap();
+        let ts_ect = TableScanExecutor::new(
+            table_scan,
+            key_ranges,
+            snap,
+            CountCollectorNormal::default(),
+            ExecutionSummaryCollectorDisabled,
+        ).unwrap();
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -496,7 +515,15 @@ pub mod tests {
         let mut topn_ect = TopNExecutor::new(
             topn,
             Arc::new(EvalConfig::default()),
-            Box::new(TableScanExecutor::new(table_scan, key_ranges, snap, false).unwrap()),
+            Box::new(
+                TableScanExecutor::new(
+                    table_scan,
+                    key_ranges,
+                    snap,
+                    CountCollectorDisabled,
+                    ExecutionSummaryCollectorDisabled,
+                ).unwrap(),
+            ),
         ).unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }

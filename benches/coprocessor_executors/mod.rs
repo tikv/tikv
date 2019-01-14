@@ -28,6 +28,7 @@ use tipb::executor::{IndexScan, TableScan};
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::dag::executor::Executor;
+use tikv::coprocessor::dag::executor::{CountCollectorDisabled, ExecutionSummaryCollectorDisabled};
 use tikv::storage::RocksEngine;
 
 fn bench_table_scan_next(
@@ -44,7 +45,8 @@ fn bench_table_scan_next(
                 meta.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),
-                false,
+                CountCollectorDisabled,
+                ExecutionSummaryCollectorDisabled,
             ).unwrap();
             // There is a step of building scanner in the first `next()` which cost time,
             // so we next() before hand.
@@ -429,9 +431,13 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
                 for i in 0..1001 {
                     ranges.push(table.get_record_range_one(i));
                 }
-                let mut executor =
-                    TableScanExecutor::new(meta.clone(), ranges, store.to_fixture_store(), false)
-                        .unwrap();
+                let mut executor = TableScanExecutor::new(
+                    meta.clone(),
+                    ranges,
+                    store.to_fixture_store(),
+                    CountCollectorDisabled,
+                    ExecutionSummaryCollectorDisabled,
+                ).unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next().unwrap().unwrap();
@@ -485,7 +491,8 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
                     meta.clone(),
                     vec![table.get_record_range_all()],
                     store.to_fixture_store(),
-                    false,
+                    CountCollectorDisabled,
+                    ExecutionSummaryCollectorDisabled,
                 ).unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.

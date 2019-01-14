@@ -18,7 +18,7 @@ use tipb::executor::Selection;
 use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use coprocessor::Result;
 
-use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use super::{ExecutionSummary, Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 /// Retrieves rows from the source executor and filter rows by expressions.
 pub struct SelectionExecutor {
@@ -65,6 +65,7 @@ impl Executor for SelectionExecutor {
         Ok(None)
     }
 
+    #[inline]
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.src.collect_output_counts(counts);
     }
@@ -86,8 +87,15 @@ impl Executor for SelectionExecutor {
         }
     }
 
+    #[inline]
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    #[inline]
+    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+        // TODO: Collect self
+        self.src.collect_execution_summary(target);
     }
 }
 
@@ -109,6 +117,9 @@ mod tests {
     use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
     use super::super::topn::tests::gen_table_data;
+    use super::super::{
+        CountCollectorDisabled, CountCollectorNormal, ExecutionSummaryCollectorDisabled,
+    };
     use super::*;
 
     fn new_const_expr() -> Expr {
@@ -205,8 +216,13 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, store, false).unwrap();
+        let inner_table_scan = TableScanExecutor::new(
+            table_scan,
+            key_ranges,
+            store,
+            CountCollectorDisabled,
+            ExecutionSummaryCollectorDisabled,
+        ).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -259,7 +275,13 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let inner_table_scan = TableScanExecutor::new(table_scan, key_ranges, store, true).unwrap();
+        let inner_table_scan = TableScanExecutor::new(
+            table_scan,
+            key_ranges,
+            store,
+            CountCollectorNormal::default(),
+            ExecutionSummaryCollectorDisabled,
+        ).unwrap();
 
         // selection executor
         let mut selection = Selection::new();

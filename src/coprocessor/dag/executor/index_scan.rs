@@ -31,7 +31,7 @@ use coprocessor::*;
 use storage::{Key, Store};
 
 use super::scanner::{ScanOn, Scanner};
-use super::ExecutorMetrics;
+use super::{ExecutionSummary, ExecutorMetrics};
 use super::{Executor, Row};
 
 /// Scans rows from table indexes.
@@ -270,6 +270,10 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
 
     fn get_len_of_columns(&self) -> usize {
         self.cols.len()
+    }
+
+    fn collect_execution_summary(&mut self, _target: &mut [ExecutionSummary]) {
+        // TODO: Implement.
     }
 }
 

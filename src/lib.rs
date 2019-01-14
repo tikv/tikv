@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![recursion_limit = "200"]
 #![feature(label_break_value)]
 #![feature(try_from)]
 #![feature(fnbox)]
@@ -27,8 +28,8 @@
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
-#![recursion_limit = "200"]
 #![feature(range_contains)]
+#![feature(associated_type_defaults)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
