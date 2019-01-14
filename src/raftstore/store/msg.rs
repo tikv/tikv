@@ -211,13 +211,6 @@ pub enum Msg {
         invalid_ssts: Vec<SSTMeta>,
     },
 
-    SeekRegion {
-        from_key: Vec<u8>,
-        filter: SeekRegionFilter,
-        limit: u32,
-        callback: SeekRegionCallback,
-    },
-
     // Clear region size and keys for all regions in the range, so we can force them to re-calculate
     // their size later.
     ClearRegionSizeInRange {
@@ -270,9 +263,6 @@ impl fmt::Debug for Msg {
             }
             Msg::MergeFail { region_id } => write!(fmt, "MergeFail region_id {}", region_id),
             Msg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
-            Msg::SeekRegion { ref from_key, .. } => {
-                write!(fmt, "Seek Region from_key {:?}", from_key)
-            }
             Msg::ClearRegionSizeInRange {
                 ref start_key,
                 ref end_key,

@@ -133,7 +133,10 @@ impl ScalarFunc {
             | ScalarFuncSig::SubstringBinary2Args
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDurationAndDuration
-            | ScalarFuncSig::Strcmp => (2, 2),
+            | ScalarFuncSig::AddDurationAndString
+            | ScalarFuncSig::Strcmp
+            | ScalarFuncSig::Locate2Args
+            | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -304,7 +307,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Lpad
             | ScalarFuncSig::LpadBinary
             | ScalarFuncSig::Rpad
-            | ScalarFuncSig::RpadBinary => (3, 3),
+            | ScalarFuncSig::RpadBinary
+            | ScalarFuncSig::Locate3Args
+            | ScalarFuncSig::LocateBinary3Args => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -323,6 +328,9 @@ impl ScalarFunc {
             | ScalarFuncSig::CaseWhenString
             | ScalarFuncSig::Concat
             | ScalarFuncSig::ConcatWS
+            | ScalarFuncSig::FieldInt
+            | ScalarFuncSig::FieldReal
+            | ScalarFuncSig::FieldString
             | ScalarFuncSig::CaseWhenTime => (1, usize::MAX),
 
             ScalarFuncSig::JsonExtractSig
@@ -365,7 +373,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDateStringDecimal
             | ScalarFuncSig::AddDateStringInt
             | ScalarFuncSig::AddDateStringString
-            | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
             | ScalarFuncSig::AddTimeDurationNull
@@ -391,9 +398,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ExportSet5Arg
             | ScalarFuncSig::ExtractDatetime
             | ScalarFuncSig::ExtractDuration
-            | ScalarFuncSig::FieldInt
-            | ScalarFuncSig::FieldReal
-            | ScalarFuncSig::FieldString
             | ScalarFuncSig::FindInSet
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
@@ -414,10 +418,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
-            | ScalarFuncSig::Locate2Args
-            | ScalarFuncSig::Locate3Args
-            | ScalarFuncSig::LocateBinary2Args
-            | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Lock
             | ScalarFuncSig::MakeDate
             | ScalarFuncSig::MakeSet
@@ -817,7 +817,14 @@ dispatch_call! {
         BitXorSig => bit_xor,
 
         Length => length,
+        Locate2Args => locate_2_args,
+        Locate3Args => locate_3_args,
+        LocateBinary2Args => locate_binary_2_args,
+        LocateBinary3Args => locate_binary_3_args,
         BitCount => bit_count,
+        FieldInt => field_int,
+        FieldReal => field_real,
+        FieldString => field_string,
         CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
@@ -1019,6 +1026,7 @@ dispatch_call! {
         CaseWhenDuration => case_when_duration,
 
         AddDurationAndDuration => add_duration_and_duration,
+        AddDurationAndString => add_duration_and_string,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1158,6 +1166,10 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+                    ScalarFuncSig::AddDurationAndString,
+                    ScalarFuncSig::AddDurationAndDuration,
+                    ScalarFuncSig::Locate2Args,
+                    ScalarFuncSig::LocateBinary2Args,
                 ],
                 2,
                 2,
@@ -1329,6 +1341,8 @@ mod tests {
                     ScalarFuncSig::LpadBinary,
                     ScalarFuncSig::Rpad,
                     ScalarFuncSig::RpadBinary,
+                    ScalarFuncSig::Locate3Args,
+                    ScalarFuncSig::LocateBinary3Args,
                 ],
                 3,
                 3,
@@ -1356,6 +1370,9 @@ mod tests {
                     ScalarFuncSig::CaseWhenTime,
                     ScalarFuncSig::Concat,
                     ScalarFuncSig::ConcatWS,
+                    ScalarFuncSig::FieldInt,
+                    ScalarFuncSig::FieldReal,
+                    ScalarFuncSig::FieldString,
                 ],
                 1,
                 usize::MAX,
@@ -1432,7 +1449,6 @@ mod tests {
             ScalarFuncSig::AddDateStringDecimal,
             ScalarFuncSig::AddDateStringInt,
             ScalarFuncSig::AddDateStringString,
-            ScalarFuncSig::AddDurationAndString,
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
             ScalarFuncSig::AddTimeDurationNull,
@@ -1458,9 +1474,6 @@ mod tests {
             ScalarFuncSig::ExportSet5Arg,
             ScalarFuncSig::ExtractDatetime,
             ScalarFuncSig::ExtractDuration,
-            ScalarFuncSig::FieldInt,
-            ScalarFuncSig::FieldReal,
-            ScalarFuncSig::FieldString,
             ScalarFuncSig::FindInSet,
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
@@ -1481,10 +1494,6 @@ mod tests {
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
-            ScalarFuncSig::Locate2Args,
-            ScalarFuncSig::Locate3Args,
-            ScalarFuncSig::LocateBinary2Args,
-            ScalarFuncSig::LocateBinary3Args,
             ScalarFuncSig::Lock,
             ScalarFuncSig::MakeDate,
             ScalarFuncSig::MakeSet,

@@ -13,21 +13,22 @@
 
 use std::path::Path;
 use std::sync::{mpsc, Arc, RwLock};
-use std::thread;
 use std::time::Duration;
+use std::{thread, usize};
 
 use grpc::{EnvBuilder, Error as GrpcError};
-use tempdir::TempDir;
-
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
+use tempdir::TempDir;
+use tokio::runtime::Builder as RuntimeBuilder;
 
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
 use tikv::raftstore::{store, Result};
+use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
@@ -63,6 +64,7 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, SimulateEngine>,
+    pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
@@ -77,13 +79,21 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+        let raft_client = RaftClient::new(
+            env,
+            Arc::new(Config::default()),
+            security_mgr,
+            Arc::new(ThreadLoad::with_threshold(usize::MAX)),
+            Arc::new(RuntimeBuilder::new().core_threads(1).build().unwrap()),
+        );
         ServerCluster {
             metas: HashMap::default(),
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
+            region_info_accessors: HashMap::default(),
             snap_paths: HashMap::default(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            raft_client,
         }
     }
 
@@ -209,7 +219,13 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        region_info_accessor.start();
+
+        self.region_info_accessors
+            .insert(node_id, region_info_accessor);
 
         node.start(
             event_loop,
