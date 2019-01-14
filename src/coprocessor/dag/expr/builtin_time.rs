@@ -665,27 +665,62 @@ mod tests {
     #[test]
     fn test_month_name() {
         let cases = vec![
-            ("2018-01-01 00:00:00.000000", "January"),
-            ("2018-02-01 00:00:00.000000", "February"),
-            ("2018-03-01 00:00:00.000000", "March"),
-            ("2018-04-01 00:00:00.000000", "April"),
-            ("2018-05-01 00:00:00.000000", "May"),
-            ("2018-06-01 00:00:00.000000", "June"),
-            ("2018-07-01 00:00:00.000000", "July"),
-            ("2018-08-01 00:00:00.000000", "August"),
-            ("2018-09-01 00:00:00.000000", "September"),
-            ("2018-10-01 00:00:00.000000", "October"),
-            ("2018-11-01 00:00:00.000000", "November"),
-            ("2018-12-01 00:00:00.000000", "December"),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-00-01 00:00:00.000000", 6).unwrap()),
+                Datum::Null,
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-01-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"January".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-02-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"February".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-03-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"March".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-04-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"April".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-05-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"May".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-06-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"June".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-07-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"July".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-08-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"August".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-09-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"September".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-10-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"October".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-11-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"November".to_vec()),
+            ),
+            (
+                Datum::Time(Time::parse_utc_datetime("2018-12-01 00:00:00.000000", 6).unwrap()),
+                Datum::Bytes(b"December".to_vec()),
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            test_ok_case_one_arg(
-                &mut ctx,
-                ScalarFuncSig::MonthName,
-                Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()),
-                Datum::Bytes(exp.as_bytes().to_vec()),
-            );
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::MonthName, arg, exp);
         }
         // test NULL case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::MonthName, Datum::Null);
