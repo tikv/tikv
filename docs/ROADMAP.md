@@ -8,10 +8,12 @@ category: Roadmap
 This document defines the roadmap for TiKV development.
 
 ## Engine
+
 - [ ] Titan - Use the separated key-value engine in production
 - [ ] Pluggable Engine Interface - Clean up the engine wrapper code and provide more extendibility
 
 ## Raft
+
 - [ ] Joint Consensus - Change multi members safely
 - [ ] Quiescent Region - Reduce the heartbeat cost of inactive Regions
 - [ ] Raft engine - Customize engine to replace RocksDB
@@ -36,13 +38,15 @@ This document defines the roadmap for TiKV development.
 - [ ] Common expression pipeline optimization 
 - [ ] Batch executor - Process multiple rows at a time
 - [ ] Vectorized expression evaluation - Evaluate expressions by column
-- [ ] Chunk - Compute continuous memory
+- [ ] Chunk - Compute over the data stored in the continuous memory
 - [ ] Explain support - Evaluate the cost of execution
 
 ## Tools
+
 - [ ] Use Raft learner to support Backup/Restore/Replication 
 
 ## Client
+
 - [ ] Rust
 - [ ] Go
 - [ ] Java
