@@ -18,7 +18,6 @@ extern crate byteorder;
 extern crate crossbeam;
 extern crate futures;
 extern crate kvproto;
-extern crate log;
 extern crate mio;
 extern crate num_traits;
 extern crate protobuf;
@@ -40,6 +39,7 @@ mod coprocessor;
 mod raftkv;
 mod serialization;
 mod storage;
+mod util;
 mod writebatch;
 
 #[bench]
