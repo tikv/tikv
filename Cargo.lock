@@ -1005,6 +1005,7 @@ dependencies = [
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvproto 0.0.1",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slog-term 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
