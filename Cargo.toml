@@ -57,6 +57,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 slog-term = "2.4"
+slog_derive = "0.1"
 byteorder = "1.2"
 rand = "0.3"
 quick-error = "1.2.2"
@@ -110,18 +111,15 @@ flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = "0.12"
 tokio-threadpool = "0.1"
+tipb = { path = "components/tipb" }
+kvproto = { path = "components/kvproto" }
+log_wrappers = { path = "components/log_wrappers" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-
-[dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
-
-[dependencies.tipb]
-git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
 version = "0.4.2"
@@ -160,6 +158,9 @@ members = [
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
+  "components/log_wrappers",
+  "components/tipb",
+  "components/kvproto",
 ]
 
 [profile.dev]

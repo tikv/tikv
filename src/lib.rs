@@ -96,6 +96,8 @@ extern crate serde_json;
 extern crate slog;
 extern crate slog_async;
 #[macro_use]
+extern crate slog_derive;
+#[macro_use]
 extern crate slog_global;
 extern crate slog_term;
 extern crate sys_info;
@@ -123,6 +125,7 @@ extern crate base64;
 extern crate cop_datatype;
 extern crate flate2;
 extern crate hyper;
+extern crate log_wrappers;
 extern crate panic_hook;
 extern crate safemem;
 extern crate smallvec;
