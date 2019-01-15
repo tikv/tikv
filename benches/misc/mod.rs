@@ -39,6 +39,7 @@ mod coprocessor;
 mod raftkv;
 mod serialization;
 mod storage;
+mod util;
 mod writebatch;
 
 #[bench]

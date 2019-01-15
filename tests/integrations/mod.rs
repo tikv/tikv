@@ -17,6 +17,7 @@
 extern crate crc;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate grpcio;
 extern crate grpcio as grpc;
 extern crate kvproto;
 extern crate protobuf;
