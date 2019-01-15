@@ -3,19 +3,14 @@
 
 #!/bin/bash
 
-dir="`pwd`"
-
-# A list of directories to search for binaries. We're just hoping that `$dir`
-# doesn't contain a space, because that will break the program logic where this
-# string (and others) are interpreted as space-separated lists.
-dirs="$dir/target/debug $dir/target/release"
+dirs="./target/debug ./target/release"
 
 errors=0
 
 # These don't need to link to jemalloc
 # NB: The fuzzer bins here are just placeholders due to the workspace
-# structure; they are not actual fuzzers
-whitelist="fuzz panic_hook fuzzer_afl fuzzer_honggfuzz fuzzer_libfuzzer"
+# structure; they are not actual fuzzers.
+whitelist="panic_hook fuzz fuzzer_afl fuzzer_honggfuzz fuzzer_libfuzzer"
 
 if [[ "`uname`" != "Linux" ]]; then
     echo "skipping jemalloc check - not on Linux"
