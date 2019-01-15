@@ -15,7 +15,7 @@ use super::{EvalContext, Result, ScalarFunc};
 use chrono::offset::TimeZone;
 use chrono::Datelike;
 use coprocessor::codec::error::Error;
-use coprocessor::codec::mysql::Time;
+use coprocessor::codec::mysql::{self,Time};
 use coprocessor::codec::Datum;
 use std::borrow::Cow;
 
