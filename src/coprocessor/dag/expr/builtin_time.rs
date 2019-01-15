@@ -204,20 +204,6 @@ mod test {
         }
     }
 
-    fn test_ok_case_two_arg(
-        ctx: &mut EvalContext,
-        sig: ScalarFuncSig,
-        arg1: Datum,
-        arg2: Datum,
-        exp: Datum,
-    ) {
-        let children = &[datum_expr(arg1), datum_expr(arg2)];
-        match expr_build(ctx, sig, children) {
-            Ok(got) => assert_eq!(got, exp),
-            Err(_) => assert!(false, "eval failed"),
-        }
-    }
-
     fn test_err_case_two_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, arg1: Datum, arg2: Datum) {
         let children = &[datum_expr(arg1), datum_expr(arg2)];
         match expr_build(ctx, sig, children) {
