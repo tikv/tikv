@@ -5,7 +5,9 @@
 
 dir="`pwd`"
 
-# Hope there are no spaces in $dir
+# A list of directories to search for binaries. We're just hoping that `$dir`
+# doesn't contain a space, because that will break the program logic where this
+# string (and others) are interpreted as space-separated lists.
 dirs="$dir/target/debug $dir/target/release"
 
 errors=0

@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,18 +19,18 @@
 //! bins turn it on themselves.
 //!
 //! Writing `extern crate tikv_alloc;` will link it to jemalloc when
-//! appropriate. The tikv library itself links to `tikv_alloc` to
+//! appropriate. The TiKV library itself links to `tikv_alloc` to
 //! ensure that any binary linking to it will use jemalloc.
 //!
 //! With few exceptions, _every binary and project in the TiKV workspace
-//! should link (perhaps transitively) to tikv_alloc_.` This is to ensure
+//! should link (perhaps transitively) to tikv_alloc_. This is to ensure
 //! that tests and benchmarks run with the production allocator. In other
 //! words, binaries and projects that don't link to `tikv` should link
 //! to `tikv_alloc`.
 //!
 //! At present all Unixes use jemalloc, and others don't. Whichever
 //! allocator is used, this crate presents the same API, and some
-//! profiling functions become no-ops. Not however that _not all
+//! profiling functions become no-ops. Note however that _not all
 //! platforms override C malloc, including macOS_. This means on some
 //! platforms RocksDB is using the system malloc. On Linux C malloc is
 //! redirected to jemalloc.
@@ -40,7 +40,7 @@
 //! - mem-profiling - compiles jemalloc and this crate with profiling
 //!   capability
 //!
-//! - no-jemalloc - compiles without jemalloc, such that tikv
+//! - no-jemalloc - compiles without jemalloc, such that TiKV
 //!   will use the system allocator
 //!
 //! cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs` and
@@ -83,7 +83,7 @@
 //! ```
 //!
 //! This is normal - they are being emitting by the jemalloc in cargo
-//! and rustc, which are both configured without profiling. tikv's
+//! and rustc, which are both configured without profiling. TiKV's
 //! jemalloc is configured for profiling if you pass
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
@@ -107,11 +107,11 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[global_allocator]
 static ALLOC: std::alloc::System = std::alloc::System;
 
-pub use self::impl_::*;
+pub use self::imp::*;
 
 // The implementation of this crate when jemalloc is turned on
 #[cfg(all(unix, not(fuzzing), not(feature = "no-jemalloc")))]
-mod impl_ {
+mod imp {
     use jemallocator::ffi::malloc_stats_print;
     use libc::{self, c_char, c_void};
     use std::{ptr, slice};
@@ -282,7 +282,7 @@ mod impl_ {
 }
 
 #[cfg(not(all(unix, not(fuzzing), not(feature = "no-jemalloc"))))]
-mod impl_ {
+mod imp {
     pub fn dump_stats() -> String {
         String::new()
     }

@@ -101,7 +101,7 @@ test:
 	fi && \
 	bash etc/check-bins-for-jemalloc.sh
         # The above linux-specific test is testing the jemalloc profiling features and needs
-        # to be fonfigured specially, both at build time and runtime. Forturately rebuilding
+        # to be configured specially, both at build time and runtime. Forturately rebuilding
         # with the mem-profiling feature will only rebuild starting at jemalloc-sys.
         # TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
