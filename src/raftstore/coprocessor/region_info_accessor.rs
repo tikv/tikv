@@ -378,6 +378,18 @@ impl RegionCollector {
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
+            if region.get_region_epoch().get_version() == 0 {
+                // Ignore messages with version 0.
+                // In raftstore `Peer::replicate`, the region meta's fields are all initialized with
+                // default value except region_id. So if there is more than one region replicating
+                // when the TiKV just starts, the assertion "Any two region with different ids and
+                // overlapping ranges must have different version" fails.
+                //
+                // Since 0 is actually an invalid value of version, we can simply ignore the
+                // messages with version 0. The region will be created later when the region's epoch
+                // is properly set and an Update message was sent.
+                return;
+            }
             if !self.check_region_range(region, true) {
                 debug!("region_collector: Received stale event: {:?}", event);
                 return;
@@ -693,6 +705,26 @@ mod tests {
         if let Some(r) = c.regions.get(&region.get_id()) {
             assert_eq!(r.role, role);
         }
+    }
+
+    #[test]
+    fn test_ignore_invalid_version() {
+        let mut c = RegionCollector::new();
+
+        c.handle_raftstore_event(RaftStoreEvent::CreateRegion {
+            region: new_region(1, b"k1", b"k3", 0),
+            role: StateRole::Follower,
+        });
+        c.handle_raftstore_event(RaftStoreEvent::UpdateRegion {
+            region: new_region(2, b"k2", b"k4", 0),
+            role: StateRole::Follower,
+        });
+        c.handle_raftstore_event(RaftStoreEvent::RoleChange {
+            region: new_region(1, b"k1", b"k2", 0),
+            role: StateRole::Leader,
+        });
+
+        check_collection(&c, &[]);
     }
 
     #[test]

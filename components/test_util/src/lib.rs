@@ -17,7 +17,6 @@ extern crate test;
 
 extern crate rand;
 extern crate slog;
-extern crate slog_scope;
 extern crate time;
 
 extern crate tikv;
@@ -36,11 +35,17 @@ pub use security::*;
 
 pub fn setup_for_ci() {
     if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-        logging::init_log_for_test().cancel_reset();
+        logging::init_log_for_test();
     }
     if env::var("PANIC_ABORT").is_ok() {
         // Panics as aborts, it's helpful for debugging,
         // but also stops tests immediately.
         tikv::util::set_panic_hook(true, "./");
     }
+
+    // HACK! Always use epollex in tests.
+    // See more: https://github.com/grpc/grpc/blob/v1.17.2/src/core/lib/iomgr/ev_posix.cc#L124
+    env::set_var("GRPC_POLL_STRATEGY", "epollex");
+
+    tikv::util::check_environment_variables();
 }
