@@ -21,53 +21,71 @@ extern crate slog_term;
 
 pub mod test_util;
 
-// We don't introduce namespace std for std functions.
+/// Wraps any `Display` type, use `Display` as `slog::Value`.
+///
+/// Usually this wrapper is useful in containers, e.g. `Option<DisplayValue<T>>`.
+///
+/// If your type `val: T` is directly used as a field value, you may use `"key" => %value` syntax
+/// instead.
+pub struct DisplayValue<T: ::std::fmt::Display>(pub T);
 
-pub mod time {
-    pub struct Duration<'a>(pub &'a ::std::time::Duration);
-
-    impl<'a> ::slog::Value for Duration<'a> {
-        #[inline]
-        fn serialize(
-            &self,
-            _record: &::slog::Record,
-            key: ::slog::Key,
-            serializer: &mut ::slog::Serializer,
-        ) -> ::slog::Result {
-            serializer.emit_arguments(key, &format_args!("{:?}", self.0))
-        }
+impl<T: ::std::fmt::Display> ::slog::Value for DisplayValue<T> {
+    #[inline]
+    fn serialize(
+        &self,
+        _record: &::slog::Record,
+        key: ::slog::Key,
+        serializer: &mut ::slog::Serializer,
+    ) -> ::slog::Result {
+        serializer.emit_arguments(key, &format_args!("{}", self.0))
     }
+}
 
-    #[cfg(test)]
-    #[test]
-    fn test_duration() {
-        let buffer = ::test_util::SyncLoggerBuffer::new();
-        let logger = buffer.build_logger();
+/// Wraps any `Debug` type, use `Debug` as `slog::Value`.
+///
+/// Usually this wrapper is useful in containers, e.g. `Option<DebugValue<T>>`.
+///
+/// If your type `val: T` is directly used as a field value, you may use `"key" => ?value` syntax
+/// instead.
+pub struct DebugValue<T: ::std::fmt::Debug>(pub T);
 
-        slog_info!(logger, "foo"; "bar" => Duration(&::std::time::Duration::from_millis(2500)));
-        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 2.5s\n");
-
-        buffer.clear();
-        slog_info!(logger, "foo"; "bar" => Duration(&::std::time::Duration::from_millis(23)));
-        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 23ms\n");
-
-        buffer.clear();
-        slog_info!(logger, "foo"; "bar" => Duration(&::std::time::Duration::from_millis(0)));
-        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 0ns\n");
-
-        buffer.clear();
-        slog_info!(logger, "foo"; "bar" => Duration(&::std::time::Duration::from_secs(1000)));
-        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1000s\n");
-
-        buffer.clear();
-        slog_info!(logger, "foo"; "bar" => Some(Duration(&::std::time::Duration::from_secs(1))));
-        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1s\n");
-
-        buffer.clear();
-        let v: Option<Duration> = None;
-        slog_info!(logger, "foo"; "bar" => v);
-        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: None\n");
+impl<T: ::std::fmt::Debug> ::slog::Value for DebugValue<T> {
+    #[inline]
+    fn serialize(
+        &self,
+        _record: &::slog::Record,
+        key: ::slog::Key,
+        serializer: &mut ::slog::Serializer,
+    ) -> ::slog::Result {
+        serializer.emit_arguments(key, &format_args!("{:?}", self.0))
     }
+}
+
+#[cfg(test)]
+#[test]
+fn test_debug() {
+    let buffer = ::test_util::SyncLoggerBuffer::new();
+    let logger = buffer.build_logger();
+
+    slog_info!(logger, "foo"; "bar" => DebugValue(&::std::time::Duration::from_millis(2500)));
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 2.5s\n");
+
+    buffer.clear();
+    slog_info!(logger, "foo"; "bar" => DebugValue(::std::time::Duration::from_millis(23)));
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 23ms\n");
+
+    buffer.clear();
+    slog_info!(logger, "foo"; "bar" => DebugValue(&::std::time::Duration::from_secs(1000)));
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1000s\n");
+
+    buffer.clear();
+    slog_info!(logger, "foo"; "bar" => Some(DebugValue(&::std::time::Duration::from_secs(1))));
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1s\n");
+
+    buffer.clear();
+    let v: Option<DebugValue<::std::time::Duration>> = None;
+    slog_info!(logger, "foo"; "bar" => v);
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: None\n");
 }
 
 pub mod kvproto {
