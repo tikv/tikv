@@ -60,7 +60,7 @@ use std::thread;
 use std::time::Duration;
 use std::{process, str, u64};
 
-use clap::{App, Arg, ArgMatches, SubCommand};
+use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
@@ -916,6 +916,7 @@ fn main() {
     let version_info = util::tikv_version_info();
 
     let mut app = App::new("TiKV Ctl")
+        .setting(AppSettings::AllowExternalSubcommands)
         .long_version(version_info.as_ref())
         .author("TiKV Org.")
         .about("Distributed transactional key value database powered by Rust and Raft")
@@ -997,12 +998,6 @@ fn main() {
                 .long("pd")
                 .takes_value(true)
                 .help("pd address"),
-        )
-        .arg(
-            Arg::with_name("ldb")
-                .long("ldb")
-                .takes_value(true)
-                .help("run the ldb command of RocksDB"),
         )
         .subcommand(
             SubCommand::with_name("raft")
@@ -1616,7 +1611,7 @@ fn main() {
     let mgr = new_security_mgr(&matches);
 
     // Bypass the ldb command to RocksDB.
-    if let Some(cmd) = matches.value_of("ldb") {
+    if let Some(cmd) = matches.subcommand_matches("ldb") {
         run_ldb_command(&cmd, &cfg);
         return;
     }
@@ -2107,8 +2102,11 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-fn run_ldb_command(cmd: &str, cfg: &TiKvConfig) {
-    let mut args: Vec<String> = cmd.split(' ').map(|x| x.to_owned()).collect();
+fn run_ldb_command(cmd: &ArgMatches, cfg: &TiKvConfig) {
+    let mut args: Vec<String> = match cmd.values_of("") {
+        Some(v) => v.map(|x| x.to_owned()).collect(),
+        None => Vec::new(),
+    };
     args.insert(0, "ldb".to_owned());
     let opts = cfg.rocksdb.build_opt();
     rocksdb::run_ldb_tool(&args, &opts);

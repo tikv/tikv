@@ -31,7 +31,6 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
 
 - Local mode:
   - Use the `--db` option to specify the local TiKV data directory path
-  - Use the `--ldb` option to run the ldb command of RocksDB
 
 Unless otherwise noted, all commands support both the remote mode and the local mode.
 
@@ -261,20 +260,20 @@ success!
 ### Ldb Command
 
 The ldb command line tool offers multiple data access and database administration commands. Some examples are listed below.
-For more information, refer to the help message displayed when running `tikv-ctl --ldb help` or check the documents from RocksDB.
+For more information, refer to the help message displayed when running `tikv-ctl ldb` or check the documents from RocksDB.
 
 Examples of data access sequence:
 
 To dump an existing RocksDB in HEX:
 
 ```bash
-$ tikv-ctl --ldb='--hex --db=/tmp/db dump'
+$ tikv-ctl ldb --hex --db=/tmp/db dump
 ```
 
 To dump the manifest of an existing RocksDB:
 
 ```bash
-$ tikv-ctl --ldb='--hex manifest_dump --path=/tmp/db/MANIFEST-000001'
+$ tikv-ctl ldb --hex manifest_dump --path=/tmp/db/MANIFEST-000001
 ```
 
 You can specify the column family that your query is against using the `--column_family=<string>` command line.
