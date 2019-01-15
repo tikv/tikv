@@ -30,6 +30,7 @@
 #![feature(use_extern_macros)]
 #![feature(range_contains)]
 #![feature(associated_type_defaults)]
+#![feature(vec_resize_with)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]

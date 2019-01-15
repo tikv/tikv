@@ -190,7 +190,7 @@ pub trait ExecutionSummaryCollector {
     fn inc_iterations(&mut self);
 
     /// Takes and appends current execution summary into `target`.
-    fn collect(&mut self, _target: &mut [ExecutionSummary]);
+    fn collect(&mut self, _target: &mut [Option<ExecutionSummary>]);
 }
 
 pub struct ExecutionSummaryTimeGuard {
@@ -244,9 +244,9 @@ impl ExecutionSummaryCollector for ExecutionSummaryCollectorNormal {
     }
 
     #[inline]
-    fn collect(&mut self, target: &mut [ExecutionSummary]) {
+    fn collect(&mut self, target: &mut [Option<ExecutionSummary>]) {
         let current_summary = ::std::mem::replace(&mut self.counts, ExecutionSummary::default());
-        target[self.output_index] = current_summary;
+        target[self.output_index] = Some(current_summary);
     }
 }
 
@@ -268,5 +268,5 @@ impl ExecutionSummaryCollector for ExecutionSummaryCollectorDisabled {
     fn inc_iterations(&mut self) {}
 
     #[inline]
-    fn collect(&mut self, _target: &mut [ExecutionSummary]) {}
+    fn collect(&mut self, _target: &mut [Option<ExecutionSummary>]) {}
 }

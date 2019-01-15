@@ -231,7 +231,7 @@ impl<S: Store, C1: CountCollector, C2: ExecutionSummaryCollector> Executor
     }
 
     #[inline]
-    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+    fn collect_execution_summary(&mut self, target: &mut [Option<ExecutionSummary>]) {
         self.exec_detail_collector.collect(target);
     }
 }
@@ -249,9 +249,8 @@ mod tests {
     use super::super::scanner::tests::{
         get_point_range, get_range, prepare_table_data, Data, TestStore,
     };
-    use super::super::{
-        CountCollectorDisabled, CountCollectorNormal, ExecutionSummaryCollectorDisabled,
-    };
+    use super::super::{CountCollectorDisabled, CountCollectorNormal};
+    use super::super::{ExecutionSummaryCollectorDisabled, ExecutionSummaryCollectorNormal};
     use super::*;
 
     const TABLE_ID: i64 = 1;
@@ -310,7 +309,7 @@ mod tests {
             wrapper.ranges,
             store,
             CountCollectorNormal::default(),
-            ExecutionSummaryCollectorDisabled,
+            ExecutionSummaryCollectorNormal::new(0),
         ).unwrap();
 
         let row = table_scanner.next().unwrap().unwrap().take_origin();
@@ -328,6 +327,13 @@ mod tests {
         let mut counts = Vec::with_capacity(2);
         table_scanner.collect_output_counts(&mut counts);
         assert_eq!(expected_counts, counts);
+
+        let mut exec_summaries = Vec::new();
+        exec_summaries.resize_with(2, || None);
+        table_scanner.collect_execution_summary(&mut exec_summaries);
+        assert_eq!(exec_summaries[0].as_ref().unwrap().num_produced_rows, 1);
+        assert_eq!(exec_summaries[0].as_ref().unwrap().num_iterations, 2);
+        assert!(exec_summaries[1].is_none());
     }
 
     #[test]
@@ -351,7 +357,7 @@ mod tests {
             wrapper.ranges,
             store,
             CountCollectorDisabled,
-            ExecutionSummaryCollectorDisabled,
+            ExecutionSummaryCollectorNormal::new(0),
         ).unwrap();
 
         for handle in 0..KEY_NUMBER {
@@ -366,6 +372,18 @@ mod tests {
             }
         }
         assert!(table_scanner.next().unwrap().is_none());
+
+        let mut exec_summaries = Vec::new();
+        exec_summaries.resize_with(1, || None);
+        table_scanner.collect_execution_summary(&mut exec_summaries);
+        assert_eq!(
+            exec_summaries[0].as_ref().unwrap().num_produced_rows,
+            KEY_NUMBER
+        );
+        assert_eq!(
+            exec_summaries[0].as_ref().unwrap().num_iterations,
+            KEY_NUMBER + 1
+        );
     }
 
     #[test]
@@ -407,5 +425,10 @@ mod tests {
             }
         }
         assert!(table_scanner.next().unwrap().is_none());
+
+        let mut exec_summaries = Vec::new();
+        exec_summaries.resize_with(1, || None);
+        table_scanner.collect_execution_summary(&mut exec_summaries);
+        assert!(exec_summaries[0].is_none());
     }
 }

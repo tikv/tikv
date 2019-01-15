@@ -75,7 +75,7 @@ impl<'a> Executor for LimitExecutor<'a> {
     }
 
     #[inline]
-    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+    fn collect_execution_summary(&mut self, target: &mut [Option<ExecutionSummary>]) {
         // TODO: Collect self
         self.src.collect_execution_summary(target);
     }

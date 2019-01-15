@@ -248,7 +248,7 @@ impl OriginCols {
 pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
-    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]);
+    fn collect_execution_summary(&mut self, target: &mut [Option<ExecutionSummary>]);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
     fn get_len_of_columns(&self) -> usize;
 

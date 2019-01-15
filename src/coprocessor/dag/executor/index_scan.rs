@@ -272,7 +272,7 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
         self.cols.len()
     }
 
-    fn collect_execution_summary(&mut self, _target: &mut [ExecutionSummary]) {
+    fn collect_execution_summary(&mut self, _target: &mut [Option<ExecutionSummary>]) {
         // TODO: Implement.
     }
 }

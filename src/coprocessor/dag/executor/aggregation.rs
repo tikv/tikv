@@ -155,7 +155,7 @@ impl AggExecutor {
     }
 
     #[inline]
-    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+    fn collect_execution_summary(&mut self, target: &mut [Option<ExecutionSummary>]) {
         // TODO: Collect self
         self.src.collect_execution_summary(target)
     }
@@ -271,7 +271,7 @@ impl Executor for HashAggExecutor {
     }
 
     #[inline]
-    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+    fn collect_execution_summary(&mut self, target: &mut [Option<ExecutionSummary>]) {
         self.inner.collect_execution_summary(target)
     }
 }
@@ -328,7 +328,7 @@ impl Executor for StreamAggExecutor {
     }
 
     #[inline]
-    fn collect_execution_summary(&mut self, target: &mut [ExecutionSummary]) {
+    fn collect_execution_summary(&mut self, target: &mut [Option<ExecutionSummary>]) {
         // TODO: Collect self
         self.inner.collect_execution_summary(target)
     }
