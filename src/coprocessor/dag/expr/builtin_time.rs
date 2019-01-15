@@ -315,44 +315,6 @@ mod test {
     }
 
     #[test]
-    fn test_hour_min_sec_micro_sec() {
-        // test hour, minute, second, micro_second
-        let cases: Vec<(&str, i8, i64, i64, i64, i64)> = vec![
-            ("31 11:30:45", 0, 31 * 24 + 11, 30, 45, 0),
-            ("11:30:45.123345", 3, 11, 30, 45, 123000),
-            ("11:30:45.123345", 5, 11, 30, 45, 123350),
-            ("11:30:45.123345", 6, 11, 30, 45, 123345),
-            ("11:30:45.1233456", 6, 11, 30, 45, 123346),
-            ("11:30:45.000010", 6, 11, 30, 45, 10),
-            ("11:30:45.00010", 5, 11, 30, 45, 100),
-            ("-11:30:45.9233456", 0, 11, 30, 46, 0),
-            ("-11:30:45.9233456", 1, 11, 30, 45, 900000),
-            ("272:59:59.94", 2, 272, 59, 59, 940000),
-            ("272:59:59.99", 1, 273, 0, 0, 0),
-            ("272:59:59.99", 0, 273, 0, 0, 0),
-        ];
-        let mut ctx = EvalContext::default();
-        for (arg, fsp, h, m, s, ms) in cases {
-            let d = Datum::Dur(Duration::parse(arg.as_bytes(), fsp).unwrap());
-            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(h));
-            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(m));
-            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(s));
-            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, d, Datum::I64(ms));
-        }
-        // test NULL case
-        test_err_case_one_arg(&mut ctx, ScalarFuncSig::Hour, Datum::Null);
-        test_err_case_one_arg(&mut ctx, ScalarFuncSig::Minute, Datum::Null);
-        test_err_case_one_arg(&mut ctx, ScalarFuncSig::Second, Datum::Null);
-        test_err_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, Datum::Null);
-        // test zero case
-        let d = Datum::Dur(Duration::parse(b"0 00:00:00.0", 0).unwrap());
-        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Hour, d.clone(), Datum::I64(0));
-        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Minute, d.clone(), Datum::I64(0));
-        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Second, d.clone(), Datum::I64(0));
-        test_ok_case_one_arg(&mut ctx, ScalarFuncSig::MicroSecond, d, Datum::I64(0));
-    }
-
-    #[test]
     fn test_month() {
         let cases = vec![
             ("0000-00-00 00:00:00", 0i64),
