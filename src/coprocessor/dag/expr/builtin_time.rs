@@ -384,7 +384,7 @@ mod test {
             ("2018-12-01 01:01:01", 12i64),
         ];
         let mut ctx = EvalContext::default();
-        for (arg, exp) in tests {
+        for (arg, exp) in cases {
             let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
             let exp = Datum::I64(exp);
             let f = scalar_func_expr(ScalarFuncSig::Month, &[arg]);
@@ -619,7 +619,7 @@ mod test {
             ("2029-01-01 01:01:01", 2029i64),
         ];
         let mut ctx = EvalContext::default();
-        for (arg, exp) in tests {
+        for (arg, exp) in cases {
             let arg = datum_expr(Datum::Time(Time::parse_utc_datetime(arg, 6).unwrap()));
             let exp = Datum::I64(exp);
             let f = scalar_func_expr(ScalarFuncSig::Year, &[arg]);
