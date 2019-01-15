@@ -16,7 +16,10 @@ use futures::Future;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::config::Config;
 use tikv::storage::engine::RocksEngine;
-use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::{
+    AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
+    Result, Storage, Value,
+};
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv::util::collections::HashMap;
 
@@ -70,6 +73,13 @@ pub struct SyncTestStorage<E: Engine> {
 }
 
 impl<E: Engine> SyncTestStorage<E> {
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &mut self,
+        cfg: AutoGCConfig<S, R>,
+    ) {
+        self.store.start_auto_gc(cfg).unwrap();
+    }
+
     pub fn get_storage(&self) -> Storage<E> {
         self.store.clone()
     }
@@ -216,21 +226,24 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         cf: String,
         start_key: Vec<u8>,
+        end_key: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, limit, false, false)
+            .async_raw_scan(ctx, cf, start_key, end_key, limit, false, false)
             .wait()
     }
+
     pub fn reverse_raw_scan(
         &self,
         ctx: Context,
         cf: String,
         start_key: Vec<u8>,
+        end_key: Option<Vec<u8>>,
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, limit, false, true)
+            .async_raw_scan(ctx, cf, start_key, end_key, limit, false, true)
             .wait()
     }
 }

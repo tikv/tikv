@@ -44,6 +44,9 @@ use super::{store::register_timer, Key};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::cmd_resp::{bind_term, new_error};
 use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
+use raftstore::store::fsm::{
+    ApplyMetrics, ApplyRes, ApplyTask, ApplyTaskRes, ChangePeer, ExecResult,
+};
 use raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::*;
@@ -51,10 +54,8 @@ use raftstore::store::msg::Callback;
 use raftstore::store::peer::{ConsistencyState, Peer, ReadyContext, StaleState};
 use raftstore::store::peer_storage::ApplySnapResult;
 use raftstore::store::transport::Transport;
-use raftstore::store::worker::apply::{ApplyMetrics, ApplyRes, ChangePeer, ExecResult};
 use raftstore::store::worker::{
-    ApplyTask, ApplyTaskRes, CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask,
-    SplitCheckTask,
+    CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, SplitCheckTask,
 };
 use raftstore::store::{util, Msg, SignificantMsg, SnapKey, SnapshotDeleter, Store, Tick};
 
@@ -190,9 +191,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         );
                     }
                 },
-                Ok(ApplyTaskRes::Destroy(p)) => {
+                Ok(ApplyTaskRes::Destroy { region_id, peer_id }) => {
                     let store_id = self.store_id();
-                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()), false);
+                    self.destroy_peer(region_id, util::new_peer(store_id, peer_id), false);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -464,22 +465,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
 
+        // When receiving message that has a merge target, it indicates that the source peer
+        // on this store is stale, the peers on other stores are already merged. The epoch
+        // in merge target is the state of target peer at the time when source peer is merged.
+        // So here we need to check the target peer on this store to decide whether the source
+        // to destory or wait target peer to catch up logs.
         if let Some(epoch) = self.pending_cross_snap.get(&target_region_id).or_else(|| {
             self.region_peers
                 .get(&target_region_id)
                 .map(|p| p.region().get_region_epoch())
         }) {
             info!(
-                "[region {}] checking target {} epoch: {:?}",
+                "[region {}] checking target {} epoch: {:?}, msg target epoch: {:?}",
                 msg.get_region_id(),
                 target_region_id,
-                epoch
+                epoch,
+                merge_target.get_region_epoch(),
             );
-            // So the target peer has moved on, we should let it go.
+            // The target peer will move on, namely, it will apply a snapshot generated after merge,
+            // so destroy source peer.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
-            // Wait till it catching up logs.
+            // Wait till the target peer has catched up logs and source peer will be destroyed at that time.
             return Ok(false);
         }
 
@@ -565,6 +573,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    // Returns `None` if the `msg` doesn't contain a snapshot or it contains a snapshot which
+    // doesn't conflict with any other snapshots or regions. Otherwise a `SnapKey` is returned.
     fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Option<SnapKey>> {
         if !msg.get_message().has_snapshot() {
             return Ok(None);
@@ -603,8 +613,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .map(|r| r.to_owned());
         if let Some(exist_region) = r {
             info!("region overlapped {:?}, {:?}", exist_region, snap_region);
-            self.pending_cross_snap
-                .insert(region_id, snap_region.get_region_epoch().to_owned());
+            let peer = &self.region_peers[&region_id];
+            // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
+            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
+            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
+            // `pending_cross_snap` here if peer is applying snapshot.
+            if !peer.is_applying_snapshot() && !peer.has_pending_snapshot() {
+                self.pending_cross_snap
+                    .insert(region_id, snap_region.get_region_epoch().to_owned());
+            }
             self.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(Some(key));
         }
@@ -641,32 +658,39 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(None)
     }
 
+    /// For all Raft groups with newly `raft::Ready`, collect and send Raft message for them.
+    /// And then updates `RaftLocalState` and `SnapshotRaftState` (if needed) into engines.
     pub fn on_raft_ready(&mut self) {
+        // Only enable the fail point when the store id is equal to 3, which is
+        // the id of slow store in tests.
+        fail_point!("on_raft_ready", self.store.get_id() == 3, |_| {});
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
-        let mut region_proposals = Vec::with_capacity(pending_count);
-        let (kv_wb, raft_wb, append_res, sync_log) = {
+        let (kv_wb, raft_wb, append_res, sync_log, need_flush) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
                     if let Some(region_proposal) = peer.take_apply_proposals() {
-                        region_proposals.push(region_proposal);
+                        let t = ApplyTask::Proposal(region_proposal);
+                        self.apply_router.schedule_task(region_id, t);
                     }
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
-            (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
+            (
+                ctx.kv_wb,
+                ctx.raft_wb,
+                ctx.ready_res,
+                ctx.sync_log,
+                ctx.need_flush,
+            )
         };
 
-        if !region_proposals.is_empty() {
-            self.apply_worker
-                .schedule(ApplyTask::Proposals(region_proposals))
-                .unwrap();
-
+        if need_flush {
             // In most cases, if the leader proposes a message, it will also
             // broadcast the message to other followers, so we should flush the
             // messages ASAP.
@@ -743,19 +767,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         );
 
         if !ready_results.is_empty() {
-            let mut apply_tasks = Vec::with_capacity(ready_results.len());
             for (region_id, ready, res) in ready_results {
                 self.region_peers
                     .get_mut(&region_id)
                     .unwrap()
-                    .handle_raft_ready_apply(ready, &mut apply_tasks);
+                    .handle_raft_ready_apply(ready, &self.apply_router);
                 if let Some(apply_result) = res {
                     self.on_ready_apply_snapshot(apply_result);
                 }
             }
-            self.apply_worker
-                .schedule(ApplyTask::applies(apply_tasks))
-                .unwrap();
         }
 
         let dur = t.elapsed();
@@ -780,9 +800,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     pub fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
-            self.apply_worker
-                .schedule(ApplyTask::destroy(job.region_id))
-                .unwrap();
+            self.apply_router
+                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id));
         }
         if job.async_remove {
             info!(
@@ -826,9 +845,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.local_reader
             .schedule(ReadTask::destroy(region_id))
             .unwrap();
+        self.apply_router
+            .schedule_task(region_id, ApplyTask::destroy(region_id));
         // Trigger region change observer
-        self.coprocessor_host
-            .on_region_changed(p.region(), RegionChangeEvent::Destroy);
+        self.coprocessor_host.on_region_changed(
+            p.region(),
+            RegionChangeEvent::Destroy,
+            p.get_role(),
+        );
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -877,15 +901,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return;
             }
             p.set_region(cp.region);
-            if p.is_leader() {
-                // Notify pd immediately.
-                info!(
-                    "{} notify pd with change peer region {:?}",
-                    p.tag,
-                    p.region()
-                );
-                p.heartbeat_pd(&self.pd_worker);
-            }
 
             let peer_id = cp.peer.get_id();
             match change_type {
@@ -897,10 +912,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                     // Add this peer to cache and heartbeats.
                     let now = Instant::now();
-                    p.peer_heartbeats.insert(peer.get_id(), now);
+                    let id = peer.get_id();
+                    p.peer_heartbeats.insert(id, now);
                     if p.is_leader() {
-                        p.peers_start_pending_time.push((peer.get_id(), now));
+                        p.peers_start_pending_time.push((id, now));
                     }
+                    p.recent_added_peer.update(id, now);
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
@@ -911,6 +928,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
                     p.remove_peer_from_cache(peer_id);
                 }
+            }
+
+            // In pattern matching above, if the peer is the leader,
+            // it will push the change peer into `peers_start_pending_time`
+            // without checking if it is duplicated. We move `heartbeat_pd` here
+            // to utilize `collect_pending_peers` in `heartbeat_pd` to avoid
+            // adding the redundant peer.
+            if p.is_leader() {
+                // Notify pd immediately.
+                info!(
+                    "{} notify pd with change peer region {:?}",
+                    p.tag,
+                    p.region()
+                );
+                p.heartbeat_pd(&self.pd_worker);
             }
             my_peer_id = p.peer_id();
         } else {

@@ -30,6 +30,8 @@ use kvproto::metapb;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 
+use raft::StateRole;
+
 use pd::{PdClient, PdRunner, PdTask};
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -46,22 +48,19 @@ use util::{rocksdb, sys as util_sys, RingQueue};
 use import::SSTImporter;
 use raftstore::store::config::Config;
 use raftstore::store::engine::{Iterable, Mutable, Peekable};
-use raftstore::store::keys::{
-    self, data_end_key, data_key, enc_end_key, enc_start_key, origin_key, DATA_MAX_KEY,
-};
+use raftstore::store::fsm::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter};
+use raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::metrics::*;
 use raftstore::store::peer::Peer;
 use raftstore::store::peer_storage::{self, CacheQueryStats};
 use raftstore::store::transport::Transport;
 use raftstore::store::worker::{
-    ApplyRunner, ApplyTask, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
-    ConsistencyCheckRunner, LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask,
-    SplitCheckRunner,
+    CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
+    LocalReader, RaftlogGcRunner, ReadTask, RegionRunner, RegionTask, SplitCheckRunner,
 };
 use raftstore::store::{
-    util, Engines, Msg, SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg,
-    SnapManager, SnapshotDeleter, Store, Tick,
+    util, Engines, Msg, SignificantMsg, SnapManager, SnapshotDeleter, Store, Tick,
 };
 
 type Key = Vec<u8>;
@@ -143,6 +142,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .registry
             .register_admin_observer(100, box SplitObserver);
 
+        let (apply_router, apply_system) = create_apply_batch_system(&cfg);
+
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
@@ -159,7 +160,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pd_worker,
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
-            apply_worker: Worker::new("apply-worker"),
+            apply_router,
+            apply_system,
             apply_res_receiver: None,
             local_reader,
             last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
@@ -240,8 +242,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
-            self.coprocessor_host
-                .on_region_changed(region, RegionChangeEvent::Create);
+            self.coprocessor_host.on_region_changed(
+                region,
+                RegionChangeEvent::Create,
+                StateRole::Follower,
+            );
             Ok(true)
         })?;
 
@@ -357,8 +362,8 @@ impl<T, C> Store<T, C> {
         self.region_worker.scheduler()
     }
 
-    pub fn apply_scheduler(&self) -> Scheduler<ApplyTask> {
-        self.apply_worker.scheduler()
+    pub fn apply_router(&self) -> ApplyRouter {
+        self.apply_router.clone()
     }
 
     pub fn read_scheduler(&self) -> Scheduler<ReadTask> {
@@ -455,9 +460,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.cleanup_sst_worker.start(cleanup_sst_runner));
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx, self.cfg.sync_log, self.cfg.use_delete_range);
         self.apply_res_receiver = Some(rx);
-        box_try!(self.apply_worker.start(apply_runner));
+        let builder = ApplyPollerBuilder::new(self, tx, self.apply_router.clone());
+        self.apply_system.spawn(builder);
+        self.apply_system.schedule_all(&self.region_peers);
 
         let reader = LocalReader::new(self);
         let timer = LocalReader::new_timer();
@@ -488,8 +494,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.cleanup_sst_worker.stop());
-        handles.push(self.apply_worker.stop());
         handles.push(self.local_reader.stop());
+
+        self.apply_system.shutdown();
 
         for h in handles {
             if let Some(h) = h {
@@ -559,20 +566,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let start_key = data_key(msg.get_start_key());
-        if let Some((_, &exist_region_id)) = self
+        if let Some((_, exist_region_id)) = self
             .region_ranges
             .range((Excluded(start_key), Unbounded::<Key>))
             .next()
         {
-            let exist_region = self.region_peers[&exist_region_id].region();
+            let exist_region = self.region_peers[exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
                 if util::is_first_vote_msg(msg.get_message()) {
                     self.pending_votes.push(msg.to_owned());
                 }
                 self.raft_metrics.message_dropped.region_overlap += 1;
-                self.pending_cross_snap
-                    .insert(region_id, msg.get_region_epoch().to_owned());
+
+                // Make sure the range of region from msg is covered by existing regions.
+                // If so, means that the region may be generated by some kinds of split
+                // and merge by catching logs. So there is no need to accept a snapshot.
+                if !is_range_covered(
+                    &self.region_ranges,
+                    |id: u64| self.region_peers[&id].region(),
+                    data_key(msg.get_start_key()),
+                    data_end_key(msg.get_end_key()),
+                ) {
+                    self.pending_cross_snap
+                        .insert(region_id, msg.get_region_epoch().to_owned());
+                }
+
                 return Ok(false);
             }
         }
@@ -943,45 +962,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
-    /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(
-        &self,
-        from_key: &[u8],
-        filter: SeekRegionFilter,
-        mut limit: u32,
-        callback: SeekRegionCallback,
-    ) {
-        assert!(limit > 0);
-
-        let from_key = data_key(from_key);
-        for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
-            let peer = &self.region_peers[region_id];
-            if filter(peer) {
-                callback(SeekRegionResult::Found {
-                    local_peer: peer.peer.clone(),
-                    region: peer.region().clone(),
-                });
-                return;
-            }
-
-            limit -= 1;
-            if limit == 0 {
-                // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
-                // than `LimitExceeded`.
-                if end_key.as_slice() >= DATA_MAX_KEY {
-                    break;
-                }
-
-                callback(SeekRegionResult::LimitExceeded {
-                    next_key: origin_key(end_key).to_vec(),
-                });
-                return;
-            }
-        }
-        callback(SeekRegionResult::Ended);
-    }
-
     fn clear_region_size_in_range(&mut self, start_key: &[u8], end_key: &[u8]) {
         let start_key = data_key(start_key);
         let end_key = data_end_key(end_key);
@@ -1079,12 +1059,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             } => self.on_schedule_half_split_region(region_id, &region_epoch, policy),
             Msg::MergeFail { region_id } => self.on_merge_fail(region_id),
             Msg::ValidateSSTResult { invalid_ssts } => self.on_validate_sst_result(invalid_ssts),
-            Msg::SeekRegion {
-                from_key,
-                filter,
-                limit,
-                callback,
-            } => self.seek_region(&from_key, filter, limit, callback),
             Msg::ClearRegionSizeInRange { start_key, end_key } => {
                 self.clear_region_size_in_range(&start_key, &end_key)
             }
@@ -1203,10 +1177,33 @@ fn calc_region_declined_bytes(
     region_declined_bytes
 }
 
+// check whether the range is covered by existing regions.
+fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
+    region_ranges: &BTreeMap<Key, u64>,
+    get_region: F,
+    mut start: Vec<u8>,
+    end: Vec<u8>,
+) -> bool {
+    for (end_key, &id) in region_ranges.range((Excluded(start.clone()), Unbounded::<Key>)) {
+        let mut region = get_region(id);
+        // find a missing range
+        if start < enc_start_key(region) {
+            return false;
+        }
+        if *end_key >= end {
+            return true;
+        }
+        start = end_key.clone();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
 
+    use protobuf::RepeatedField;
     use util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
     use util::rocksdb::CompactedEvent;
 
@@ -1253,5 +1250,82 @@ mod tests {
         let declined_bytes = calc_region_declined_bytes(event, &region_ranges, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
+    }
+
+    #[test]
+    fn test_is_range_covered() {
+        let meta = vec![(b"b", b"d"), (b"d", b"e"), (b"e", b"f"), (b"f", b"h")];
+        let mut region_ranges = BTreeMap::new();
+        let mut region_peers = HashMap::new();
+
+        {
+            for (i, (start, end)) in meta.into_iter().enumerate() {
+                let mut region = metapb::Region::new();
+                let peer = metapb::Peer::new();
+                region.set_peers(RepeatedField::from_vec(vec![peer]));
+                region.set_start_key(start.to_vec());
+                region.set_end_key(end.to_vec());
+
+                region_ranges.insert(enc_end_key(&region), i as u64);
+                region_peers.insert(i as u64, region);
+            }
+
+            let check_range = |start: &[u8], end: &[u8]| {
+                is_range_covered(
+                    &region_ranges,
+                    |id: u64| &region_peers[&id],
+                    data_key(start),
+                    data_end_key(end),
+                )
+            };
+
+            assert!(!check_range(b"a", b"c"));
+            assert!(check_range(b"b", b"d"));
+            assert!(check_range(b"b", b"e"));
+            assert!(check_range(b"e", b"f"));
+            assert!(check_range(b"b", b"g"));
+            assert!(check_range(b"e", b"h"));
+            assert!(!check_range(b"e", b"n"));
+            assert!(!check_range(b"g", b"n"));
+            assert!(!check_range(b"o", b"z"));
+            assert!(!check_range(b"", b""));
+        }
+
+        let meta = vec![(b"b", b"d"), (b"e", b"f"), (b"f", b"h")];
+        region_ranges.clear();
+        region_peers.clear();
+        {
+            for (i, (start, end)) in meta.into_iter().enumerate() {
+                let mut region = metapb::Region::new();
+                let peer = metapb::Peer::new();
+                region.set_peers(RepeatedField::from_vec(vec![peer]));
+                region.set_start_key(start.to_vec());
+                region.set_end_key(end.to_vec());
+
+                region_ranges.insert(enc_end_key(&region), i as u64);
+                region_peers.insert(i as u64, region);
+            }
+
+            let check_range = |start: &[u8], end: &[u8]| {
+                is_range_covered(
+                    &region_ranges,
+                    |id: u64| &region_peers[&id],
+                    data_key(start),
+                    data_end_key(end),
+                )
+            };
+
+            assert!(!check_range(b"a", b"c"));
+            assert!(check_range(b"b", b"d"));
+            assert!(!check_range(b"b", b"e"));
+            assert!(check_range(b"e", b"f"));
+            assert!(!check_range(b"b", b"g"));
+            assert!(check_range(b"e", b"g"));
+            assert!(check_range(b"e", b"h"));
+            assert!(!check_range(b"e", b"n"));
+            assert!(!check_range(b"g", b"n"));
+            assert!(!check_range(b"o", b"z"));
+            assert!(!check_range(b"", b""));
+        }
     }
 }

@@ -13,6 +13,7 @@
 
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
+#![feature(label_break_value)]
 #![feature(try_from)]
 #![feature(fnbox)]
 #![feature(alloc)]
@@ -41,8 +42,6 @@ extern crate chrono;
 extern crate chrono_tz;
 extern crate crc;
 extern crate crossbeam;
-#[macro_use]
-extern crate crossbeam_channel;
 extern crate crypto;
 #[macro_use]
 extern crate fail;
@@ -51,16 +50,17 @@ extern crate fs2;
 #[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
-extern crate fxhash;
 extern crate grpcio as grpc;
+extern crate hashbrown;
 extern crate hex;
 extern crate indexmap;
+#[cfg(all(unix, not(fuzzing)))]
+extern crate jemallocator;
 extern crate kvproto;
 
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
-#[macro_use]
 extern crate log;
 extern crate mio;
 extern crate murmur3;
@@ -80,23 +80,23 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[cfg_attr(not(test), macro_use(slog_o, slog_kv))]
-#[cfg_attr(
-    test,
-    macro_use(
-        slog_o,
-        slog_kv,
-        slog_crit,
-        slog_log,
-        slog_record,
-        slog_b,
-        slog_record_static
-    )
+#[macro_use(
+    slog_o,
+    slog_kv,
+    slog_trace,
+    slog_error,
+    slog_warn,
+    slog_info,
+    slog_debug,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static,
 )]
 extern crate slog;
 extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
+#[macro_use]
+extern crate slog_global;
 extern crate slog_term;
 extern crate sys_info;
 extern crate tempdir;
@@ -104,7 +104,9 @@ extern crate tempdir;
 extern crate test;
 extern crate time;
 extern crate tipb;
+extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_executor;
 extern crate tokio_timer;
 #[cfg(test)]
 extern crate toml;
@@ -115,12 +117,18 @@ extern crate uuid;
 extern crate zipf;
 #[macro_use]
 extern crate derive_more;
-extern crate smallvec;
-
+#[macro_use]
+extern crate more_asserts;
 extern crate base64;
 extern crate cop_datatype;
+extern crate flate2;
+extern crate hyper;
 extern crate panic_hook;
 extern crate safemem;
+extern crate smallvec;
+extern crate tokio_threadpool;
+#[macro_use]
+extern crate vlog;
 
 #[macro_use]
 pub mod util;
@@ -133,3 +141,13 @@ pub mod server;
 pub mod storage;
 
 pub use storage::Storage;
+
+// As of now TiKV always turns on jemalloc on Unix, though libraries
+// generally shouldn't be opinionated about their allocators like
+// this. It's easier to do this in one place than to have all our bins
+// turn it on themselves.
+//
+// cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs`
+#[cfg(all(unix, not(fuzzing)))]
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;

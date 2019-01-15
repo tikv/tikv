@@ -131,11 +131,7 @@ impl ScalarFunc {
 
     pub fn cast_int_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if !self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        if !self.children[0].is_unsigned() {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
         } else {
             let uval = val as u64;
@@ -289,11 +285,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let s = if self.children[0]
-            .field_type()
-            .flag()
-            .contains(FieldTypeFlag::UNSIGNED)
-        {
+        let s = if self.children[0].is_unsigned() {
             let uval = val as u64;
             format!("{}", uval)
         } else {
@@ -498,8 +490,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let mut res = val.to_duration()?;
-        res.round_frac(self.field_type.decimal() as i8)?;
+        let res = val
+            .to_duration()?
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -509,8 +502,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut res = val.into_owned();
-        res.round_frac(self.field_type.decimal() as i8)?;
+        let res = val
+            .into_owned()
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -603,7 +597,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let mut val = val.into_owned();
-        val.fsp = mysql::MAX_FSP as u8;
+        val.set_fsp(mysql::MAX_FSP as u8);
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }
@@ -840,7 +834,7 @@ mod tests {
                     .as_mut_accessor()
                     .set_flag(flag.unwrap());
             }
-            let e = Expression::build(&mut ctx, exp).unwrap();
+            let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_int(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
             // test None
@@ -870,7 +864,7 @@ mod tests {
         for (sig, tp, col, expect) in cases {
             let col_expr = col_expr(0, tp);
             let mut exp = scalar_func_expr(sig, &[col_expr]);
-            let e = Expression::build(&mut ctx, exp).unwrap();
+            let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_int(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
         }
@@ -951,7 +945,7 @@ mod tests {
             (
                 ScalarFuncSig::CastDurationAsReal,
                 FieldTypeTp::Duration,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 cop_datatype::UNSPECIFIED_LENGTH,
                 120023f64,
@@ -1006,7 +1000,7 @@ mod tests {
                 .as_mut_accessor()
                 .set_flen(flen)
                 .set_decimal(decimal);
-            let e = Expression::build(&mut ctx, exp).unwrap();
+            let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_real(&mut ctx, &col).unwrap();
             assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
             // test None
@@ -1089,7 +1083,7 @@ mod tests {
             (
                 ScalarFuncSig::CastDurationAsDecimal,
                 FieldTypeTp::Duration,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(120023),
@@ -1144,7 +1138,7 @@ mod tests {
                 .as_mut_accessor()
                 .set_flen(flen)
                 .set_decimal(decimal);
-            let e = Expression::build(&mut ctx, exp).unwrap();
+            let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_decimal(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), expect);
             // test None
@@ -1240,7 +1234,7 @@ mod tests {
                 FieldTypeTp::Duration,
                 charset::CHARSET_UTF8,
                 None,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 dur_str.to_vec(),
             ),
@@ -1303,7 +1297,7 @@ mod tests {
                 ex.mut_field_type().as_mut_accessor().set_tp(to_tp.unwrap());
             }
             ex.mut_field_type().set_charset(String::from(charset));
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_string(&mut ctx, &col).unwrap();
             assert_eq!(
                 res.unwrap().into_owned(),
@@ -1479,7 +1473,7 @@ mod tests {
                 .as_mut_accessor()
                 .set_decimal(isize::from(to_fsp))
                 .set_tp(to_tp);
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
 
             let res = e.eval_time(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
@@ -1520,7 +1514,7 @@ mod tests {
         let str_cols = vec![Datum::Bytes(dur_str.as_bytes().to_vec())];
         let f64_cols = vec![Datum::F64(dur_int as f64)];
         let time_cols = vec![Datum::Time(dur_to_time)];
-        let duration_cols = vec![Datum::Dur(duration.clone())];
+        let duration_cols = vec![Datum::Dur(duration)];
         let dec_cols = vec![Datum::Dec(Decimal::from(dur_int))];
 
         let cases = vec![
@@ -1643,12 +1637,12 @@ mod tests {
             ex.mut_field_type()
                 .as_mut_accessor()
                 .set_decimal(isize::from(to_fsp));
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
-            let mut expt = exp.clone();
+            let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
-                expt.fsp = to_fsp as u8;
+                expt.set_fsp(to_fsp as u8);
             }
             assert_eq!(
                 data.to_string(),
@@ -1694,7 +1688,7 @@ mod tests {
                     .set_flag(flag.unwrap());
             }
             let ex = scalar_func_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1714,7 +1708,7 @@ mod tests {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, FieldTypeTp::Double);
             let ex = scalar_func_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1738,7 +1732,7 @@ mod tests {
             let col_expr = col_expr(0, FieldTypeTp::NewDecimal);
             let ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
 
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1773,7 +1767,7 @@ mod tests {
                 flag |= FieldTypeFlag::PARSE_TO_JSON;
                 ex.mut_field_type().as_mut_accessor().set_flag(flag);
             }
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1822,7 +1816,7 @@ mod tests {
         for (tp, cols, exp) in cases {
             let col_expr = col_expr(0, tp);
             let ex = scalar_func_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1848,7 +1842,7 @@ mod tests {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1871,7 +1865,7 @@ mod tests {
         for (cols, exp) in cases {
             let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
@@ -1907,7 +1901,7 @@ mod tests {
             // test with overflow as warning
             let mut ctx =
                 EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
-            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+            let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
             assert_eq!(ctx.warnings.warning_cnt, 1);
@@ -1918,7 +1912,7 @@ mod tests {
 
             // test overflow as error
             ctx = EvalContext::new(Arc::new(EvalConfig::default()));
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_int(&mut ctx, &cols);
             assert!(res.is_err());
         }
@@ -1953,7 +1947,7 @@ mod tests {
             ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
             let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
-            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+            let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
             assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
@@ -1980,7 +1974,7 @@ mod tests {
             let mut cfg = EvalConfig::new();
             cfg.set_overflow_as_warning(true).set_in_select_stmt(true);
             let mut ctx = EvalContext::new(Arc::new(cfg));
-            let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+            let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
             assert_eq!(ctx.warnings.warning_cnt, 1);
@@ -1991,7 +1985,7 @@ mod tests {
 
             // test overflow as error
             ctx = EvalContext::new(Arc::new(EvalConfig::default()));
-            let e = Expression::build(&mut ctx, ex).unwrap();
+            let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_int(&mut ctx, &cols);
             assert!(res.is_err());
         }
@@ -2007,7 +2001,7 @@ mod tests {
 
     //     // test with overflow as warning
     //     let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
-    //     let e = Expression::build(&mut ctx, ex.clone()).unwrap();
+    //     let e = Expression::build(&ctx, ex.clone()).unwrap();
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
     //     assert!(res.is_none());
     //     assert_eq!(ctx.warnings.warning_cnt, 1);
@@ -2015,7 +2009,7 @@ mod tests {
 
     //     // test overflow as error
     //     ctx = EvalContext::new(Arc::new(EvalConfig::default()));
-    //     let e = Expression::build(&mut ctx, ex).unwrap();
+    //     let e = Expression::build(&ctx, ex).unwrap();
     //     let res = e.eval_duration(&mut ctx, &cols);
     //     assert!(res.is_err());
     // }

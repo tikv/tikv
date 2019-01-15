@@ -16,7 +16,6 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Write;
-use std::mem;
 use std::str::FromStr;
 use std::{i64, str};
 
@@ -290,7 +289,7 @@ impl Datum {
             Datum::F64(f) => Some(f.round() != 0f64),
             Datum::Bytes(ref bs) => Some(!bs.is_empty() && convert::bytes_to_int(ctx, bs)? != 0),
             Datum::Time(t) => Some(!t.is_zero()),
-            Datum::Dur(d) => Some(!d.is_empty()),
+            Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(d.as_f64()?.round() != 0f64),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {:?} to bool", self)),
@@ -347,7 +346,7 @@ impl Datum {
         }
     }
 
-    /// `into_i64` converts self into f64.
+    /// `into_i64` converts self into i64.
     /// source function name is `ToInt64`.
     pub fn into_i64(self, ctx: &mut EvalContext) -> Result<i64> {
         let (lower_bound, upper_bound) = (i64::MIN, i64::MAX);
@@ -363,9 +362,8 @@ impl Datum {
                 let d = t.to_decimal()?;
                 d.as_i64().into()
             }
-            Datum::Dur(mut d) => {
-                d.round_frac(mysql::DEFAULT_FSP)?;
-                let d = d.to_decimal()?;
+            Datum::Dur(d) => {
+                let d = d.round_frac(mysql::DEFAULT_FSP)?.to_decimal()?;
                 d.as_i64().into()
             }
             Datum::Dec(d) => {
@@ -394,7 +392,7 @@ impl Datum {
         match *self {
             Datum::I64(i) => i,
             Datum::U64(u) => u as i64,
-            Datum::F64(f) => unsafe { mem::transmute(f) },
+            Datum::F64(f) => f.to_bits() as i64,
             Datum::Dur(ref d) => d.to_nanos(),
             Datum::Time(_)
             | Datum::Bytes(_)
@@ -428,7 +426,7 @@ impl Datum {
             }
             Datum::Dur(d) => {
                 let dec = d.to_decimal()?;
-                if d.get_fsp() == 0 {
+                if d.fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
                 Ok(Datum::Dec(dec))

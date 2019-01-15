@@ -35,13 +35,13 @@ struct AggFuncExpr {
 }
 
 impl AggFuncExpr {
-    fn batch_build(ctx: &mut EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
+    fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
         expr.into_iter()
             .map(|v| AggFuncExpr::build(ctx, v))
             .collect()
     }
 
-    fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
+    fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
         let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
         let tp = expr.get_tp();
         let eval_buffer = Vec::with_capacity(args.len());
@@ -95,10 +95,10 @@ impl AggExecutor {
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&group_by)?;
         visitor.batch_visit(&aggr_func)?;
-        let mut ctx = EvalContext::new(eval_config);
+        let ctx = EvalContext::new(eval_config);
         Ok(AggExecutor {
-            group_by: Expression::batch_build(&mut ctx, group_by)?,
-            aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
+            group_by: Expression::batch_build(&ctx, group_by)?,
+            aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
             executed: false,
             ctx,
             related_cols_offset: visitor.column_offsets(),

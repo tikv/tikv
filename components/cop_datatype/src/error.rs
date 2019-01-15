@@ -11,14 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        UnsupportedType(name: String) {
-            display("Unsupported type {}", name)
-            description("Unsupported type")
-        }
-    }
+#[derive(Debug, Fail)]
+pub enum DataTypeError {
+    #[fail(display = "Unsupported type: {}", name)]
+    UnsupportedType { name: String },
 }
-
-pub type Result<T> = ::std::result::Result<T, Error>;

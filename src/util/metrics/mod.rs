@@ -26,7 +26,7 @@ mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::monitor_threads;
 
-/// `run_prometheus` runs a background prometheus client.
+/// Runs a background Prometheus client.
 pub fn run_prometheus(
     interval: Duration,
     address: &str,
@@ -66,7 +66,7 @@ pub fn dump() -> String {
     let metric_familys = prometheus::gather();
     for mf in metric_familys {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-            warn!("ignore prometheus encoding error: {:?}", e);
+            warn!("prometheus encoding error: {:?}", e);
         }
     }
     String::from_utf8(buffer).unwrap()

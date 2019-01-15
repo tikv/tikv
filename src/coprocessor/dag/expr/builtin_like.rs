@@ -165,7 +165,7 @@ mod tests {
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
             let op = scalar_func_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} like {:?}", target_str, pattern_str);
@@ -194,7 +194,7 @@ mod tests {
             let target = datum_expr(Datum::Bytes(target_str.as_bytes().to_vec()));
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::RegexpSig, &[target, pattern]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} rlike {:?}", target_str, pattern_str);
@@ -231,7 +231,7 @@ mod tests {
             let target = datum_expr(Datum::Bytes(target_str.clone()));
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::RegexpBinarySig, &[target, pattern]);
-            let op = Expression::build(&mut ctx, op).unwrap();
+            let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} binary rlike {:?}", target_str, pattern_str);

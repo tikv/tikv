@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -31,6 +30,7 @@ use raftstore::store::keys;
 use super::client::*;
 use super::common::*;
 use super::Result;
+use util::collections::HashMap;
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);

@@ -20,6 +20,7 @@ use coprocessor::Result;
 
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
+/// Retrieves rows from the source executor and filter rows by expressions.
 pub struct SelectionExecutor {
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
@@ -37,9 +38,9 @@ impl SelectionExecutor {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
-        let mut ctx = EvalContext::new(eval_cfg);
+        let ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
-            conditions: Expression::batch_build(&mut ctx, conditions)?,
+            conditions: Expression::batch_build(&ctx, conditions)?,
             related_cols_offset: visitor.column_offsets(),
             ctx,
             src,

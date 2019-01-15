@@ -64,6 +64,7 @@ impl Deref for RangeInfo {
     }
 }
 
+/// RangeContext helps to decide a range end key.
 pub struct RangeContext<Client> {
     client: Arc<Client>,
     region: Option<RegionInfo>,

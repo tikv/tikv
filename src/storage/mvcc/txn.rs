@@ -190,21 +190,16 @@ impl<S: Snapshot> MvccTxn<S> {
             Mutation::Lock(key) => (key, None),
         };
 
-        if value.is_some() && is_short_value(value.as_ref().unwrap()) {
+        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
             self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
         } else {
-            self.lock_key(
-                key.clone(),
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                None,
-            );
-            if value.is_some() {
-                let ts = self.start_ts;
-                self.put_value(key, ts, value.unwrap());
-            }
+            // value is long
+            let ts = self.start_ts;
+            self.put_value(key.clone(), ts, value.unwrap());
+
+            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, None);
         }
+
         Ok(())
     }
 
@@ -220,8 +215,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         // None: related Rollback has been collapsed.
                         // Rollback: rollback by concurrent transaction.
                         info!(
-                            "txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
-                            key, self.start_ts, commit_ts
+                            "txn conflict (lock not found)";
+                            "key" => %key,
+                            "start_ts" => self.start_ts,
+                            "commit_ts" => commit_ts,
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
@@ -267,10 +264,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         } else {
                             MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                             info!(
-                                "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                                key.clone(),
-                                self.start_ts,
-                                ts
+                                "txn conflict (committed)";
+                                "key" => %key,
+                                "start_ts" => self.start_ts,
+                                "commit_ts" => ts,
                             );
                             Err(Error::Committed { commit_ts: ts })
                         }

@@ -15,9 +15,9 @@
 
 extern crate arrow;
 extern crate byteorder;
-extern crate crossbeam_channel;
+extern crate crossbeam;
+extern crate futures;
 extern crate kvproto;
-extern crate log;
 extern crate mio;
 extern crate num_traits;
 extern crate protobuf;
@@ -39,19 +39,10 @@ mod coprocessor;
 mod raftkv;
 mod serialization;
 mod storage;
+mod util;
 mod writebatch;
-
-use test::Bencher;
-
-use test_util::KvGenerator;
 
 #[bench]
 fn _bench_check_requirement(_: &mut test::Bencher) {
     tikv::util::config::check_max_open_fds(4096).unwrap();
-}
-
-#[bench]
-fn bench_kv_iter(b: &mut Bencher) {
-    let mut g = KvGenerator::new(100, 1000);
-    b.iter(|| g.next());
 }

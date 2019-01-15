@@ -15,10 +15,23 @@
 //! and store is also a special state machine that handles all requests across
 //! stores. They are mixed for now, will be separated in the future.
 
+pub mod apply;
+mod batch;
+mod metrics;
 mod peer;
+mod router;
 mod store;
 
+pub use self::apply::{
+    create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
+    Builder as ApplyPollerBuilder, ChangePeer, ExecResult, Msg as ApplyTask, Proposal,
+    RegionProposal, Registration, TaskRes as ApplyTaskRes,
+};
+pub use self::batch::{
+    BatchRouter, BatchSystem, Fsm, HandlerBuilder, NormalScheduler, PollHandler,
+};
 pub use self::peer::DestroyPeerJob;
+pub use self::router::{BasicMailbox, Mailbox};
 pub use self::store::{
     create_event_loop, new_compaction_listener, StoreChannel, StoreInfo, StoreStat,
 };
@@ -46,15 +59,15 @@ use super::local_metrics::RaftMetrics;
 use super::peer::Peer;
 use super::peer_storage::CacheQueryStats;
 use super::worker::{
-    ApplyTask, ApplyTaskRes, CleanupSSTTask, CompactTask, ConsistencyCheckTask, RaftlogGcTask,
-    ReadTask, RegionTask, SplitCheckTask,
+    CleanupSSTTask, CompactTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask,
+    SplitCheckTask,
 };
 use super::{Engines, Msg, SignificantMsg, SnapManager};
 use import::SSTImporter;
 
 type Key = Vec<u8>;
 
-pub struct Store<T, C: 'static> {
+pub struct Store<T: 'static, C: 'static> {
     cfg: Rc<Config>,
     engines: Engines,
     store: metapb::Store,
@@ -75,6 +88,7 @@ pub struct Store<T, C: 'static> {
     // It assumes that when a peer is going to accept snapshot, it can never
     // captch up by normal log replication.
     pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
+
     split_check_worker: Worker<SplitCheckTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     region_worker: Worker<RegionTask>,
@@ -82,7 +96,8 @@ pub struct Store<T, C: 'static> {
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     cleanup_sst_worker: Worker<CleanupSSTTask>,
-    pub apply_worker: Worker<ApplyTask>,
+    apply_system: ApplyBatchSystem,
+    apply_router: ApplyRouter,
     local_reader: Worker<ReadTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
 
