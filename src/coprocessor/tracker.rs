@@ -175,8 +175,8 @@ impl Tracker {
             info!("slow-query";
                 "region_id" => self.req_ctx.context.get_region_id(),
                 "peer_id" => &self.req_ctx.peer,
-                "total_process_time" => ::log_wrappers::time::Duration(&self.total_process_time),
-                "wait_time" => ::log_wrappers::time::Duration(&self.wait_time),
+                "total_process_time" => ?self.total_process_time,
+                "wait_time" => ?self.wait_time,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
                 "tag" => self.req_ctx.tag,
