@@ -50,7 +50,8 @@ impl CopFlowStatistics {
         if let Err(e) = self.sender.schedule(PdTask::ReadStats {
             read_stats: to_send_stats,
         }) {
-            error!("send coprocessor statistics: {:?}", e);
+            error!("send coprocessor statistics failed";
+            "error"=> e.to_string());
         };
     }
 }
