@@ -1123,6 +1123,7 @@ fn future_prewrite<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
+    options.write_not_exist = req.get_write_not_exist();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(
@@ -1621,6 +1622,11 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             key_error.set_conflict(write_conflict);
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
+        }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { ref key })) => {
+            let mut exist = AlreadyExist::new();
+            exist.set_key(key.clone());
+            key_error.set_alreadyexist(exist);
         }
         // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {

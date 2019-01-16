@@ -393,6 +393,8 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    // Only write when these keys not exist
+    pub write_not_exist: bool,
 }
 
 impl Options {
@@ -402,6 +404,7 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            write_not_exist: false,
         }
     }
 

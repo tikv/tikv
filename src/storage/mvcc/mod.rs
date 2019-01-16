@@ -68,6 +68,10 @@ quick_error! {
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
              start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
         }
+        AlreadyExist { key: Vec<u8> } {
+            description("already exists")
+            display("key {:?} already exists", escape(key))
+        }
         KeyVersion {description("bad format key(version)")}
         Other(err: Box<error::Error + Sync + Send>) {
             from()
@@ -118,6 +122,7 @@ impl Error {
                 key: key.to_owned(),
                 primary: primary.to_owned(),
             }),
+            Error::AlreadyExist { ref key } => Some(Error::AlreadyExist { key: key.clone() }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
             Error::Io(_) | Error::Other(_) => None,

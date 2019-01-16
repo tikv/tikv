@@ -162,6 +162,8 @@ impl<S: Snapshot> MvccTxn<S> {
                             key: key.to_raw()?,
                             primary: primary.to_vec(),
                         });
+                    } else if options.write_not_exist {
+                        return Err(Error::AlreadyExist { key: key.to_raw()? });
                     }
                 }
             }
