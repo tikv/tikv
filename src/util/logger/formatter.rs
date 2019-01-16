@@ -50,7 +50,7 @@ where
 /// - U+005B (LEFT SQUARE BRACKET)
 /// - U+005D (RIGHT SQUARE BRACKET)
 ///
-/// [RFC: Unified Log Format]: https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md
+/// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
 ///
 #[inline]
 fn need_escape(bytes: &[u8]) -> bool {
@@ -66,7 +66,7 @@ fn need_escape(bytes: &[u8]) -> bool {
 /// If there is no character [`need escape`], write the data into the writer directly.
 /// Else, call `serde_json::to_writer` which serializes the given data structure as JSON into a writer.
 ///
-/// [RFC: Unified Log Format]: https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md
+/// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
 /// [`need escape`]: #method.need_escape
 ///
 pub fn write_escaped_str<W>(writer: &mut W, value: &str) -> io::Result<()>

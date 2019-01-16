@@ -190,7 +190,7 @@ where
     }
 }
 
-/// Writes log header to decorator. see [log-header-section](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
+/// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
 fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
     decorator.start_timestamp()?;
     write!(
@@ -224,7 +224,7 @@ fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Res
     Ok(())
 }
 
-/// Writes log message to decorator. see [log-message-section](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-message-section)
+/// Writes log message to decorator. See [log-message](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-message-section)
 fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
     decorator.start_whitespace()?;
     write!(decorator, " ")?;
@@ -238,7 +238,7 @@ fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result
     Ok(())
 }
 
-/// Writes log fields to decorator. see [log-fields-section](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-fields-section)
+/// Writes log fields to decorator. See [log-fields](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-fields-section)
 fn write_log_fields(
     decorator: &mut RecordDecorator,
     record: &Record,
