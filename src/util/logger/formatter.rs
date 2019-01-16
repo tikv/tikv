@@ -11,217 +11,79 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Copyright 2018 The Serde Json Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+use serde_json;
 use std::io;
 
-#[inline]
-fn is_escape_key(byte: u8) -> bool {
-    byte <= 0x20 || byte == 0x22 || byte == 0x3D || byte == 0x5B || byte == 0x5D
+/// Writes file name into the writer, removes the character which not match `[a-zA-Z0-9\.-_]`
+pub fn write_file_name<W>(writer: &mut W, file_name: &str) -> io::Result<()>
+where
+    W: io::Write + ?Sized,
+{
+    let mut start = 0;
+    let bytes = file_name.as_bytes();
+    for (index, &b) in bytes.iter().enumerate() {
+        if (b >= b'A' && b <= b'Z')
+            || (b >= b'a' && b <= b'z')
+            || (b >= b'0' && b <= b'9')
+            || b == b'.'
+            || b == b'-'
+            || b == b'_'
+        {
+            continue;
+        }
+        if start < index {
+            writer.write_all((&file_name[start..index]).as_bytes())?;
+        }
+        start = index + 1;
+    }
+    if start < bytes.len() {
+        writer.write_all((&file_name[start..]).as_bytes())?;
+    }
+    Ok(())
 }
 
+/// According to [RFC: Unified Log Format], the following characters need to be escaped:
+///
+/// - U+0000 (NULL) ~ U+0020 (SPACE)
+/// - U+0022 (QUOTATION MARK)
+/// - U+003D (EQUALS SIGN)
+/// - U+005B (LEFT SQUARE BRACKET)
+/// - U+005D (RIGHT SQUARE BRACKET)
+///
+/// [RFC: Unified Log Format]: https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md
+///
 #[inline]
 fn need_escape(bytes: &[u8]) -> bool {
     for &byte in bytes {
-        if is_escape_key(byte) {
+        if byte <= 0x20 || byte == 0x22 || byte == 0x3D || byte == 0x5B || byte == 0x5D {
             return true;
         }
     }
     false
 }
 
-pub fn write_escaped_str<W: ?Sized>(writer: &mut W, value: &str) -> io::Result<()>
+/// According to [RFC: Unified Log Format], escapes the given data and writes it into a writer.
+/// If there is no character [`need escape`], write the data into the writer directly.
+/// Else, call `serde_json::to_writer` which serializes the given data structure as JSON into a writer.
+///
+/// [RFC: Unified Log Format]: https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md
+/// [`need escape`]: #method.need_escape
+///
+pub fn write_escaped_str<W>(writer: &mut W, value: &str) -> io::Result<()>
 where
-    W: io::Write,
+    W: io::Write + ?Sized,
 {
     if !need_escape(value.as_bytes()) {
         writer.write_all(value.as_bytes())?;
     } else {
-        writer.write_all(b"\"")?;
-        format_escaped_str_contents(writer, value)?;
-        writer.write_all(b"\"")?;
+        serde_json::to_writer(writer, value)?;
     }
     Ok(())
-}
-
-fn format_escaped_str_contents<W: ?Sized>(writer: &mut W, value: &str) -> io::Result<()>
-where
-    W: io::Write,
-{
-    let bytes = value.as_bytes();
-
-    let mut start = 0;
-
-    for (i, &byte) in bytes.iter().enumerate() {
-        let escape = ESCAPE[byte as usize];
-        if escape == 0 {
-            continue;
-        }
-
-        if start < i {
-            write_string_fragment(writer, &value[start..i])?;
-        }
-
-        let char_escape = CharEscape::from_escape_table(escape, byte);
-        write_char_escape(writer, char_escape)?;
-
-        start = i + 1;
-    }
-
-    if start != bytes.len() {
-        write_string_fragment(writer, &value[start..])?;
-    }
-
-    Ok(())
-}
-
-const BB: u8 = b'b'; // \x08
-const TT: u8 = b't'; // \x09
-const NN: u8 = b'n'; // \x0A
-const FF: u8 = b'f'; // \x0C
-const RR: u8 = b'r'; // \x0D
-const QU: u8 = b'"'; // \x22
-const BS: u8 = b'\\'; // \x5C
-const UU: u8 = b'u'; // \x00...\x1F except the ones above
-const __: u8 = 0;
-
-// Lookup table of escape sequences. A value of b'x' at index i means that byte
-// i is escaped as "\x" in JSON. A value of 0 means that byte i is not escaped.
-static ESCAPE: [u8; 256] = [
-    //   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F
-    UU, UU, UU, UU, UU, UU, UU,
-    UU, BB, TT, NN, UU, FF, RR, UU, UU, // 0
-    UU, UU, UU, UU, UU, UU, UU, UU, UU, UU, UU, UU, UU, UU, UU, UU, // 1
-    __, __, QU, __, __, __, __, __, __, __, __, __, __, __, __, __, // 2
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 3
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 4
-    __, __, __, __, __, __, __, __, __, __, __, __, BS, __, __, __, // 5
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 6
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 7
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 8
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 9
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // A
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // B
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // C
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // D
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // E
-    __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // F
-];
-
-/// Writes a string fragment that doesn't need any escaping to the
-/// specified writer.
-#[inline]
-fn write_string_fragment<W: ?Sized>(writer: &mut W, fragment: &str) -> io::Result<()>
-where
-    W: io::Write,
-{
-    writer.write_all(fragment.as_bytes())
-}
-
-/// Represents a character escape code in a type-safe manner.
-pub enum CharEscape {
-    /// An escaped quote `"`
-    Quote,
-    /// An escaped reverse solidus `\`
-    ReverseSolidus,
-    /// An escaped backspace character (usually escaped as `\b`)
-    Backspace,
-    /// An escaped form feed character (usually escaped as `\f`)
-    FormFeed,
-    /// An escaped line feed character (usually escaped as `\n`)
-    LineFeed,
-    /// An escaped carriage return character (usually escaped as `\r`)
-    CarriageReturn,
-    /// An escaped tab character (usually escaped as `\t`)
-    Tab,
-    /// An escaped ASCII plane control character (usually escaped as
-    /// `\u00XX` where `XX` are two hex characters)
-    AsciiControl(u8),
-}
-
-impl CharEscape {
-    #[inline]
-    fn from_escape_table(escape: u8, byte: u8) -> CharEscape {
-        match escape {
-            self::BB => CharEscape::Backspace,
-            self::TT => CharEscape::Tab,
-            self::NN => CharEscape::LineFeed,
-            self::FF => CharEscape::FormFeed,
-            self::RR => CharEscape::CarriageReturn,
-            self::QU => CharEscape::Quote,
-            self::BS => CharEscape::ReverseSolidus,
-            self::UU => CharEscape::AsciiControl(byte),
-            _ => unreachable!(),
-        }
-    }
-}
-
-/// Writes a character escape code to the specified writer.
-#[inline]
-fn write_char_escape<W: ?Sized>(writer: &mut W, char_escape: CharEscape) -> io::Result<()>
-where
-    W: io::Write,
-{
-    let s = match char_escape {
-        CharEscape::Quote => b"\\\"",
-        CharEscape::ReverseSolidus => b"\\\\",
-        CharEscape::Backspace => b"\\b",
-        CharEscape::FormFeed => b"\\f",
-        CharEscape::LineFeed => b"\\n",
-        CharEscape::CarriageReturn => b"\\r",
-        CharEscape::Tab => b"\\t",
-        CharEscape::AsciiControl(byte) => {
-            static HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
-            let bytes = &[
-                b'\\',
-                b'u',
-                b'0',
-                b'0',
-                HEX_DIGITS[(byte >> 4) as usize],
-                HEX_DIGITS[(byte & 0xF) as usize],
-            ];
-            return writer.write_all(bytes);
-        }
-    };
-
-    writer.write_all(s)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_escaped_key() {
-        let cases = [
-            (b' ', true),
-            (b'"', true),
-            (b'=', true),
-            (b'[', true),
-            (b']', true),
-            (0x00, true),
-            (0x20, true),
-            (0x21, false),
-            (b'a', false),
-        ];
-
-        for (byte, expect) in &cases {
-            println!("{},{}", byte, expect);
-            assert_eq!(is_escape_key(*byte), *expect);
-        }
-    }
 
     #[test]
     fn test_need_escape() {
@@ -247,5 +109,15 @@ mod tests {
                 expect
             );
         }
+    }
+
+    #[test]
+    fn test_write_file_name() {
+        let mut s = vec![];
+        write_file_name(
+            &mut s,
+            "+=!@#$%^&*(){}|:\"<>/?\u{000f} 老虎 tiger 🐅\r\n\\-_1234567890.rs",
+        ).unwrap();
+        assert_eq!("tiger-_1234567890.rs", &String::from_utf8(s).unwrap())
     }
 }

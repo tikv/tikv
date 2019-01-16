@@ -102,6 +102,7 @@ extern crate serde_json;
         kv,
         slog_o,
         slog_kv,
+        slog_crit,
         slog_trace,
         slog_error,
         slog_warn,

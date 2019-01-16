@@ -119,18 +119,16 @@ pub fn get_string_by_level(lv: Level) -> &'static str {
     }
 }
 
-#[test]
-fn test_get_level_by_string() {
-    // Ensure UPPER, Capitalized, and lower case all map over.
-    assert_eq!(Some(Level::Trace), get_level_by_string("TRACE"));
-    assert_eq!(Some(Level::Trace), get_level_by_string("Trace"));
-    assert_eq!(Some(Level::Trace), get_level_by_string("trace"));
-    // Due to legacy we need to ensure that `warn` maps to `Warning`.
-    assert_eq!(Some(Level::Warning), get_level_by_string("warn"));
-    assert_eq!(Some(Level::Warning), get_level_by_string("warning"));
-    // Ensure that all non-defined values map to `Info`.
-    assert_eq!(None, get_level_by_string("Off"));
-    assert_eq!(None, get_level_by_string("definitely not an option"));
+// Converts `slog::Level` to unified log level format.
+fn get_unified_log_level(lv: Level) -> &'static str {
+    match lv {
+        Level::Critical => "FATAL",
+        Level::Error => "ERROR",
+        Level::Warning => "WARN",
+        Level::Info => "INFO",
+        Level::Debug => "DEBUG",
+        Level::Trace => "TRACE",
+    }
 }
 
 pub fn convert_slog_level_to_log_level(lv: Level) -> log::LogLevel {
@@ -151,34 +149,6 @@ pub fn convert_log_level_to_slog_level(lv: log::LogLevel) -> Level {
         log::LogLevel::Trace => Level::Trace,
         log::LogLevel::Info => Level::Info,
     }
-}
-
-#[test]
-fn test_log_level_conversion() {
-    assert_eq!(
-        Level::Error,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Critical))
-    );
-    assert_eq!(
-        Level::Error,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Error))
-    );
-    assert_eq!(
-        Level::Warning,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Warning))
-    );
-    assert_eq!(
-        Level::Debug,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Debug))
-    );
-    assert_eq!(
-        Level::Trace,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Trace))
-    );
-    assert_eq!(
-        Level::Info,
-        convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Info))
-    );
 }
 
 pub struct TikvFormat<D>
@@ -233,7 +203,7 @@ fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Res
     write!(decorator, " ")?;
 
     decorator.start_level()?;
-    write!(decorator, "[{}]", record.level().as_short_str())?;
+    write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
 
     decorator.start_whitespace()?;
     write!(decorator, " ")?;
@@ -244,7 +214,9 @@ fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Res
         .file_name()
         .and_then(|path| path.to_str())
     {
-        write!(decorator, "[{}:{}]", path, record.line())?
+        write!(decorator, "[")?;
+        formatter::write_file_name(decorator, path)?;
+        write!(decorator, ":{}]", record.line())?
     } else {
         write!(decorator, "[<unknown>]")?
     }
@@ -317,18 +289,19 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
         self.write_whitespace()?;
 
         // Write key
-        self.decorator.start_key()?;
         write!(self.decorator, "[")?;
-        formatter::write_escaped_str(self.decorator, key as &str)?;
+        self.decorator.start_key()?;
+        formatter::write_escaped_str(&mut self.decorator, key as &str)?;
 
         // Write separator
         self.decorator.start_separator()?;
         write!(self.decorator, "=")?;
 
         // Write value
-        self.decorator.start_value()?;
         let value = format!("{}", val);
+        self.decorator.start_value()?;
         formatter::write_escaped_str(self.decorator, &value)?;
+        self.decorator.reset()?;
         write!(self.decorator, "]")?;
         Ok(())
     }
@@ -368,51 +341,73 @@ mod tests {
         let drain = TikvFormat::new(decorator).fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!());
 
-        // Empty message is not recommend. Just for test purpose.
-        slog_info!(logger, "");
+        // Empty message is not recommend, just for test purpose here.
+        slog_crit!(logger, "");
         slog_info!(logger, "Welcome");
         slog_info!(logger, "Welcome TiKV");
         slog_info!(logger, "欢迎");
         slog_info!(logger, "欢迎 TiKV");
 
-        let duration = Duration::new(3, 0);
         slog_info!(logger, "failed to fetch URL";
-                    "url"=> "http://example.com",
-                    "attempt"=> 3,
-                    "backoff"=> ?duration,
+                    "url" => "http://example.com",
+                    "attempt" => 3,
+                    "backoff" => ?Duration::new(3, 0),
         );
+
         slog_info!(
             logger,
             "failed to \"fetch\" [URL]: {}",
             "http://example.com"
         );
 
-        let duration = Duration::new(0, 123);
         slog_debug!(logger, "Slow query";
 		    "sql" =>"SELECT * FROM TABLE WHERE ID=\"abc\"",
-		    "duration"=> ?duration,
-		    "process keys"=> 1500,
+		    "duration" => ?Duration::new(0, 123),
+		    "process keys" => 1500,
 	    );
 
         slog_warn!(logger, "Type";
-            "Counter"=> ::std::f64::NAN,
+            "Counter" => ::std::f64::NAN,
             "Score" => ::std::f64::INFINITY,
-            "Other" => ::std::f64::NEG_INFINITY);
+            "Other" => ::std::f64::NEG_INFINITY
+         );
 
-        let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
+        let none: Option<u8> = None;
+        slog_info!(logger, "more type tests";
+            "field1" => "no_quote",
+            "field2" => "in quote",
+            "urls" => ?["http://xxx.com:2347", "http://xxx.com:2432"],
+            "url-peers" => ?["peer1", "peer 2"],
+            "store ids" => ?[1, 2, 3],
+            "is_true" => true,
+            "is_false" => false,
+            "is_None" => none,
+            "u8" => 34 as u8,
+            "str_array" => ?["💖",
+			    "�",
+			    "☺☻☹",
+			    "日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+			    "日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+			    "\\x80\\x80\\x80\\x80",
+			    "<car><mirror>XML</mirror></car>"]
+        );
+
+        let expect = r#"[2019/01/15 13:40:39.619 +08:00] [FATAL] [mod.rs:469] []
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"]
 [2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"]
-[2019/01/15 13:40:39.619 +08:00] [DEBG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""]
+[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""]
 [2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN]
+[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote]
 "#;
 
         BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
             let output = from_utf8(&*buffer).unwrap();
+            assert_eq!(output.lines().count(), expect.lines().count());
 
             let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
 
@@ -446,7 +441,7 @@ mod tests {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// assert_eq!(true, validate_log_source_file("<unknown>", "<unknown>"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:1"));
     /// assert_eq!(true, validate_log_source_file("mod.rs:1", "mod.rs:100"));
@@ -475,5 +470,57 @@ mod tests {
             "{:?}",
             datetime,
         );
+    }
+
+    #[test]
+    fn test_log_level_conversion() {
+        assert_eq!(
+            Level::Error,
+            convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Critical))
+        );
+        assert_eq!(
+            Level::Error,
+            convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Error))
+        );
+        assert_eq!(
+            Level::Warning,
+            convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Warning))
+        );
+        assert_eq!(
+            Level::Debug,
+            convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Debug))
+        );
+        assert_eq!(
+            Level::Trace,
+            convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Trace))
+        );
+        assert_eq!(
+            Level::Info,
+            convert_log_level_to_slog_level(convert_slog_level_to_log_level(Level::Info))
+        );
+    }
+
+    #[test]
+    fn test_get_level_by_string() {
+        // Ensure UPPER, Capitalized, and lower case all map over.
+        assert_eq!(Some(Level::Trace), get_level_by_string("TRACE"));
+        assert_eq!(Some(Level::Trace), get_level_by_string("Trace"));
+        assert_eq!(Some(Level::Trace), get_level_by_string("trace"));
+        // Due to legacy we need to ensure that `warn` maps to `Warning`.
+        assert_eq!(Some(Level::Warning), get_level_by_string("warn"));
+        assert_eq!(Some(Level::Warning), get_level_by_string("warning"));
+        // Ensure that all non-defined values map to `Info`.
+        assert_eq!(None, get_level_by_string("Off"));
+        assert_eq!(None, get_level_by_string("definitely not an option"));
+    }
+
+    #[test]
+    fn test_get_unified_log_level() {
+        assert_eq!("FATAL", get_unified_log_level(Level::Critical));
+        assert_eq!("ERROR", get_unified_log_level(Level::Error));
+        assert_eq!("WARN", get_unified_log_level(Level::Warning));
+        assert_eq!("INFO", get_unified_log_level(Level::Info));
+        assert_eq!("DEBUG", get_unified_log_level(Level::Debug));
+        assert_eq!("TRACE", get_unified_log_level(Level::Trace));
     }
 }
