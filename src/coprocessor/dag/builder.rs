@@ -19,8 +19,8 @@ use tipb::executor::{self, ExecType};
 use storage::Store;
 
 use super::executor::{
-    Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
-    StreamAggExecutor, TableScanExecutor, TopNExecutor,
+    Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
+    TopNExecutor,
 };
 use coprocessor::dag::expr::EvalConfig;
 use coprocessor::*;
@@ -92,7 +92,7 @@ impl DAGBuilder {
     ) -> Result<Box<Executor + Send>> {
         match first.get_tp() {
             ExecType::TypeTableScan => {
-                let ex = Box::new(TableScanExecutor::new(
+                let ex = Box::new(ScanExecutor::table_scan(
                     first.take_tbl_scan(),
                     ranges,
                     store,
@@ -102,7 +102,7 @@ impl DAGBuilder {
             }
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
-                let ex = Box::new(IndexScanExecutor::new(
+                let ex = Box::new(ScanExecutor::index_scan(
                     first.take_idx_scan(),
                     ranges,
                     store,
