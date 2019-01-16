@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![feature(repeat_generic_slice)]
+
 #[macro_use]
 extern crate criterion;
 extern crate protobuf;
@@ -57,6 +59,64 @@ fn bench_table_scan_next(
         },
         |mut executor| {
             black_box(black_box(&mut executor).next().unwrap().unwrap());
+        },
+    );
+}
+
+fn bench_table_scan_next_1000(
+    b: &mut Bencher,
+    meta: &TableScan,
+    ranges: &[KeyRange],
+    store: &Store<RocksEngine>,
+) {
+    use tikv::coprocessor::dag::executor::TableScanExecutor;
+
+    b.iter_with_setup(
+        || {
+            let mut executor = TableScanExecutor::new(
+                meta.clone(),
+                ranges.to_vec(),
+                store.to_fixture_store(),
+                false,
+            ).unwrap();
+            // There is a step of building scanner in the first `next()` which cost time,
+            // so we next() before hand.
+            executor.next().unwrap().unwrap();
+            executor
+        },
+        |mut executor| {
+            let executor = black_box(&mut executor);
+            for _ in 0..1000 {
+                black_box(executor.next().unwrap().unwrap());
+            }
+        },
+    );
+}
+
+fn bench_table_scan_next_1000_batch(
+    b: &mut Bencher,
+    context: &ExecutorContext,
+    ranges: &[KeyRange],
+    store: &Store<RocksEngine>,
+) {
+    use tikv::coprocessor::dag::batch_executor::executors::BatchTableScanExecutor;
+
+    b.iter_with_setup(
+        || {
+            let mut executor = BatchTableScanExecutor::new(
+                store.to_fixture_store(),
+                context.clone(),
+                ranges.to_vec(),
+                false,
+            ).unwrap();
+            // There is a step of building scanner in the first `next()` which cost time,
+            // so we next() before hand.
+            executor.next_batch(1);
+            executor
+        },
+        |mut executor| {
+            let executor = black_box(&mut executor);
+            black_box(executor.next_batch(1000));
         },
     );
 }
@@ -118,44 +178,6 @@ fn bench_table_scan_datum_front(c: &mut Criterion) {
                 for idx in 0..COLUMNS {
                     insert =
                         insert.set(&table[format!("col{}", idx)], Datum::I64((i ^ idx) as i64));
-                }
-                insert.execute();
-            }
-            store.commit();
-        }
-
-        let mut meta = TableScan::new();
-        meta.set_table_id(table.id);
-        meta.set_desc(false);
-        meta.mut_columns().push(table["col0"].as_column_info());
-
-        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
-    });
-}
-
-/// next() for 1 time, 1 interested column, at the front of each row. Each row contains 100 columns
-/// and length is very long.
-///
-/// Bench the impact of large values.
-fn bench_table_scan_long_datum_front(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
-    c.bench_function("table_scan_long_datum_front", |b| {
-        let mut table = TableBuilder::new();
-        for idx in 0..COLUMNS {
-            let col = ColumnBuilder::new().col_type(TYPE_LONG).build();
-            table = table.add_col(format!("col{}", idx), col);
-        }
-        let table = table.build();
-
-        let mut store = Store::new();
-        for _ in 0..10 {
-            let bytes = vec![0xCC; 1000];
-            store.begin();
-            {
-                let mut insert = store.insert_into(&table);
-                for idx in 0..COLUMNS {
-                    insert = insert.set(&table[format!("col{}", idx)], Datum::Bytes(bytes.clone()));
                 }
                 insert.execute();
             }
@@ -278,6 +300,482 @@ fn bench_table_scan_datum_all(c: &mut Criterion) {
         meta.set_columns(RepeatedField::from_vec(table.columns_info()));
 
         bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_primary_key(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_primary_key", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..10 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["id"].as_column_info());
+
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_normal(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_normal", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..10 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["foo"].as_column_info());
+
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_long(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_long", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..10 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["bar"].as_column_info());
+
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_all(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_all", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..10 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["id"].as_column_info());
+        meta.mut_columns().push(table["foo"].as_column_info());
+        meta.mut_columns().push(table["bar"].as_column_info());
+
+        bench_table_scan_next(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_primary_key_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_primary_key_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["id"].as_column_info());
+
+        bench_table_scan_next_1000(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_normal_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_normal_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["foo"].as_column_info());
+
+        bench_table_scan_next_1000(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_long_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_long_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["bar"].as_column_info());
+
+        bench_table_scan_next_1000(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_table_scan_long_datum_all_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("table_scan_long_datum_all_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let mut meta = TableScan::new();
+        meta.set_table_id(table.id);
+        meta.set_desc(false);
+        meta.mut_columns().push(table["id"].as_column_info());
+        meta.mut_columns().push(table["foo"].as_column_info());
+        meta.mut_columns().push(table["bar"].as_column_info());
+
+        bench_table_scan_next_1000(b, &meta, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_batch_table_scan_long_datum_primary_key_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("batch_table_scan_long_datum_primary_key_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let context = {
+            let columns_info = vec![table["id"].as_column_info()];
+            ExecutorContext::new(columns_info)
+        };
+
+        bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_batch_table_scan_long_datum_normal_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("batch_table_scan_long_datum_normal_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let context = {
+            let columns_info = vec![table["foo"].as_column_info()];
+            ExecutorContext::new(columns_info)
+        };
+
+        bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_batch_table_scan_long_datum_long_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("batch_table_scan_long_datum_long_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let context = {
+            let columns_info = vec![table["bar"].as_column_info()];
+            ExecutorContext::new(columns_info)
+        };
+
+        bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
+    });
+}
+
+/// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
+/// interested.
+fn bench_batch_table_scan_long_datum_all_multi_rows(c: &mut Criterion) {
+    const COLUMNS: usize = 100;
+
+    c.bench_function("batch_table_scan_long_datum_all_multi_rows", |b| {
+        let id = ColumnBuilder::new()
+            .col_type(TYPE_LONG)
+            .primary_key(true)
+            .build();
+        let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+        let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+        let table = TableBuilder::new()
+            .add_col("id", id)
+            .add_col("foo", foo)
+            .add_col("bar", bar)
+            .build();
+
+        let mut store = Store::new();
+        for i in 0..1001 {
+            store.begin();
+            store
+                .insert_into(&table)
+                .set(&table["id"], Datum::I64(i))
+                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                .execute();
+            store.commit();
+        }
+
+        let context = {
+            let columns_info = vec![
+                table["id"].as_column_info(),
+                table["foo"].as_column_info(),
+                table["bar"].as_column_info(),
+            ];
+            ExecutorContext::new(columns_info)
+        };
+
+        bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
     });
 }
 
@@ -1108,15 +1606,211 @@ fn bench_dag_table_scan_selection_pk_front(c: &mut Criterion) {
     bench(c, "dag_batch_table_scan_selection_pk_front", true);
 }
 
+fn bench_dag_table_scan_long_datum_primary_key(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let id = ColumnBuilder::new()
+                .col_type(TYPE_LONG)
+                .primary_key(true)
+                .build();
+            let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+            let table = TableBuilder::new()
+                .add_col("id", id)
+                .add_col("foo", foo)
+                .add_col("bar", bar)
+                .build();
+
+            let mut store = Store::new();
+            for i in 0..1001 {
+                store.begin();
+                store
+                    .insert_into(&table)
+                    .set(&table["id"], Datum::I64(i))
+                    .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                    .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                    .execute();
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            meta.mut_columns().push(table["id"].as_column_info());
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_record_range_all()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_long_datum_primary_key", false);
+    bench(c, "dag_batch_table_scan_long_datum_primary_key", true);
+}
+
+fn bench_dag_table_scan_long_datum_normal(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let id = ColumnBuilder::new()
+                .col_type(TYPE_LONG)
+                .primary_key(true)
+                .build();
+            let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+            let table = TableBuilder::new()
+                .add_col("id", id)
+                .add_col("foo", foo)
+                .add_col("bar", bar)
+                .build();
+
+            let mut store = Store::new();
+            for i in 0..1001 {
+                store.begin();
+                store
+                    .insert_into(&table)
+                    .set(&table["id"], Datum::I64(i))
+                    .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                    .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                    .execute();
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            meta.mut_columns().push(table["foo"].as_column_info());
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_record_range_all()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_long_datum_normal", false);
+    bench(c, "dag_batch_table_scan_long_datum_normal", true);
+}
+
+fn bench_dag_table_scan_long_datum_long(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let id = ColumnBuilder::new()
+                .col_type(TYPE_LONG)
+                .primary_key(true)
+                .build();
+            let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+            let table = TableBuilder::new()
+                .add_col("id", id)
+                .add_col("foo", foo)
+                .add_col("bar", bar)
+                .build();
+
+            let mut store = Store::new();
+            for i in 0..1001 {
+                store.begin();
+                store
+                    .insert_into(&table)
+                    .set(&table["id"], Datum::I64(i))
+                    .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                    .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                    .execute();
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            meta.mut_columns().push(table["bar"].as_column_info());
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_record_range_all()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_long_datum_long", false);
+    bench(c, "dag_batch_table_scan_long_datum_long", true);
+}
+
+fn bench_dag_table_scan_long_datum_all(c: &mut Criterion) {
+    use tipb::executor::ExecType;
+
+    fn bench(c: &mut Criterion, id: &'static str, batch: bool) {
+        c.bench_function(id, move |b| {
+            let id = ColumnBuilder::new()
+                .col_type(TYPE_LONG)
+                .primary_key(true)
+                .build();
+            let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+            let bar = ColumnBuilder::new().col_type(TYPE_VAR_CHAR).build();
+            let table = TableBuilder::new()
+                .add_col("id", id)
+                .add_col("foo", foo)
+                .add_col("bar", bar)
+                .build();
+
+            let mut store = Store::new();
+            for i in 0..1001 {
+                store.begin();
+                store
+                    .insert_into(&table)
+                    .set(&table["id"], Datum::I64(i))
+                    .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                    .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
+                    .execute();
+                store.commit();
+            }
+
+            let mut meta = TableScan::new();
+            meta.set_table_id(table.id);
+            meta.set_desc(false);
+            meta.mut_columns().push(table["id"].as_column_info());
+            meta.mut_columns().push(table["foo"].as_column_info());
+            meta.mut_columns().push(table["bar"].as_column_info());
+
+            let mut exec = PbExecutor::new();
+            exec.set_tp(ExecType::TypeTableScan);
+            exec.set_tbl_scan(meta);
+
+            bench_dag_handle(b, &[exec], &[table.get_record_range_all()], &store, batch);
+        });
+    }
+
+    bench(c, "dag_normal_table_scan_long_datum_all", false);
+    bench(c, "dag_batch_table_scan_long_datum_all", true);
+}
+
 criterion_group!(
     benches,
     bench_table_scan_primary_key,
     bench_table_scan_datum_front,
     bench_table_scan_datum_multi_front,
-    bench_table_scan_long_datum_front,
-    bench_table_scan_datum_multi_front,
     bench_table_scan_datum_end,
     bench_table_scan_datum_all,
+    bench_table_scan_long_datum_primary_key,
+    bench_table_scan_long_datum_normal,
+    bench_table_scan_long_datum_long,
+    bench_table_scan_long_datum_all,
+    bench_table_scan_long_datum_primary_key_multi_rows,
+    bench_table_scan_long_datum_normal_multi_rows,
+    bench_table_scan_long_datum_long_multi_rows,
+    bench_table_scan_long_datum_all_multi_rows,
+    bench_batch_table_scan_long_datum_primary_key_multi_rows,
+    bench_batch_table_scan_long_datum_normal_multi_rows,
+    bench_batch_table_scan_long_datum_long_multi_rows,
+    bench_batch_table_scan_long_datum_all_multi_rows,
     bench_table_scan_datum_absent,
     bench_table_scan_datum_absent_large_row,
     bench_table_scan_point_range,
@@ -1132,5 +1826,9 @@ criterion_group!(
     bench_dag_table_scan_datum_all,
     bench_dag_table_scan_pk_front,
     bench_dag_table_scan_selection_pk_front,
+    bench_dag_table_scan_long_datum_primary_key,
+    bench_dag_table_scan_long_datum_normal,
+    bench_dag_table_scan_long_datum_long,
+    bench_dag_table_scan_long_datum_all,
 );
 criterion_main!(benches);
