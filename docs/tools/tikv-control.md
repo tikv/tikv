@@ -23,15 +23,14 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
     ```
 
     However, sometimes `tikv-ctl` communicates with PD instead of TiKV. In this case, you need to use the `--pd` option instead of `--host`. Here is an example:
-    
+
     ```
     $ tikv-ctl --pd 127.0.0.1:2379 compact-cluster
     store:"127.0.0.1:20160" compact db:KV cf:default range:([], []) success!
     ```
 
-- Local mode: 
+- Local mode:
   - Use the `--db` option to specify the local TiKV data directory path
-  - Use the `ldb` option to run the ldb command of RocksDB
 
 Unless otherwise noted, all commands support both the remote mode and the local mode.
 
@@ -237,7 +236,7 @@ success!
 ```
 
 > **Note:**
-> 
+>
 > - This command only supports the local mode. It prints `success!` when successfully run.
 > - You must run this command for all stores where specified Regions' peers are located. If `-r` is not set, all Regions are involved, and you need to run this command for all stores.
 
@@ -253,28 +252,28 @@ success!
 ```
 
 > **Note**:
-> 
+>
 > - This command only supports the local mode. It prints `success!` when successfully run.
 > - The argument of the `-p` option specifies the PD endpoints without the `http` prefix. Specifying the PD endpoints is to query whether the specified `region_id` is validated or not.
 > - You need to run this command for all stores where specified Regions' peers are located.
 
 ### Ldb Command
 
-The ldb command line tool offers multiple data access and database administration commands. Some examples are listed below. 
-For more information, refer to the help message displayed when running `tikv-ctl ldb` without any arguments or check the documents from RocksDB.
+The ldb command line tool offers multiple data access and database administration commands. Some examples are listed below.
+For more information, refer to the help message displayed when running `tikv-ctl ldb` or check the documents from RocksDB.
 
 Examples of data access sequence:
 
 To dump an existing RocksDB in HEX:
 
 ```bash
-$ tikv-ctl ldb --db=/tmp/test_db dump --hex > /tmp/dbdump
+$ tikv-ctl ldb --hex --db=/tmp/db dump
 ```
 
 To dump the manifest of an existing RocksDB:
 
 ```bash
-$ tikv-ctl ldb manifest_dump --path=/tmp/test_db/MANIFEST-000001 --json
+$ tikv-ctl ldb --hex manifest_dump --path=/tmp/db/MANIFEST-000001
 ```
 
 You can specify the column family that your query is against using the `--column_family=<string>` command line.
