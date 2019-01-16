@@ -175,7 +175,7 @@ dependencies = [
 [[package]]
 name = "bzip2-sys"
 version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#50c3d852b68d8e17a55454e600b21a196928b508"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#18fd3e18bc1763219a7496e466a16bd213448fec"
 dependencies = [
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -945,7 +945,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#2a657925d6715c9160a84c26376ba79b884f040e"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#1317e2eda2b743f71a31d8a6535e9e87dadd9770"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -954,7 +954,7 @@ dependencies = [
  "libz-sys 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "lz4-sys 1.8.0 (git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build)",
  "snappy-sys 0.1.0 (git+https://github.com/busyjay/rust-snappy.git?branch=static-link)",
- "zstd-sys 1.4.7+zstd.1.3.8 (git+https://github.com/gyscos/zstd-rs.git)",
+ "zstd-sys 1.4.8+zstd.1.3.8 (git+https://github.com/gyscos/zstd-rs.git)",
 ]
 
 [[package]]
@@ -1570,7 +1570,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#2a657925d6715c9160a84c26376ba79b884f040e"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#1317e2eda2b743f71a31d8a6535e9e87dadd9770"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2444,8 +2444,8 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.7+zstd.1.3.8"
-source = "git+https://github.com/gyscos/zstd-rs.git#3d0105ac413b06aca54d9cccce78ee54d24fa0f1"
+version = "1.4.8+zstd.1.3.8"
+source = "git+https://github.com/gyscos/zstd-rs.git#843151e8260ae7e15b046ece919423a4f9b109fb"
 dependencies = [
  "blob 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2713,4 +2713,4 @@ dependencies = [
 "checksum ws2_32-sys 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "d59cefebd0c892fa2dd6de581e937301d8552cb44489cdff035c6187cb63fa5e"
 "checksum xdg 2.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d089681aa106a86fade1b0128fb5daf07d5867a509ab036d99988dec80429a57"
 "checksum zipf 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a4b6916023b585291387096ec195b2f2d372344993dfceed51c8efb6cde84b12"
-"checksum zstd-sys 1.4.7+zstd.1.3.8 (git+https://github.com/gyscos/zstd-rs.git)" = "<none>"
+"checksum zstd-sys 1.4.8+zstd.1.3.8 (git+https://github.com/gyscos/zstd-rs.git)" = "<none>"

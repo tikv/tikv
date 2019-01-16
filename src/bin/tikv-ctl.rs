@@ -50,7 +50,6 @@ extern crate vlog;
 mod util;
 
 use std::cmp::Ordering;
-use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -60,7 +59,7 @@ use std::thread;
 use std::time::Duration;
 use std::{process, str, u64};
 
-use clap::{App, Arg, ArgMatches, SubCommand};
+use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
@@ -88,7 +87,6 @@ const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 const METRICS_JEMALLOC: &str = "jemalloc";
-const RUN_LDB_CMD_KEY_WORD: &str = "ldb";
 
 fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     ve1!("{}: {}", prefix, e);
@@ -99,21 +97,11 @@ fn new_debug_executor(
     db: Option<&str>,
     raft_db: Option<&str>,
     host: Option<&str>,
-    cfg_path: Option<&str>,
+    cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
 ) -> Box<DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
-            let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
-                File::open(&path)
-                    .and_then(|mut f| {
-                        let mut s = String::new();
-                        f.read_to_string(&mut s).unwrap();
-                        let c = toml::from_str(&s).unwrap();
-                        Ok(c)
-                    })
-                    .unwrap()
-            });
             let kv_db_opts = cfg.rocksdb.build_opt();
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
             let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
@@ -304,10 +292,10 @@ trait DebugExecutor {
         db: Option<&str>,
         raft_db: Option<&str>,
         host: Option<&str>,
-        cfg_path: Option<&str>,
+        cfg: &TiKvConfig,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, host, cfg_path, mgr);
+        let rhs_debug_executor = new_debug_executor(db, raft_db, host, cfg, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -927,6 +915,7 @@ fn main() {
     let version_info = util::tikv_version_info();
 
     let mut app = App::new("TiKV Ctl")
+        .setting(AppSettings::AllowExternalSubcommands)
         .long_version(version_info.as_ref())
         .author("TiKV Org.")
         .about("Distributed transactional key value database powered by Rust and Raft")
@@ -1008,10 +997,6 @@ fn main() {
                 .long("pd")
                 .takes_value(true)
                 .help("pd address"),
-        )
-        .subcommand(
-            SubCommand::with_name(RUN_LDB_CMD_KEY_WORD)
-                .about("run ldb cmd of RocksDB")
         )
         .subcommand(
             SubCommand::with_name("raft")
@@ -1608,14 +1593,27 @@ fn main() {
                 ),
         );
 
-    // tikv-ctl just encapsulates the related module in rust-rocksdb. So, we don't need to parse
-    // the cmd here. Run cmd `./path-to-tikv-ctl ldb` and the help information will be printed.
-    if let Some(ldb_args) = check_run_ldb_cmd() {
-        rocksdb::run_ldb_tool(&ldb_args);
+    let matches = app.clone().get_matches();
+
+    // Initialize configuration and security manager.
+    let cfg_path = matches.value_of("config");
+    let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
+        File::open(&path)
+            .and_then(|mut f| {
+                let mut s = String::new();
+                f.read_to_string(&mut s).unwrap();
+                let c = toml::from_str(&s).unwrap();
+                Ok(c)
+            })
+            .unwrap()
+    });
+    let mgr = new_security_mgr(&matches);
+
+    // Bypass the ldb command to RocksDB.
+    if let Some(cmd) = matches.subcommand_matches("ldb") {
+        run_ldb_command(&cmd, &cfg);
         return;
     }
-
-    let matches = app.clone().get_matches();
 
     // Deal with subcommand dump-snap-meta. This subcommand doesn't require other args, so process
     // it before checking args.
@@ -1653,10 +1651,9 @@ fn main() {
         return;
     }
 
-    let mgr = new_security_mgr(&matches);
-
     // Deal with all subcommands needs PD.
     if let Some(pd) = matches.value_of("pd") {
+        let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
         if let Some(matches) = matches.subcommand_matches("compact-cluster") {
             let db = matches.value_of("db").unwrap();
             let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
@@ -1666,13 +1663,13 @@ fn main() {
             let threads = value_t_or_exit!(matches.value_of("threads"), u32);
             let bottommost = BottommostLevelCompaction::from(matches.value_of("bottommost"));
             return compact_whole_cluster(
-                pd, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
+                &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
             );
         }
         if let Some(matches) = matches.subcommand_matches("split-region") {
             let region_id = value_t_or_exit!(matches.value_of("region"), u64);
             let key = unescape(matches.value_of("key").unwrap());
-            return split_region(pd, region_id, key, mgr);
+            return split_region(&pd_client, mgr, region_id, key);
         }
 
         let _ = app.print_help();
@@ -1683,9 +1680,8 @@ fn main() {
     let db = matches.value_of("db");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
-    let cfg_path = matches.value_of("config");
 
-    let debug_executor = new_debug_executor(db, raft_db, host, cfg_path, Arc::clone(&mgr));
+    let debug_executor = new_debug_executor(db, raft_db, host, &cfg, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -1744,7 +1740,7 @@ fn main() {
         let region = matches.value_of("region").unwrap().parse().unwrap();
         let to_db = matches.value_of("to_db");
         let to_host = matches.value_of("to_host");
-        debug_executor.diff_region(region, to_db, None, to_host, cfg_path, mgr);
+        debug_executor.diff_region(region, to_db, None, to_host, &cfg, mgr);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
         let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
@@ -2000,9 +1996,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
     RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
-fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager>) {
-    let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
-
+fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
     let region = pd_client
         .get_region_by_id(region_id)
         .wait()
@@ -2048,7 +2042,8 @@ fn split_region(pd: &str, region_id: u64, key: Vec<u8>, mgr: Arc<SecurityManager
 }
 
 fn compact_whole_cluster(
-    pd: &str,
+    pd_client: &RpcClient,
+    cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
     db_type: DBType,
     cfs: Vec<&str>,
@@ -2057,27 +2052,19 @@ fn compact_whole_cluster(
     threads: u32,
     bottommost: BottommostLevelCompaction,
 ) {
-    let mut cfg = PdConfig::default();
-    cfg.endpoints.push(pd.to_owned());
-    if let Err(e) = cfg.validate() {
-        panic!("invalid pd configuration: {:?}", e);
-    }
-
-    let pd_client = RpcClient::new(&cfg, Arc::clone(&mgr))
-        .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
-
     let stores = pd_client
         .get_all_stores()
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
     let mut handles = Vec::new();
     for s in stores {
+        let cfg = cfg.clone();
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
         let h = thread::spawn(move || {
-            let debug_executor = new_debug_executor(None, None, Some(&addr), None, mgr);
+            let debug_executor = new_debug_executor(None, None, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
                     Some(&addr),
@@ -2114,22 +2101,14 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-// check if the key word "ldb" exists as the first argv and format the cmd line
-// to meet the requirements of ldb_tool.
-fn check_run_ldb_cmd() -> Option<Vec<String>> {
-    let mut res = Vec::new();
-    for x in env::args_os() {
-        if let Some(s) = x.to_os_string().to_str() {
-            res.push(s.to_string());
-        } else {
-            return None;
-        }
-    }
-    if res.len() > 1 && res[1] == RUN_LDB_CMD_KEY_WORD {
-        res.remove(1);
-        return Some(res);
-    }
-    None
+fn run_ldb_command(cmd: &ArgMatches, cfg: &TiKvConfig) {
+    let mut args: Vec<String> = match cmd.values_of("") {
+        Some(v) => v.map(|x| x.to_owned()).collect(),
+        None => Vec::new(),
+    };
+    args.insert(0, "ldb".to_owned());
+    let opts = cfg.rocksdb.build_opt();
+    rocksdb::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]
