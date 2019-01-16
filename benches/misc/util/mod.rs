@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,28 +11,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![cfg_attr(test, feature(test))]
-#![feature(try_from)]
-
-#[macro_use]
-extern crate bitflags;
-#[macro_use]
-extern crate enum_primitive_derive;
-#[macro_use]
-extern crate failure;
-extern crate num_traits;
-#[cfg(test)]
-extern crate test;
-extern crate tikv_alloc;
-
-extern crate tipb;
-
-mod def;
-mod error;
-
-pub mod prelude {
-    pub use super::def::FieldTypeAccessor;
-}
-
-pub use self::def::*;
-pub use self::error::*;
+mod slice_compare;
