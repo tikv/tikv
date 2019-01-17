@@ -45,7 +45,6 @@ pub fn setup_for_ci() {
 
     // HACK! Always use epollex in tests.
     // See more: https://github.com/grpc/grpc/blob/v1.17.2/src/core/lib/iomgr/ev_posix.cc#L124
-
     #[cfg(target_os = "linux")]
     env::set_var("GRPC_POLL_STRATEGY", "epollex");
 
