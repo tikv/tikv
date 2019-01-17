@@ -501,6 +501,7 @@ impl Peer {
         local_reader: &Scheduler<ReadTask>,
         region: metapb::Region,
     ) {
+        info!("{} {:?} in set_region {:?}", self.tag, self.region(), region);
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the localreader for this region.

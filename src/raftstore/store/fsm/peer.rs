@@ -1508,12 +1508,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState, merged: bool) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
+            info!("{} get meta lock in prepare merge", self.fsm.peer.tag);
             meta.set_region(
                 &self.ctx.coprocessor_host,
                 &self.ctx.local_reader,
                 region.clone(),
                 &mut self.fsm.peer,
             );
+            info!("{} update to local reader finished in prepare merge", self.fsm.peer.tag);
         }
         self.fsm.peer.pending_merge_state = Some(state);
         self.notify_prepare_merge();
@@ -1533,6 +1535,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         source: metapb::Region,
     ) -> Option<Arc<AtomicBool>> {
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        info!("{} get meta lock", self.fsm.peer.tag);
         let source_region_id = source.get_id();
         let source_version = source.get_region_epoch().get_version();
         'check_locks: {
@@ -1542,6 +1545,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if let Some((exist_version, ready_to_merge)) =
                 meta.merge_locks.remove(&source_region_id)
             {
+                info!("{} remove merge lock exist {} source {}", self.fsm.peer.tag, exist_version, source_version);
                 if exist_version == source_version {
                     assert!(ready_to_merge.is_none());
                     // So `on_ready_prepare_merge` is executed.
@@ -1571,6 +1575,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 source_region_id,
                 (source_version, Some(ready_to_merge.clone())),
             );
+            info!("{} insert merge lock", self.fsm.peer.tag);
             return Some(ready_to_merge);
         }
 
@@ -1596,6 +1601,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             region,
             &mut self.fsm.peer,
         );
+        info!("{} update region to local reader finished", self.fsm.peer.tag);
+
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
@@ -1620,6 +1627,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 },
             )
             .unwrap();
+        info!("{} end of commit merge", self.fsm.peer.tag);
         None
     }
 

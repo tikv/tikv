@@ -474,6 +474,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                 }
                 Task::Update((region_id, progress)) => {
                     if let Some(delegate) = self.delegates.get_mut(&region_id) {
+                        info!("{} update {:?}", delegate.tag, progress);
                         delegate.update(progress);
                     } else {
                         warn!(
