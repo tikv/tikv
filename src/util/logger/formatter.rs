@@ -69,7 +69,7 @@ fn need_json_encode(bytes: &[u8]) -> bool {
 /// Else, it serializes the given data structure as JSON into a writer.
 ///
 /// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
-/// [`need json encode`]: #method.need_escape
+/// [`need json encode`]: #method.need_json_encode
 ///
 pub fn write_escaped_str<W>(writer: &mut W, value: &str) -> io::Result<()>
 where
