@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crossbeam::SendError;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -132,11 +133,12 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
-        if let Err(e) = self
+        if let Err(SendError(msg)) = self
             .router
             .force_send(region_id, PeerMsg::SignificantMsg(msg))
         {
-            return Err(box_err!("failed to sendsignificant msg {:?}", e));
+            // TODO: panic here once we can detect system is shutting down reliably.
+            error!("failed to send significant msg {:?}", msg);
         }
 
         Ok(())
