@@ -950,10 +950,10 @@ mod tests {
     fn test_merge_impl(to_left: bool, update_first: bool) {
         let mut c = RegionCollector::new();
         let init_regions = &[
-            new_region(1, b"", b"k1", 1),
-            new_region(2, b"k1", b"k2", 1),
-            new_region(3, b"k2", b"k3", 1),
-            new_region(4, b"k3", b"", 1),
+            region_with_conf(1, b"", b"k1", 1, 1),
+            region_with_conf(2, b"k1", b"k2", 1, 100),
+            region_with_conf(3, b"k2", b"k3", 1, 1),
+            region_with_conf(4, b"k3", b"", 1, 100),
         ];
         must_load_regions(&mut c, init_regions);
 
@@ -975,9 +975,9 @@ mod tests {
         }
 
         let final_regions = &[
-            (new_region(1, b"", b"k1", 1), StateRole::Follower),
+            (region_with_conf(1, b"", b"k1", 1, 1), StateRole::Follower),
             (updating_region, StateRole::Follower),
-            (new_region(4, b"k3", b"", 1), StateRole::Follower),
+            (region_with_conf(4, b"k3", b"", 1, 100), StateRole::Follower),
         ];
         check_collection(&c, final_regions);
     }
