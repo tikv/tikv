@@ -235,20 +235,20 @@ impl<E: Engine> GCRunner<E> {
 
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                 info!(
-                    "[region {}] GC found at least {} versions for key {}",
-                    ctx.get_region_id(),
-                    gc_info.found_versions,
-                    k
+                    "GC found plenty versions for a key";
+                    "region" => ctx.get_region_id(),
+                    "versions count" => gc_info.found_versions,
+                    "key" => %k
                 );
             }
             // TODO: we may delete only part of the versions in a batch, which may not beyond
             // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
             if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
                 info!(
-                    "[region {}] GC deleted {} versions for key {}",
-                    ctx.get_region_id(),
-                    gc_info.deleted_versions,
-                    k
+                    "GC deleted plenty versions for a key";
+                    "region" => ctx.get_region_id(),
+                    "deleted version count" => gc_info.deleted_versions,
+                    "key" => %k
                 );
             }
 
@@ -268,9 +268,9 @@ impl<E: Engine> GCRunner<E> {
 
     fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
         debug!(
-            "doing gc on region {}, safe_point {}",
-            ctx.get_region_id(),
-            safe_point
+            "doing gc";
+            "region" => ctx.get_region_id(),
+            "safe_point" => safe_point
         );
 
         let mut next_key = None;
@@ -279,7 +279,7 @@ impl<E: Engine> GCRunner<E> {
             let (keys, next) = self
                 .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {
-                    warn!("gc scan_keys failed on region {}: {:?}", safe_point, &e);
+                    warn!("gc scan_keys failed"; "region" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
                     e
                 })?;
             if keys.is_empty() {
@@ -288,7 +288,7 @@ impl<E: Engine> GCRunner<E> {
 
             // Does the GC operation on all scanned keys
             next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
-                warn!("gc_keys failed on region {}: {:?}", safe_point, &e);
+                warn!("gc gc_keys failed"; "region" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
                 e
             })?;
             if next_key.is_none() {
@@ -297,24 +297,24 @@ impl<E: Engine> GCRunner<E> {
         }
 
         debug!(
-            "gc on region {}, safe_point {} has finished",
-            ctx.get_region_id(),
-            safe_point
+            "gc has finished";
+            "region" => ctx.get_region_id(),
+            "safe_point" => safe_point
         );
         Ok(())
     }
 
     fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
         info!(
-            "unsafe destroy range start_key: {}, end_key: {} started.",
-            start_key, end_key
+            "start to unsafely destroy range";
+            "start_key" => %start_key, "end_key" => %end_key
         );
 
         // TODO: Refine usage of errors
 
         let local_storage = self.local_storage.as_ref().ok_or_else(|| {
             let e: Error = box_err!("unsafe destroy range not supported: local_storage not set");
-            warn!("unsafe destroy range failed: {:?}", &e);
+            warn!("unsafe destroy range failed"; "err" => ?e);
             e
         })?;
 
@@ -335,16 +335,15 @@ impl<E: Engine> GCRunner<E> {
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(
-                        "unsafe destroy range failed at delete_files_in_range_cf: {:?}",
-                        e
+                        "unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e
                     );
                     e
                 })?;
         }
 
         info!(
-            "unsafe destroy range start_key: {}, end_key: {} finished deleting files in range, cost time: {:?}",
-            start_key, end_key, delete_files_start_time.elapsed(),
+            "unsafe destroy range finished deleting files in range";
+            "start_key" => %start_key, "end_key" => %end_key, "cost time" => ?delete_files_start_time.elapsed()
         );
 
         // Then, delete all remaining keys in the range.
@@ -355,8 +354,7 @@ impl<E: Engine> GCRunner<E> {
                 .map_err(|e| {
                     let e: Error = box_err!(e);
                     warn!(
-                        "unsafe destroy range failed at delete_all_in_range_cf: {:?}",
-                        e
+                        "unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e
                     );
                     e
                 })?;
@@ -373,8 +371,8 @@ impl<E: Engine> GCRunner<E> {
                 .unwrap_or_else(|e| {
                     // Warn and ignore it.
                     warn!(
-                        "unsafe destroy range: failed sending ClearRegionSizeInRange: {:?}",
-                        e
+                        "unsafe destroy range: failed sending ClearRegionSizeInRange";
+                        "err" => ?e
                     );
                 });
         } else {
@@ -382,8 +380,8 @@ impl<E: Engine> GCRunner<E> {
         }
 
         info!(
-            "unsafe destroy range start_key: {}, end_key: {} finished cleaning up all, cost time {:?}",
-            start_key, end_key, cleanup_all_time_cost,
+            "unsafe destroy finished cleaning up all";
+            "start_key" => %start_key, "end_key" => %end_key, "cost time" => ?cleanup_all_time_cost,
         );
         Ok(())
     }
@@ -762,7 +760,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         info!("gc-manager is initializing");
         self.safe_point = 0;
         self.wait_for_next_safe_point()?;
-        info!("gc-manager started at safe point {}", self.safe_point);
+        info!("gc-manager started"; "safe_point" => self.safe_point);
         Ok(())
     }
 
@@ -787,7 +785,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
-                error!("failed to get safe point from pd: {:?}", e);
+                error!("failed to get safe point from pd"; "err" => ?e);
                 return false;
             }
         };
@@ -802,7 +800,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             }
             Ordering::Equal => false,
             Ordering::Greater => {
-                debug!("gc_worker: safe point updated to {}", safe_point);
+                debug!("gc_worker: update safe point"; "safe_point" => safe_point);
                 self.safe_point = safe_point;
                 true
             }
@@ -862,8 +860,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         let mut processed_regions = 0;
 
         info!(
-            "gc_worker: start auto gc with safe point {}",
-            self.safe_point
+            "gc_worker: start auto gc"; "safe_point" => self.safe_point
         );
 
         // The following loop iterates all regions whose leader is on this TiKV and does GC on them.
@@ -880,8 +877,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
                     need_rewind = false;
                     info!(
-                        "gc_worker: auto gc rewinds after gc {} regions",
-                        processed_regions
+                        "gc_worker: auto gc rewinds"; "processed_regions" => processed_regions
                     );
                     processed_regions = 0;
                 }
@@ -896,8 +892,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     // We have worked to the end of the TiKV or our progress has reached `end`, and we
                     // don't need to rewind. In this case, the round of GC has finished.
                     info!(
-                        "gc_worker: finished auto gc, {} regions processed",
-                        processed_regions
+                        "gc_worker: finished auto gc"; "processed_regions" => processed_regions
                     );
                     return Ok(());
                 }
@@ -938,16 +933,14 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             *need_rewind = false;
             *end = None;
             info!(
-                "gc_worker: safe point updated to {}, auto gc will go to the end",
-                self.safe_point
+                "gc_worker: auto gc will go to the end"; "safe_point" => self.safe_point
             );
         } else {
             *need_rewind = true;
             *end = progress.clone();
             info!(
-                "gc_worker: safe point updated to {}, auto gc will rewind to {}",
-                self.safe_point,
-                end.as_ref().unwrap()
+                "gc_worker: auto gc will go to rewind"; "safe_point" => self.safe_point,
+                "next_rewind_key" => %(end.as_ref().unwrap())
             );
         }
     }
@@ -971,24 +964,21 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         // Ignore the error and continue, since it's useless to retry this.
         // TODO: Find a better way to handle errors. Maybe we should retry.
         debug!(
-            "trying gc region {}, epoch {:?}, end_key {}",
-            ctx.get_region_id(),
-            ctx.region_epoch.as_ref(),
-            match &next_key {
+            "trying gc"; "region" => ctx.get_region_id(), "epoch" => ?ctx.region_epoch.as_ref(),
+            "end_key" =>  match &next_key {
                 Some(key) => format!("{}", key),
                 None => "None".to_string(),
             }
         );
         if let Err(e) = gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
             error!(
-                "failed gc region {}, epoch {:?}, end_key {}, err: {:?}",
-                ctx.get_region_id(),
-                ctx.region_epoch.as_ref(),
+                "failed gc"; "region" => ctx.get_region_id(), "epoch" => ?ctx.region_epoch.as_ref(),
+                "end_key" =>
                 match &next_key {
                     Some(key) => format!("{}", key),
                     None => "None".to_string(),
                 },
-                e
+               "err" => ?e
             );
         }
         *processed_regions += 1;
@@ -1017,8 +1007,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 Ok(r) => r,
                 Err(e) => {
                     error!(
-                        "gc_worker: failed to get next region information, err: {:?}",
-                        e
+                        "gc_worker: failed to get next region information"; "err" => ?e
                     );
                     continue;
                 }
