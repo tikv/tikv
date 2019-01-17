@@ -29,7 +29,8 @@ use raftstore::store::msg::Callback;
 use raftstore::store::Engines;
 use server::debug::{Debugger, Error};
 use server::transport::RaftStoreRouter;
-use util::{jemalloc, metrics, rocksdb_stats};
+use tikv_alloc;
+use util::{metrics, rocksdb_stats};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -328,7 +329,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
                 let engines = debugger.get_engine();
                 resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
                 resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
-                resp.set_jemalloc(jemalloc::dump_stats());
+                resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)
         });
