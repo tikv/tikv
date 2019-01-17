@@ -450,8 +450,8 @@ fn main() {
         fatal!("invalid configuration: {:?}", e);
     }
     info!(
-        "using config: {}",
-        serde_json::to_string_pretty(&config).unwrap()
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
     );
 
     // Before any startup, check system configuration.
