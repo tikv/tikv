@@ -280,8 +280,13 @@ impl RegionCollector {
         let epoch = region_to_check.get_region_epoch();
         let current_epoch = current.get_region_epoch();
 
+        // Only compare conf_ver when they have the same version.
+        // When a region A merges region B, region B may have a greater conf_ver. Then, the new
+        // merged region meta has larger version but smaller conf_ver than the original B's. In this
+        // case, the incoming region meta has a smaller conf_ver but is not stale.
         epoch.get_version() < current_epoch.get_version()
-            || epoch.get_conf_ver() < current_epoch.get_conf_ver()
+            || (epoch.get_version() == current_epoch.get_version()
+                && epoch.get_conf_ver() < current_epoch.get_conf_ver())
     }
 
     /// For all regions whose range overlaps with the given `region` or region_id is the same as
