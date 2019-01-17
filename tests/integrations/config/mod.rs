@@ -164,6 +164,9 @@ fn test_serde_custom_tikv_config() {
         local_read_batch_size: 33,
         apply_max_batch_size: 22,
         apply_pool_size: 4,
+        store_max_batch_size: 21,
+        store_pool_size: 3,
+        future_poll_size: 2,
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
