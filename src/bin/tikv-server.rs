@@ -96,7 +96,7 @@ fn check_system_config(config: &TiKvConfig) {
 
     // check rocksdb data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!("rockdsb check data dir";
+        warn!("rocksdb check data dir";
               "error" => %e);
     }
     // check raft data dir
