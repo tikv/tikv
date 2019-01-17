@@ -31,7 +31,7 @@ use tokio::runtime::{Runtime, TaskExecutor};
 use tokio::timer::Delay;
 
 use coprocessor::Endpoint;
-use raftstore::store::{Callback, Msg as StoreMessage};
+use raftstore::store::{Callback, Msg as StoreMessage, PeerMsg};
 use server::load_statistics::ThreadLoad;
 use server::metrics::*;
 use server::snap::Task as SnapTask;
@@ -700,12 +700,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
-        let req = StoreMessage::SplitRegion {
+        let req = StoreMessage::PeerMsg(PeerMsg::SplitRegion {
             region_id,
             region_epoch: req.take_context().take_region_epoch(),
             split_keys: vec![Key::from_raw(req.get_split_key()).into_encoded()],
             callback: Callback::Write(cb),
-        };
+        });
 
         if let Err(e) = self.ch.try_send(req) {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);

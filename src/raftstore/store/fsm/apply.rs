@@ -16,11 +16,11 @@ use std::borrow::Cow;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use std::{cmp, mem, usize};
+use std::{cmp, usize};
 
 use protobuf::RepeatedField;
 use rocksdb::rocksdb_options::WriteOptions;
@@ -43,17 +43,17 @@ use import::SSTImporter;
 use raft::NO_LIMIT;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use raftstore::store::metrics::*;
-use raftstore::store::msg::Callback;
+use raftstore::store::msg::{Callback, PeerMsg};
 use raftstore::store::peer::Peer;
 use raftstore::store::peer_storage::{
     self, compact_raft_log, write_initial_apply_state, write_peer_state,
 };
 use raftstore::store::util::check_region_epoch;
-use raftstore::store::{cmd_resp, keys, util, Config, Engines, Store};
+use raftstore::store::{cmd_resp, keys, util, Config, Engines};
 use raftstore::{Error, Result};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::collections::HashMap;
 use util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::Either;
@@ -263,13 +263,32 @@ impl ApplyCallback {
     }
 }
 
+#[derive(Clone)]
+pub enum Notifier {
+    Router(RaftRouter),
+    #[cfg(test)]
+    Sender(Sender<PeerMsg>),
+}
+
+impl Notifier {
+    fn notify(&self, region_id: u64, msg: PeerMsg) {
+        match *self {
+            Notifier::Router(ref r) => {
+                r.force_send(region_id, msg).unwrap();
+            }
+            #[cfg(test)]
+            Notifier::Sender(ref s) => s.send(msg).unwrap(),
+        }
+    }
+}
+
 struct ApplyContext {
     tag: String,
     timer: Option<SlowTimer>,
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
     router: ApplyRouter,
-    notifier: Sender<TaskRes>,
+    notifier: Notifier,
     engines: Engines,
     cbs: MustConsumeVec<ApplyCallback>,
     apply_res: Vec<ApplyRes>,
@@ -297,7 +316,7 @@ impl ApplyContext {
         importer: Arc<SSTImporter>,
         engines: Engines,
         router: BatchRouter<ApplyFsm, ControlFsm>,
-        notifier: Sender<TaskRes>,
+        notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
         ApplyContext {
@@ -380,7 +399,7 @@ impl ApplyContext {
     }
 
     /// Finishes `Apply`s for the delegate.
-    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: Vec<ExecResult>) {
+    pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
         if !delegate.pending_remove {
             delegate.write_apply_state(&self.engines, self.wb.as_mut().unwrap());
         }
@@ -428,12 +447,15 @@ impl ApplyContext {
         self.write_to_db();
 
         if !self.apply_res.is_empty() {
-            self.notifier
-                .send(TaskRes::Applies(mem::replace(
-                    &mut self.apply_res,
-                    Vec::default(),
-                )))
-                .unwrap();
+            for res in self.apply_res.drain(..) {
+                self.notifier.notify(
+                    res.region_id,
+                    PeerMsg::ApplyRes {
+                        region_id: res.region_id,
+                        res: TaskRes::Apply(res),
+                    },
+                );
+            }
         }
 
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
@@ -655,7 +677,7 @@ impl ApplyDelegate {
         // commands again.
         apply_ctx.committed_count += committed_entries.len();
         let mut drainer = committed_entries.drain(..);
-        let mut results = vec![];
+        let mut results = VecDeque::new();
         while let Some(entry) = drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -688,7 +710,7 @@ impl ApplyDelegate {
 
             match res {
                 ApplyResult::None => {}
-                ApplyResult::Res(res) => results.push(res),
+                ApplyResult::Res(res) => results.push_back(res),
                 ApplyResult::WaitMergeSource(ready_to_merge) => {
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
@@ -1262,6 +1284,11 @@ impl ApplyDelegate {
         let change_type = request.get_change_type();
         let mut region = self.region.clone();
 
+        fail_point!(
+            "apply_on_conf_change_1_3_1",
+            { (self.id == 1 || self.id == 3) && self.region_id() == 1 },
+            |_| panic!("should not use return")
+        );
         info!(
             "{} exec ConfChange {:?}, epoch: {:?}",
             self.tag,
@@ -2119,14 +2146,14 @@ pub struct ApplyRes {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
-    pub exec_res: Vec<ExecResult>,
+    pub exec_res: VecDeque<ExecResult>,
     pub metrics: ApplyMetrics,
     pub merged: bool,
 }
 
 #[derive(Debug)]
 pub enum TaskRes {
-    Applies(Vec<ApplyRes>),
+    Apply(ApplyRes),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -2241,12 +2268,16 @@ impl ApplyFsm {
         assert_eq!(d.region_id, self.delegate.region_id());
         if !self.delegate.stopped {
             self.destroy(ctx);
-            ctx.notifier
-                .send(TaskRes::Destroy {
+            ctx.notifier.notify(
+                self.delegate.region_id(),
+                PeerMsg::ApplyRes {
                     region_id: self.delegate.region_id(),
-                    peer_id: self.delegate.id,
-                })
-                .unwrap();
+                    res: TaskRes::Destroy {
+                        region_id: self.delegate.region_id(),
+                        peer_id: self.delegate.id,
+                    },
+                },
+            );
         }
     }
 
@@ -2440,7 +2471,7 @@ pub struct ApplyPoller {
 }
 
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
-    fn begin(&mut self) {}
+    fn begin(&mut self, _batch_size: usize) {}
 
     /// There is no control fsm in apply poller.
     fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {
@@ -2485,29 +2516,33 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         expected_msg_count
     }
 
-    fn end(&mut self) {
+    fn end(&mut self, _: &mut [Box<ApplyFsm>]) {
         self.apply_ctx.flush();
     }
 }
 
 pub struct Builder {
     tag: String,
-    cfg: Rc<Config>,
+    cfg: Arc<Config>,
     coprocessor_host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
     engines: Engines,
-    sender: Sender<TaskRes>,
+    sender: Notifier,
     router: ApplyRouter,
 }
 
 impl Builder {
-    pub fn new<T, C>(store: &Store<T, C>, sender: Sender<TaskRes>, router: ApplyRouter) -> Builder {
+    pub fn new<T, C>(
+        builder: &RaftPollerBuilder<T, C>,
+        sender: Notifier,
+        router: ApplyRouter,
+    ) -> Builder {
         Builder {
-            tag: store.tag.clone(),
-            cfg: store.cfg.clone(),
-            coprocessor_host: store.coprocessor_host.clone(),
-            importer: store.importer.clone(),
-            engines: store.engines.clone(),
+            tag: format!("[store {}]", builder.store.get_id()),
+            cfg: builder.cfg.clone(),
+            coprocessor_host: builder.coprocessor_host.clone(),
+            importer: builder.importer.clone(),
+            engines: builder.engines.clone(),
             sender,
             router,
         }
@@ -2583,11 +2618,11 @@ impl ApplyRouter {
 pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
 
 impl ApplyBatchSystem {
-    pub fn schedule_all(&self, peers: &HashMap<u64, Peer>) {
-        let mut mailboxes = Vec::with_capacity(peers.len());
-        for (region_id, peer) in peers {
+    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
+        let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
+        for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
-            mailboxes.push((*region_id, BasicMailbox::new(tx, fsm)));
+            mailboxes.push((peer.region().get_id(), BasicMailbox::new(tx, fsm)));
         }
         self.router().register_all(mailboxes);
     }
@@ -2596,7 +2631,6 @@ impl ApplyBatchSystem {
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
     super::batch::create_system(
-        "apply".to_owned(),
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
         tx,
@@ -2607,6 +2641,7 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
     use std::sync::atomic::*;
     use std::sync::*;
     use std::time::*;
@@ -2707,9 +2742,12 @@ mod tests {
         validate_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     }
 
-    fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<TaskRes>) -> ApplyRes {
+    fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
         match receiver.recv_timeout(Duration::from_secs(3)) {
-            Ok(TaskRes::Applies(mut res)) => res.pop().unwrap(),
+            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
+                TaskRes::Apply(mut res) => res,
+                e => panic!("unexpected res {:?}", e),
+            },
             e => panic!("unexpected res {:?}", e),
         }
     }
@@ -2717,21 +2755,22 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
+        let sender = Notifier::Sender(tx);
         let (_tmp, engines) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
-        let cfg = Rc::new(Config::default());
+        let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
             coprocessor_host: host,
             importer,
+            sender,
             engines: engines.clone(),
-            sender: tx,
             router: router.clone(),
         };
-        system.spawn(builder);
+        system.spawn("test-basic".to_owned(), builder);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -2831,12 +2870,13 @@ mod tests {
             2,
             Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
         );
-        let res = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(TaskRes::Applies(res)) => res,
+        let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
+                TaskRes::Apply(res) => res,
+                e => panic!("unexpected apply result: {:?}", e),
+            },
             e => panic!("unexpected apply result: {:?}", e),
         };
-        assert_eq!(res.len(), 1);
-        let apply_res = &res[0];
         assert_eq!(apply_res.region_id, 2);
         let apply_state: RaftApplyState = engines
             .kv
@@ -2857,7 +2897,10 @@ mod tests {
 
         router.schedule_task(2, Msg::destroy(2));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(TaskRes::Destroy { region_id, peer_id }) => (region_id, peer_id),
+            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
+                TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),
+                e => panic!("expected destroy result, but got {:?}", e),
+            },
             e => panic!("expected destroy result, but got {:?}", e),
         };
         assert_eq!(peer_id, 1);
@@ -3048,18 +3091,19 @@ mod tests {
             .register_query_observer(1, Box::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
-        let cfg = Rc::new(Config::default());
+        let sender = Notifier::Sender(tx);
+        let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
+            sender,
             coprocessor_host: Arc::new(host),
             importer: importer.clone(),
             engines: engines.clone(),
-            sender: tx,
             router: router.clone(),
         };
-        system.spawn(builder);
+        system.spawn("test-handle-raft".to_owned(), builder);
 
         let mut reg = Registration::default();
         reg.id = 3;
@@ -3385,19 +3429,20 @@ mod tests {
         let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
         reg.region.set_peers(RepeatedField::from_vec(peers.clone()));
         let (tx, _rx) = mpsc::channel();
+        let sender = Notifier::Sender(tx);
         let host = Arc::new(CoprocessorHost::default());
-        let cfg = Rc::new(Config::default());
+        let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
-            coprocessor_host: host,
+            sender,
             importer,
+            coprocessor_host: host,
             engines: engines.clone(),
-            sender: tx,
             router: router.clone(),
         };
-        system.spawn(builder);
+        system.spawn("test-split".to_owned(), builder);
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
 
