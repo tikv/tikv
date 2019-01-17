@@ -42,7 +42,9 @@ where
     Ok(())
 }
 
-/// According to [RFC: Unified Log Format], the following characters need to be escaped:
+/// According to [RFC: Unified Log Format], it returns `true` when this byte stream contains
+/// the following characters, which means this input stream needs to be JSON encoded.
+/// Otherwise, it returns `false`.
 ///
 /// - U+0000 (NULL) ~ U+0020 (SPACE)
 /// - U+0022 (QUOTATION MARK)
@@ -53,7 +55,7 @@ where
 /// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
 ///
 #[inline]
-fn need_escape(bytes: &[u8]) -> bool {
+fn need_json_encode(bytes: &[u8]) -> bool {
     for &byte in bytes {
         if byte <= 0x20 || byte == 0x22 || byte == 0x3D || byte == 0x5B || byte == 0x5D {
             return true;
@@ -63,17 +65,17 @@ fn need_escape(bytes: &[u8]) -> bool {
 }
 
 /// According to [RFC: Unified Log Format], escapes the given data and writes it into a writer.
-/// If there is no character [`need escape`], write the data into the writer directly.
-/// Else, call `serde_json::to_writer` which serializes the given data structure as JSON into a writer.
+/// If there is no character [`need json encode`], it writes the data into the writer directly.
+/// Else, it serializes the given data structure as JSON into a writer.
 ///
 /// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
-/// [`need escape`]: #method.need_escape
+/// [`need json encode`]: #method.need_escape
 ///
 pub fn write_escaped_str<W>(writer: &mut W, value: &str) -> io::Result<()>
 where
     W: io::Write + ?Sized,
 {
-    if !need_escape(value.as_bytes()) {
+    if !need_json_encode(value.as_bytes()) {
         writer.write_all(value.as_bytes())?;
     } else {
         serde_json::to_writer(writer, value)?;
@@ -102,7 +104,7 @@ mod tests {
         ];
         for (input, expect) in &cases {
             assert_eq!(
-                need_escape(input.as_bytes()),
+                need_json_encode(input.as_bytes()),
                 *expect,
                 "{} | {}",
                 input,
