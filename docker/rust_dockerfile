@@ -46,8 +46,8 @@ RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/maste
 	&& cd /root && rm -rf master.tar.gz
 
 RUN cd /root/tikv-master \
-	&& /root/.cargo/bin/rustup default $(tail -n 1 RUST_VERSION) \
-	&& /root/.cargo/bin/rustup component add rustfmt-preview --toolchain $(tail -n 1 RUST_VERSION) \
+	&& /root/.cargo/bin/rustup default $(tail -n 1 rust-toolchain) \
+	&& /root/.cargo/bin/rustup component add rustfmt-preview --toolchain $(tail -n 1 rust-toolchain) \
 	&& /root/.cargo/bin/cargo fetch \
 	&& rm -rf /root/tikv-master
 
