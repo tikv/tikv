@@ -14,19 +14,18 @@
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
-use raftstore::store::{Callback, Msg as StoreMsg, ReadTask, SignificantMsg, Transport};
+use raftstore::store::fsm::{RaftRouter, SendCh};
+use raftstore::store::{Callback, Msg as StoreMsg, PeerMsg, ReadTask, SignificantMsg, Transport};
 use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
 use server::raft_client::RaftClient;
 use server::Result;
 use util::collections::HashSet;
-use util::transport::SendCh;
 use util::worker::Scheduler;
 use util::HandyRwLock;
 
@@ -40,7 +39,7 @@ pub trait RaftStoreRouter: Send + Clone {
 
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::RaftMessage(msg))
+        self.try_send(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)))
     }
 
     /// Sends RaftCmdRequest to local store.
@@ -49,14 +48,17 @@ pub trait RaftStoreRouter: Send + Clone {
     }
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()>;
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
 
     /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        self.significant_send(SignificantMsg::Unreachable {
+        self.significant_send(
             region_id,
-            to_peer_id,
-        })
+            SignificantMsg::Unreachable {
+                region_id,
+                to_peer_id,
+            },
+        )
     }
 
     /// Reports the sending snapshot status to the peer of the Region.
@@ -66,32 +68,35 @@ pub trait RaftStoreRouter: Send + Clone {
         to_peer_id: u64,
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
-        self.significant_send(SignificantMsg::SnapshotStatus {
+        self.significant_send(
             region_id,
-            to_peer_id,
-            status,
-        })
+            SignificantMsg::SnapshotStatus {
+                region_id,
+                to_peer_id,
+                status,
+            },
+        )
     }
 }
 
 /// A router that routes messages to the raftstore
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
-    pub ch: SendCh<StoreMsg>,
-    pub significant_msg_sender: Sender<SignificantMsg>,
+    pub ch: SendCh,
+    router: RaftRouter,
     local_reader_ch: Scheduler<ReadTask>,
 }
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
     pub fn new(
-        raftstore_ch: SendCh<StoreMsg>,
-        significant_msg_sender: Sender<SignificantMsg>,
+        raftstore_ch: SendCh,
+        router: RaftRouter,
         local_reader_ch: Scheduler<ReadTask>,
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             ch: raftstore_ch,
-            significant_msg_sender,
+            router,
             local_reader_ch,
         }
     }
@@ -119,15 +124,18 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::RaftMessage(msg))
+        self.try_send(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)))
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
-    fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
-        if let Err(e) = self.significant_msg_sender.send(msg) {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+        if let Err(e) = self
+            .router
+            .force_send(region_id, PeerMsg::SignificantMsg(msg))
+        {
             return Err(box_err!("failed to sendsignificant msg {:?}", e));
         }
 

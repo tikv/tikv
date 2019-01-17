@@ -11,31 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crossbeam::TrySendError;
+use kvproto::errorpb;
+use kvproto::metapb;
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
+use prometheus::local::LocalHistogram;
+use rocksdb::DB;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use kvproto::errorpb;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
-use mio;
-use prometheus::local::LocalHistogram;
-use rocksdb::DB;
 use time::Timespec;
 
 use raftstore::errors::RAFTSTORE_IS_BUSY;
+use raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use raftstore::store::msg::Callback;
 use raftstore::store::util::{self, LeaseState, RemoteLease};
-use raftstore::store::Store;
 use raftstore::store::{
-    cmd_resp, Msg as StoreMsg, Peer, ReadExecutor, ReadResponse, RequestInspector, RequestPolicy,
+    cmd_resp, Msg as StoreMsg, Peer, PeerMsg, ReadExecutor, ReadResponse, RequestInspector,
+    RequestPolicy,
 };
 use raftstore::Result;
 use util::collections::HashMap;
 use util::time::duration_to_sec;
 use util::timer::Timer;
-use util::transport::{NotifyError, Sender};
+use util::transport::Sender;
 use util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
@@ -193,7 +193,7 @@ impl Task {
     #[inline]
     pub fn acceptable(msg: &StoreMsg) -> bool {
         match *msg {
-            StoreMsg::RaftCmd { ref request, .. } => {
+            StoreMsg::PeerMsg(PeerMsg::RaftCmd { ref request, .. }) => {
                 if request.has_admin_request() || request.has_status_request() {
                     false
                 } else {
@@ -242,7 +242,7 @@ fn handle_busy(cmd: StoreMsg) {
     };
 
     match cmd {
-        StoreMsg::RaftCmd { callback, .. } => callback.invoke_read(read_resp),
+        StoreMsg::PeerMsg(PeerMsg::RaftCmd { callback, .. }) => callback.invoke_read(read_resp),
         other => panic!("unexpected cmd {:?}", other),
     }
 }
@@ -258,24 +258,27 @@ pub struct LocalReader<C: Sender<StoreMsg>> {
     tag: String,
 }
 
-impl LocalReader<mio::Sender<StoreMsg>> {
-    pub fn new<T, P>(store: &Store<T, P>) -> Self {
+impl LocalReader<RaftRouter> {
+    pub fn new<'a, T, P>(
+        builder: &RaftPollerBuilder<T, P>,
+        peers: impl Iterator<Item = &'a Peer>,
+    ) -> Self {
         let mut delegates =
-            HashMap::with_capacity_and_hasher(store.get_peers().len(), Default::default());
-        for (&region_id, p) in store.get_peers() {
+            HashMap::with_capacity_and_hasher(peers.size_hint().0, Default::default());
+        for p in peers {
             let delegate = ReadDelegate::from_peer(p);
             info!(
                 "{} create ReadDelegate for peer {:?}",
                 delegate.tag, delegate.peer_id
             );
-            delegates.insert(region_id, delegate);
+            delegates.insert(p.region().get_id(), delegate);
         }
-        let store_id = store.store_id();
+        let store_id = builder.store.get_id();
         LocalReader {
             delegates,
             store_id,
-            kv_engine: store.kv_engine(),
-            ch: store.get_sendch().into_inner(),
+            kv_engine: builder.engines.kv.clone(),
+            ch: builder.router.clone(),
             metrics: Default::default(),
             tag: format!("[store {}]", store_id),
         }
@@ -293,7 +296,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         debug!("{} localreader redirect {:?}", self.tag, cmd);
         match self.ch.send(cmd) {
             Ok(()) => (),
-            Err(NotifyError::Full(cmd)) => {
+            Err(TrySendError::Full(cmd)) => {
                 self.metrics.borrow_mut().rejected_by_channel_full += 1;
                 handle_busy(cmd)
             }
@@ -396,11 +399,11 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             }
         }
 
-        self.redirect(StoreMsg::RaftCmd {
+        self.redirect(StoreMsg::PeerMsg(PeerMsg::RaftCmd {
             send_time,
             request,
             callback,
-        });
+        }));
     }
 }
 
@@ -456,11 +459,11 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                     info!("{} register ReadDelegate", delegate.tag);
                     self.delegates.insert(delegate.region.get_id(), delegate);
                 }
-                Task::Read(StoreMsg::RaftCmd {
+                Task::Read(StoreMsg::PeerMsg(PeerMsg::RaftCmd {
                     send_time,
                     request,
                     callback,
-                }) => {
+                })) => {
                     self.propose_raft_command(request, callback, send_time, &mut executor);
                     if sent.is_none() {
                         sent = Some(send_time);
@@ -653,7 +656,7 @@ mod tests {
 
     fn must_extract_cmds(msg: StoreMsg) -> Vec<RaftCmdRequest> {
         match msg {
-            StoreMsg::RaftCmd { request, .. } => vec![request],
+            StoreMsg::PeerMsg(PeerMsg::RaftCmd { request, .. }) => vec![request],
             other => panic!("unexpected msg: {:?}", other),
         }
     }
