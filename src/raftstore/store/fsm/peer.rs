@@ -317,6 +317,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
+        if self.fsm.stopped {
+            return;
+        }
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::RaftLogGc => self.on_raft_gc_log_tick(),
@@ -2077,14 +2080,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         total_gc_logs += compact_idx - first_idx;
 
-        let term = self
-            .fsm
-            .peer
-            .raft_group
-            .raft
-            .raft_log
-            .term(compact_idx)
-            .unwrap();
+        let res = self.fsm.peer.raft_group.raft.raft_log.term(compact_idx);
+        let term = match res {
+            Ok(t) => t,
+            Err(e) => panic!(
+                "{} fail to load term for {}: {:?}",
+                self.fsm.peer.tag, compact_idx, e
+            ),
+        };
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
