@@ -33,7 +33,7 @@ use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use pd::PdClient;
 use raftstore::store::keys;
-use raftstore::store::msg::Msg as RaftStoreMsg;
+use raftstore::store::msg::{Msg as RaftStoreMsg, StoreMsg};
 use raftstore::store::util::{delete_all_in_range_cf, find_peer};
 use raftstore::store::SeekRegionResult;
 use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
@@ -364,10 +364,10 @@ impl<E: Engine> GCRunner<E> {
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
-                .send(RaftStoreMsg::ClearRegionSizeInRange {
+                .send(RaftStoreMsg::StoreMsg(StoreMsg::ClearRegionSizeInRange {
                     start_key: start_key.as_encoded().to_vec(),
                     end_key: end_key.as_encoded().to_vec(),
-                })
+                }))
                 .unwrap_or_else(|e| {
                     // Warn and ignore it.
                     warn!(

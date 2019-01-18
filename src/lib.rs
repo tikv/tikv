@@ -27,6 +27,7 @@
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
+#![feature(cell_update)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
@@ -60,7 +61,6 @@ extern crate kvproto;
 extern crate lazy_static;
 extern crate libc;
 extern crate log;
-extern crate mio;
 extern crate murmur3;
 extern crate num;
 extern crate num_traits;
