@@ -127,7 +127,7 @@ pub trait CountCollector {
     fn collect(&mut self, _target: &mut Vec<i64>);
 }
 
-/// A normal `CountCollector`.
+/// A normal `CountCollector`. Acts like `collect = true`.
 #[derive(Default)]
 pub struct CountCollectorNormal {
     counts: Vec<i64>,
@@ -151,7 +151,7 @@ impl CountCollector for CountCollectorNormal {
     }
 }
 
-/// A `CountCollector` that does not collect anything.
+/// A `CountCollector` that does not collect anything. Acts like `collect = false`.
 pub struct CountCollectorDisabled;
 
 impl CountCollector for CountCollectorDisabled {
@@ -165,6 +165,8 @@ impl CountCollector for CountCollectorDisabled {
     fn collect(&mut self, _target: &mut Vec<i64>) {}
 }
 
+/// Some extra metrics collected during execution. These metrics are mainly used to support
+/// `EXPLAIN ANALYZE` statements.
 #[derive(Default)]
 pub struct ExecutionSummary {
     /// Total time cost in this executor.
@@ -177,6 +179,7 @@ pub struct ExecutionSummary {
     pub num_iterations: usize,
 }
 
+/// Collector that help collect metrics and build an `ExecutionSummary`.
 pub trait ExecutionSummaryCollector {
     type TimeRecorderGuard;
 
@@ -193,6 +196,7 @@ pub trait ExecutionSummaryCollector {
     fn collect(&mut self, _target: &mut [Option<ExecutionSummary>]);
 }
 
+/// A helper to record duration for timing fields for `ExecutionSummary` based on `Drop`.
 pub struct ExecutionSummaryTimeGuard {
     start_time: ::util::time::Instant,
     collect_target: ::std::sync::Arc<::std::sync::atomic::AtomicUsize>,
@@ -207,7 +211,7 @@ impl Drop for ExecutionSummaryTimeGuard {
     }
 }
 
-/// A normal `ExecutionSummaryCollector`.
+/// A normal `ExecutionSummaryCollector`. Acts like `collect = true`.
 pub struct ExecutionSummaryCollectorNormal {
     output_index: usize,
     counts: ExecutionSummary,
@@ -250,7 +254,7 @@ impl ExecutionSummaryCollector for ExecutionSummaryCollectorNormal {
     }
 }
 
-/// A `ExecutionSummaryCollector` that does not collect anything.
+/// A `ExecutionSummaryCollector` that does not collect anything. Acts like `collect = false`.
 pub struct ExecutionSummaryCollectorDisabled;
 
 impl ExecutionSummaryCollector for ExecutionSummaryCollectorDisabled {
