@@ -58,8 +58,6 @@ const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
-const SIZE_LEN: usize = 4 as usize;
-
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
     let (ratio, min, max) = match (is_raft_db, cf) {
@@ -1290,13 +1288,13 @@ Note: little endian Coding
 */
 fn update_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOperands) -> Vec<u8> {
     let mut result: Vec<u8> = Vec::with_capacity(operands.size_hint().0);
-    let arr : [u8; SIZE_LEN] = [0, 0, 0, 0];
+    let arr : [u8;4] = [0, 0, 0, 0];
     result.extend_from_slice(&arr[..]);
 
     let mut map_index = HashMap::new();
 
-    let mut total_size  = 0;
-    total_size += SIZE_LEN;
+    let mut total_size : u32 = 0;
+    total_size += 4;
 
     let mut v = Vec::new();
     for op in operands {
@@ -1307,26 +1305,36 @@ fn update_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOpera
     for i in 0..len {
         let op_value : &[u8] = v.get( len-1-i ).unwrap();
         let mut begin = 0;
-        begin += SIZE_LEN ;
+        begin += 4 ;
 
         let op_len = op_value.len();
         while begin < op_len {
-            let first = begin;
+
             //decode key size
-            let key_size = decode_size(&op_value, begin);
+            let first = begin;
+            let end = begin + 4 ;
+            let vv = &op_value[begin..end];
+            let ptr: *const u8  = vv.as_ptr();
+            let ptr: *const u32 = ptr as *const u32;
+            let key_size = unsafe{ *ptr };
 
             //decode key
-            begin = begin + SIZE_LEN;
-            let end = begin + key_size;
-            let key = &op_value[begin..end];
+            begin = end;
+            let end = begin + key_size as usize;
+            let key = &op_value[begin..end];  
+
 
             //decode value size
             begin = end;
-            let value_size = decode_size(&op_value, begin);
+            let end = begin + 4;
+            let vv = &op_value[begin..end];
+            let ptr: *const u8  = vv.as_ptr();
+            let ptr: *const u32 = ptr as *const u32;
+            let value_size = unsafe{ *ptr };
 
             //decode value
-            begin = begin + SIZE_LEN;
-            let end = begin + value_size;
+            begin = end;
+            let end = begin + value_size as usize;
             //let value = &op_value[begin..end];
 
             if let None = map_index.get(&key) {
@@ -1334,7 +1342,7 @@ fn update_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOpera
 
                 if value_size != 0 {
                     result.extend_from_slice(&op_value[first..end]);
-                    total_size += 2*SIZE_LEN + key_size + value_size;
+                    total_size += 8 + key_size + value_size;
                 }
 
             }
@@ -1343,30 +1351,37 @@ fn update_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOpera
     }
 
     if let Some(existing_value) = existing_val {
-        let mut begin= 0;
+        let mut begin = 0;
         let exist_total_size = existing_value.len();
 
-        begin += SIZE_LEN ;
+        begin += 4 ;
 
         while begin < exist_total_size {
             //decode key size
             let first = begin;
-            //decode key size
-            let key_size = decode_size(&existing_value, begin);
+            let end = begin + 4;
+            let vv = &existing_value[begin..end];
+            let ptr: *const u8  = vv.as_ptr();
+            let ptr: *const u32 = ptr as *const u32;
+            let key_size = unsafe{ *ptr };
 
             //decode key
-            begin = begin + SIZE_LEN;
-            let end = begin + key_size;
+            begin = end;
+            let end = begin + key_size as usize;
             let key = &existing_value[begin..end];
 
 
             //decode value size
             begin = end;
-            let value_size = decode_size(&existing_value, begin);
+            let end = begin + 4;
+            let vv = &existing_value[begin..end];
+            let ptr: *const u8  = vv.as_ptr();
+            let ptr: *const u32 = ptr as *const u32;
+            let value_size = unsafe{ *ptr };
 
             //decode value
             begin = end;
-            let end = begin + value_size;
+            let end = begin + value_size as usize;
             //let value = &existing_value[begin..end];
 
             if let Some(_) = map_index.get(&key) {
@@ -1376,7 +1391,7 @@ fn update_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOpera
 
             if value_size != 0 {
                 result.extend_from_slice(&existing_value[first..end]);
-                total_size += 2*SIZE_LEN + key_size + value_size;
+                total_size += 8 + key_size + value_size;
             }
             begin = end;
         }
@@ -1384,9 +1399,9 @@ fn update_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOpera
 
     let res_u8;
     unsafe {
-        res_u8 = mem::transmute::<u32, [u8; SIZE_LEN]>(total_size as u32);
+        res_u8 = mem::transmute::<u32, [u8; 4]>(total_size);
     }
-    for i in 0..SIZE_LEN {
+    for i in 0..4 {
         if let Some(elem) = result.get_mut(i) {
             *elem = res_u8[i];
         }
@@ -1394,18 +1409,6 @@ fn update_merge(_: &[u8], existing_val: Option<&[u8]>, operands: &mut MergeOpera
 
     result
 }
-
-fn decode_size(value: &[u8], begin: usize) -> usize {
-    //decode key or value size
-    let end = begin + SIZE_LEN;
-    let vv = &value[begin..end];
-    let ptr: *const u8  = vv.as_ptr();
-    let ptr: *const u32 = ptr as *const u32;
-    let key_size = unsafe{ *ptr } as usize;
-    return key_size
-}
-
-
 
 #[cfg(test)]
 mod tests {
