@@ -1053,6 +1053,7 @@ impl ApplyDelegate {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Update => self.handle_update(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(ctx, req, &mut ranges, ctx.use_delete_range)
@@ -1140,6 +1141,51 @@ impl ApplyDelegate {
         }
         Ok(resp)
     }
+
+    // handle update
+    fn handle_update(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
+        let (key, value) = (req.get_update().get_key(), req.get_update().get_value());
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
+
+        let resp = Response::new();
+        let key = keys::data_key(key);
+        self.metrics.size_diff_hint += key.len() as i64;
+        self.metrics.size_diff_hint += value.len() as i64;
+        if !req.get_update().get_cf().is_empty() {
+            let cf = req.get_update().get_cf();
+            // TODO: don't allow write preseved cfs.
+            if cf == CF_LOCK {
+                self.metrics.lock_cf_written_bytes += key.len() as u64;
+                self.metrics.lock_cf_written_bytes += value.len() as u64;
+            }
+            // TODO: check whether cf exists or not.
+            rocksdb::get_cf_handle(&ctx.engines.kv, cf)
+                .and_then(|handle| ctx.wb().merge_cf(handle, &key, value)) // to modify
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to write ({}, {}) to cf {}: {:?}",
+                        self.tag,
+                        escape(&key),
+                        escape(value),
+                        cf,
+                        e
+                    )
+                });
+        } else {
+            ctx.wb().merge(&key, value).unwrap_or_else(|e| { // to modify
+                panic!(
+                    "{} failed to write ({}, {}): {:?}",
+                    self.tag,
+                    escape(&key),
+                    escape(value),
+                    e
+                );
+            });
+        }
+        Ok(resp)
+    }
+
 
     fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();

@@ -386,6 +386,86 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn raw_update(&mut self, ctx: RpcContext, mut req: RawUpdateRequest, sink: UnarySink<RawUpdateResponse>) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_update.start_coarse_timer();
+
+        let (cb, future) = paired_future_callback();
+        let res = self.storage.async_raw_update(
+            req.take_context(),
+            req.take_cf(),
+            req.take_key(),
+            req.take_value(),
+            cb,
+        );
+
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future
+            .map_err(Error::from)
+            .map(|v|{
+                let mut resp = RawUpdateResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed {:?}", "raw_update", e);
+                GRPC_MSG_FAIL_COUNTER.raw_update.inc();
+            });
+        ctx.spawn(future);
+    }
+
+    fn raw_batch_update(
+        &mut self,
+        ctx: RpcContext,
+        mut req: RawBatchUpdateRequest,
+        sink: UnarySink<RawBatchUpdateResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_update.start_coarse_timer();
+
+        let pairs = req
+            .take_pairs()
+            .into_iter()
+            .map(|mut x| (x.take_key(), x.take_value()))
+            .collect();
+
+        let (cb, future) = paired_future_callback();
+        let res = self
+            .storage
+            .async_raw_batch_update(req.take_context(), req.take_cf(), pairs, cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future
+            .map_err(Error::from)
+            .map(|v| {
+                let mut resp = RawBatchUpdateResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", "raw_batch_update", e);
+                GRPC_MSG_FAIL_COUNTER.raw_batch_update.inc();
+            });
+        ctx.spawn(future);
+    }
+
     fn raw_delete(
         &mut self,
         ctx: RpcContext,

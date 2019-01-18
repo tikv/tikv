@@ -19,7 +19,7 @@ use std::time::Duration;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
-    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, UpdateRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
 use protobuf::RepeatedField;
@@ -291,6 +291,16 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     }
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
+                }
+                Modify::Update(cf, k, v) => {
+                    let mut update = UpdateRequest::new();
+                    update.set_key(k.into_encoded());
+                    update.set_value(v);
+                    if cf != CF_DEFAULT {
+                        update.set_cf(cf.to_string());
+                    }
+                    req.set_cmd_type(CmdType::Update);
+                    req.set_update(update);
                 }
                 Modify::DeleteRange(cf, start_key, end_key) => {
                     let mut delete_range = DeleteRangeRequest::new();

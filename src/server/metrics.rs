@@ -34,6 +34,8 @@ make_static_metric! {
         raw_batch_scan,
         raw_put,
         raw_batch_put,
+        raw_update,
+        raw_batch_update,
         raw_delete,
         raw_delete_range,
         raw_batch_delete,

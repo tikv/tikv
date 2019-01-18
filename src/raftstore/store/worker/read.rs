@@ -202,6 +202,7 @@ impl Task {
                             CmdType::Get | CmdType::Snap => (),
                             CmdType::Delete
                             | CmdType::Put
+                            | CmdType::Update
                             | CmdType::DeleteRange
                             | CmdType::Prewrite
                             | CmdType::IngestSST

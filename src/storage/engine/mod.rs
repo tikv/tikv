@@ -66,6 +66,7 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
+    Update(CfName, Key, Value),
     DeleteRange(CfName, Key, Key),
 }
 

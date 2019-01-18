@@ -272,6 +272,7 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
                 let cf_tree = engine.get_cf(cf);
                 cf_tree.write().unwrap().remove(&k);
             }
+            Modify::Update(_cf, _k, _v) => unimplemented!(), 
             Modify::Put(cf, k, v) => {
                 let cf_tree = engine.get_cf(cf);
                 cf_tree.write().unwrap().insert(k, v);
