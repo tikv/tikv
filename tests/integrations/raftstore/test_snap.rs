@@ -21,7 +21,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::{Message, MessageType};
 
 use test_raftstore::*;
-use tikv::raftstore::store::Msg;
+use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
@@ -396,7 +396,7 @@ impl Filter<Msg> for SnapshotAppendFilter {
         let mut stale = false;
         for m in msgs.drain(..) {
             let mut should_collect = false;
-            if let Msg::RaftMessage(ref msg) = m {
+            if let Msg::PeerMsg(PeerMsg::RaftMessage(ref msg)) = m {
                 should_collect =
                     !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
                 stale = !pending_msg.is_empty()

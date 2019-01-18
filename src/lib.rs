@@ -27,6 +27,7 @@
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
+#![feature(cell_update)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
@@ -54,15 +55,12 @@ extern crate grpcio as grpc;
 extern crate hashbrown;
 extern crate hex;
 extern crate indexmap;
-#[cfg(all(unix, not(fuzzing)))]
-extern crate jemallocator;
 extern crate kvproto;
 
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
 extern crate log;
-extern crate mio;
 extern crate murmur3;
 extern crate num;
 extern crate num_traits;
@@ -103,6 +101,7 @@ extern crate sys_info;
 extern crate tempdir;
 #[cfg(test)]
 extern crate test;
+extern crate tikv_alloc;
 extern crate time;
 extern crate tipb;
 extern crate tokio;
@@ -128,6 +127,8 @@ extern crate panic_hook;
 extern crate safemem;
 extern crate smallvec;
 extern crate tokio_threadpool;
+#[macro_use]
+extern crate vlog;
 
 #[macro_use]
 pub mod util;
@@ -140,13 +141,3 @@ pub mod server;
 pub mod storage;
 
 pub use storage::Storage;
-
-// As of now TiKV always turns on jemalloc on Unix, though libraries
-// generally shouldn't be opinionated about their allocators like
-// this. It's easier to do this in one place than to have all our bins
-// turn it on themselves.
-//
-// cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs`
-#[cfg(all(unix, not(fuzzing)))]
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
