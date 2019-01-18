@@ -5,10 +5,10 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ## [3.0.0-beta]
 - Support distributed GC [#3179](https://github.com/tikv/tikv/pull/3179)
 - Check RocksDB Level 0 files before applying snapshots to avoid Write Stall [#3606](https://github.com/tikv/tikv/pull/3606)
-- Support reverse `raw_scan` and `raw_batch_scan` [#3742](https://github.com/tikv/tikv/pull/3724)
+- Support reverse `raw_scan` and `raw_batch_scan` [#3724](https://github.com/tikv/tikv/pull/3724)
 - Support using HTTP to obtain monitoring information [#3855](https://github.com/tikv/tikv/pull/3855)
 - Support DST better [#3786](https://github.com/tikv/tikv/pull/3786)
-- Support receiving and sending Raft messages in batch [#3931](https://github.com/tikv/tikv/pull/3913)
+- Support receiving and sending Raft messages in batch [#3913](https://github.com/tikv/tikv/pull/3913)
 - Introduce a new storage engine Titan [#3985](https://github.com/tikv/tikv/pull/3985)
 - Upgrade gRPC to v1.17.2 [#4023](https://github.com/tikv/tikv/pull/4023)
 - Support receiving the client requests and sending replies in batch [#4043](https://github.com/tikv/tikv/pull/4043)
