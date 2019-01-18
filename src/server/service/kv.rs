@@ -1114,7 +1114,11 @@ fn future_prewrite<E: Engine>(
         .take_mutations()
         .into_iter()
         .map(|mut x| match x.get_op() {
-            Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+            Op::Put => Mutation::Put((
+                Key::from_raw(x.get_key()),
+                x.take_value(),
+                x.get_should_not_exist(),
+            )),
             Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
             Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
             _ => panic!("mismatch Op in prewrite mutations"),
@@ -1123,7 +1127,6 @@ fn future_prewrite<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
-    options.write_not_exist = req.get_write_not_exist();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(

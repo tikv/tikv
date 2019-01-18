@@ -108,7 +108,7 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: u64,
         commit_ts: u64,
     ) {
-        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec(), false))];
         let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
     }
@@ -265,7 +265,7 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                vec![Mutation::Put((Key::from_raw(key), value.to_vec(), false))],
                 key.to_vec(),
                 start_ts,
             )

@@ -293,7 +293,7 @@ pub mod tests {
                         pk = key.clone();
                     }
                     txn.prewrite(
-                        Mutation::Put((Key::from_raw(key), value.to_vec())),
+                        Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
                         &pk,
                         &Options::default(),
                     ).unwrap();

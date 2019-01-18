@@ -186,7 +186,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         txn.prewrite(
-            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
             pk,
             &Options::default(),
         ).unwrap();

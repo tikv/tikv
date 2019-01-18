@@ -145,7 +145,7 @@ mod tests {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
                 LockType::Put,
                 FLAG_PUT,
             ),

@@ -520,7 +520,7 @@ mod tests {
         }
 
         pub fn put(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let m = Mutation::Put((Key::from_raw(pk), vec![]));
+            let m = Mutation::Put((Key::from_raw(pk), vec![], false));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -760,18 +760,18 @@ mod tests {
         let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
 
         let (k, v) = (b"k", b"v");
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec(), false));
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 10);
 
         engine.rollback(k, 5);
         engine.rollback(k, 20);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec(), false));
         engine.prewrite(m, k, 25);
         engine.commit(k, 25, 30);
 
-        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec(), false));
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 

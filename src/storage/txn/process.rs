@@ -474,25 +474,8 @@ fn process_write_impl<S: Snapshot>(
             for m in mutations {
                 match txn.prewrite(m, &primary, &options) {
                     Ok(_) => {}
-                    Err(MvccError::KeyIsLocked {
-                        primary,
-                        ts,
-                        key,
-                        ttl,
-                    }) => {
-                        if options.write_not_exist {
-                            return Err(Error::from(MvccError::AlreadyExist { key: key.clone() }));
-                        } else {
-                            locks.push(
-                                Err(MvccError::KeyIsLocked {
-                                    primary,
-                                    ts,
-                                    key,
-                                    ttl,
-                                }).map_err(Error::from)
-                                    .map_err(StorageError::from),
-                            );
-                        }
+                    e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
                     }
                     Err(e) => return Err(Error::from(e)),
                 }

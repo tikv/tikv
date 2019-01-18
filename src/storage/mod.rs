@@ -80,7 +80,7 @@ pub fn is_short_value(value: &[u8]) -> bool {
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
-    Put((Key, Value)),
+    Put((Key, Value, bool /*should not exist*/)),
     Delete(Key),
     Lock(Key),
 }
@@ -89,7 +89,7 @@ pub enum Mutation {
 impl Mutation {
     pub fn key(&self) -> &Key {
         match *self {
-            Mutation::Put((ref key, _)) => key,
+            Mutation::Put((ref key, _, _)) => key,
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
         }
@@ -356,7 +356,7 @@ impl Command {
         match *self {
             Command::Prewrite { ref mutations, .. } => for m in mutations {
                 match *m {
-                    Mutation::Put((ref key, ref value)) => {
+                    Mutation::Put((ref key, ref value, _)) => {
                         bytes += key.as_encoded().len();
                         bytes += value.len();
                     }
@@ -393,8 +393,6 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
-    // Only write when these keys not exist
-    pub write_not_exist: bool,
 }
 
 impl Options {
@@ -404,7 +402,6 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
-            write_not_exist: false,
         }
     }
 
@@ -1839,7 +1836,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), false))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -1889,9 +1886,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), false)),
                 ],
                 b"a".to_vec(),
                 1,
@@ -1950,9 +1947,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), false)),
                 ],
                 b"a".to_vec(),
                 1,
@@ -2175,9 +2172,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), false)),
                 ],
                 b"a".to_vec(),
                 1,
@@ -2238,7 +2235,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), false))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -2248,7 +2245,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec(), false))],
                 b"y".to_vec(),
                 101,
                 Options::default(),
@@ -2292,7 +2289,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec(), false))],
                 b"x".to_vec(),
                 105,
                 Options::default(),
@@ -2327,7 +2324,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec(), false))],
                 b"y".to_vec(),
                 101,
                 Options::default(),
@@ -2339,7 +2336,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec(), false))],
                 b"y".to_vec(),
                 102,
                 Options::default(),
@@ -2356,7 +2353,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), false))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -2392,7 +2389,7 @@ mod tests {
         storage
             .async_prewrite(
                 ctx,
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), false))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -2437,7 +2434,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::new(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), false))],
                 b"x".to_vec(),
                 100,
                 Options::default(),
@@ -2483,9 +2480,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"x"), b"100".to_vec())),
-                    Mutation::Put((Key::from_raw(b"y"), b"100".to_vec())),
-                    Mutation::Put((Key::from_raw(b"z"), b"100".to_vec())),
+                    Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"y"), b"100".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"z"), b"100".to_vec(), false)),
                 ],
                 b"x".to_vec(),
                 100,
@@ -3487,9 +3484,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"z"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"z"), b"foo".to_vec(), false)),
                 ],
                 b"x".to_vec(),
                 100,
@@ -3502,9 +3499,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec(), false)),
                 ],
                 b"c".to_vec(),
                 101,
@@ -3698,9 +3695,9 @@ mod tests {
             .async_prewrite(
                 Context::new(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec(), false)),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec(), false)),
                 ],
                 b"c".to_vec(),
                 99,
@@ -3759,6 +3756,7 @@ mod tests {
                     mutations.push(Mutation::Put((
                         Key::from_raw(format!("x{:08}", i).as_bytes()),
                         b"foo".to_vec(),
+                        false,
                     )));
                 }
 

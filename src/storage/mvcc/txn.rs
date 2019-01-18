@@ -145,10 +145,19 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: &[u8],
         options: &Options,
     ) -> Result<()> {
+        let lock_type = LockType::from_mutation(&mutation);
+        let (key, value, should_not_exist) = match mutation {
+            Mutation::Put((key, value, should_not_exist)) => (key, Some(value), should_not_exist),
+            Mutation::Delete(key) => (key, None, false),
+            Mutation::Lock(key) => (key, None, false),
+        };
+
         {
-            let key = mutation.key();
             if !options.skip_constraint_check {
-                if let Some((commit, write)) = self.reader.seek_write(key, u64::max_value())? {
+                if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
+                    if should_not_exist {
+                        return Err(Error::AlreadyExist { key: key.to_raw()? });
+                    }
                     // Abort on writes after our start timestamp ...
                     // If exists a commit version whose commit timestamp is larger than or equal to
                     // current start timestamp, we should abort current prewrite, even if the commit
@@ -162,13 +171,14 @@ impl<S: Snapshot> MvccTxn<S> {
                             key: key.to_raw()?,
                             primary: primary.to_vec(),
                         });
-                    } else if options.write_not_exist {
-                        return Err(Error::AlreadyExist { key: key.to_raw()? });
                     }
                 }
             }
             // ... or locks at any timestamp.
-            if let Some(lock) = self.reader.load_lock(key)? {
+            if let Some(lock) = self.reader.load_lock(&key)? {
+                if should_not_exist {
+                    return Err(Error::AlreadyExist { key: key.to_raw()? });
+                }
                 if lock.ts != self.start_ts {
                     return Err(Error::KeyIsLocked {
                         key: key.to_raw()?,
@@ -183,14 +193,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 return Ok(());
             }
         }
-
-        let lock_type = LockType::from_mutation(&mutation);
-
-        let (key, value) = match mutation {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-        };
 
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
             self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
@@ -746,7 +748,7 @@ mod tests {
         assert_eq!(txn.write_size, 0);
 
         txn.prewrite(
-            Mutation::Put((key.clone(), v.to_vec())),
+            Mutation::Put((key.clone(), v.to_vec(), false)),
             pk,
             &Options::default(),
         ).unwrap();
@@ -781,7 +783,7 @@ mod tests {
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         assert!(
             txn.prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
                 key,
                 &Options::default()
             ).is_err()
@@ -794,7 +796,7 @@ mod tests {
         opt.skip_constraint_check = true;
         assert!(
             txn.prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
                 key,
                 &opt
             ).is_ok()
