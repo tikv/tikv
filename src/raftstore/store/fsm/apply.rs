@@ -1004,13 +1004,13 @@ impl ApplyDelegate {
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
-        if cmd_type != AdminCmdType::CompactLog {
+        if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
             info!(
                 "{} execute admin command {:?} at [term: {}, index: {}]",
                 self.tag,
                 request,
                 ctx.exec_ctx.as_ref().unwrap().term,
-                ctx.exec_ctx.as_ref().unwrap().index
+                ctx.exec_ctx.as_ref().unwrap().index;
             );
         }
 
@@ -1730,6 +1730,14 @@ impl ApplyDelegate {
                 ApplyResult::WaitMergeSource(ready_to_merge),
             ));
         }
+
+        info!(
+            "{} execute admin command {:?} at [term: {}, index: {}]",
+            self.tag,
+            req,
+            ctx.exec_ctx.as_ref().unwrap().term,
+            ctx.exec_ctx.as_ref().unwrap().index;
+        );
 
         self.ready_source_region_id = 0;
 
