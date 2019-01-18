@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
+use super::metrics::*;
 use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
@@ -27,7 +29,8 @@ use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResu
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
 use util::collections::HashMap;
 use util::escape;
-use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
+use util::timer::Timer;
+use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -439,6 +442,28 @@ impl Runnable<RegionCollectorMsg> for RegionCollector {
     }
 }
 
+const METRICS_FLUSH_INTERVAL: u64 = 10; // 10s
+
+impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        let mut count = 0;
+        let mut leader = 0;
+        for r in self.regions.values() {
+            count += 1;
+            if r.role == StateRole::Leader {
+                leader += 1;
+            }
+        }
+        REGION_COLLECTOR_COUNT_GAUGE_VEC
+            .with_label_values(&["region"])
+            .set(count);
+        REGION_COLLECTOR_COUNT_GAUGE_VEC
+            .with_label_values(&["leader"])
+            .set(leader);
+        timer.add_task(Duration::from_secs(METRICS_FLUSH_INTERVAL), ());
+    }
+}
+
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
@@ -464,10 +489,11 @@ impl RegionInfoAccessor {
 
     /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
     pub fn start(&self) {
+        let timer = Timer::new(METRICS_FLUSH_INTERVAL as usize);
         self.worker
             .lock()
             .unwrap()
-            .start(RegionCollector::new())
+            .start_with_timer(RegionCollector::new(), timer)
             .unwrap();
     }
 
