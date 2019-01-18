@@ -27,6 +27,7 @@ extern crate protobuf;
 extern crate rand;
 #[cfg(test)]
 extern crate test;
+extern crate tikv_alloc;
 
 extern crate panic_hook;
 

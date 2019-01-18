@@ -25,7 +25,7 @@ use rocksdb::{DBIterator, DB};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::SplitCheckerHost;
 use raftstore::store::engine::{IterOption, Iterable};
-use raftstore::store::{keys, Callback, Msg};
+use raftstore::store::{keys, Callback, Msg, PeerMsg};
 use raftstore::Result;
 use storage::{CfName, CF_WRITE, LARGE_CFS};
 use util::escape;
@@ -284,10 +284,10 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
 }
 
 fn new_split_region(region_id: u64, region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> Msg {
-    Msg::SplitRegion {
+    Msg::PeerMsg(PeerMsg::SplitRegion {
         region_id,
         region_epoch,
         split_keys,
         callback: Callback::None,
-    }
+    })
 }

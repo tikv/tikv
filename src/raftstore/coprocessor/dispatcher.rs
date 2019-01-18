@@ -131,7 +131,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: Sender<Msg> + Send + Sync + 'static>(
+    pub fn new<C: Sender<Msg> + Send + 'static>(
         cfg: Config,
         ch: RetryableSendCh<Msg, C>,
     ) -> CoprocessorHost {

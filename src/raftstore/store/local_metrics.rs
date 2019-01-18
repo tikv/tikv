@@ -12,6 +12,9 @@
 // limitations under the License.
 
 use prometheus::local::LocalHistogram;
+use std::sync::{Arc, Mutex};
+
+use util::collections::HashSet;
 
 use super::metrics::*;
 
@@ -375,7 +378,7 @@ pub struct RaftMetrics {
     pub process_tick: LocalHistogram,
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
-    pub leader_missing: usize,
+    pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
 }
 
@@ -393,7 +396,7 @@ impl Default for RaftMetrics {
                 .with_label_values(&["ready"])
                 .local(),
             append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
-            leader_missing: 0,
+            leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
         }
     }
@@ -410,6 +413,8 @@ impl RaftMetrics {
         self.append_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
-        LEADER_MISSING.set(self.leader_missing as i64);
+        let mut missing = self.leader_missing.lock().unwrap();
+        LEADER_MISSING.set(missing.len() as i64);
+        missing.clear();
     }
 }
