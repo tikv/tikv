@@ -250,8 +250,8 @@ lazy_static! {
 #[cfg(test)]
 mod tests {
     use std::env::temp_dir;
-    use std::sync;
-    use std::thread;
+    use std::io::Write;
+    use std::{fs, sync, thread};
 
     use libc;
 
@@ -269,7 +269,9 @@ mod tests {
                 let mut tmp = temp_dir();
                 tmp.push(name);
                 tmp.set_extension("txt");
-                fs::write(tmp.as_path(), name).unwrap();
+                let mut f = fs::File::create(tmp.as_path()).unwrap();
+                f.write_all(name.as_bytes()).unwrap();
+                f.sync_all().unwrap();
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
             })
