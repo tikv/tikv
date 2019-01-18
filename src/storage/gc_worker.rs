@@ -237,7 +237,7 @@ impl<E: Engine> GCRunner<E> {
                 info!(
                     "GC found plenty versions for a key";
                     "region" => ctx.get_region_id(),
-                    "versions count" => gc_info.found_versions,
+                    "versions" => gc_info.found_versions,
                     "key" => %k
                 );
             }
@@ -247,7 +247,7 @@ impl<E: Engine> GCRunner<E> {
                 info!(
                     "GC deleted plenty versions for a key";
                     "region" => ctx.get_region_id(),
-                    "deleted version count" => gc_info.deleted_versions,
+                    "versions" => gc_info.deleted_versions,
                     "key" => %k
                 );
             }
@@ -268,7 +268,7 @@ impl<E: Engine> GCRunner<E> {
 
     fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
         debug!(
-            "doing gc";
+            "start doing GC";
             "region" => ctx.get_region_id(),
             "safe_point" => safe_point
         );
@@ -306,7 +306,7 @@ impl<E: Engine> GCRunner<E> {
 
     fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
         info!(
-            "start to unsafely destroy range";
+            "unsafe destroy range started";
             "start_key" => %start_key, "end_key" => %end_key
         );
 
@@ -343,7 +343,7 @@ impl<E: Engine> GCRunner<E> {
 
         info!(
             "unsafe destroy range finished deleting files in range";
-            "start_key" => %start_key, "end_key" => %end_key, "cost time" => ?delete_files_start_time.elapsed()
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?delete_files_start_time.elapsed()
         );
 
         // Then, delete all remaining keys in the range.
@@ -380,8 +380,8 @@ impl<E: Engine> GCRunner<E> {
         }
 
         info!(
-            "unsafe destroy finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost time" => ?cleanup_all_time_cost,
+            "unsafe destroy range finished cleaning up all";
+            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_time_cost,
         );
         Ok(())
     }

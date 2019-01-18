@@ -536,7 +536,7 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage referenced"; "reference count before operation" => refs
+            "Storage referenced"; "original_ref" => refs
         );
 
         Self {
@@ -557,7 +557,7 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage de-referenced"; "reference count before operation" => refs
+            "Storage de-referenced"; "original_ref" => refs
         );
 
         if refs != 1 {
