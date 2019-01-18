@@ -489,7 +489,8 @@ impl RegionInfoAccessor {
 
     /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
     pub fn start(&self) {
-        let timer = Timer::new(METRICS_FLUSH_INTERVAL as usize);
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_secs(METRICS_FLUSH_INTERVAL), ());
         self.worker
             .lock()
             .unwrap()
