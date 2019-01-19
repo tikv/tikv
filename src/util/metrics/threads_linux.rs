@@ -293,7 +293,7 @@ mod tests {
         tids.iter()
             .find(|t| {
                 pid::io_task(pid, **t)
-                    .map(|io| io.write_bytes > 0)
+                    .map(|io| io.wchar == name.len())
                     .unwrap_or(false)
             })
             .unwrap();
