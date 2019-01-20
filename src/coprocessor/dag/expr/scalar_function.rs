@@ -134,6 +134,8 @@ impl ScalarFunc {
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
+            | ScalarFuncSig::AddDateAndDuration
+            | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
@@ -366,9 +368,7 @@ impl ScalarFunc {
             | ScalarFuncSig::PI => (0, 0),
 
             // unimplement signature
-            ScalarFuncSig::AddDateAndDuration
-            | ScalarFuncSig::AddDateAndString
-            | ScalarFuncSig::AddDateDatetimeInt
+            ScalarFuncSig::AddDateDatetimeInt
             | ScalarFuncSig::AddDateDatetimeString
             | ScalarFuncSig::AddDateIntInt
             | ScalarFuncSig::AddDateIntString
@@ -989,6 +989,9 @@ dispatch_call! {
         LpadBinary => lpad_binary,
         Rpad => rpad,
         RpadBinary => rpad_binary,
+
+        AddDateAndDuration => add_date_and_duration,
+        AddDateAndString => add_date_and_string,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1170,6 +1173,8 @@ mod tests {
                     ScalarFuncSig::Strcmp,
                     ScalarFuncSig::AddDurationAndString,
                     ScalarFuncSig::AddDurationAndDuration,
+                    ScalarFuncSig::AddDateAndDuration,
+                    ScalarFuncSig::AddDateAndString,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
                 ],
@@ -1446,8 +1451,6 @@ mod tests {
 
         // unimplemented signature
         let cases = vec![
-            ScalarFuncSig::AddDateAndDuration,
-            ScalarFuncSig::AddDateAndString,
             ScalarFuncSig::AddDateDatetimeInt,
             ScalarFuncSig::AddDateDatetimeString,
             ScalarFuncSig::AddDateIntInt,
