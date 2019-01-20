@@ -28,6 +28,7 @@
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
+#![feature(cell_update)]
 #![feature(range_contains)]
 #![feature(associated_type_defaults)]
 #![feature(vec_resize_with)]
@@ -62,7 +63,6 @@ extern crate kvproto;
 extern crate lazy_static;
 extern crate libc;
 extern crate log;
-extern crate mio;
 extern crate murmur3;
 extern crate num;
 extern crate num_traits;
