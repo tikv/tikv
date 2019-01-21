@@ -11,20 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
 use test_raftstore::*;
+use tikv::raftstore::coprocessor::RegionInfoAccessor;
 use tikv::raftstore::store::SeekRegionResult;
 use tikv::storage::engine::RegionInfoProvider;
+use tikv::util::collections::HashMap;
 use tikv::util::HandyRwLock;
 
-#[test]
-fn test_seek_region() {
-    // Prepare
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-
+fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
+    mut cluster: Cluster<T>,
+    region_info_providers: HashMap<u64, R>,
+) {
     for i in 0..15 {
         let i = i + b'0';
         let key = vec![b'k', i];
@@ -73,16 +74,15 @@ fn test_seek_region() {
     thread::sleep(Duration::from_secs(2));
 
     for node_id in cluster.get_node_ids() {
-        let engine = cluster.sim.rl().storages[&node_id].clone();
+        let engine = &region_info_providers[&node_id];
 
         // Test traverse all regions
         let mut sought_regions = Vec::new();
         let mut key = b"".to_vec();
         loop {
-            let res = engine.seek_region(&key, box |_| true, 100).unwrap();
+            let res = engine.seek_region(&key, box |_, _| true, 100).unwrap();
             match res {
-                SeekRegionResult::Found { local_peer, region } => {
-                    assert_eq!(local_peer.get_store_id(), node_id);
+                SeekRegionResult::Found(region) => {
                     key = region.get_end_key().to_vec();
                     sought_regions.push(region);
                     // Break on the last region
@@ -97,10 +97,9 @@ fn test_seek_region() {
         assert_eq!(sought_regions, regions);
 
         // Test end_key is exclusive
-        let res = engine.seek_region(b"k1", box |_| true, 100).unwrap();
+        let res = engine.seek_region(b"k1", box |_, _| true, 100).unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[1]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
@@ -108,11 +107,10 @@ fn test_seek_region() {
 
         // Test exactly reaches limit
         let res = engine
-            .seek_region(b"", box |p| p.region().get_end_key() == b"k9", 5)
+            .seek_region(b"", box |r, _| r.get_end_key() == b"k9", 5)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[4]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
@@ -120,7 +118,7 @@ fn test_seek_region() {
 
         // Test exactly exceeds limit
         let res = engine
-            .seek_region(b"", box |p| p.region().get_end_key() == b"k9", 4)
+            .seek_region(b"", box |r, _| r.get_end_key() == b"k9", 4)
             .unwrap();
         match res {
             SeekRegionResult::LimitExceeded { next_key } => {
@@ -130,7 +128,7 @@ fn test_seek_region() {
         }
 
         // Test seek to the end
-        let res = engine.seek_region(b"", box |_| false, 100).unwrap();
+        let res = engine.seek_region(b"", box |_, _| false, 100).unwrap();
         match res {
             SeekRegionResult::Ended => {}
             r => panic!("expect getting Ended, but got {:?}", r),
@@ -138,18 +136,17 @@ fn test_seek_region() {
 
         // Test exactly to the end
         let res = engine
-            .seek_region(b"", box |p| p.region().get_end_key().is_empty(), 6)
+            .seek_region(b"", box |r, _| r.get_end_key().is_empty(), 6)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[5]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
         }
 
         // Test limit exactly reaches end
-        let res = engine.seek_region(b"", box |_| false, 6).unwrap();
+        let res = engine.seek_region(b"", box |_, _| false, 6).unwrap();
         match res {
             SeekRegionResult::Ended => {}
             r => panic!("expect getting Ended, but got {:?}", r),
@@ -157,24 +154,47 @@ fn test_seek_region() {
 
         // Test seek from non-starting key
         let res = engine
-            .seek_region(b"k6\xff\xff\xff\xff\xff", box |_| true, 1)
+            .seek_region(b"k6\xff\xff\xff\xff\xff", box |_, _| true, 1)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[3]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
         }
         let res = engine
-            .seek_region(b"\xff\xff\xff\xff\xff\xff\xff\xff", box |_| true, 1)
+            .seek_region(b"\xff\xff\xff\xff\xff\xff\xff\xff", box |_, _| true, 1)
             .unwrap();
         match res {
-            SeekRegionResult::Found { local_peer, region } => {
-                assert_eq!(local_peer.get_store_id(), node_id);
+            SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[5]);
             }
             r => panic!("expect getting a region, but got {:?}", r),
         }
+    }
+}
+
+#[test]
+fn test_region_collection_seek_region() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    let (tx, rx) = channel();
+    cluster
+        .sim
+        .wl()
+        .post_create_coprocessor_host(box move |id, host| {
+            let p = RegionInfoAccessor::new(host);
+            p.start();
+            tx.send((id, p)).unwrap()
+        });
+
+    cluster.run();
+    let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
+    assert_eq!(region_info_providers.len(), 3);
+
+    test_seek_region_impl(cluster, region_info_providers.clone());
+
+    for (_, p) in region_info_providers {
+        p.stop();
     }
 }

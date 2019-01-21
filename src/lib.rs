@@ -27,6 +27,7 @@
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
 #![feature(use_extern_macros)]
+#![feature(cell_update)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
@@ -59,9 +60,7 @@ extern crate kvproto;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
-#[macro_use]
 extern crate log;
-extern crate mio;
 extern crate murmur3;
 extern crate num;
 extern crate num_traits;
@@ -79,32 +78,34 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[cfg_attr(not(test), macro_use(slog_o, slog_kv))]
-#[cfg_attr(
-    test,
-    macro_use(
-        slog_o,
-        slog_kv,
-        slog_crit,
-        slog_log,
-        slog_record,
-        slog_b,
-        slog_record_static
-    )
+#[macro_use(
+    slog_o,
+    slog_kv,
+    slog_trace,
+    slog_error,
+    slog_warn,
+    slog_info,
+    slog_debug,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static,
 )]
 extern crate slog;
 extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
+#[macro_use]
+extern crate slog_global;
 extern crate slog_term;
 extern crate sys_info;
 extern crate tempdir;
 #[cfg(test)]
 extern crate test;
+extern crate tikv_alloc;
 extern crate time;
 extern crate tipb;
 extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_executor;
 extern crate tokio_timer;
 #[cfg(test)]
 extern crate toml;
@@ -125,6 +126,8 @@ extern crate panic_hook;
 extern crate safemem;
 extern crate smallvec;
 extern crate tokio_threadpool;
+#[macro_use]
+extern crate vlog;
 
 #[macro_use]
 pub mod util;

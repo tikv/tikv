@@ -50,8 +50,10 @@ pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
 pub use self::engine::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
+    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
+    TestEngineBuilder,
 };
+pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
@@ -473,7 +475,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
             ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-                || ReadPoolContext::new(pd_worker.scheduler())
+                ReadPoolContext::new(pd_worker.scheduler())
             })
         };
         Storage::from_engine(
@@ -488,6 +490,25 @@ impl<E: Engine> TestStorageBuilder<E> {
 
 use self::txn::scheduler1;
 
+/// `Storage` implements transactional KV APIs and raw KV APIs on a given `Engine`. An `Engine`
+/// provides low level KV functionality. `Engine` has multiple implementations. When a TiKV server
+/// is running, a `RaftKv` will be the underlying `Engine` of `Storage`. The other two types of
+/// engines are for test purpose.
+///
+/// `Storage` is reference counted and cloning `Storage` will just increase the reference counter.
+/// Storage resources (i.e. threads, engine) will be released when all references are dropped.
+///
+/// Notice that read and write methods may not be performed over full data in most cases, i.e. when
+/// underlying engine is `RaftKv`, which limits data access in the range of a single region
+/// according to specified `ctx` parameter. However, `async_unsafe_destroy_range` is the only
+/// exception. It's always performed on the whole TiKV.
+///
+/// Operations of `Storage` can be divided into two types: MVCC operations and raw operations.
+/// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
+/// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
+/// to it, so that multiple versions can be saved at the same time.
+/// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
+/// encoding and appending timestamp.
 pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
@@ -497,6 +518,8 @@ pub struct Storage<E: Engine> {
     // worker: Arc<Mutex<Worker<Msg>>>,
     // worker_scheduler: worker::Scheduler<Msg>,
     read_pool: ReadPool<ReadPoolContext>,
+
+    /// Used to handle requests related to GC.
     gc_worker: GCWorker<E>,
 
     /// How many strong references. Thread pool and workers will be stopped
@@ -513,8 +536,8 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage ({} engine) referenced (reference count before operation: {})",
-            self.engine, refs
+            "Storage referenced (reference count before operation: {})",
+            refs
         );
 
         Self {
@@ -534,8 +557,8 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage ({} engine) de-referenced (reference count before operation: {})",
-            self.engine, refs
+            "Storage de-referenced (reference count before operation: {})",
+            refs
         );
 
         if refs != 1 {
@@ -549,11 +572,12 @@ impl<E: Engine> Drop for Storage<E> {
             error!("Failed to stop gc_worker: {:?}", e);
         }
 
-        info!("Storage ({} engine) stopped.", self.engine);
+        info!("Storage stopped.");
     }
 }
 
 impl<E: Engine> Storage<E> {
+    /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
         config: &Config,
@@ -576,7 +600,7 @@ impl<E: Engine> Storage<E> {
 
         gc_worker.start()?;
 
-        info!("Storage ({} engine) started.", engine);
+        info!("Storage started.");
 
         Ok(Storage {
             engine,
@@ -588,10 +612,21 @@ impl<E: Engine> Storage<E> {
         })
     }
 
+    /// Starts running GC automatically.
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &self,
+        cfg: AutoGCConfig<S, R>,
+    ) -> Result<()> {
+        self.gc_worker.start_auto_gc(cfg)
+    }
+
+    /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
     }
 
+    /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
+    /// running the command.
     #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
@@ -599,6 +634,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Get a snapshot of `engine`.
     fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
         let (callback, future) = util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
@@ -611,7 +647,8 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
-    /// Get from the snapshot.
+    /// Get value of the given key from a snapshot. Only writes that are committed before `start_ts`
+    /// is visible.
     pub fn async_get(
         &self,
         ctx: Context,
@@ -666,7 +703,8 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Batch get from the snapshot.
+    /// Get values of a set of keys in a batch from the snapshot. Only writes that are committed
+    /// before `start_ts` is visible.
     pub fn async_batch_get(
         &self,
         ctx: Context,
@@ -725,7 +763,9 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
-    /// Scan a range starting with `start_key` up to `limit` rows from the snapshot.
+    /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot. If `end_key` is
+    /// `None`, it means the upper bound is unbounded. Only writes committed before `start_ts` is
+    /// visible.
     pub fn async_scan(
         &self,
         ctx: Context,
@@ -791,6 +831,8 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
+    /// Latch the given keys for given duration, so other write operations that involve these keys
+    /// will be blocked. Only used for tests purpose.
     pub fn async_pause(
         &self,
         ctx: Context,
@@ -807,6 +849,8 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Prewrite some mutations to the storage. It's the first phase of 2PC. The transaction model
+    /// comes from [Google Percolator](https://ai.google/research/pubs/pub36726).
     pub fn async_prewrite(
         &self,
         ctx: Context,
@@ -836,6 +880,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Commit the transaction that started at `lock_ts`.
     pub fn async_commit(
         &self,
         ctx: Context,
@@ -856,6 +901,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Delete all keys in the range [`start_key`, `end_key`).
+    /// All keys in the range will be deleted permanently regardless of their timestamps.
+    /// That means, you are even unable to get deleted keys by specifying an older timestamp.
     pub fn async_delete_range(
         &self,
         ctx: Context,
@@ -902,6 +950,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Roll back the transaction that was started at `start_ts`.
     pub fn async_rollback(
         &self,
         ctx: Context,
@@ -920,6 +969,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     pub fn async_scan_locks(
         &self,
         ctx: Context,
@@ -944,6 +994,25 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Resolve locks according to `txn_status`. During the GC operation, this will be called by
+    /// TiDB to clean up stale locks whose timestamp is before safe point.
+    ///
+    /// `txn_status` maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
+    ///
+    /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
+    /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
+    /// start_ts is 102 was rolled back. If there are these keys in the db:
+    ///
+    /// * "k1", lock_ts = 100
+    /// * "k2", lock_ts = 102
+    /// * "k3", lock_ts = 104
+    /// * "k4", no lock
+    ///
+    /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
+    /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
+    /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
+    /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
+    /// version.
     pub fn async_resolve_lock(
         &self,
         ctx: Context,
@@ -962,6 +1031,9 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Does garbage collection, which means cleaning up old MVCC keys.
+    /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
+    /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
         KV_COMMAND_COUNTER_VEC
@@ -970,6 +1042,12 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Delete all data in the range.
+    /// This function is **VERY DANGEROUS**. It's not only running on one single region, but it can
+    /// delete a large range that spans over many regions, bypassing the Raft layer. This is
+    /// designed for TiDB to quickly free up disk space while doing GC after
+    /// drop/truncate table/index. By invoking this function, it's user's responsibility to make
+    /// sure no more operations will be performed in this destroyed range.
     pub fn async_unsafe_destroy_range(
         &self,
         ctx: Context,
@@ -985,6 +1063,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Get the value of a raw key.
     pub fn async_raw_get(
         &self,
         ctx: Context,
@@ -1035,6 +1114,7 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
+    /// Get the values of some raw keys in a batch.
     pub fn async_raw_batch_get(
         &self,
         ctx: Context,
@@ -1093,6 +1173,7 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
+    /// Write a raw key to the storage.
     pub fn async_raw_put(
         &self,
         ctx: Context,
@@ -1118,6 +1199,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Write some keys to the storage in a batch.
     pub fn async_raw_batch_put(
         &self,
         ctx: Context,
@@ -1146,6 +1228,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Delete a raw key from the storage.
     pub fn async_raw_delete(
         &self,
         ctx: Context,
@@ -1168,6 +1251,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Delete all raw keys in [`start_key`, `end_key`).
     pub fn async_raw_delete_range(
         &self,
         ctx: Context,
@@ -1199,6 +1283,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Delete some raw keys in a batch.
     pub fn async_raw_batch_delete(
         &self,
         ctx: Context,
@@ -1227,6 +1312,11 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is
+    /// `None`, it means unbounded.
+    ///
+    /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
+    /// keys will be returned.
     fn raw_scan(
         snapshot: &E::Snap,
         cf: &str,
@@ -1259,6 +1349,12 @@ impl<E: Engine> Storage<E> {
         }
         Ok(pairs)
     }
+
+    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at most `limit` keys. If
+    /// `start_key` is `None`, it means it's unbounded.
+    ///
+    /// If `key_only` is true, the value
+    /// corresponding to the key will not be read out. Only scanned keys will be returned.
     fn reverse_raw_scan(
         snapshot: &E::Snap,
         cf: &str,
@@ -1292,6 +1388,16 @@ impl<E: Engine> Storage<E> {
         Ok(pairs)
     }
 
+    /// Scan raw keys in a range.
+    ///
+    /// If `reverse` is false, the range is [`key`, `end_key`); otherwise, the range is
+    /// [`end_key`, `key`) and it scans from `key` and goes backwards. If `end_key` is `None`, it
+    /// means unbounded.
+    ///
+    /// This function scans at most `limit` keys.
+    ///
+    /// If `key_only` is true, the value
+    /// corresponding to the key will not be read out. Only scanned keys will be returned.
     pub fn async_raw_scan(
         &self,
         ctx: Context,
@@ -1360,6 +1466,9 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
+    /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
+    /// The CF name can be one of `"default"`, `"write"` and `"lock"`. If given `cf` is empty,
+    /// `CF_DEFAULT` (`"default"`) will be returned.
     fn rawkv_cf(cf: &str) -> Result<CfName> {
         if cf.is_empty() {
             return Ok(CF_DEFAULT);
@@ -1374,8 +1483,8 @@ impl<E: Engine> Storage<E> {
 
     /// Check if key range is valid
     ///
-    /// - if reverse, endKey is less than startKey. endKey is lowerBound.
-    /// - if not reverse, endKey is greater than startKey. endKey is upperBound.
+    /// - If `reverse` is true, `end_key` is less than `start_key`. `end_key` is the lower bound.
+    /// - If `reverse` is false, `end_key` is greater than `start_key`. `end_key` is the upper bound.
     fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
         let ranges_len = ranges.len();
         for i in 0..ranges_len {
@@ -1393,6 +1502,7 @@ impl<E: Engine> Storage<E> {
         true
     }
 
+    /// Scan raw keys in multiple ranges in a batch.
     pub fn async_raw_batch_scan(
         &self,
         ctx: Context,
@@ -1477,6 +1587,7 @@ impl<E: Engine> Storage<E> {
             .flatten()
     }
 
+    /// Get MVCC info of a transactional key.
     pub fn async_mvcc_by_key(
         &self,
         ctx: Context,
@@ -1490,6 +1601,8 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
+    /// Find the first key that has a version with its `start_ts` equal to the given `start_ts`, and
+    /// return its MVCC info.
     pub fn async_mvcc_by_start_ts(
         &self,
         ctx: Context,

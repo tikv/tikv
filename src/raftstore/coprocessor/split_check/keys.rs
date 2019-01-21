@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
-
 use kvproto::pdpb::CheckPolicy;
-use raftstore::store::{keys, util, Msg};
+use raftstore::store::{keys, util, Msg, PeerMsg};
 use rocksdb::DB;
+use std::mem;
+use std::sync::Mutex;
 use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
@@ -92,7 +92,7 @@ pub struct KeysCheckObserver<C> {
     region_max_keys: u64,
     split_keys: u64,
     batch_split_limit: u64,
-    ch: RetryableSendCh<Msg, C>,
+    ch: Mutex<RetryableSendCh<Msg, C>>,
 }
 
 impl<C: Sender<Msg>> KeysCheckObserver<C> {
@@ -106,7 +106,7 @@ impl<C: Sender<Msg>> KeysCheckObserver<C> {
             region_max_keys,
             split_keys,
             batch_split_limit,
-            ch,
+            ch: Mutex::new(ch),
         }
     }
 }
@@ -141,11 +141,11 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             }
         };
 
-        let res = Msg::RegionApproximateKeys {
+        let res = Msg::PeerMsg(PeerMsg::RegionApproximateKeys {
             region_id,
             keys: region_keys,
-        };
-        if let Err(e) = self.ch.try_send(res) {
+        });
+        if let Err(e) = self.ch.lock().unwrap().try_send(res) {
             warn!(
                 "[region {}] failed to send approximate region keys: {}",
                 region_id, e
@@ -189,7 +189,7 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{keys, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
     use storage::mvcc::{Write, WriteType};
     use storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
     use util::properties::RangePropertiesCollectorFactory;
@@ -269,8 +269,8 @@ mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. })
-            | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
+            Ok(Msg::PeerMsg(PeerMsg::RegionApproximateSize { region_id, .. }))
+            | Ok(Msg::PeerMsg(PeerMsg::RegionApproximateKeys { region_id, .. })) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect recv empty, but got {:?}", others),

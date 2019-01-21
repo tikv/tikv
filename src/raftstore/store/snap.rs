@@ -27,15 +27,15 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{CFHandle, Writable, WriteBatch, DB};
 
 use raftstore::errors::Error as RaftStoreError;
+use raftstore::store::fsm::SendCh;
 use raftstore::store::util::check_key_in_region;
-use raftstore::store::Msg;
+use raftstore::store::{Msg, StoreMsg};
 use raftstore::Result as RaftStoreResult;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::io_limiter::{IOLimiter, LimitWriter};
 use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use util::transport::SendCh;
 use util::HandyRwLock;
 
 use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
@@ -1105,9 +1105,9 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&SendCh<Msg>>) {
+fn notify_stats(ch: Option<&SendCh>) {
     if let Some(ch) = ch {
-        if let Err(e) = ch.try_send(Msg::SnapshotStats) {
+        if let Err(e) = ch.try_send(Msg::StoreMsg(StoreMsg::SnapshotStats)) {
             error!("notify snapshot stats failed {:?}", e)
         }
     }
@@ -1118,13 +1118,13 @@ fn notify_stats(ch: Option<&SendCh<Msg>>) {
 pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    ch: Option<SendCh<Msg>>,
+    ch: Option<SendCh>,
     limiter: Option<Arc<IOLimiter>>,
     max_total_size: u64,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh>) -> SnapManager {
         SnapManagerBuilder::default().build(path, ch)
     }
 
@@ -1424,7 +1424,7 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
+    pub fn build<T: Into<String>>(&self, path: T, ch: Option<SendCh>) -> SnapManager {
         let limiter = if self.max_write_bytes_per_sec > 0 {
             Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
         } else {

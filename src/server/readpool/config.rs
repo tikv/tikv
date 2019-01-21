@@ -21,6 +21,7 @@ pub const DEFAULT_MAX_TASKS_PER_WORKER: usize = 2 as usize * 1000;
 
 pub const DEFAULT_STACK_SIZE_MB: u64 = 10;
 
+/// Configuration for the `ReadPool`.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub high_concurrency: usize,
@@ -33,7 +34,10 @@ pub struct Config {
 }
 
 impl Config {
-    // TODO: Add #[cfg(test)]
+    /// A shortcut to construct Config with the specified concurrency.
+    ///
+    /// Note: it is only used in tests.
+    #[doc(hidden)]
     pub fn default_with_concurrency(concurrency: usize) -> Self {
         Self {
             high_concurrency: concurrency,
@@ -46,7 +50,7 @@ impl Config {
         }
     }
 
-    // TODO: Add #[cfg(test)]
+    #[doc(hidden)]
     pub fn default_for_test() -> Self {
         Self::default_with_concurrency(2)
     }
