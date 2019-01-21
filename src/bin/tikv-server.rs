@@ -26,6 +26,7 @@ extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
 #[macro_use(
+    kv,
     slog_kv,
     slog_error,
     slog_warn,
@@ -305,7 +306,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
         info!(
             "ignore failure when stopping resolver";
-            "err" => format!("{:?}",e)
+            "err" => ?e
             );
     }
 }
