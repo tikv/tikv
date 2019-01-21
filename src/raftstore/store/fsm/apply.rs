@@ -1010,7 +1010,7 @@ impl ApplyDelegate {
                 self.tag,
                 request,
                 ctx.exec_ctx.as_ref().unwrap().term,
-                ctx.exec_ctx.as_ref().unwrap().index;
+                ctx.exec_ctx.as_ref().unwrap().index,
             );
         }
 
@@ -1736,7 +1736,7 @@ impl ApplyDelegate {
             self.tag,
             req,
             ctx.exec_ctx.as_ref().unwrap().term,
-            ctx.exec_ctx.as_ref().unwrap().index;
+            ctx.exec_ctx.as_ref().unwrap().index,
         );
 
         self.ready_source_region_id = 0;
