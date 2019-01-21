@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use raftstore;
+use raftstore::store::fsm::SendCh;
 use raftstore::store::msg::Msg;
 use std::sync::mpsc::Sender;
-use util::transport::SendCh;
 
 pub trait MsgSender {
     fn send(&self, msg: Msg) -> raftstore::Result<()>;
@@ -22,7 +22,7 @@ pub trait MsgSender {
     fn try_send(&self, msg: Msg) -> raftstore::Result<()>;
 }
 
-impl MsgSender for SendCh<Msg> {
+impl MsgSender for SendCh {
     fn send(&self, msg: Msg) -> raftstore::Result<()> {
         SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
