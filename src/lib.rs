@@ -78,19 +78,41 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[macro_use(
-    kv,
-    slog_o,
-    slog_kv,
-    slog_trace,
-    slog_error,
-    slog_warn,
-    slog_info,
-    slog_debug,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static,
+#[cfg_attr(
+    not(test),
+    macro_use(
+        kv,
+        slog_o,
+        slog_kv,
+        slog_trace,
+        slog_error,
+        slog_warn,
+        slog_info,
+        slog_debug,
+        slog_log,
+        slog_record,
+        slog_b,
+        slog_record_static
+    )
+)]
+// additional `slog_crit`
+#[cfg_attr(
+    test,
+    macro_use(
+        kv,
+        slog_o,
+        slog_kv,
+        slog_crit,
+        slog_trace,
+        slog_error,
+        slog_warn,
+        slog_info,
+        slog_debug,
+        slog_log,
+        slog_record,
+        slog_b,
+        slog_record_static
+    )
 )]
 extern crate slog;
 extern crate slog_async;
