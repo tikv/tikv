@@ -1628,7 +1628,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { ref key })) => {
             let mut exist = AlreadyExist::new();
             exist.set_key(key.clone());
-            key_error.set_alreadyexist(exist);
+            key_error.set_already_exist(exist);
         }
         // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
