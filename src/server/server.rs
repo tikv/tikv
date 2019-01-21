@@ -275,7 +275,7 @@ mod tests {
             Ok(())
         }
 
-        fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
+        fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
             Ok(())
         }
