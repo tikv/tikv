@@ -489,7 +489,7 @@ fn make_tag(is_table_scan: bool) -> &'static str {
 fn make_error_response(e: Error) -> coppb::Response {
     error!(
         "error-response";
-        "error" => %e
+        "err" => %e
         );
     let mut resp = coppb::Response::new();
     let tag;

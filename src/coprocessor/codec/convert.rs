@@ -188,7 +188,7 @@ fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
                 error!(
                     "failed to parse float";
                     "from" => s,
-                    "error" => %e,
+                    "err" => %e,
                     );
                 0.0
             }
@@ -196,7 +196,7 @@ fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
         Err(e) => {
             error!(
                 "failed to convert bytes to str";
-                "error" => %e
+                "err" => %e
                 );
             0.0
         }
