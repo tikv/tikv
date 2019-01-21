@@ -318,7 +318,7 @@ impl ScalarFunc {
             Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))
         );
         let s = box_try!(::std::str::from_utf8(cow_s.as_ref()));
-        let d = match MyDuration::parse(s.as_bytes(), Time::parse_fsp(s)) {
+        let d = match MyDuration::parse(&cow_s, Time::parse_fsp(s)) {
             Ok(res) => res,
             Err(_) => return Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz)))),
         };
@@ -393,10 +393,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, MyDuration>>> {
         let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
-
         let cow_s: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s: &str = box_try!(::std::str::from_utf8(cow_s.as_ref()));
-        let arg1 = MyDuration::parse(s.as_bytes(), Time::parse_fsp(s))?;
+        let arg1 = MyDuration::parse(&cow_s, Time::parse_fsp(s))?;
 
         let add: i64 = match arg0.to_nanos().checked_add(arg1.to_nanos()) {
             Some(result) => result,
@@ -441,7 +440,7 @@ impl ScalarFunc {
         let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s: &str = box_try!(::std::str::from_utf8(arg1.as_ref()));
-        let arg1 = MyDuration::parse(s.as_bytes(), Time::parse_fsp(s))?;
+        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
 
         let add: i64 = match arg0.to_nanos().checked_add(arg1.to_nanos()) {
             Some(result) => result,
