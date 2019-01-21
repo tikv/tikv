@@ -75,35 +75,65 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
 }
 
 /// Check if key in region range (`start_key`, `end_key`).
-pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+pub fn check_key_in_region_exclusive(
+    key: &[u8],
+    region: &metapb::Region,
+    from: &'static str,
+    point_time: String,
+) -> Result<()> {
     let end_key = region.get_end_key();
     let start_key = region.get_start_key();
     if start_key < key && (key < end_key || end_key.is_empty()) {
         Ok(())
     } else {
-        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+        Err(Error::KeyNotInRegion(
+            key.to_vec(),
+            region.clone(),
+            from,
+            point_time,
+        ))
     }
 }
 
 /// Check if key in region range [`start_key`, `end_key`].
-pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+pub fn check_key_in_region_inclusive(
+    key: &[u8],
+    region: &metapb::Region,
+    from: &'static str,
+    point_time: String,
+) -> Result<()> {
     let end_key = region.get_end_key();
     let start_key = region.get_start_key();
     if key >= start_key && (end_key.is_empty() || key <= end_key) {
         Ok(())
     } else {
-        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+        Err(Error::KeyNotInRegion(
+            key.to_vec(),
+            region.clone(),
+            from,
+            point_time,
+        ))
     }
 }
 
 /// Check if key in region range [`start_key`, `end_key`).
-pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
+pub fn check_key_in_region(
+    key: &[u8],
+    region: &metapb::Region,
+    from: &'static str,
+    point_time: String,
+) -> Result<()> {
     let end_key = region.get_end_key();
     let start_key = region.get_start_key();
     if key >= start_key && (end_key.is_empty() || key < end_key) {
         Ok(())
     } else {
-        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+        Err(Error::KeyNotInRegion(
+            key.to_vec(),
+            region.clone(),
+            from,
+            point_time,
+        ))
     }
 }
 
@@ -1134,11 +1164,11 @@ mod tests {
             let mut region = metapb::Region::new();
             region.set_start_key(start_key.as_bytes().to_vec());
             region.set_end_key(end_key.as_bytes().to_vec());
-            let mut result = check_key_in_region(key.as_bytes(), &region);
+            let mut result = check_key_in_region(key.as_bytes(), &region, "", String::new());
             assert_eq!(result.is_ok(), is_in_region);
-            result = check_key_in_region_inclusive(key.as_bytes(), &region);
+            result = check_key_in_region_inclusive(key.as_bytes(), &region, "", String::new());
             assert_eq!(result.is_ok(), inclusive);
-            result = check_key_in_region_exclusive(key.as_bytes(), &region);
+            result = check_key_in_region_exclusive(key.as_bytes(), &region, "", String::new());
             assert_eq!(result.is_ok(), exclusive);
         }
     }

@@ -57,7 +57,7 @@ use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use util::time::{duration_to_sec, Instant, SlowTimer};
 use util::Either;
-use util::{escape, rocksdb, MustConsumeVec};
+use util::{escape, log_time, rocksdb, MustConsumeVec};
 
 use super::metrics::*;
 use super::{
@@ -1101,7 +1101,12 @@ impl ApplyDelegate {
     fn handle_put(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region)?;
+        util::check_key_in_region(
+            key,
+            &self.region,
+            concat!(file!(), ":", line!()),
+            log_time(),
+        )?;
 
         let resp = Response::new();
         let key = keys::data_key(key);
@@ -1144,7 +1149,12 @@ impl ApplyDelegate {
     fn handle_delete(&mut self, ctx: &ApplyContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, &self.region)?;
+        util::check_key_in_region(
+            key,
+            &self.region,
+            concat!(file!(), ":", line!()),
+            log_time(),
+        )?;
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
@@ -1192,11 +1202,21 @@ impl ApplyDelegate {
             ));
         }
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(s_key, &self.region)?;
+        util::check_key_in_region(
+            s_key,
+            &self.region,
+            concat!(file!(), ":", line!()),
+            log_time(),
+        )?;
         let end_key = keys::data_end_key(e_key);
         let region_end_key = keys::data_end_key(self.region.get_end_key());
         if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(e_key.to_vec(), self.region.clone()));
+            return Err(Error::KeyNotInRegion(
+                e_key.to_vec(),
+                self.region.clone(),
+                concat!(file!(), ":", line!()),
+                log_time(),
+            ));
         }
 
         let resp = Response::new();
@@ -1512,7 +1532,12 @@ impl ApplyDelegate {
             keys.push_back(split_key.to_vec());
         }
 
-        util::check_key_in_region(keys.back().unwrap(), &self.region)?;
+        util::check_key_in_region(
+            keys.back().unwrap(),
+            &self.region,
+            concat!(file!(), ":", line!()),
+            log_time(),
+        )?;
 
         info!("{} split region {:?} with {:?}", self.tag, derived, keys);
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
@@ -1982,8 +2007,18 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     }
 
     let range = sst.get_range();
-    util::check_key_in_region(range.get_start(), region)?;
-    util::check_key_in_region(range.get_end(), region)?;
+    util::check_key_in_region(
+        range.get_start(),
+        region,
+        concat!(file!(), ":", line!()),
+        log_time(),
+    )?;
+    util::check_key_in_region(
+        range.get_end(),
+        region,
+        concat!(file!(), ":", line!()),
+        log_time(),
+    )?;
 
     Ok(())
 }

@@ -451,6 +451,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
             self.kv_engine.clone(),
             false, /* dont check region epoch */
             true,  /* we need snapshot time */
+            concat!(file!(), ":", line!()),
         );
 
         for task in tasks.drain(..) {

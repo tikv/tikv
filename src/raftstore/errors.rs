@@ -52,13 +52,15 @@ quick_error!{
             description("peer is not leader")
             display("peer is not leader for region {}, leader may {:?}", region_id, leader)
         }
-        KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
+        KeyNotInRegion(key: Vec<u8>, region: metapb::Region, from: &'static str, point_time: String) {
             description("key is not in region")
-            display("key {} is not in region key range [{}, {}) for region {}",
+            display("key {} is not in region key range [{}, {}) for region {}, from: {} at {}",
                     escape(key),
                     escape(region.get_start_key()),
                     escape(region.get_end_key()),
-                    region.get_id())
+                    region.get_id(),
+                    from,
+                    point_time)
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
@@ -174,7 +176,7 @@ impl Into<errorpb::Error> for Error {
                     .mut_store_not_match()
                     .set_actual_store_id(my_store_id);
             }
-            Error::KeyNotInRegion(key, region) => {
+            Error::KeyNotInRegion(key, region, _, _) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb
                     .mut_key_not_in_region()

@@ -48,6 +48,8 @@ pub mod worker;
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
 
+pub use self::logger::log_time;
+
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {

@@ -226,6 +226,10 @@ where
     }
 }
 
+pub fn log_time() -> String {
+    format!("{}", chrono::Local::now().format(TIMESTAMP_FORMAT))
+}
+
 /// Returns `true` if message was not empty
 fn print_msg_header(mut rd: &mut RecordDecorator, record: &Record) -> io::Result<bool> {
     rd.start_timestamp()?;

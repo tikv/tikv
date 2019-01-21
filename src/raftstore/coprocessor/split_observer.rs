@@ -14,7 +14,7 @@
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use coprocessor::codec::table;
 use util::codec::bytes::{self, encode_bytes};
-use util::escape;
+use util::{escape, log_time};
 
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
@@ -54,7 +54,12 @@ impl SplitObserver {
         }
 
         let key = encode_bytes(&key);
-        match util::check_key_in_region_exclusive(&key, region) {
+        match util::check_key_in_region_exclusive(
+            &key,
+            region,
+            concat!(file!(), ":", line!()),
+            log_time(),
+        ) {
             Ok(()) => Ok(key),
             Err(_) => Err(format!(
                 "key \"{}\" should be in (\"{}\", \"{}\")",

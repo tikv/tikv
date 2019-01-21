@@ -48,7 +48,7 @@ use raftstore::{Error, Result};
 use util::collections::HashMap;
 use util::time::{duration_to_sec, monotonic_raw_now};
 use util::worker::Scheduler;
-use util::{escape, MustConsumeVec};
+use util::{escape, log_time, MustConsumeVec};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -501,7 +501,12 @@ impl Peer {
         local_reader: &Scheduler<ReadTask>,
         region: metapb::Region,
     ) {
-        info!("{} {:?} in set_region {:?}", self.tag, self.region(), region);
+        info!(
+            "{} {:?} in set_region {:?}",
+            self.tag,
+            self.region(),
+            region
+        );
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the localreader for this region.
@@ -1790,6 +1795,7 @@ impl Peer {
             ctx.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
+            concat!(file!(), ":", line!()),
         ).execute(&req, self.region());
 
         cmd_resp::bind_term(&mut resp.response, self.term());
@@ -2024,16 +2030,23 @@ pub struct ReadExecutor {
     snapshot: Option<SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
+    from: &'static str,
 }
 
 impl ReadExecutor {
-    pub fn new(engine: Arc<DB>, check_epoch: bool, need_snapshot_time: bool) -> Self {
+    pub fn new(
+        engine: Arc<DB>,
+        check_epoch: bool,
+        need_snapshot_time: bool,
+        from: &'static str,
+    ) -> Self {
         ReadExecutor {
             check_epoch,
             engine,
             snapshot: None,
             snapshot_time: None,
             need_snapshot_time,
+            from,
         }
     }
 
@@ -2062,7 +2075,7 @@ impl ReadExecutor {
         // TODO: the get_get looks weird, maybe we should figure out a better name later.
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(key, region)?;
+        util::check_key_in_region(key, region, self.from, log_time())?;
 
         let mut resp = Response::new();
         let snapshot = self.snapshot.as_ref().unwrap();
@@ -2151,6 +2164,7 @@ impl ReadExecutor {
             Some(RegionSnapshot::from_snapshot(
                 self.snapshot.clone().unwrap(),
                 region.to_owned(),
+                self.from,
             ))
         } else {
             None

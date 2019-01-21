@@ -19,7 +19,7 @@ use std::sync::Arc;
 use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
-use util::set_panic_mark;
+use util::{log_time, set_panic_mark};
 
 /// Snapshot of a region.
 ///
@@ -28,21 +28,25 @@ use util::set_panic_mark;
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
     region: Arc<Region>,
+    pub from: &'static str,
+    pub point_time: String,
 }
 
 impl RegionSnapshot {
-    pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
+    pub fn new(ps: &PeerStorage, from: &'static str) -> RegionSnapshot {
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone(), from)
     }
 
-    pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
+    pub fn from_raw(db: Arc<DB>, region: Region, from: &'static str) -> RegionSnapshot {
+        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region, from)
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
+    pub fn from_snapshot(snap: SyncSnapshot, region: Region, from: &'static str) -> RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
+            from,
+            point_time: log_time(),
         }
     }
 
@@ -51,7 +55,13 @@ impl RegionSnapshot {
     }
 
     pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
-        RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
+        RegionIterator::new(
+            &self.snap,
+            Arc::clone(&self.region),
+            iter_opt,
+            self.from,
+            self.point_time.clone(),
+        )
     }
 
     pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
@@ -60,6 +70,8 @@ impl RegionSnapshot {
             Arc::clone(&self.region),
             iter_opt,
             cf,
+            self.from,
+            self.point_time.clone(),
         ))
     }
 
@@ -127,19 +139,21 @@ impl Clone for RegionSnapshot {
         RegionSnapshot {
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
+            from: self.from.clone(),
+            point_time: self.point_time.clone(),
         }
     }
 }
 
 impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+        util::check_key_in_region(key, &self.region, self.from, self.point_time.clone())?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+        util::check_key_in_region(key, &self.region, self.from, self.point_time.clone())?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
     }
@@ -155,6 +169,8 @@ pub struct RegionIterator {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     panic_when_exceed_bound: bool,
+    from: &'static str,
+    point_time: String,
 }
 
 fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -183,7 +199,13 @@ fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
 
 // we use rocksdb's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
+    pub fn new(
+        snap: &Snapshot,
+        region: Arc<Region>,
+        mut iter_opt: IterOption,
+        from: &'static str,
+        point_time: String,
+    ) -> RegionIterator {
         set_lower_bound(&mut iter_opt, &region);
         set_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
@@ -196,6 +218,8 @@ impl RegionIterator {
             end_key,
             region,
             panic_when_exceed_bound: true,
+            from,
+            point_time,
         }
     }
 
@@ -204,6 +228,8 @@ impl RegionIterator {
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
+        from: &'static str,
+        point_time: String,
     ) -> RegionIterator {
         set_lower_bound(&mut iter_opt, &region);
         set_upper_bound(&mut iter_opt, &region);
@@ -217,6 +243,8 @@ impl RegionIterator {
             end_key,
             region,
             panic_when_exceed_bound: true,
+            from,
+            point_time,
         }
     }
 
@@ -315,7 +343,12 @@ impl RegionIterator {
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
-        if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+        if let Err(e) = util::check_key_in_region_inclusive(
+            key,
+            &self.region,
+            self.from,
+            self.point_time.clone(),
+        ) {
             if self.panic_when_exceed_bound {
                 set_panic_mark();
                 panic!("key exceed bound: {:?}", e);
@@ -445,7 +478,7 @@ mod tests {
         let key3 = b"key3";
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
         let v1 = snap.get_u64(key1).expect("");
         assert_eq!(v1, Some(value1));
         let v2 = snap.get_i64(key2).expect("");
@@ -466,7 +499,7 @@ mod tests {
         let path = TempDir::new("test-raftstore").unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_default_dataset(engines.clone());
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
 
         let check_seek_result = |snap: &RegionSnapshot,
                                  lower_bound: Option<&[u8]>,
@@ -547,7 +580,7 @@ mod tests {
         let path = TempDir::new("test-raftstore").unwrap();
         let engines = new_temp_engine(&path);
         let (store, _) = load_multiple_levels_dataset(engines.clone());
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
 
         seek_table = vec![
             (b"a01", false, None, None),
@@ -576,7 +609,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (store, base_data) = load_default_dataset(engines.clone());
 
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
         let mut data = vec![];
         snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
@@ -609,7 +642,7 @@ mod tests {
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engines.clone(), &region);
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
         data.clear();
         snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
@@ -634,7 +667,7 @@ mod tests {
 
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
         let mut iter = snap.iter(IterOption::new(None, Some(b"a5".to_vec()), true));
         assert!(iter.seek_to_first());
         let mut res = vec![];
@@ -653,7 +686,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (store, test_data) = load_default_dataset(engines.clone());
 
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
         let mut statistics = CFStatistics::default();
         let mut it = snap.iter(IterOption::default());
         it.panic_when_exceed_bound(false);
@@ -714,7 +747,7 @@ mod tests {
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engines, &region);
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
         let mut it = snap.iter(IterOption::default());
         it.panic_when_exceed_bound(false);
         let mut iter = Cursor::new(it, ScanMode::Mixed);
@@ -768,7 +801,7 @@ mod tests {
         let engines = new_temp_engine(&path);
         let (store, test_data) = load_default_dataset(engines);
 
-        let snap = RegionSnapshot::new(&store);
+        let snap = RegionSnapshot::new(&store, "");
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3".to_vec());
         let mut iter = snap.iter(iter_opt);

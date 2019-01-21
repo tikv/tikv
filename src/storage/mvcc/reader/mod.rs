@@ -538,21 +538,21 @@ mod tests {
         }
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone(), "");
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone(), "");
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.commit(Key::from_raw(pk), commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone(), "");
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
@@ -561,7 +561,7 @@ mod tests {
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
             loop {
-                let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+                let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone(), "");
                 let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
                 txn.gc(Key::from_raw(pk), safe_point).unwrap();
                 let modifies = txn.into_modifies();
@@ -648,7 +648,7 @@ mod tests {
         safe_point: u64,
         need_gc: bool,
     ) -> Option<MvccProperties> {
-        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone(), "");
         let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
@@ -775,7 +775,7 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
-        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone(), "");
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
         // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
