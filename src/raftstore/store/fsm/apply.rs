@@ -1732,9 +1732,11 @@ impl ApplyDelegate {
         }
 
         info!(
-            "{} execute admin command {:?} at [term: {}, index: {}]",
+            "{} execute CommitMerge for region {:?} commit {} entries count {} at [term: {}, index: {}]",
             self.tag,
-            req,
+            source_region,
+            merge.get_commit(),
+            merge.get_entries().len(),
             ctx.exec_ctx.as_ref().unwrap().term,
             ctx.exec_ctx.as_ref().unwrap().index,
         );
