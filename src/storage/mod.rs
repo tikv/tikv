@@ -25,7 +25,7 @@ use std::cmp;
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{atomic, Arc};
 use std::u64;
 
 use futures::{future, Future};
@@ -39,12 +39,10 @@ use server::readpool::{self, ReadPool};
 use server::ServerRaftStoreRouter;
 use util;
 use util::collections::HashMap;
-use util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
-use self::txn::CMD_BATCH_SIZE;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::engine::raftkv::RaftKv;
@@ -55,6 +53,7 @@ pub use self::engine::{
 };
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::readpool_context::Context as ReadPoolContext;
+use self::txn::scheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -488,8 +487,6 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 }
 
-use self::txn::scheduler1;
-
 /// `Storage` implements transactional KV APIs and raw KV APIs on a given `Engine`. An `Engine`
 /// provides low level KV functionality. `Engine` has multiple implementations. When a TiKV server
 /// is running, a `RaftKv` will be the underlying `Engine` of `Storage`. The other two types of
@@ -513,10 +510,7 @@ pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    sched: scheduler1::Scheduler<E>,
-    // /// To schedule the execution of storage commands
-    // worker: Arc<Mutex<Worker<Msg>>>,
-    // worker_scheduler: worker::Scheduler<Msg>,
+    sched: scheduler::Scheduler<E>,
     read_pool: ReadPool<ReadPoolContext>,
 
     /// Used to handle requests related to GC.
@@ -566,9 +560,7 @@ impl<E: Engine> Drop for Storage<E> {
         }
 
         self.sched.shutdown();
-
-        let r = self.gc_worker.stop();
-        if let Err(e) = r {
+        if let Err(e) = self.gc_worker.stop() {
             error!("Failed to stop gc_worker: {:?}", e);
         }
 
@@ -585,7 +577,7 @@ impl<E: Engine> Storage<E> {
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
     ) -> Result<Self> {
-        let sched = scheduler1::Scheduler::new(
+        let sched = scheduler::Scheduler::new(
             engine.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
@@ -604,7 +596,7 @@ impl<E: Engine> Storage<E> {
 
         Ok(Storage {
             engine,
-            sched: sched,
+            sched,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),

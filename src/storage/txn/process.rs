@@ -31,7 +31,7 @@ use storage::{Key, MvccInfo, Value};
 use util::collections::HashMap;
 use util::threadpool::{self, Context as ThreadContext, ContextFactory as ThreadContextFactory};
 use util::time::SlowTimer;
-use util::worker::{self, ScheduleError};
+use util::worker::ScheduleError;
 
 use super::super::metrics::*;
 use super::scheduler::Msg;
@@ -120,12 +120,6 @@ impl Task {
 
 pub trait MsgScheduler: Clone + Send + 'static {
     fn on_msg(&self, task: Msg) -> ::std::result::Result<(), ScheduleError<Msg>>;
-}
-
-impl MsgScheduler for worker::Scheduler<Msg> {
-    fn on_msg(&self, task: Msg) -> ::std::result::Result<(), ScheduleError<Msg>> {
-        self.schedule(task)
-    }
 }
 
 pub struct Executor<E: Engine, S: MsgScheduler> {

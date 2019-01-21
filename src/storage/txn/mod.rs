@@ -13,19 +13,17 @@
 
 mod latch;
 mod process;
-mod scheduler;
+pub mod scheduler;
 mod store;
 
 use std::error;
 use std::io::Error as IoError;
 
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
-pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
+pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store, StoreScanner};
 use util::escape;
-
-pub mod scheduler1;
 
 quick_error! {
     #[derive(Debug)]
