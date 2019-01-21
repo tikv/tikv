@@ -442,7 +442,7 @@ impl Runnable<RegionCollectorMsg> for RegionCollector {
     }
 }
 
-const METRICS_FLUSH_INTERVAL: u64 = 10; // 10s
+const METRICS_FLUSH_INTERVAL: u64 = 10000; // 10s
 
 impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
@@ -454,13 +454,13 @@ impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
                 leader += 1;
             }
         }
-        REGION_COLLECTOR_COUNT_GAUGE_VEC
+        REGION_COUNT_GAUGE_VEC
             .with_label_values(&["region"])
             .set(count);
-        REGION_COLLECTOR_COUNT_GAUGE_VEC
+        REGION_COUNT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader);
-        timer.add_task(Duration::from_secs(METRICS_FLUSH_INTERVAL), ());
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
     }
 }
 
@@ -490,7 +490,7 @@ impl RegionInfoAccessor {
     /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
     pub fn start(&self) {
         let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_secs(METRICS_FLUSH_INTERVAL), ());
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
         self.worker
             .lock()
             .unwrap()

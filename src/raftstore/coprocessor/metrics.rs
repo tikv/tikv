@@ -26,9 +26,9 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 30).unwrap()
     ).unwrap();
 
-    pub static ref REGION_COLLECTOR_COUNT_GAUGE_VEC: IntGaugeVec =
+    pub static ref REGION_COUNT_GAUGE_VEC: IntGaugeVec =
     register_int_gauge_vec!(
-        "tikv_raftstore_region_collector_region_count",
+        "tikv_raftstore_region_count",
         "Number of regions collected in region_collector",
         &["type"]
     ).unwrap();
