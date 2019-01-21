@@ -1214,7 +1214,7 @@ impl ApplyDelegate {
             return Err(Error::KeyNotInRegion(
                 e_key.to_vec(),
                 self.region.clone(),
-                concat!(file!(), ":", line!()),
+                concat!(file!(), ":", line!()).to_string(),
                 log_time(),
             ));
         }

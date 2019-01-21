@@ -78,7 +78,7 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
 pub fn check_key_in_region_exclusive(
     key: &[u8],
     region: &metapb::Region,
-    from: &'static str,
+    from: &str,
     point_time: String,
 ) -> Result<()> {
     let end_key = region.get_end_key();
@@ -89,7 +89,7 @@ pub fn check_key_in_region_exclusive(
         Err(Error::KeyNotInRegion(
             key.to_vec(),
             region.clone(),
-            from,
+            from.to_string(),
             point_time,
         ))
     }
@@ -99,7 +99,7 @@ pub fn check_key_in_region_exclusive(
 pub fn check_key_in_region_inclusive(
     key: &[u8],
     region: &metapb::Region,
-    from: &'static str,
+    from: &str,
     point_time: String,
 ) -> Result<()> {
     let end_key = region.get_end_key();
@@ -110,7 +110,7 @@ pub fn check_key_in_region_inclusive(
         Err(Error::KeyNotInRegion(
             key.to_vec(),
             region.clone(),
-            from,
+            from.to_string(),
             point_time,
         ))
     }
@@ -120,7 +120,7 @@ pub fn check_key_in_region_inclusive(
 pub fn check_key_in_region(
     key: &[u8],
     region: &metapb::Region,
-    from: &'static str,
+    from: &str,
     point_time: String,
 ) -> Result<()> {
     let end_key = region.get_end_key();
@@ -131,7 +131,7 @@ pub fn check_key_in_region(
         Err(Error::KeyNotInRegion(
             key.to_vec(),
             region.clone(),
-            from,
+            from.to_string(),
             point_time,
         ))
     }

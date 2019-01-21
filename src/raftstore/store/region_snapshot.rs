@@ -28,20 +28,24 @@ use util::{log_time, set_panic_mark};
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
     region: Arc<Region>,
-    pub from: &'static str,
+    pub from: String,
     pub point_time: String,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage, from: &'static str) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone(), from)
+        RegionSnapshot::from_snapshot(
+            ps.raw_snapshot().into_sync(),
+            ps.region().clone(),
+            from.to_string(),
+        )
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region, from: &'static str) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region, from)
+        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region, from.to_string())
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region, from: &'static str) -> RegionSnapshot {
+    pub fn from_snapshot(snap: SyncSnapshot, region: Region, from: String) -> RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
@@ -59,7 +63,7 @@ impl RegionSnapshot {
             &self.snap,
             Arc::clone(&self.region),
             iter_opt,
-            self.from,
+            self.from.clone(),
             self.point_time.clone(),
         )
     }
@@ -70,7 +74,7 @@ impl RegionSnapshot {
             Arc::clone(&self.region),
             iter_opt,
             cf,
-            self.from,
+            self.from.clone(),
             self.point_time.clone(),
         ))
     }
@@ -147,13 +151,13 @@ impl Clone for RegionSnapshot {
 
 impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region, self.from, self.point_time.clone())?;
+        util::check_key_in_region(key, &self.region, &self.from, self.point_time.clone())?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region, self.from, self.point_time.clone())?;
+        util::check_key_in_region(key, &self.region, &self.from, self.point_time.clone())?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
     }
@@ -169,7 +173,7 @@ pub struct RegionIterator {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     panic_when_exceed_bound: bool,
-    from: &'static str,
+    from: String,
     point_time: String,
 }
 
@@ -203,7 +207,7 @@ impl RegionIterator {
         snap: &Snapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
-        from: &'static str,
+        from: String,
         point_time: String,
     ) -> RegionIterator {
         set_lower_bound(&mut iter_opt, &region);
@@ -228,7 +232,7 @@ impl RegionIterator {
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
-        from: &'static str,
+        from: String,
         point_time: String,
     ) -> RegionIterator {
         set_lower_bound(&mut iter_opt, &region);
@@ -346,7 +350,7 @@ impl RegionIterator {
         if let Err(e) = util::check_key_in_region_inclusive(
             key,
             &self.region,
-            self.from,
+            &self.from,
             self.point_time.clone(),
         ) {
             if self.panic_when_exceed_bound {

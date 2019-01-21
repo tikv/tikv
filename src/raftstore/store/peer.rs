@@ -2164,7 +2164,13 @@ impl ReadExecutor {
             Some(RegionSnapshot::from_snapshot(
                 self.snapshot.clone().unwrap(),
                 region.to_owned(),
-                self.from,
+                self.from.to_string()
+                    + &format!(
+                        ", req region: {}, epoch: {:?}, term: {}",
+                        msg.get_header().get_region_id(),
+                        msg.get_header().get_region_epoch(),
+                        msg.get_header().get_term()
+                    ),
             ))
         } else {
             None
