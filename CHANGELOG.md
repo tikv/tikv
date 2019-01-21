@@ -2,6 +2,19 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.0-beta]
+- Support distributed GC [#3179](https://github.com/tikv/tikv/pull/3179)
+- Check RocksDB Level 0 files before applying snapshots to avoid Write Stall [#3606](https://github.com/tikv/tikv/pull/3606)
+- Support reverse `raw_scan` and `raw_batch_scan` [#3724](https://github.com/tikv/tikv/pull/3724)
+- Support using HTTP to obtain monitoring information [#3855](https://github.com/tikv/tikv/pull/3855)
+- Support DST better [#3786](https://github.com/tikv/tikv/pull/3786)
+- Support receiving and sending Raft messages in batch [#3913](https://github.com/tikv/tikv/pull/3913)
+- Introduce a new storage engine Titan [#3985](https://github.com/tikv/tikv/pull/3985)
+- Upgrade gRPC to v1.17.2 [#4023](https://github.com/tikv/tikv/pull/4023)
+- Support receiving the client requests and sending replies in batch [#4043](https://github.com/tikv/tikv/pull/4043)
+- Support multi-thread Apply [#4044](https://github.com/tikv/tikv/pull/4044)
+- Support multi-thread Raftstore [#4066](https://github.com/tikv/tikv/pull/4066)
+
 ## [2.1.2]
 - Support the configuration format in the unit of `DAY` (`d`) and fix the configuration compatibility issue [#3931](https://github.com/tikv/tikv/pull/3931)
 - Fix the possible panic issue caused by `Approximate Size Split` [#3942](https://github.com/tikv/tikv/pull/3942)

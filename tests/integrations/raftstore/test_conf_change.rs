@@ -238,13 +238,6 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_simple_conf_change() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_simple_conf_change(&mut cluster);
-}
-
-#[test]
 fn test_server_simple_conf_change() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
