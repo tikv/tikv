@@ -234,6 +234,9 @@
 ## Use how many threads to handle log apply
 # apply-pool-size = 2
 
+## Use how many threads to handle raft messages
+# store-pool-size = 2
+
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
