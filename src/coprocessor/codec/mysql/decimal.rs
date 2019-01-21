@@ -1907,10 +1907,11 @@ pub trait DecimalEncoder: NumberEncoder {
             src_int_word_cnt = int_word_cnt;
             src_leading_digits = leading_digits;
             res = Res::Overflow(());
-            error!("encode decimal overflow";
-                "from"=>d.to_string(),
-                "prec"=>prec,
-                "frac"=>frac,
+            error!(
+                "encode decimal overflow";
+                "from" => d.to_string(),
+                "prec" => prec,
+                "frac" => frac,
             );
         } else if int_size > src_int_size {
             for _ in src_int_size..int_size {
@@ -1924,9 +1925,9 @@ pub trait DecimalEncoder: NumberEncoder {
             res = Res::Truncated(());
             warn!(
                 "encode decimal truncated";
-                "from"=>d.to_string(),
-                "prec"=>prec,
-                "frac"=>frac,
+                "from" => d.to_string(),
+                "prec" => prec,
+                "frac" => frac,
             );
         } else if frac_size > src_frac_size && src_trailing_digits > 0 {
             if frac_word_cnt == src_frac_word_cnt {
