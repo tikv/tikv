@@ -442,7 +442,7 @@ impl Runnable<RegionCollectorMsg> for RegionCollector {
     }
 }
 
-const METRICS_FLUSH_INTERVAL: u64 = 10000; // 10s
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {

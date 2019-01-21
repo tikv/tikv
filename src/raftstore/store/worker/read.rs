@@ -499,7 +499,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
     }
 }
 
-const METRICS_FLUSH_INTERVAL: u64 = 15000; // 15s
+const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 impl<C: Sender<StoreMsg>> RunnableWithTimer<Task, ()> for LocalReader<C> {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
