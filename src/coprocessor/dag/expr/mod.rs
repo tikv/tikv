@@ -238,7 +238,7 @@ impl Expression {
         debug!(
             "build-expr";
             "expr" => format!("{:?}", expr)
-            );
+        );
         let field_type = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, field_type)),

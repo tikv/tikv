@@ -53,7 +53,7 @@ impl CopFlowStatistics {
             error!(
                 "send coprocessor statistics failed";
                 "err" => e.to_string()
-                );
+            );
         };
     }
 }

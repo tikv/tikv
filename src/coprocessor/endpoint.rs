@@ -490,7 +490,7 @@ fn make_error_response(e: Error) -> coppb::Response {
     error!(
         "error-response";
         "err" => %e
-        );
+    );
     let mut resp = coppb::Response::new();
     let tag;
     match e {
