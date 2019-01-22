@@ -263,7 +263,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         error!(
             "failed to start metrics flusher";
             "err" => %e
-            );
+        );
     }
 
     // Run server.
@@ -282,7 +282,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             error!(
                 "failed to bind addr for status service";
                 "err" => %e
-                );
+            );
             status_enabled = false;
         }
     }
