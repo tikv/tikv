@@ -93,20 +93,23 @@ fn check_system_config(config: &TiKvConfig) {
     for e in tikv_util::config::check_kernel() {
         warn!(
             "check-kernel";
-            "err" => %e);
+            "err" => %e
+        );
     }
 
     // check rocksdb data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
         warn!(
             "rocksdb check data dir";
-            "err" => %e);
+            "err" => %e
+        );
     }
     // check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!(
             "raft check data dir";
-            "err" => %e);
+            "err" => %e
+        );
     }
 }
 
@@ -307,7 +310,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         info!(
             "ignore failure when stopping resolver";
             "err" => ?e
-            );
+        );
     }
 }
 
@@ -475,7 +478,7 @@ fn main() {
     info!(
         "connect to PD cluster";
         "cluster_id" => cluster_id
-        );
+    );
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);
