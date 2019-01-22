@@ -15,8 +15,6 @@
 #![feature(core_intrinsics)]
 #![feature(ptr_offset_from)]
 
-#[cfg(all(unix))]
-extern crate jemallocator;
 #[macro_use]
 extern crate quick_error;
 extern crate byteorder;
@@ -29,6 +27,7 @@ extern crate protobuf;
 extern crate rand;
 #[cfg(test)]
 extern crate test;
+extern crate tikv_alloc;
 
 extern crate panic_hook;
 
@@ -48,10 +47,3 @@ pub use self::buffer::{BufferReader, BufferWriter};
 pub use self::byte::MemComparableByteCodec;
 pub use self::error::{Error, Result};
 pub use self::number::NumberCodec;
-
-// Currently, only crates that link to TiKV use jemalloc, our production
-// allocator. This crate has a test, `test_vec_reallocate`, that is testing
-// allocator behavior, so we also link to jemalloc.
-#[cfg(all(unix, not(fuzzing)))]
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;

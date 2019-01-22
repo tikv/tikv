@@ -42,6 +42,7 @@ snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
+heavy-load-wait-duration = "2ms"
 
 [server.labels]
 a = "b"
@@ -115,6 +116,11 @@ merge-check-tick-interval = "11s"
 use-delete-range = true
 cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
+apply-max-batch-size = 22
+apply-pool-size = 4
+store-max-batch-size = 21
+store-pool-size = 3
+future-poll-size = 2
 
 [coprocessor]
 split-region-on-table = true

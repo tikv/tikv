@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
+use super::metrics::*;
 use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
@@ -27,7 +29,8 @@ use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResu
 use storage::engine::{RegionInfoProvider, Result as EngineResult};
 use util::collections::HashMap;
 use util::escape;
-use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
+use util::timer::Timer;
+use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -279,8 +282,13 @@ impl RegionCollector {
         let epoch = region_to_check.get_region_epoch();
         let current_epoch = current.get_region_epoch();
 
+        // Only compare conf_ver when they have the same version.
+        // When a region A merges region B, region B may have a greater conf_ver. Then, the new
+        // merged region meta has larger version but smaller conf_ver than the original B's. In this
+        // case, the incoming region meta has a smaller conf_ver but is not stale.
         epoch.get_version() < current_epoch.get_version()
-            || epoch.get_conf_ver() < current_epoch.get_conf_ver()
+            || (epoch.get_version() == current_epoch.get_version()
+                && epoch.get_conf_ver() < current_epoch.get_conf_ver())
     }
 
     /// For all regions whose range overlaps with the given `region` or region_id is the same as
@@ -433,6 +441,28 @@ impl Runnable<RegionCollectorMsg> for RegionCollector {
     }
 }
 
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+
+impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        let mut count = 0;
+        let mut leader = 0;
+        for r in self.regions.values() {
+            count += 1;
+            if r.role == StateRole::Leader {
+                leader += 1;
+            }
+        }
+        REGION_COUNT_GAUGE_VEC
+            .with_label_values(&["region"])
+            .set(count);
+        REGION_COUNT_GAUGE_VEC
+            .with_label_values(&["leader"])
+            .set(leader);
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+    }
+}
+
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
@@ -458,10 +488,12 @@ impl RegionInfoAccessor {
 
     /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
     pub fn start(&self) {
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
         self.worker
             .lock()
             .unwrap()
-            .start(RegionCollector::new())
+            .start_with_timer(RegionCollector::new(), timer)
             .unwrap();
     }
 
@@ -942,10 +974,10 @@ mod tests {
     fn test_merge_impl(to_left: bool, update_first: bool) {
         let mut c = RegionCollector::new();
         let init_regions = &[
-            new_region(1, b"", b"k1", 1),
-            new_region(2, b"k1", b"k2", 1),
-            new_region(3, b"k2", b"k3", 1),
-            new_region(4, b"k3", b"", 1),
+            region_with_conf(1, b"", b"k1", 1, 1),
+            region_with_conf(2, b"k1", b"k2", 1, 100),
+            region_with_conf(3, b"k2", b"k3", 1, 1),
+            region_with_conf(4, b"k3", b"", 1, 100),
         ];
         must_load_regions(&mut c, init_regions);
 
@@ -967,9 +999,9 @@ mod tests {
         }
 
         let final_regions = &[
-            (new_region(1, b"", b"k1", 1), StateRole::Follower),
+            (region_with_conf(1, b"", b"k1", 1, 1), StateRole::Follower),
             (updating_region, StateRole::Follower),
-            (new_region(4, b"k3", b"", 1), StateRole::Follower),
+            (region_with_conf(4, b"k3", b"", 1, 100), StateRole::Follower),
         ];
         check_collection(&c, final_regions);
     }

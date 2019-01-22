@@ -265,7 +265,7 @@ fn test_auto_gc() {
     let (finish_signal_tx, finish_signal_rx) = channel();
 
     // Create storage object for each store in the cluster
-    let storages: HashMap<_, _> = cluster
+    let mut storages: HashMap<_, _> = cluster
         .sim
         .rl()
         .storages
@@ -274,18 +274,28 @@ fn test_auto_gc() {
             let mut config = Config::default();
             // Do not skip GC
             config.gc_ratio_threshold = 0.9;
-            let mut storage = SyncTestStorageBuilder::from_engine(engine.clone())
+            let storage = SyncTestStorageBuilder::from_engine(engine.clone())
                 .config(config)
                 .build()
                 .unwrap();
-            let tx = finish_signal_tx.clone();
 
-            let mut cfg = AutoGCConfig::new_test_cfg(Arc::clone(&pd_client), engine.clone(), *id);
-            cfg.post_a_round_of_gc = Some(box move || tx.send(()).unwrap());
-            storage.start_auto_gc(cfg);
             (*id, storage)
         })
         .collect();
+
+    let mut region_info_accessors = cluster.sim.rl().region_info_accessors.clone();
+
+    for (id, storage) in &mut storages {
+        let tx = finish_signal_tx.clone();
+
+        let mut cfg = AutoGCConfig::new_test_cfg(
+            Arc::clone(&pd_client),
+            region_info_accessors.remove(id).unwrap(),
+            *id,
+        );
+        cfg.post_a_round_of_gc = Some(box move || tx.send(()).unwrap());
+        storage.start_auto_gc(cfg);
+    }
 
     assert_eq!(storages.len(), count);
 

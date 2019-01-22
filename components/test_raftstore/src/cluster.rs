@@ -28,11 +28,11 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
+use tikv::raftstore::store::fsm::SendCh;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::storage::CF_DEFAULT;
 use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::transport::SendCh;
 use tikv::util::{escape, rocksdb, HandyRwLock};
 
 use super::*;
@@ -64,7 +64,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter);
@@ -212,6 +212,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
         Arc::clone(&self.engines[&node_id].raft)
+    }
+
+    pub fn get_all_engines(&self, node_id: u64) -> Engines {
+        self.engines[&node_id].clone()
     }
 
     pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
@@ -807,12 +811,12 @@ impl<T: Simulator> Cluster<T> {
             .get_store_sendch(leader.get_store_id())
             .unwrap();
         let split_key = split_key.to_vec();
-        ch.try_send(Msg::SplitRegion {
+        ch.try_send(Msg::PeerMsg(PeerMsg::SplitRegion {
             region_id: region.get_id(),
             region_epoch: region.get_region_epoch().clone(),
             split_keys: vec![split_key.clone()],
             callback: cb,
-        })
+        }))
         .unwrap();
     }
 

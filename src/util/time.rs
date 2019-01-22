@@ -295,7 +295,7 @@ impl Instant {
         }
     }
 
-    fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+    pub fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
         } else {

@@ -17,6 +17,7 @@
 extern crate crc;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate grpcio;
 extern crate grpcio as grpc;
 extern crate kvproto;
 extern crate protobuf;
@@ -26,6 +27,7 @@ extern crate rocksdb;
 extern crate tempdir;
 extern crate test;
 extern crate tipb;
+extern crate tokio;
 extern crate toml;
 extern crate uuid;
 #[macro_use(
@@ -55,6 +57,7 @@ mod coprocessor;
 mod import;
 mod pd;
 mod raftstore;
+mod server;
 mod storage;
 
 // The prefix "_" here is to guarantee running this case first.

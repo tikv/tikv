@@ -18,9 +18,9 @@ use kvproto::import_sstpb::SSTMeta;
 
 use import::SSTImporter;
 use pd::PdClient;
+use raftstore::store::fsm::SendCh;
 use raftstore::store::util::is_epoch_stale;
-use raftstore::store::Msg;
-use util::transport::SendCh;
+use raftstore::store::{Msg, StoreMsg};
 use util::worker::Runnable;
 
 pub enum Task {
@@ -39,7 +39,7 @@ impl fmt::Display for Task {
 
 pub struct Runner<C> {
     store_id: u64,
-    store_ch: SendCh<Msg>,
+    store_ch: SendCh,
     importer: Arc<SSTImporter>,
     pd_client: Arc<C>,
 }
@@ -47,7 +47,7 @@ pub struct Runner<C> {
 impl<C: PdClient> Runner<C> {
     pub fn new(
         store_id: u64,
-        store_ch: SendCh<Msg>,
+        store_ch: SendCh,
         importer: Arc<SSTImporter>,
         pd_client: Arc<C>,
     ) -> Runner<C> {
@@ -59,12 +59,14 @@ impl<C: PdClient> Runner<C> {
         }
     }
 
+    /// Deletes SST files from the importer.
     fn handle_delete_sst(&self, ssts: Vec<SSTMeta>) {
         for sst in &ssts {
             let _ = self.importer.delete(sst);
         }
     }
 
+    /// Validates whether the SST is stale or not.
     fn handle_validate_sst(&self, ssts: Vec<SSTMeta>) {
         let store_id = self.store_id;
         let mut invalid_ssts = Vec::new();
@@ -95,7 +97,7 @@ impl<C: PdClient> Runner<C> {
         // We need to send back the result to check for the stale
         // peer, which may ingest the stale SST before it is
         // destroyed.
-        let msg = Msg::ValidateSSTResult { invalid_ssts };
+        let msg = Msg::StoreMsg(StoreMsg::ValidateSSTResult { invalid_ssts });
         if let Err(e) = self.store_ch.try_send(msg) {
             error!("send validate sst result: {:?}", e);
         }

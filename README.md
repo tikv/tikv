@@ -189,5 +189,4 @@ TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for deta
 
 - Thanks [etcd](https://github.com/coreos/etcd) for providing some great open source tools.
 - Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
-- Thanks [mio](https://github.com/carllerche/mio) for providing metal I/O library for Rust.
 - Thanks [rust-clippy](https://github.com/Manishearth/rust-clippy). We do love the great project.
