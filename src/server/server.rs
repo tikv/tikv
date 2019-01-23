@@ -68,7 +68,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
@@ -329,7 +329,8 @@ mod tests {
             SnapManager::new("", None),
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         server.start(cfg, security_mgr).unwrap();
 

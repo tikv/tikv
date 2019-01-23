@@ -24,3 +24,6 @@ out/
 target
 tmp
 /bin
+
+# fuzzing hack, see fuzz/cli.rs
+fuzz-incremental/

@@ -105,7 +105,7 @@ impl fmt::Debug for Callback {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PeerTick {
     Raft,
     RaftLogGc,
@@ -281,7 +281,7 @@ impl fmt::Debug for PeerMsg {
                 region_id,
                 target,
                 stale,
-            } => write!{
+            } => write! {
                 fmt,
                 "[reigon {}] target: {:?}, successful: {}",
                 region_id, target, stale
@@ -289,17 +289,17 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::GcSnap {
                 region_id,
                 ref snaps,
-            } => write!{
+            } => write! {
                 fmt,
                 "[region {}] gc snaps {:?}",
                 region_id, snaps
             },
-            PeerMsg::ClearRegionSize(region_id) => write!{
+            PeerMsg::ClearRegionSize(region_id) => write! {
                 fmt,
                 "[region {}] clear region size",
                 region_id
             },
-            PeerMsg::Tick(region_id, tick) => write!{
+            PeerMsg::Tick(region_id, tick) => write! {
                 fmt,
                 "[region {}] {:?}",
                 region_id,
