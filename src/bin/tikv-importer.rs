@@ -12,13 +12,11 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(proc_macro_non_items)]
+#![feature(proc_macro_hygiene)]
 
 extern crate chrono;
 extern crate clap;
 extern crate fs2;
-#[cfg(feature = "mem-profiling")]
-extern crate jemallocator;
 extern crate libc;
 #[cfg(unix)]
 extern crate nix;
@@ -30,20 +28,19 @@ extern crate signal;
 #[macro_use(
     slog_kv,
     slog_error,
-    slog_warn,
     slog_info,
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_stdlog;
 extern crate slog_term;
 extern crate tikv;
+extern crate tikv_alloc;
 extern crate toml;
 
 #[cfg(unix)]
@@ -59,7 +56,7 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util as tikv_util;
+use tikv::util::{self as tikv_util, check_environment_variables};
 
 fn main() {
     let matches = App::new("TiKV Importer")

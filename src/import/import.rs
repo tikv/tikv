@@ -267,12 +267,14 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
             let range = self.sst.meta.get_range().clone();
             let mut region = match self.client.get_region(range.get_start()) {
-                Ok(region) => if self.sst.inside_region(&region) {
-                    region
-                } else {
-                    warn!("{} outside of {:?}", self.tag, region);
-                    return Err(Error::ImportSSTJobFailed(self.tag.clone()));
-                },
+                Ok(region) => {
+                    if self.sst.inside_region(&region) {
+                        region
+                    } else {
+                        warn!("{} outside of {:?}", self.tag, region);
+                        return Err(Error::ImportSSTJobFailed(self.tag.clone()));
+                    }
+                }
                 Err(e) => {
                     warn!("{}: {:?}", self.tag, e);
                     continue;
@@ -366,14 +368,16 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
         ingest.set_sst(self.sst.meta.clone());
 
         let res = match self.client.ingest_sst(store_id, ingest) {
-            Ok(mut resp) => if !resp.has_error() {
-                Ok(())
-            } else {
-                match Error::from(resp.take_error()) {
-                    e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
-                    e => Err(e),
+            Ok(mut resp) => {
+                if !resp.has_error() {
+                    Ok(())
+                } else {
+                    match Error::from(resp.take_error()) {
+                        e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
+                        e => Err(e),
+                    }
                 }
-            },
+            }
             Err(e) => Err(e),
         };
 

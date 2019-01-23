@@ -56,7 +56,7 @@ const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
 pub fn get_fastest_supported_compression_type() -> DBCompressionType {
     let all_supported_compression = supported_compression();
     *COMPRESSION_PRIORITY
-        .into_iter()
+        .iter()
         .find(|c| all_supported_compression.contains(c))
         .unwrap_or(&DBCompressionType::No)
 }
@@ -564,7 +564,8 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
     // RocksDB may have modified the global seqno.
     let cf_handle = get_cf_handle(db, cf)?;
     set_external_sst_file_global_seq_no(db, cf_handle, path, 0)?;
-    f.sync_all().map_err(|e| format!("sync {}: {:?}", path, e))?;
+    f.sync_all()
+        .map_err(|e| format!("sync {}: {:?}", path, e))?;
 
     let checksum = calc_crc32(path).map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
     if checksum != expected_checksum {
@@ -637,7 +638,7 @@ mod tests {
         let cfs_list = DB::list_column_families(&opts, path).unwrap();
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
-        let mut cfs_excepted: Vec<&str> = excepted.iter().map(|v| *v).collect();
+        let mut cfs_excepted: Vec<&str> = excepted.clone();
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
@@ -758,7 +759,8 @@ mod tests {
             temp_dir.path().to_str().unwrap(),
             &["default", "test"],
             Some(cfs_opts),
-        ).unwrap();
+        )
+        .unwrap();
 
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();

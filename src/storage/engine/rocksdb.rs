@@ -197,22 +197,26 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
     let wb = WriteBatch::new();
     for rev in modifies {
         let res = match rev {
-            Modify::Delete(cf, k) => if cf == CF_DEFAULT {
-                trace!("RocksEngine: delete {}", k);
-                wb.delete(k.as_encoded())
-            } else {
-                trace!("RocksEngine: delete_cf {} {}", cf, k);
-                let handle = rocksdb::get_cf_handle(db, cf)?;
-                wb.delete_cf(handle, k.as_encoded())
-            },
-            Modify::Put(cf, k, v) => if cf == CF_DEFAULT {
-                trace!("RocksEngine: put {},{}", k, escape(&v));
-                wb.put(k.as_encoded(), &v)
-            } else {
-                trace!("RocksEngine: put_cf {}, {}, {}", cf, k, escape(&v));
-                let handle = rocksdb::get_cf_handle(db, cf)?;
-                wb.put_cf(handle, k.as_encoded(), &v)
-            },
+            Modify::Delete(cf, k) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: delete {}", k);
+                    wb.delete(k.as_encoded())
+                } else {
+                    trace!("RocksEngine: delete_cf {} {}", cf, k);
+                    let handle = rocksdb::get_cf_handle(db, cf)?;
+                    wb.delete_cf(handle, k.as_encoded())
+                }
+            }
+            Modify::Put(cf, k, v) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: put {},{}", k, escape(&v));
+                    wb.put(k.as_encoded(), &v)
+                } else {
+                    trace!("RocksEngine: put_cf {}, {}, {}", cf, k, escape(&v));
+                    let handle = rocksdb::get_cf_handle(db, cf)?;
+                    wb.put_cf(handle, k.as_encoded(), &v)
+                }
+            }
             Modify::DeleteRange(cf, start_key, end_key) => {
                 trace!(
                     "RocksEngine: delete_range_cf {}, {}, {}",

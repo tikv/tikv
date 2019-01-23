@@ -17,58 +17,7 @@ use test::Bencher;
 
 use crossbeam::channel;
 use futures::{Future, Stream};
-use mio::{EventLoop, Handler, Sender};
 use tikv::util::mpsc;
-
-struct CountHandler {
-    n: usize,
-}
-
-impl Handler for CountHandler {
-    type Timeout = ();
-    type Message = u32;
-
-    fn notify(&mut self, event_loop: &mut EventLoop<CountHandler>, msg: u32) {
-        if msg == 0 {
-            event_loop.shutdown();
-            return;
-        }
-
-        self.n += 1;
-    }
-}
-
-fn mio_must_send(sender: &Sender<u32>, n: u32) {
-    loop {
-        // Send may return notify error, we must retry.
-        if sender.send(n).is_ok() {
-            return;
-        }
-    }
-}
-
-#[bench]
-fn bench_mio_channel(b: &mut Bencher) {
-    let mut event_loop = EventLoop::new().unwrap();
-    let sender = event_loop.channel();
-
-    let t = thread::spawn(move || {
-        let mut h = CountHandler { n: 0 };
-        event_loop.run(&mut h).unwrap();
-        h.n
-    });
-
-    let mut n1 = 0;
-    b.iter(|| {
-        n1 += 1;
-        mio_must_send(&sender, 1);
-    });
-
-    mio_must_send(&sender, 0);
-
-    let n2 = t.join().unwrap();
-    assert_eq!(n1, n2);
-}
 
 #[bench]
 fn bench_thread_channel(b: &mut Bencher) {

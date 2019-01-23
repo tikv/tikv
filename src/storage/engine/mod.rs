@@ -126,6 +126,16 @@ pub trait Snapshot: Send + Clone {
     fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
+    // The minimum key this snapshot can retrieve.
+    #[inline]
+    fn lower_bound(&self) -> Option<&[u8]> {
+        None
+    }
+    // The maximum key can be fetched from the snapshot should less than the upper bound.
+    #[inline]
+    fn upper_bound(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
 pub trait Iterator: Send {
@@ -833,16 +843,12 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(
-            !iter
-                .seek(&Key::from_raw(b"z\x00"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!iter
+            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap());
+        assert!(!iter
+            .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
@@ -861,11 +867,9 @@ pub mod tests {
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
@@ -892,36 +896,24 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"z"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"w"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"z"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"w"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"z"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"w"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"z"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"w"), &mut statistics)
+            .unwrap());
     }
 
     macro_rules! assert_seek {

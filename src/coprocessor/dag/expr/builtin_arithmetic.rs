@@ -49,20 +49,24 @@ impl ScalarFunc {
         let rus = self.children[1].is_unsigned();
         let res = match (lus, rus) {
             (true, true) => (lhs as u64).checked_add(rhs as u64).map(|t| t as i64),
-            (true, false) => if rhs >= 0 {
-                (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
-            } else {
-                (lhs as u64)
-                    .checked_sub(rhs.overflowing_neg().0 as u64)
-                    .map(|t| t as i64)
-            },
-            (false, true) => if lhs >= 0 {
-                (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
-            } else {
-                (rhs as u64)
-                    .checked_sub(lhs.overflowing_neg().0 as u64)
-                    .map(|t| t as i64)
-            },
+            (true, false) => {
+                if rhs >= 0 {
+                    (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
+                } else {
+                    (lhs as u64)
+                        .checked_sub(rhs.overflowing_neg().0 as u64)
+                        .map(|t| t as i64)
+                }
+            }
+            (false, true) => {
+                if lhs >= 0 {
+                    (lhs as u64).checked_add(rhs as u64).map(|t| t as i64)
+                } else {
+                    (rhs as u64)
+                        .checked_sub(lhs.overflowing_neg().0 as u64)
+                        .map(|t| t as i64)
+                }
+            }
             (false, false) => lhs.checked_add(rhs),
         };
         let data_type = if lus | rus {
@@ -107,18 +111,22 @@ impl ScalarFunc {
         };
         let res = match (lus, rus) {
             (true, true) => (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64),
-            (true, false) => if rhs >= 0 {
-                (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
-            } else {
-                (lhs as u64)
-                    .checked_add(rhs.overflowing_neg().0 as u64)
-                    .map(|t| t as i64)
-            },
-            (false, true) => if lhs >= 0 {
-                (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
-            } else {
-                return Err(Error::overflow(data_type, &format!("({} - {})", lhs, rhs)));
-            },
+            (true, false) => {
+                if rhs >= 0 {
+                    (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
+                } else {
+                    (lhs as u64)
+                        .checked_add(rhs.overflowing_neg().0 as u64)
+                        .map(|t| t as i64)
+                }
+            }
+            (false, true) => {
+                if lhs >= 0 {
+                    (lhs as u64).checked_sub(rhs as u64).map(|t| t as i64)
+                } else {
+                    return Err(Error::overflow(data_type, &format!("({} - {})", lhs, rhs)));
+                }
+            }
             (false, false) => lhs.checked_sub(rhs),
         };
         res.ok_or_else(|| Error::overflow(data_type, &format!("({} - {})", lhs, rhs)))
@@ -1001,7 +1009,8 @@ mod tests {
             let mut op = Expression::build(
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
-            ).unwrap();
+            )
+            .unwrap();
             op.mut_field_type()
                 .as_mut_accessor()
                 .set_flag(FieldTypeFlag::UNSIGNED);
@@ -1024,7 +1033,8 @@ mod tests {
             let mut op = Expression::build(
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
-            ).unwrap();
+            )
+            .unwrap();
             op.mut_field_type()
                 .as_mut_accessor()
                 .set_flag(FieldTypeFlag::UNSIGNED);

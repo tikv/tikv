@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
@@ -38,9 +37,9 @@ macro_rules! fatal {
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
-    let log_rotation_timespan = chrono::Duration::from_std(
-        config.log_rotation_timespan.clone().into(),
-    ).expect("config.log_rotation_timespan is an invalid duration.");
+    let log_rotation_timespan =
+        chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
+            .expect("config.log_rotation_timespan is an invalid duration.");
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
@@ -140,32 +139,5 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(import_dir) = matches.value_of("import-dir") {
         config.import.import_dir = import_dir.to_owned();
-    }
-}
-
-/// Check environment variables that affect TiKV.
-#[allow(dead_code)]
-pub fn check_environment_variables() {
-    if cfg!(unix) && env::var("TZ").is_err() {
-        env::set_var("TZ", ":/etc/localtime");
-        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
-    }
-
-    if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
-        info!(
-            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
-            var
-        );
-    } else if cfg!(target_os = "linux") {
-        // Set gRPC event engine to epollsig if it is missing.
-        // See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
-        //           /src/core/lib/iomgr/ev_posix.cc#L149
-        env::set_var("GRPC_POLL_STRATEGY", "epollsig");
-    }
-
-    for proxy in &["http_proxy", "https_proxy"] {
-        if let Ok(var) = env::var(proxy) {
-            info!("environment variable `{}` is present, `{}`", proxy, var);
-        }
     }
 }

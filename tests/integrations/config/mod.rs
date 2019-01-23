@@ -58,7 +58,7 @@ fn test_serde_custom_tikv_config() {
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
-        labels: map!{ "a".to_owned() => "b".to_owned() },
+        labels: map! { "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
@@ -83,6 +83,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
+        heavy_load_wait_duration: ReadableDuration::millis(2),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
@@ -161,6 +162,11 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
+        apply_max_batch_size: 22,
+        apply_pool_size: 4,
+        store_max_batch_size: 21,
+        store_pool_size: 3,
+        future_poll_size: 2,
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],

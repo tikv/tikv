@@ -16,7 +16,7 @@ use super::{Error, Result};
 use byteorder::ReadBytesExt;
 use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use util::codec::bytes::{self, BytesEncoder};
-use util::codec::number::{self, MAX_VAR_U64_LEN, NumberEncoder};
+use util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
