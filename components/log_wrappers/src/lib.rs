@@ -88,7 +88,7 @@ fn test_debug() {
     assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: None\n");
 }
 
-pub struct Key<'a>(pub &'a[u8]);
+pub struct Key<'a>(pub &'a [u8]);
 
 impl<'a> ::slog::Value for Key<'a> {
     #[inline]
@@ -98,10 +98,7 @@ impl<'a> ::slog::Value for Key<'a> {
         key: ::slog::Key,
         serializer: &mut ::slog::Serializer,
     ) -> ::slog::Result {
-        serializer.emit_arguments(
-            key,
-            &format_args!("{}", ::hex::encode_upper(self.0)),
-        )
+        serializer.emit_arguments(key, &format_args!("{}", ::hex::encode_upper(self.0)))
     }
 }
 
