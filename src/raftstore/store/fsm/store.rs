@@ -633,10 +633,11 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 Ok(msg) => {
                     fail_point!(
                         "pause_on_apply_res_1",
-                        peer.peer_id() == 1 && match msg {
-                            PeerMsg::ApplyRes { .. } => true,
-                            _ => false,
-                        },
+                        peer.peer_id() == 1
+                            && match msg {
+                                PeerMsg::ApplyRes { .. } => true,
+                                _ => false,
+                            },
                         |_| unreachable!()
                     );
                     self.peer_msg_buf.push(msg)
