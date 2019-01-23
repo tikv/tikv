@@ -94,7 +94,8 @@ fn reversed_checksum_crc64_xor<E: Engine>(
     let mut scanner = Scanner::new(
         &snap, scan_on, true, // Scan in reversed order.
         false, range,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut checksum = 0;
     while let Some((k, v)) = scanner.next_row().unwrap() {

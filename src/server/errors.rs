@@ -29,7 +29,7 @@ use storage::Error as StorageError;
 use util::codec::Error as CodecError;
 use util::worker::ScheduleError;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Other(err: Box<error::Error + Sync + Send>) {

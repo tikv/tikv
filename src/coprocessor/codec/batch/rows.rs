@@ -347,7 +347,7 @@ mod tests {
     fn raw_row_from_datums(datums: impl AsRef<[Option<Datum>]>, comparable: bool) -> Vec<Vec<u8>> {
         datums
             .as_ref()
-            .into_iter()
+            .iter()
             .map(|some_datum| {
                 let mut ret = Vec::new();
                 if some_datum.is_some() {
@@ -355,7 +355,8 @@ mod tests {
                         &mut ret,
                         &[some_datum.clone().take().unwrap()],
                         comparable,
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 ret
             })
