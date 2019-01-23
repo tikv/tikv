@@ -385,7 +385,12 @@ impl Peer {
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
-        ctx.local_reader.schedule(ReadTask::register(self)).unwrap();
+        if ctx.local_reader.schedule(ReadTask::register(self)).is_err() {
+            info!(
+                "{} fails to schedule local reader, are we shutting down?",
+                self.tag
+            );
+        }
 
         ctx.coprocessor_host.on_region_changed(
             self.region(),

@@ -187,6 +187,11 @@ impl PeerFsm {
     }
 
     #[inline]
+    pub fn peer_id(&self) -> u64 {
+        self.peer.peer_id()
+    }
+
+    #[inline]
     pub fn stop(&mut self) {
         self.stopped = true;
     }
@@ -576,6 +581,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .timer
             .delay(timeout)
             .map(move |_| {
+                fail_point!(
+                    "on_raft_log_gc_tick_1",
+                    peer_id == 1 && tick == PeerTick::RaftLogGc,
+                    |_| unreachable!()
+                );
                 if let Err(e) = mb.force_send(PeerMsg::Tick(region_id, tick)) {
                     info!(
                         "[region {}] {} failed to schedule peer tick {:?}: {:?}",

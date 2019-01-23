@@ -1286,7 +1286,12 @@ impl ApplyDelegate {
 
         fail_point!(
             "apply_on_conf_change_1_3_1",
-            { (self.id == 1 || self.id == 3) && self.region_id() == 1 },
+            (self.id == 1 || self.id == 3) && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
+            "apply_on_conf_change_all_1",
+            self.region_id() == 1,
             |_| panic!("should not use return")
         );
         info!(
