@@ -392,7 +392,7 @@ mod tests {
 			    "<car><mirror>XML</mirror></car>"]
         );
 
-        let expect = r#"[2019/01/15 13:40:39.619 +08:00] [FATAL] [mod.rs:469] []
+        let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎]
