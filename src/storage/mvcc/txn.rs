@@ -139,6 +139,10 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(Modify::Delete(CF_WRITE, key));
     }
 
+    fn key_exist(&mut self, key: &Key, ts: u64) -> Result<bool> {
+        Ok(self.reader.skip_lock_get(&key, ts)?.is_some())
+    }
+
     pub fn prewrite(
         &mut self,
         mutation: Mutation,
@@ -156,7 +160,11 @@ impl<S: Snapshot> MvccTxn<S> {
             if !options.skip_constraint_check {
                 if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
                     if should_not_exist {
-                        return Err(Error::AlreadyExist { key: key.to_raw()? });
+                        if write.write_type == WriteType::Put
+                            || (write.write_type != WriteType::Delete && self.key_exist(&key, write.start_ts - 1)?)
+                        {
+                            return Err(Error::AlreadyExist { key: key.to_raw()? });
+                        }
                     }
                     // Abort on writes after our start timestamp ...
                     // If exists a commit version whose commit timestamp is larger than or equal to
@@ -176,9 +184,6 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // ... or locks at any timestamp.
             if let Some(lock) = self.reader.load_lock(&key)? {
-                if should_not_exist {
-                    return Err(Error::AlreadyExist { key: key.to_raw()? });
-                }
                 if lock.ts != self.start_ts {
                     return Err(Error::KeyIsLocked {
                         key: key.to_raw()?,
@@ -447,6 +452,32 @@ mod tests {
         must_prewrite_delete(&engine, k, k, 13);
         must_rollback(&engine, k, 13);
         must_unlocked(&engine, k);
+    }
+
+    #[test]
+    fn test_mvcc_txn_prewrite_check_exist() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1, v2, v3) = (b"k1", b"v1", b"v2", b"v3");
+        // "k1" is not exist, so prewrite success.
+        try_prewrite_put(&engine, k1, v1, k1, 1, true).unwrap();
+        must_commit(&engine, k1, 1, 2);
+
+        // "k1" already exist, returns AlreadyExist error.
+        assert!(try_prewrite_put(&engine, k1, v2, k1, 3, true).is_err());
+
+        // Delete "k1"
+        must_prewrite_delete(&engine, k1, k1, 4);
+        must_commit(&engine, k1, 4, 5);
+
+        // After delete "k1", prewrite returns ok.
+        assert!(try_prewrite_put(&engine, k1, v2, k1, 6, true).is_ok());
+        must_commit(&engine, k1, 6, 7);
+
+        // Rollback
+        must_prewrite_put(&engine, k1, v3, k1, 8);
+        must_rollback(&engine, k1, 8);
+
+        assert!(try_prewrite_put(&engine, k1, v3, k1, 9, true).is_err())
     }
 
     #[test]

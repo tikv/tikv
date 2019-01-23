@@ -234,6 +234,10 @@ impl<S: Snapshot> MvccReader<S> {
             IsolationLevel::SI => ts = self.check_lock(key, ts)?,
             IsolationLevel::RC => {}
         }
+        self.skip_lock_get(key, ts)
+    }
+
+    pub fn skip_lock_get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         loop {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, mut write)) => match write.write_type {
