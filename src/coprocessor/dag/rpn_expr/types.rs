@@ -389,7 +389,8 @@ impl RpnExpressionNodeVec {
                             field_type.tp().try_into().unwrap(),
                             fsp,
                             time_zone,
-                        ).unwrap();
+                        )
+                        .unwrap();
                         ScalarValue::DateTime(Some(value))
                     }
                     _ => panic!(),

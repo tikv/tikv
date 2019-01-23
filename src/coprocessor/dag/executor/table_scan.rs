@@ -120,7 +120,8 @@ impl<S: Store> TableScanExecutor<S> {
             self.desc,
             self.col_ids.is_empty(),
             range,
-        ).map_err(Error::from)
+        )
+        .map_err(Error::from)
     }
 }
 

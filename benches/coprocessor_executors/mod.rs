@@ -51,7 +51,8 @@ fn bench_table_scan_next(
                 ranges.to_vec(),
                 store.to_fixture_store(),
                 false,
-            ).unwrap();
+            )
+            .unwrap();
             // There is a step of building scanner in the first `next()` which cost time,
             // so we next() before hand.
             executor.next().unwrap().unwrap();
@@ -78,7 +79,8 @@ fn bench_table_scan_next_1000(
                 ranges.to_vec(),
                 store.to_fixture_store(),
                 false,
-            ).unwrap();
+            )
+            .unwrap();
             // There is a step of building scanner in the first `next()` which cost time,
             // so we next() before hand.
             executor.next().unwrap().unwrap();
@@ -108,7 +110,8 @@ fn bench_table_scan_next_1000_batch(
                 context.clone(),
                 ranges.to_vec(),
                 false,
-            ).unwrap();
+            )
+            .unwrap();
             // There is a step of building scanner in the first `next()` which cost time,
             // so we next() before hand.
             executor.next_batch(1);
@@ -306,8 +309,6 @@ fn bench_table_scan_datum_all(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_primary_key(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_primary_key", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -345,8 +346,6 @@ fn bench_table_scan_long_datum_primary_key(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_normal(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_normal", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -384,8 +383,6 @@ fn bench_table_scan_long_datum_normal(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_long(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_long", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -423,8 +420,6 @@ fn bench_table_scan_long_datum_long(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_all(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_all", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -464,8 +459,6 @@ fn bench_table_scan_long_datum_all(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_primary_key_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_primary_key_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -503,8 +496,6 @@ fn bench_table_scan_long_datum_primary_key_multi_rows(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_normal_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_normal_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -542,8 +533,6 @@ fn bench_table_scan_long_datum_normal_multi_rows(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_long_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_long_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -581,8 +570,6 @@ fn bench_table_scan_long_datum_long_multi_rows(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_table_scan_long_datum_all_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("table_scan_long_datum_all_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -622,8 +609,6 @@ fn bench_table_scan_long_datum_all_multi_rows(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_batch_table_scan_long_datum_primary_key_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("batch_table_scan_long_datum_primary_key_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -661,8 +646,6 @@ fn bench_batch_table_scan_long_datum_primary_key_multi_rows(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_batch_table_scan_long_datum_normal_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("batch_table_scan_long_datum_normal_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -700,8 +683,6 @@ fn bench_batch_table_scan_long_datum_normal_multi_rows(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_batch_table_scan_long_datum_long_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("batch_table_scan_long_datum_long_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -739,8 +720,6 @@ fn bench_batch_table_scan_long_datum_long_multi_rows(c: &mut Criterion) {
 /// next() for 1 time, 3 columns in the row and the last column is very long but only PK is
 /// interested.
 fn bench_batch_table_scan_long_datum_all_multi_rows(c: &mut Criterion) {
-    const COLUMNS: usize = 100;
-
     c.bench_function("batch_table_scan_long_datum_all_multi_rows", |b| {
         let id = ColumnBuilder::new()
             .col_type(TYPE_LONG)
@@ -989,7 +968,8 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
                     vec![table.get_record_range_all()],
                     store.to_fixture_store(),
                     false,
-                ).unwrap();
+                )
+                .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next().unwrap().unwrap();
@@ -1049,7 +1029,8 @@ fn bench_table_scan_datum_all_multi_rows(c: &mut Criterion) {
                     vec![table.get_record_range_all()],
                     store.to_fixture_store(),
                     false,
-                ).unwrap();
+                )
+                .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next().unwrap().unwrap();
@@ -1105,7 +1086,8 @@ fn bench_batch_table_scan_multi_rows(c: &mut Criterion) {
                     context.clone(),
                     vec![table.get_record_range_all()],
                     false,
-                ).unwrap();
+                )
+                .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next_batch(1);
@@ -1160,7 +1142,8 @@ fn bench_batch_table_scan_datum_all_multi_rows(c: &mut Criterion) {
                     context.clone(),
                     vec![table.get_record_range_all()],
                     false,
-                ).unwrap();
+                )
+                .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next_batch(1);
@@ -1191,7 +1174,8 @@ fn bench_index_scan_next(
                 store.to_fixture_store(),
                 unique,
                 false,
-            ).unwrap();
+            )
+            .unwrap();
             // There is a step of building scanner in the first `next()` which cost time,
             // so we next() before hand.
             executor.next().unwrap().unwrap();
@@ -1324,7 +1308,8 @@ fn bench_dag_handle(
                 64,
                 false,
                 enable_batch,
-            ).unwrap()
+            )
+            .unwrap()
         },
         |mut dag| {
             dag.handle_request().unwrap();

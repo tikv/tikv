@@ -29,7 +29,7 @@ use util::{escape, transport};
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {

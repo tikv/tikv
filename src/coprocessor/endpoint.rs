@@ -342,21 +342,21 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
 
-        let tracker_and_handler_future = future::result(
-            tracker.req_ctx.deadline.check_if_exceeded(),
-        ).and_then(move |_| {
-            Self::async_snapshot(engine, &tracker.req_ctx.context)
-                .map(|snapshot| (tracker, snapshot))
-        })
-            .and_then(move |(tracker, snapshot)| {
-                // When snapshot is retrieved, deadline may exceed.
-                future::result(tracker.req_ctx.deadline.check_if_exceeded())
-                    .map(|_| (tracker, snapshot))
-            })
-            .and_then(move |(tracker, snapshot)| {
-                future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
-                    .map(|handler| (tracker, handler))
-            });
+        let tracker_and_handler_future =
+            future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                .and_then(move |_| {
+                    Self::async_snapshot(engine, &tracker.req_ctx.context)
+                        .map(|snapshot| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    // When snapshot is retrieved, deadline may exceed.
+                    future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                        .map(|_| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
+                        .map(|handler| (tracker, handler))
+                });
 
         tracker_and_handler_future
             .map(|(mut tracker, handler)| {
@@ -410,7 +410,8 @@ impl<E: Engine> Endpoint<E> {
                             None
                         }
                     }
-                }).filter_map(|resp_or_tracker| match resp_or_tracker {
+                })
+                .filter_map(|resp_or_tracker| match resp_or_tracker {
                     Either::Left(resp) => Some(resp),
                     Either::Right(mut tracker) => {
                         tracker.on_finish_all_items();
@@ -1077,7 +1078,8 @@ mod tests {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_SMALL as u64,
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1149,7 +1151,8 @@ mod tests {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_LARGE as u64,
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1171,7 +1174,8 @@ mod tests {
                         PAYLOAD_LARGE as u64,
                         PAYLOAD_SMALL as u64,
                     ],
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_3 =
                 cop.handle_stream_request(req_with_exec_detail.clone(), handler_builder);

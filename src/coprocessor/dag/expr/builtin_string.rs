@@ -511,7 +511,7 @@ impl ScalarFunc {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
+    #[allow(clippy::wrong_self_convention)]
     #[inline]
     pub fn from_base64<'a, 'b: 'a>(
         &'b self,

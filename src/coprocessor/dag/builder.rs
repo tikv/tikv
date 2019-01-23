@@ -90,12 +90,9 @@ impl DAGBuilder {
                     let descriptor = ed.get_tbl_scan();
                     for column in descriptor.get_columns() {
                         let eval_type = EvalType::try_from(column.tp());
-                        match eval_type {
-                            Err(_) => {
-                                info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
-                                return false;
-                            }
-                            _ => {}
+                        if eval_type.is_err() {
+                            info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                            return false;
                         }
                     }
                 }
@@ -103,12 +100,9 @@ impl DAGBuilder {
                     let descriptor = ed.get_idx_scan();
                     for column in descriptor.get_columns() {
                         let eval_type = EvalType::try_from(column.tp());
-                        match eval_type {
-                            Err(_) => {
-                                info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
-                                return false;
-                            }
-                            _ => {}
+                        if eval_type.is_err() {
+                            info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                            return false;
                         }
                     }
                 }
@@ -179,7 +173,7 @@ impl DAGBuilder {
                 return Err(Error::Other(box_err!(
                     "Unexpected first executor {:?}",
                     first_ed.get_tp()
-                )))
+                )));
             }
         }
 
@@ -204,7 +198,7 @@ impl DAGBuilder {
                     return Err(Error::Other(box_err!(
                         "Unexpected non-first executor {:?}",
                         first_ed.get_tp()
-                    )))
+                    )));
                 }
             };
             executor = new_executor;
@@ -231,7 +225,7 @@ impl DAGBuilder {
         for mut exec in exec_descriptors {
             let curr: Box<Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                    return Err(box_err!("got too much *scan exec, should be only one"))
+                    return Err(box_err!("got too much *scan exec, should be only one"));
                 }
                 ExecType::TypeSelection => Box::new(SelectionExecutor::new(
                     exec.take_selection(),

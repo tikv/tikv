@@ -341,15 +341,13 @@ pub mod tests {
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
 
-        assert!(
-            topn_heap
-                .try_add_row(
-                    OriginCols::new(0 as i64, row_data3, Arc::default()),
-                    bad_key1,
-                    Arc::clone(&order_cols)
-                )
-                .is_err()
-        );
+        assert!(topn_heap
+            .try_add_row(
+                OriginCols::new(0 as i64, row_data3, Arc::default()),
+                bad_key1,
+                Arc::clone(&order_cols)
+            )
+            .is_err());
         assert!(topn_heap.into_sorted_vec().is_err());
     }
 
@@ -497,7 +495,8 @@ pub mod tests {
             topn,
             Arc::new(EvalConfig::default()),
             Box::new(TableScanExecutor::new(table_scan, key_ranges, snap, false).unwrap()),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }
 }

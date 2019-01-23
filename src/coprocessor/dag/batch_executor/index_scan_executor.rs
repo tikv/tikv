@@ -180,7 +180,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
                                 return Err(Error::Other(box_err!(
                                     "Unexpected handle flag {}",
                                     flag
-                                )))
+                                )));
                             }
                         }
                     };
