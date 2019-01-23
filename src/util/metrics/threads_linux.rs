@@ -100,9 +100,8 @@ impl Collector for ThreadsCollector {
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 // Threads CPU time.
                 let total = cpu_total(&stat);
-                let name = stat.command;
                 // sanitize thread name before push metrics.
-                let name = sanitize_thread_name(tid, &name);
+                let name = sanitize_thread_name(tid, &stat.command);
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
@@ -160,7 +159,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
             let file_name = match task {
                 Ok(t) => t.file_name(),
                 Err(e) => {
-                    error!("fail to read task of {}, error {:?}", pid, e);
+                    error!("read task failed"; "pid" => pid; "error" => e);
                     return None;
                 }
             };
