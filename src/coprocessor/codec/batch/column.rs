@@ -581,20 +581,37 @@ impl BatchColumn {
         Ok(())
     }
 
-    /// Returns maximum encoded size.
-    pub fn encoded_size(&self) -> Result<usize> {
+    /// Returns maximum encoded size in binary format.
+    pub fn maximum_encoded_size(&self) -> Result<usize> {
         match self {
             BatchColumn::Int(ref vec) => Ok(vec.len() * 9),
+
+            // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
+            // this function only calculates a maximum encoded size (for constructing buffers), not
+            // actual encoded size.
             BatchColumn::Real(ref vec) => Ok(vec.len() * 9),
-            BatchColumn::Decimal(ref _vec) => {
-                Err(Error::Other(box_err!("Decimal is not supported")))
+            BatchColumn::Decimal(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            // FIXME: We don't need approximate size. Maximum size is enough (so
+                            // that we don't need to iterate each value).
+                            size += 1 /* FLAG */ + v.approximate_encoded_size();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
             }
             BatchColumn::Bytes(ref vec) => {
                 let mut size = 0;
                 for el in vec {
                     match el {
                         Some(v) => {
-                            size += 9 + v.len();
+                            size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
                         }
                         None => {
                             size += 1;
@@ -605,12 +622,27 @@ impl BatchColumn {
             }
             BatchColumn::DateTime(ref vec) => Ok(vec.len() * 9),
             BatchColumn::Duration(ref vec) => Ok(vec.len() * 9),
-            BatchColumn::Json(ref _vec) => Err(Error::Other(box_err!("JSON is not supported"))),
+            BatchColumn::Json(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + v.binary_len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
         }
     }
 
     /// Encodes a single element into binary format.
     pub fn encode(&self, row_index: usize, output: &mut Vec<u8>) -> Result<()> {
+        use coprocessor::codec::mysql::DecimalEncoder;
+        use coprocessor::codec::mysql::JsonEncoder;
         use util::codec::bytes::BytesEncoder;
         use util::codec::number::NumberEncoder;
 
@@ -639,8 +671,18 @@ impl BatchColumn {
                 }
                 Ok(())
             }
-            BatchColumn::Decimal(ref _vec) => {
-                Err(Error::Other(box_err!("Decimal is not supported")))
+            BatchColumn::Decimal(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::DECIMAL_FLAG);
+                        let (prec, frac) = val.prec_and_frac();
+                        output.encode_decimal(val, prec, frac)?;
+                    }
+                }
+                Ok(())
             }
             BatchColumn::Bytes(ref vec) => {
                 match &vec[row_index] {
@@ -678,7 +720,18 @@ impl BatchColumn {
                 }
                 Ok(())
             }
-            BatchColumn::Json(ref _vec) => Err(Error::Other(box_err!("JSON is not supported"))),
+            BatchColumn::Json(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::JSON_FLAG);
+                        output.encode_json(val)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }

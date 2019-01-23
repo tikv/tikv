@@ -192,10 +192,10 @@ impl LazyBatchColumnVec {
     }
 
     /// Returns maximum encoded size.
-    pub fn encoded_size(&self, output_offsets: impl AsRef<[u32]>) -> Result<usize> {
+    pub fn maximum_encoded_size(&self, output_offsets: impl AsRef<[u32]>) -> Result<usize> {
         let mut size = 0;
         for offset in output_offsets.as_ref() {
-            size += self.columns[(*offset) as usize].encoded_size()?;
+            size += self.columns[(*offset) as usize].maximum_encoded_size()?;
         }
         Ok(size)
     }

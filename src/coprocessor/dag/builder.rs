@@ -95,11 +95,6 @@ impl DAGBuilder {
                                 info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
                                 return false;
                             }
-                            // Currently decimal or JSON field is not supported
-                            Ok(EvalType::Decimal) | Ok(EvalType::Json) => {
-                                info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
-                                return false;
-                            }
                             _ => {}
                         }
                     }
@@ -110,11 +105,6 @@ impl DAGBuilder {
                         let eval_type = EvalType::try_from(column.tp());
                         match eval_type {
                             Err(_) => {
-                                info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
-                                return false;
-                            }
-                            // Currently decimal or JSON field is not supported
-                            Ok(EvalType::Decimal) | Ok(EvalType::Json) => {
                                 info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
                                 return false;
                             }

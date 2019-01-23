@@ -67,7 +67,7 @@ impl RequestHandler for BatchDAGHandler {
                 let mut chunk = Chunk::new();
                 {
                     let data = chunk.mut_rows_data();
-                    data.reserve(result.data.encoded_size(&self.output_offsets)?);
+                    data.reserve(result.data.maximum_encoded_size(&self.output_offsets)?);
                     result.data.encode(
                         &self.output_offsets,
                         &self.executor_context.columns_info,

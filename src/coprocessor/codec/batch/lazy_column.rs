@@ -281,7 +281,7 @@ impl LazyBatchColumn {
     }
 
     /// Returns maximum encoded size.
-    pub fn encoded_size(&self) -> Result<usize> {
+    pub fn maximum_encoded_size(&self) -> Result<usize> {
         match self {
             LazyBatchColumn::Raw(ref v) => {
                 let mut size = 0;
@@ -290,7 +290,7 @@ impl LazyBatchColumn {
                 }
                 Ok(size)
             }
-            LazyBatchColumn::Decoded(ref v) => v.encoded_size(),
+            LazyBatchColumn::Decoded(ref v) => v.maximum_encoded_size(),
         }
     }
 
