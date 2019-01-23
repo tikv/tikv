@@ -966,7 +966,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         // TODO: Find a better way to handle errors. Maybe we should retry.
         debug!(
             "trying gc"; "region" => ctx.get_region_id(), "epoch" => ?ctx.region_epoch.as_ref(),
-            "end_key" =>  match &next_key {
+            "end_key" => match &next_key {
                 Some(key) => format!("{}", key),
                 None => "None".to_string(),
             }
@@ -979,7 +979,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     Some(key) => format!("{}", key),
                     None => "None".to_string(),
                 },
-               "err" => ?e
+                "err" => ?e
             );
         }
         *processed_regions += 1;
