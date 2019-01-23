@@ -747,7 +747,8 @@ mod tests {
             Mutation::Put((key.clone(), v.to_vec())),
             pk,
             &Options::default(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(txn.write_size() > 0);
         engine.write(&ctx, txn.into_modifies()).unwrap();
 
@@ -777,26 +778,26 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
-        assert!(
-            txn.prewrite(
+        assert!(txn
+            .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
                 &Options::default()
-            ).is_err()
-        );
+            )
+            .is_err());
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         let mut opt = Options::default();
         opt.skip_constraint_check = true;
-        assert!(
-            txn.prewrite(
+        assert!(txn
+            .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
                 &opt
-            ).is_ok()
-        );
+            )
+            .is_ok());
     }
 
     #[test]

@@ -137,10 +137,10 @@ impl RaftRouter {
         match self.try_send(id, PeerMsg::RaftMessage(msg)) {
             Either::Left(Ok(())) => return Ok(()),
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Full(m))
+                return Err(TrySendError::Full(m));
             }
             Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Disconnected(m))
+                return Err(TrySendError::Disconnected(m));
             }
             Either::Right(PeerMsg::RaftMessage(m)) => msg = m,
             _ => unreachable!(),
@@ -1059,11 +1059,9 @@ impl RaftBatchSystem {
         box_try!(workers.pd_worker.start(pd_runner));
 
         let consistency_check_runner = ConsistencyCheckRunner::new(sendch.clone());
-        box_try!(
-            workers
-                .consistency_check_worker
-                .start(consistency_check_runner)
-        );
+        box_try!(workers
+            .consistency_check_worker
+            .start(consistency_check_runner));
 
         let cleanup_sst_runner = CleanupSSTRunner::new(
             builder.store.get_id(),
@@ -1496,7 +1494,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 ranges: ranges_need_check,
                 tombstones_num_threshold: self.ctx.cfg.region_compact_min_tombstones,
                 tombstones_percent_threshold: self.ctx.cfg.region_compact_tombstones_percent,
-            }) {
+            })
+        {
             error!(
                 "{} failed to schedule space check task: {}",
                 self.fsm.store.tag, e

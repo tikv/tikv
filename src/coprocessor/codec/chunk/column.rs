@@ -92,7 +92,7 @@ impl Column {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
-                ))
+                ));
             }
             FieldTypeTp::VarChar
             | FieldTypeTp::VarString
@@ -355,7 +355,7 @@ impl Column {
             col.fixed_len * col.length
         } else {
             col.var_offsets.clear();
-            for _ in 0..length + 1 {
+            for _ in 0..=length {
                 col.var_offsets.push(number::decode_i32_le(buf)? as usize);
             }
             col.var_offsets[col.length]
