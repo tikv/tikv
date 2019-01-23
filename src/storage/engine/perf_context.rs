@@ -15,7 +15,7 @@ use std::ops::{Deref, DerefMut};
 
 use rocksdb::PerfContext;
 
-#[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
+#[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
 pub struct PerfStatisticsFields {
     pub internal_key_skipped_count: usize,
     pub internal_delete_skipped_count: usize,
@@ -28,6 +28,16 @@ pub struct PerfStatisticsFields {
 /// This statistics store instant values.
 #[derive(Debug, Clone, Copy)]
 pub struct PerfStatisticsInstant(pub PerfStatisticsFields);
+
+impl ::slog::KV for PerfStatisticsInstant {
+    fn serialize(
+        &self,
+        record: &::slog::Record,
+        serializer: &mut ::slog::Serializer,
+    ) -> ::slog::Result {
+        ::slog::KV::serialize(&self.0, record, serializer)
+    }
+}
 
 impl PerfStatisticsInstant {
     /// Create an instance which stores instant statistics values, retrieved at creation.
@@ -67,6 +77,16 @@ impl DerefMut for PerfStatisticsInstant {
 /// This this statistics store delta values between two instant statistics.
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
 pub struct PerfStatisticsDelta(pub PerfStatisticsFields);
+
+impl ::slog::KV for PerfStatisticsDelta {
+    fn serialize(
+        &self,
+        record: &::slog::Record,
+        serializer: &mut ::slog::Serializer,
+    ) -> ::slog::Result {
+        ::slog::KV::serialize(&self.0, record, serializer)
+    }
+}
 
 impl Deref for PerfStatisticsDelta {
     type Target = PerfStatisticsFields;

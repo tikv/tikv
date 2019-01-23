@@ -1514,9 +1514,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
         }
-        STORE_PD_HEARTBEAT_GAUGE_VEC
-            .with_label_values(&["region"])
-            .set(i64::from(stats.get_region_count()));
 
         let snap_stats = self.ctx.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
