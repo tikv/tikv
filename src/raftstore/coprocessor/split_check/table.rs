@@ -235,7 +235,7 @@ mod tests {
     use tempdir::TempDir;
 
     use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
+    use raftstore::store::{Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
     use storage::types::Key;
     use storage::ALL_CFS;
     use util::codec::number::NumberEncoder;
@@ -349,7 +349,7 @@ mod tests {
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
-                        Ok(Msg::SplitRegion { split_keys, .. }) => {
+                        Ok(Msg::PeerMsg(PeerMsg::SplitRegion { split_keys, .. })) => {
                             assert_eq!(split_keys, vec![key.into_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),
