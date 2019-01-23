@@ -161,7 +161,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
                     if should_not_exist {
                         if write.write_type == WriteType::Put
-                            || (write.write_type != WriteType::Delete && self.key_exist(&key, write.start_ts - 1)?)
+                            || (write.write_type != WriteType::Delete
+                                && self.key_exist(&key, write.start_ts - 1)?)
                         {
                             return Err(Error::AlreadyExist { key: key.to_raw()? });
                         }
