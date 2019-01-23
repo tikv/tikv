@@ -85,7 +85,7 @@ pub enum Mutation {
     Lock(Key),
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(clippy::match_same_arms))]
+#[allow(clippy::match_same_arms)]
 impl Mutation {
     pub fn key(&self) -> &Key {
         match *self {

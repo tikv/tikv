@@ -2297,7 +2297,7 @@ mod tests {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::useless_vec))]
+    #[allow(clippy::useless_vec)]
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {

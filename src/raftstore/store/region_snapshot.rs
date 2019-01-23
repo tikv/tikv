@@ -460,7 +460,7 @@ mod tests {
         assert!(v4.is_err());
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::type_complexity))]
+    #[allow(clippy::type_complexity)]
     #[test]
     fn test_seek_and_seek_prev() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -564,7 +564,7 @@ mod tests {
         check_seek_result(&snap, Some(b"a00"), Some(b"a15"), &seek_table);
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::type_complexity))]
+    #[allow(clippy::type_complexity)]
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();

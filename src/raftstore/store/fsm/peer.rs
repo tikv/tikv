@@ -1995,7 +1995,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         )
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::if_same_then_else))]
+    #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
         self.register_raft_gc_log_tick();
 

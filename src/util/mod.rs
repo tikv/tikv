@@ -612,7 +612,7 @@ mod tests {
             }
         }
 
-        #[cfg_attr(feature = "cargo-clippy", allow(clippy::clone_on_copy))]
+        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
         }

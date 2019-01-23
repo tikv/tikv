@@ -561,7 +561,7 @@ mod tests {
             let encoded_len = MemComparableByteCodec::encoded_len(payload_len);
             let mut payload_encoded: Vec<u8> =
                 vec![0; encoded_prefix_len + encoded_len + encoded_suffix_len];
-            #[cfg_attr(feature = "cargo-clippy", allow(clippy::needless_range_loop))]
+            #[allow(clippy::needless_range_loop)]
             for i in 0..encoded_prefix_len {
                 payload_encoded[i] = rand::random();
             }
@@ -574,7 +574,7 @@ mod tests {
                     MemComparableByteCodec::encode_all(src, dest);
                 }
             }
-            #[cfg_attr(feature = "cargo-clippy", allow(clippy::needless_range_loop))]
+            #[allow(clippy::needless_range_loop)]
             for i in encoded_prefix_len + encoded_len..encoded_suffix_len {
                 payload_encoded[i] = rand::random();
             }

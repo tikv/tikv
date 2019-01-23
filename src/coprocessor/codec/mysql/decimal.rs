@@ -1715,7 +1715,7 @@ macro_rules! enable_conv_for_int {
     ($s:ty, $t:ty) => {
         impl From<$s> for Decimal {
             fn from(t: $s) -> Decimal {
-                #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
+                #[allow(clippy::cast_lossless)]
                 (t as $t).into()
             }
         }
@@ -2297,7 +2297,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::approx_constant))]
+    #[allow(clippy::approx_constant)]
     fn test_f64() {
         let cases = vec![
             ("12345", 12345f64),

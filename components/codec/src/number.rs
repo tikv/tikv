@@ -396,7 +396,7 @@ impl NumberCodec {
     /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
     #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
-        #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
+        #[allow(clippy::cast_lossless)]
         unsafe {
             let mut ptr = buf.as_ptr();
             let len = buf.len();
@@ -970,7 +970,7 @@ mod tests {
         get_u16_samples().into_iter().map(|v| v as i16).collect()
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
+    #[allow(clippy::cast_lossless)]
     fn get_u32_samples() -> Vec<u32> {
         let mut samples = vec![
             (::std::i32::MIN as u32),
@@ -994,7 +994,7 @@ mod tests {
         get_u32_samples().into_iter().map(|v| v as i32).collect()
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
+    #[allow(clippy::cast_lossless)]
     fn get_u64_samples() -> Vec<u64> {
         let mut samples = vec![
             (::std::i64::MIN as u64),
@@ -1018,7 +1018,7 @@ mod tests {
         get_u64_samples().into_iter().map(|v| v as i64).collect()
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
+    #[allow(clippy::cast_lossless)]
     fn get_f64_samples() -> Vec<f64> {
         vec![
             -1.0,
@@ -1364,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_f64() {
         test_mem_compare!(
             get_f64_samples(),
@@ -1377,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_f64_desc() {
         test_mem_compare!(
             get_f64_samples(),
@@ -1456,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_f64_le() {
         test_codec!(
             get_f64_samples(),

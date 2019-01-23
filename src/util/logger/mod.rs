@@ -279,7 +279,7 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(clippy::write_literal))]
+#[allow(clippy::write_literal)]
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
