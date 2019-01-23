@@ -109,11 +109,11 @@ impl ReadDelegate {
                     return Some(resp);
                 } else {
                     metrics.rejected_by_lease_expire += 1;
-                    debug!("rejected by lease expire"; "tag" => self.tag);
+                    debug!("rejected by lease expire"; "tag" => &self.tag);
                 }
             } else {
                 metrics.rejected_by_term_mismatch += 1;
-                debug!("rejected by term mismatch"; "tag" => self.tag);
+                debug!("rejected by term mismatch"; "tag" => &self.tag);
             }
         }
 
@@ -269,7 +269,7 @@ impl LocalReader<RaftRouter> {
             let delegate = ReadDelegate::from_peer(p);
             info!(
                 "create ReadDelegate";
-                "tag" => delegate.tag,
+                "tag" => &delegate.tag,
                 "peer" => delegate.peer_id,
             );
             delegates.insert(p.region().get_id(), delegate);
@@ -294,7 +294,7 @@ impl LocalReader<RaftRouter> {
 
 impl<C: Sender<StoreMsg>> LocalReader<C> {
     fn redirect(&self, cmd: StoreMsg) {
-        debug!("localreader redirects command"; "tag" => self.tag, "command" => ?cmd);
+        debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         match self.ch.send(cmd) {
             Ok(()) => (),
             Err(TrySendError::Full(cmd)) => {
@@ -352,7 +352,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
             self.metrics.borrow_mut().rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("rejected by stale epoch"; "tag" => delegate.tag);
+            debug!("rejected by stale epoch"; "tag" => &delegate.tag);
             return Ok(None);
         }
 
@@ -420,9 +420,9 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
         } else {
             debug!(
                 "rejected by term check";
-                "tag" => self.delegate.tag,
+                "tag" => &self.delegate.tag,
                 "applied_index_term" => self.delegate.applied_index_term,
-                "delegate_term" => ?self.delegate_term,
+                "delegate_term" => ?self.delegate.term,
             );
             self.metrics.rejected_by_appiled_term += 1;
             false
@@ -435,7 +435,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             // We skip lease check, because it is postponed until `handle_read`.
             LeaseState::Valid
         } else {
-            debug!("rejected by leader lease"; "tag" => self.delegate.tag);
+            debug!("rejected by leader lease"; "tag" => &self.delegate.tag);
             self.metrics.rejected_by_no_lease += 1;
             LeaseState::Expired
         }
@@ -459,7 +459,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
         for task in tasks.drain(..) {
             match task {
                 Task::Register(delegate) => {
-                    info!("register ReadDelegate"; "tag" => delegate.tag);
+                    info!("register ReadDelegate"; "tag" => &delegate.tag);
                     self.delegates.insert(delegate.region.get_id(), delegate);
                 }
                 Task::Read(StoreMsg::PeerMsg(PeerMsg::RaftCmd {

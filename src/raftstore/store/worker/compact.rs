@@ -128,8 +128,8 @@ impl Runner {
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
-            "range_start" => %start,
-            "range_end" => %end,
+            "range_start" => start.map(::log_wrappers::Key),
+            "range_end" => end.map(::log_wrappers::Key),
             "cf" => cf_name,
             "time_takes" => ?timer.elapsed(),
         );
@@ -170,8 +170,8 @@ impl Runnable<Task> for Runner {
                         ) {
                             error!(
                                 "compact range failed";
-                                "range_start" => %start,
-                                "range_end" => %end,
+                                "range_start" => ::log_wrappers::Key(&start),
+                                "range_end" => ::log_wrappers::Key(&end),
                                 "cf" => cf,
                                 "error" => %e,
                             );

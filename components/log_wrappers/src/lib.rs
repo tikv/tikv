@@ -88,6 +88,32 @@ fn test_debug() {
     assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: None\n");
 }
 
+pub struct Key<'a>(pub &'a[u8]);
+
+impl<'a> ::slog::Value for Key<'a> {
+    #[inline]
+    fn serialize(
+        &self,
+        _record: &::slog::Record,
+        key: ::slog::Key,
+        serializer: &mut ::slog::Serializer,
+    ) -> ::slog::Result {
+        serializer.emit_arguments(
+            key,
+            &format_args!("{}", ::hex::encode_upper(self.0)),
+        )
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn test_log_key() {
+    let buffer = ::test_util::SyncLoggerBuffer::new();
+    let logger = buffer.build_logger();
+    slog_info!(logger, "foo"; "bar" => Key(b"\xAB \xCD"));
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD");
+}
+
 pub mod kvproto {
     pub mod kvrpcpb {
         pub struct KeyRange<'a>(pub &'a ::lib_kvproto::kvrpcpb::KeyRange);
