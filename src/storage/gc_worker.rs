@@ -40,6 +40,7 @@ use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use util::rocksdb::get_cf_handle;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
+use log_wrappers::DisplayValue;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -966,19 +967,12 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         // TODO: Find a better way to handle errors. Maybe we should retry.
         debug!(
             "trying gc"; "region" => ctx.get_region_id(), "epoch" => ?ctx.region_epoch.as_ref(),
-            "end_key" => match &next_key {
-                Some(key) => format!("{}", key),
-                None => "None".to_string(),
-            }
+            "end_key" => next_key.as_ref().map(DisplayValue)
         );
         if let Err(e) = gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
             error!(
                 "failed gc"; "region" => ctx.get_region_id(), "epoch" => ?ctx.region_epoch.as_ref(),
-                "end_key" =>
-                match &next_key {
-                    Some(key) => format!("{}", key),
-                    None => "None".to_string(),
-                },
+                "end_key" => next_key.as_ref().map(DisplayValue),
                 "err" => ?e
             );
         }
