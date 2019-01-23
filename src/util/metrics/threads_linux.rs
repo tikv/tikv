@@ -95,8 +95,6 @@ impl Collector for ThreadsCollector {
         let tids = get_thread_ids(self.pid).unwrap();
         for tid in tids {
             if let Ok(stat) = pid::stat_task(self.pid, tid) {
-                let state = state_to_str(&stat.state);
-
                 // Threads CPU time.
                 let total = cpu_total(&stat);
                 let name = stat.command;
@@ -115,7 +113,7 @@ impl Collector for ThreadsCollector {
                 // Threads states.
                 let state = metrics
                     .threads_state
-                    .get_metric_with_label_values(&[&state])
+                    .get_metric_with_label_values(&[state_to_str(&stat.state)])
                     .unwrap();
                 state.inc();
 
