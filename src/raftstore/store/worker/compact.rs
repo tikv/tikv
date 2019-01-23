@@ -161,24 +161,26 @@ impl Runnable<Task> for Runner {
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
             ) {
-                Ok(mut ranges) => for (start, end) in ranges.drain(..) {
-                    for cf in &cf_names {
-                        if let Err(e) = self.compact_range_cf(
-                            cf.clone(),
-                            Some(start.clone()),
-                            Some(end.clone()),
-                        ) {
-                            error!(
-                                "compact range failed";
-                                "range_start" => ::log_wrappers::Key(&start),
-                                "range_end" => ::log_wrappers::Key(&end),
-                                "cf" => cf,
-                                "error" => %e,
-                            );
+                Ok(mut ranges) => {
+                    for (start, end) in ranges.drain(..) {
+                        for cf in &cf_names {
+                            if let Err(e) = self.compact_range_cf(
+                                cf.clone(),
+                                Some(start.clone()),
+                                Some(end.clone()),
+                            ) {
+                                error!(
+                                    "compact range failed";
+                                    "range_start" => ::log_wrappers::Key(&start),
+                                    "range_end" => ::log_wrappers::Key(&end),
+                                    "cf" => cf,
+                                    "error" => %e,
+                                );
+                            }
                         }
                     }
-                },
-                Err(e) => warn!("check ranges need reclaim failed"; "error" => %e),
+                }
+                Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
             },
         }
     }
@@ -391,7 +393,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
@@ -414,7 +417,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));

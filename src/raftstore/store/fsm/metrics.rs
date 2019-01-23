@@ -20,7 +20,8 @@ lazy_static! {
         "tikv_raftstore_apply_proposal",
         "The count of proposals sent by a region at once",
         exponential_buckets(1.0, 2.0, 20).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 #[derive(Default)]
