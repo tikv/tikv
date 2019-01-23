@@ -27,8 +27,8 @@ use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use rocksdb::{
-    CompactOptions, DBBottommostLevelCompaction, Kv, Range, SeekKey, Writable, WriteBatch,
-    WriteOptions, DB,
+    CompactOptions, DBBottommostLevelCompaction, Kv, Range, ReadOptions, SeekKey, Writable,
+    WriteBatch, WriteOptions, DB,
 };
 
 use raft::{self, RawNode};
@@ -41,6 +41,7 @@ use raftstore::store::{
 use raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::Key;
+use storage::Iterator as EngineIterator;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use util::codec::bytes;
 use util::collections::HashSet;
@@ -273,6 +274,35 @@ impl Debugger {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
         MvccInfoIterator::new(&self.engines.kv, start, end, limit)
+    }
+
+    /// Scan raw keys for given range `[start, end)` in given cf.
+    pub fn raw_scan(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: usize,
+        cf: &str,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let db = &self.engines.kv;
+        let cf_handle = get_cf_handle(db, cf).unwrap();
+        let mut read_opt = ReadOptions::new();
+        read_opt.set_total_order_seek(true);
+        read_opt.set_iterate_lower_bound(start);
+        if !end.is_empty() {
+            read_opt.set_iterate_upper_bound(end);
+        }
+        let mut iter = db.iter_cf_opt(cf_handle, read_opt);
+        if !iter.seek_to_first() {
+            return Ok(vec![]);
+        }
+
+        let mut res = vec![(iter.key().to_vec(), iter.value().to_vec())];
+        while res.len() < limit && iter.next() {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+        }
+
+        Ok(res)
     }
 
     /// Compact the cf[start..end) in the db.
@@ -2053,5 +2083,68 @@ mod tests {
                 Expect::Remove => assert!(data.is_none()),
             }
         }
+    }
+
+    #[test]
+    fn test_debug_raw_scan() {
+        let keys: &[&[u8]] = &[
+            b"a",
+            b"a1",
+            b"a2",
+            b"a2\x00",
+            b"a2\x00\x00",
+            b"b",
+            b"b1",
+            b"b2",
+            b"b2\x00",
+            b"b2\x00\x00",
+            b"c",
+            b"c1",
+            b"c2",
+            b"c2\x00",
+            b"c2\x00\x00",
+        ];
+
+        let debugger = new_debugger();
+
+        let wb = WriteBatch::new();
+        for key in keys {
+            let data_key = keys::data_key(key);
+            let value = key.to_vec();
+            wb.put(&data_key, &value).unwrap();
+        }
+        debugger.engines.kv.write(wb).unwrap();
+
+        let check = |result: Result<_>, expected: &[&[u8]]| {
+            assert_eq!(
+                result.unwrap(),
+                expected
+                    .iter()
+                    .map(|k| (keys::data_key(k), k.to_vec()))
+                    .collect::<Vec<_>>()
+            );
+        };
+
+        check(debugger.raw_scan(b"z", &[b'z' + 1], 100, CF_DEFAULT), keys);
+        check(debugger.raw_scan(b"za", b"zz", 100, CF_DEFAULT), keys);
+        check(debugger.raw_scan(b"za1", b"za1", 100, CF_DEFAULT), &[]);
+        check(
+            debugger.raw_scan(b"za1", b"za2\x00\x00", 100, CF_DEFAULT),
+            &keys[1..4],
+        );
+        check(
+            debugger.raw_scan(b"za2\x00", b"za2\x00\x00", 100, CF_DEFAULT),
+            &keys[3..4],
+        );
+        check(
+            debugger.raw_scan(b"zb\x00", b"zb2\x00\x00", 100, CF_DEFAULT),
+            &keys[6..9],
+        );
+        check(debugger.raw_scan(b"za1", b"zz", 1, CF_DEFAULT), &keys[1..2]);
+        check(debugger.raw_scan(b"za1", b"zz", 3, CF_DEFAULT), &keys[1..4]);
+        check(
+            debugger.raw_scan(b"za1", b"zb2\x00\x00", 8, CF_DEFAULT),
+            &keys[1..9],
+        );
     }
 }
