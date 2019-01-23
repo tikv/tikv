@@ -386,7 +386,7 @@ impl<T> RingQueue<T> {
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
         .filter(|x| b.iter().find(|y| y == x).is_none())
-        .map(|x| *x)
+        .cloned()
         .collect()
 }
 
@@ -612,7 +612,7 @@ mod tests {
             }
         }
 
-        #[cfg_attr(feature = "cargo-clippy", allow(clone_on_copy))]
+        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
         }
@@ -658,8 +658,8 @@ mod tests {
                 v.push_back(10 + i - first);
             }
             for len in 0..10 {
-                for low in 0..len + 1 {
-                    for high in low..len + 1 {
+                for low in 0..=len {
+                    for high in low..=len {
                         let (p1, p2) = super::slices_in_range(&v, low, high);
                         let mut res = vec![];
                         res.extend_from_slice(p1);
