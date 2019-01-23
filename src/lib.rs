@@ -78,42 +78,24 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[cfg_attr(
-    not(test),
-    macro_use(
-        slog_o,
-        slog_kv,
-        slog_trace,
-        slog_error,
-        slog_warn,
-        slog_info,
-        slog_debug,
-        slog_log,
-        slog_record,
-        slog_b,
-        slog_record_static
-    )
-)]
-#[cfg_attr(
-    test,
-    macro_use(
-        kv,
-        slog_o,
-        slog_kv,
-        slog_crit,
-        slog_trace,
-        slog_error,
-        slog_warn,
-        slog_info,
-        slog_debug,
-        slog_log,
-        slog_record,
-        slog_b,
-        slog_record_static
-    )
+#[macro_use(
+    kv,
+    slog_o,
+    slog_kv,
+    slog_trace,
+    slog_error,
+    slog_warn,
+    slog_info,
+    slog_debug,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static,
 )]
 extern crate slog;
 extern crate slog_async;
+#[macro_use]
+extern crate slog_derive;
 #[macro_use]
 extern crate slog_global;
 extern crate slog_term;
@@ -143,6 +125,7 @@ extern crate base64;
 extern crate cop_datatype;
 extern crate flate2;
 extern crate hyper;
+extern crate log_wrappers;
 extern crate panic_hook;
 extern crate safemem;
 extern crate smallvec;
