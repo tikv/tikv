@@ -237,7 +237,7 @@ impl Expression {
     pub fn build(ctx: &EvalContext, mut expr: Expr) -> Result<Self> {
         debug!(
             "build-expr";
-            "expr" => format!("{:?}", expr)
+            "expr" => ?expr
         );
         let field_type = expr.take_field_type();
         match expr.get_tp() {
