@@ -531,7 +531,8 @@ mod tests {
             let op = Expression::build(
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]),
-            ).unwrap();
+            )
+            .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -558,7 +559,8 @@ mod tests {
             let op = Expression::build(
                 &ctx,
                 scalar_func_expr(ScalarFuncSig::RightShift, &[lhs, rhs]),
-            ).unwrap();
+            )
+            .unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }

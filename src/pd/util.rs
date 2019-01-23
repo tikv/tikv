@@ -133,7 +133,8 @@ impl LeaderClient {
             recv.for_each(move |resp| {
                 f(resp);
                 Ok(())
-            }).map_err(|e| panic!("unexpected error: {:?}", e)),
+            })
+            .map_err(|e| panic!("unexpected error: {:?}", e)),
         )
     }
 
@@ -315,7 +316,8 @@ where
                 ctx.reconnect_if_needed()
                     .and_then(Self::send_and_receive)
                     .then(Self::break_or_continue)
-            }).then(Self::post_loop),
+            })
+            .then(Self::post_loop),
         )
     }
 }
@@ -431,7 +433,7 @@ pub fn try_connect_leader(
     let mut resp = None;
     // Try to connect to other members, then the previous leader.
     'outer: for m in members
-        .into_iter()
+        .iter()
         .filter(|m| *m != previous_leader)
         .chain(&[previous_leader.clone()])
     {

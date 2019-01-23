@@ -21,16 +21,20 @@ impl ScalarFunc {
     pub fn bit_count(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let res = self.children[0].eval_int(ctx, row);
         match res {
-            Ok(r) => if let Some(v) = r {
-                Ok(Some(i64::from(v.count_ones())))
-            } else {
-                Ok(None)
-            },
-            Err(e) => if e.is_overflow() {
-                Ok(Some(64))
-            } else {
-                Err(e)
-            },
+            Ok(r) => {
+                if let Some(v) = r {
+                    Ok(Some(i64::from(v.count_ones())))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(e) => {
+                if e.is_overflow() {
+                    Ok(Some(64))
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 }
@@ -111,7 +115,8 @@ mod tests {
                 Datum::Dec(
                     Decimal::from_str(
                         "111111111111111111111111111111111111111111111111111111111111111",
-                    ).unwrap(),
+                    )
+                    .unwrap(),
                 ),
                 Datum::I64(63),
             ),
@@ -119,7 +124,8 @@ mod tests {
                 Datum::Dec(
                     Decimal::from_str(
                         "-111111111111111111111111111111111111111111111111111111111111111",
-                    ).unwrap(),
+                    )
+                    .unwrap(),
                 ),
                 Datum::I64(1),
             ),

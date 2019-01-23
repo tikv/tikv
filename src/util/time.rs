@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(eq_op))]
+    #[allow(clippy::eq_op)]
     fn test_instant() {
         Instant::now().elapsed();
         Instant::now_coarse().elapsed();

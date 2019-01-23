@@ -1616,7 +1616,8 @@ impl ApplyDelegate {
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
-        ).unwrap_or_else(|e| {
+        )
+        .unwrap_or_else(|e| {
             panic!(
                 "{} failed to save merging state {:?} for region {:?}: {:?}",
                 self.tag, merging_state, region, e
@@ -1664,7 +1665,8 @@ impl ApplyDelegate {
             exist_first_index,
             NO_LIMIT,
             &mut entries,
-        ).unwrap_or_else(|e| {
+        )
+        .unwrap_or_else(|e| {
             panic!(
                 "{} failed to load entries [{}:{}) from region {}: {:?}",
                 self.tag,
@@ -2859,13 +2861,11 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         let apply_state_key = keys::apply_state_key(2);
-        assert!(
-            engines
-                .kv
-                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
-                .unwrap()
-                .is_none()
-        );
+        assert!(engines
+            .kv
+            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+            .unwrap()
+            .is_none());
         router.schedule_task(
             2,
             Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
