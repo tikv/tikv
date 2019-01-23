@@ -244,7 +244,7 @@ impl SnapContext {
             info!(
                 "failed to notify snap result, leadership may have changed, ignore error";
                 "region" => region_id,
-                "error" => %e,
+                "err" => %e,
             );
         }
         Ok(())
@@ -259,7 +259,7 @@ impl SnapContext {
         let timer = gen_histogram.start_coarse_timer();
 
         if let Err(e) = self.generate_snap(region_id, notifier) {
-            error!("failed to generate snap!!!"; "region" => region_id, "error" => %e);
+            error!("failed to generate snap!!!"; "region" => region_id, "err" => %e);
             return;
         }
 
@@ -373,7 +373,7 @@ impl SnapContext {
                     .inc();
             }
             Err(e) => {
-                error!("failed to apply snap!!!"; "error" => %e);
+                error!("failed to apply snap!!!"; "err" => %e);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
             }
@@ -397,7 +397,7 @@ impl SnapContext {
                     "region" => region_id,
                     "start_key" => ::log_wrappers::Key(start_key),
                     "end_key" => ::log_wrappers::Key(end_key),
-                    "error" => %e,
+                    "err" => %e,
                 );
                 return;
             }
@@ -410,7 +410,7 @@ impl SnapContext {
                 "region" => region_id,
                 "start_key" => ::log_wrappers::Key(start_key),
                 "end_key" => ::log_wrappers::Key(end_key),
-                "error" => %e,
+                "err" => %e,
             );
         } else {
             info!(
@@ -619,7 +619,7 @@ impl Runnable<Task> for Runner {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.pool.stop() {
-            warn!("Stop threadpool failed"; "error" => %e);
+            warn!("Stop threadpool failed"; "err" => %e);
         }
     }
 }

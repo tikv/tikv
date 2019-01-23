@@ -314,7 +314,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         // Check store id.
         if let Err(e) = util::check_store_id(req, self.store_id) {
             self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
-            debug!("rejected by store id not match"; "error" => %e);
+            debug!("rejected by store id not match"; "err" => %e);
             return Err(e);
         }
 

@@ -127,7 +127,7 @@ impl Runnable<Task> for Runner {
             task.end_idx,
         ) {
             Err(e) => {
-                error!("failed to gc"; "region" => task.region_id, "error" => %e);
+                error!("failed to gc"; "region" => task.region_id, "err" => %e);
                 self.report_collected(0);
             }
             Ok(n) => {

@@ -97,7 +97,7 @@ impl<C: MsgSender> Runner<C> {
                 error!(
                     "failed to calculate hash";
                     "region" => region_id,
-                    "error" => %e,
+                    "err" => %e,
                 );
                 return;
             }
@@ -114,7 +114,7 @@ impl<C: MsgSender> Runner<C> {
                 error!(
                     "failed to get region state";
                     "region" => region_id,
-                    "error" => %e,
+                    "err" => %e,
                 );
                 return;
             }
@@ -135,7 +135,7 @@ impl<C: MsgSender> Runner<C> {
             warn!(
                 "failed to send hash compute result";
                 "region" => region_id,
-                "error" => %e,
+                "err" => %e,
             );
         }
     }

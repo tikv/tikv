@@ -147,7 +147,7 @@ impl Runnable<Task> for Runner {
             } => {
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
-                    error!("execute compact range failed"; "cf" => cf, "error" => %e);
+                    error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
             Task::CheckAndCompact {
@@ -174,7 +174,7 @@ impl Runnable<Task> for Runner {
                                     "range_start" => ::log_wrappers::Key(&start),
                                     "range_end" => ::log_wrappers::Key(&end),
                                     "cf" => cf,
-                                    "error" => %e,
+                                    "err" => %e,
                                 );
                             }
                         }

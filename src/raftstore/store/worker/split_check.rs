@@ -204,7 +204,7 @@ impl<C: Sender<Msg>> Runner<C> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region" => region_id, "error" => %e);
+                        error!("failed to scan split key"; "region" => region_id, "err" => %e);
                         return;
                     }
                 }
@@ -218,12 +218,12 @@ impl<C: Sender<Msg>> Runner<C> {
                     error!(
                         "failed to get approxiamte split key, try scan way";
                         "region" => region_id,
-                        "error" => %e,
+                        "err" => %e,
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region" => region_id, "error" => %e);
+                            error!("failed to scan split key"; "region" => region_id, "err" => %e);
                             return;
                         }
                     }
@@ -237,7 +237,7 @@ impl<C: Sender<Msg>> Runner<C> {
                 .ch
                 .try_send(new_split_region(region_id, region_epoch, split_keys));
             if let Err(e) = res {
-                warn!("failed to send check result"; "region" => region_id, "error" => %e);
+                warn!("failed to send check result"; "region" => region_id, "err" => %e);
             }
 
             CHECK_SPILT_COUNTER_VEC
