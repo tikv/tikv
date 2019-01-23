@@ -213,7 +213,8 @@ pub mod tests {
             Mutation::Delete(Key::from_raw(key)),
             pk,
             &Options::default(),
-        ).unwrap();
+        )
+        .unwrap();
         engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
@@ -230,10 +231,9 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        assert!(
-            txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
-                .is_err()
-        );
+        assert!(txn
+            .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+            .is_err());
     }
 
     pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -314,12 +314,10 @@ pub mod tests {
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(
-            reader
-                .seek_write(&Key::from_raw(key), ts)
-                .unwrap()
-                .is_none()
-        );
+        assert!(reader
+            .seek_write(&Key::from_raw(key), ts)
+            .unwrap()
+            .is_none());
     }
 
     pub fn must_seek_write<E: Engine>(
@@ -341,12 +339,10 @@ pub mod tests {
     pub fn must_reverse_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(
-            reader
-                .reverse_seek_write(&Key::from_raw(key), ts)
-                .unwrap()
-                .is_none()
-        );
+        assert!(reader
+            .reverse_seek_write(&Key::from_raw(key), ts)
+            .unwrap()
+            .is_none());
     }
 
     pub fn must_reverse_seek_write<E: Engine>(

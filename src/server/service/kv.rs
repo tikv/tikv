@@ -1204,11 +1204,7 @@ fn future_batch_get<E: Engine>(
     storage: &Storage<E>,
     mut req: BatchGetRequest,
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
-    let keys = req
-        .get_keys()
-        .into_iter()
-        .map(|x| Key::from_raw(x))
-        .collect();
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     storage
         .async_batch_get(req.take_context(), keys, req.get_version())
         .then(|v| {
@@ -1226,11 +1222,7 @@ fn future_batch_rollback<E: Engine>(
     storage: &Storage<E>,
     mut req: BatchRollbackRequest,
 ) -> impl Future<Item = BatchRollbackResponse, Error = Error> {
-    let keys = req
-        .get_keys()
-        .into_iter()
-        .map(|x| Key::from_raw(x))
-        .collect();
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_rollback(req.take_context(), keys, req.get_start_version(), cb);

@@ -72,7 +72,7 @@ fn test_storage_gcworker_busy() {
 
     rx2.recv().unwrap();
     fail::remove(snapshot_fp);
-    for _ in 0..(GC_MAX_PENDING_TASKS + 1) {
+    for _ in 0..=GC_MAX_PENDING_TASKS {
         rx1.recv().unwrap();
     }
 }

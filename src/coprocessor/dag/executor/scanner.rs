@@ -296,7 +296,8 @@ pub mod tests {
                         Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
                         &pk,
                         &Options::default(),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 txn.into_modifies()
             };

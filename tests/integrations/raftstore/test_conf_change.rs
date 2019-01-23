@@ -179,12 +179,10 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
     let engine_2 = cluster.get_engine(peer2.get_store_id());
-    assert!(
-        engine_2
-            .get_value(&keys::data_key(b"k1"))
-            .unwrap()
-            .is_none()
-    );
+    assert!(engine_2
+        .get_value(&keys::data_key(b"k1"))
+        .unwrap()
+        .is_none());
     // add new peer to first region.
     pd_client.must_add_peer(region_id, peer2.clone());
 
@@ -630,7 +628,8 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
         r1,
         ConfChangeType::AddLearnerNode,
         new_learner_peer(4, 11),
-    ).unwrap();
+    )
+    .unwrap();
     let err_msg = resp.get_header().get_error().get_message();
     assert!(err_msg.contains("duplicated"));
 

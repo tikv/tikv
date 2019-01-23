@@ -151,7 +151,8 @@ impl Simulator for ServerCluster {
             storage_read_pool,
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         // Create import service.
@@ -233,7 +234,8 @@ impl Simulator for ServerCluster {
             local_reader,
             coprocessor_host,
             importer,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
