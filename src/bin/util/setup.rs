@@ -37,9 +37,9 @@ macro_rules! fatal {
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
-    let log_rotation_timespan = chrono::Duration::from_std(
-        config.log_rotation_timespan.clone().into(),
-    ).expect("config.log_rotation_timespan is an invalid duration.");
+    let log_rotation_timespan =
+        chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
+            .expect("config.log_rotation_timespan is an invalid duration.");
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.

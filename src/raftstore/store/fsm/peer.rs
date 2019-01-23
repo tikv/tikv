@@ -119,7 +119,7 @@ impl PeerFsm {
                     "find no peer for store {} in region {:?}",
                     store_id,
                     region
-                ))
+                ));
             }
             Some(peer) => peer.clone(),
         };
@@ -245,9 +245,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg>) {
         for m in msgs.drain(..) {
             match m {
-                PeerMsg::RaftMessage(msg) => if let Err(e) = self.on_raft_message(msg) {
-                    error!("{} handle raft message err: {:?}", self.fsm.peer.tag, e);
-                },
+                PeerMsg::RaftMessage(msg) => {
+                    if let Err(e) = self.on_raft_message(msg) {
+                        error!("{} handle raft message err: {:?}", self.fsm.peer.tag, e);
+                    }
+                }
                 PeerMsg::RaftCmd {
                     send_time,
                     request,
@@ -1094,7 +1096,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
-        if is_initialized && !merged_by_target
+        if is_initialized
+            && !merged_by_target
             && meta
                 .region_ranges
                 .remove(&enc_end_key(self.fsm.peer.region()))
@@ -1773,9 +1776,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::CompactLog { first_index, state } => if !merged {
-                    self.on_ready_compact_log(first_index, state)
-                },
+                ExecResult::CompactLog { first_index, state } => {
+                    if !merged {
+                        self.on_ready_compact_log(first_index, state)
+                    }
+                }
                 ExecResult::SplitRegion { derived, regions } => {
                     self.on_ready_split_region(derived, regions)
                 }
@@ -1822,13 +1827,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             {
                 let meta = self.ctx.store_meta.lock().unwrap();
                 match meta.regions.get(&target_region.get_id()) {
-                    Some(r) => if r != target_region {
-                        return Err(box_err!(
-                            "target region not matched, skip proposing: {:?} != {:?}",
-                            r,
-                            target_region
-                        ));
-                    },
+                    Some(r) => {
+                        if r != target_region {
+                            return Err(box_err!(
+                                "target region not matched, skip proposing: {:?} != {:?}",
+                                r,
+                                target_region
+                            ));
+                        }
+                    }
                     None => {
                         return Err(box_err!(
                             "target region {} doesn't exist.",
@@ -1988,7 +1995,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         )
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
+    #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
         self.register_raft_gc_log_tick();
 

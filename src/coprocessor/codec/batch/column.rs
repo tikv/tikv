@@ -233,7 +233,7 @@ impl BatchColumn {
     ///
     /// Panics if `field_type` doesn't match current column's type.
     #[inline]
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
+    #[allow(clippy::cast_lossless)]
     pub fn push_datum(
         &mut self,
         mut raw_datum: &[u8],
@@ -342,7 +342,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Int column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Real(ref mut vec) => match flag {
@@ -359,7 +359,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Real column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Decimal(ref mut vec) => match flag {
@@ -370,7 +370,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Decimal column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Bytes(ref mut vec) => match flag {
@@ -383,7 +383,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Bytes column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::DateTime(ref mut vec) => match flag {
@@ -404,7 +404,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for DateTime column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Duration(ref mut vec) => match flag {
@@ -425,7 +425,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Duration column",
                         flag
-                    )))
+                    )));
                 }
             },
             BatchColumn::Json(ref mut vec) => match flag {
@@ -436,7 +436,7 @@ impl BatchColumn {
                     return Err(Error::InvalidDataType(format!(
                         "Unsupported datum flag {} for Json column",
                         flag
-                    )))
+                    )));
                 }
             },
         }
@@ -878,7 +878,8 @@ mod benches {
                     &mut raw,
                     test::black_box(&eval_ctx),
                     test::black_box(&col_info),
-                ).unwrap();
+                )
+                .unwrap();
                 match datum {
                     Datum::I64(v) => {
                         test::black_box(v);

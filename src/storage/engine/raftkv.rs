@@ -323,7 +323,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
-        }).map_err(|e| {
+        })
+        .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             e.into()
@@ -353,7 +354,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
-        }).map_err(|e| {
+        })
+        .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()

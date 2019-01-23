@@ -245,8 +245,8 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
             // and the src and dest may overlap
             // if src == dest do nothing
             ptr::copy(
-                data.as_ptr().offset(read_offset as isize),
-                data.as_mut_ptr().offset(write_offset as isize),
+                data.as_ptr().add(read_offset),
+                data.as_mut_ptr().add(write_offset),
                 ENC_GROUP_SIZE,
             );
         }

@@ -454,9 +454,11 @@ mod tests {
                         panic!("expect parse {} to {}, got {}", escape(input), exp, s);
                     }
                 }
-                None => if !d.is_err() {
-                    panic!("{} should not be passed, got {:?}", escape(input), d);
-                },
+                None => {
+                    if !d.is_err() {
+                        panic!("{} should not be passed, got {:?}", escape(input), d);
+                    }
+                }
             }
         }
     }
