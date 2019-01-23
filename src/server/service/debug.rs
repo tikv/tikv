@@ -29,7 +29,8 @@ use raftstore::store::msg::Callback;
 use raftstore::store::Engines;
 use server::debug::{Debugger, Error};
 use server::transport::RaftStoreRouter;
-use util::{jemalloc, metrics, rocksdb_stats};
+use tikv_alloc;
+use util::{metrics, rocksdb_stats};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -51,6 +52,7 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
     e
 }
 
+/// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
@@ -59,6 +61,7 @@ pub struct Service<T: RaftStoreRouter> {
 }
 
 impl<T: RaftStoreRouter> Service<T> {
+    /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
     pub fn new(engines: Engines, raft_router: T) -> Service<T> {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
@@ -85,7 +88,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
     fn get(&mut self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -326,7 +329,7 @@ impl<T: RaftStoreRouter + 'static + Send> debugpb_grpc::Debug for Service<T> {
                 let engines = debugger.get_engine();
                 resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
                 resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
-                resp.set_jemalloc(jemalloc::dump_stats());
+                resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)
         });

@@ -18,7 +18,7 @@ use crc::crc32::{self, Digest, Hasher32};
 
 use kvproto::metapb::Region;
 use raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use raftstore::store::{keys, Msg};
+use raftstore::store::{keys, Msg, PeerMsg};
 use storage::CF_RAFT;
 use util::worker::Runnable;
 
@@ -64,6 +64,7 @@ impl<C: MsgSender> Runner<C> {
         Runner { ch }
     }
 
+    /// Computes the hash of the Region.
     fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
         let region_id = region.get_id();
         info!("[region {}] computing hash at {}", region_id, index);
@@ -75,6 +76,8 @@ impl<C: MsgSender> Runner<C> {
         let mut digest = Digest::new(crc32::IEEE);
         let mut cf_names = snap.cf_names();
         cf_names.sort();
+
+        // Computes the hash from all the keys and values in the range of the Region.
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         for cf in cf_names {
@@ -91,6 +94,8 @@ impl<C: MsgSender> Runner<C> {
                 return;
             }
         }
+
+        // Computes the hash from the Region state too.
         let region_state_key = keys::region_state_key(region_id);
         digest.write(&region_state_key);
         match snap.get_value_cf(CF_RAFT, &region_state_key) {
@@ -109,11 +114,11 @@ impl<C: MsgSender> Runner<C> {
 
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
-        let msg = Msg::ComputeHashResult {
+        let msg = Msg::PeerMsg(PeerMsg::ComputeHashResult {
             region_id,
             index,
             hash: checksum,
-        };
+        });
         if let Err(e) = self.ch.try_send(msg) {
             warn!(
                 "[region {}] failed to send hash compute result, err {:?}",
@@ -186,11 +191,11 @@ mod tests {
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         match res {
-            Msg::ComputeHashResult {
+            Msg::PeerMsg(PeerMsg::ComputeHashResult {
                 region_id,
                 index,
                 hash,
-            } => {
+            }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
                 assert_eq!(hash, checksum_bytes);

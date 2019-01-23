@@ -496,7 +496,7 @@ mod tests {
     macro_rules! test_codec {
         ($enc:ident, $dec:ident, $compare:expr, $cases:expr) => {
             #[allow(unused_imports)]
-            #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
+            #[allow(clippy::float_cmp)]
             mod $enc {
                 use super::{F64_TESTS, I64_TESTS, U16_TESTS, U32_TESTS, U64_TESTS};
                 use util::codec::number::*;
@@ -559,7 +559,7 @@ mod tests {
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_var_f64_le() {
         for &v in F64_TESTS {
             let mut buf = vec![];

@@ -12,29 +12,36 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(proc_macro_non_items)]
+#![feature(proc_macro_hygiene)]
 
 extern crate chrono;
 extern crate clap;
 extern crate fs2;
-#[cfg(feature = "mem-profiling")]
-extern crate jemallocator;
-extern crate libc;
-#[macro_use]
-extern crate log;
 extern crate hyper;
+extern crate libc;
 #[cfg(unix)]
 extern crate nix;
 extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
+#[macro_use(
+    slog_kv,
+    slog_error,
+    slog_warn,
+    slog_info,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static
+)]
 extern crate slog;
 extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
+#[macro_use]
+extern crate slog_global;
 extern crate slog_term;
 extern crate tikv;
+extern crate tikv_alloc;
 extern crate toml;
 
 #[cfg(unix)]
@@ -47,7 +54,7 @@ use std::fs::File;
 use std::path::Path;
 use std::process;
 use std::sync::atomic::Ordering;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 use std::usize;
 
@@ -59,7 +66,8 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::store::{self, new_compaction_listener, Engines, SnapManagerBuilder};
+use tikv::raftstore::store::fsm::{self, SendCh};
+use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::status_server::StatusServer;
@@ -69,9 +77,8 @@ use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::util::rocksdb::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::SecurityManager;
 use tikv::util::time::Monitor;
-use tikv::util::transport::SendCh;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, rocksdb as rocksdb_util};
+use tikv::util::{self as tikv_util, check_environment_variables, rocksdb as rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -121,10 +128,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Initialize raftstore channels.
-    let mut event_loop = store::create_event_loop(&cfg.raft_store)
-        .unwrap_or_else(|e| fatal!("failed to create event loop: {:?}", e));
-    let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-    let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
+    let (router, system) = fsm::create_raft_batch_system(&cfg.raft_store);
+    let store_sendch = SendCh::new(router.clone(), "raftstore");
 
     // Create Local Reader.
     let local_reader = Builder::new("local-reader")
@@ -133,9 +138,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let local_ch = local_reader.scheduler();
 
     // Create router.
-    let raft_router =
-        ServerRaftStoreRouter::new(store_sendch.clone(), significant_msg_sender, local_ch);
-    let compaction_listener = new_compaction_listener(store_sendch.clone());
+    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), router.clone(), local_ch);
+    let compaction_listener = new_compaction_listener(router);
 
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
@@ -162,7 +166,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         storage_read_pool,
         Some(Arc::clone(&kv_engine)),
         Some(raft_router.clone()),
-    ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -172,7 +177,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
             raft_db_cf_opts,
-        ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
+        )
+        .unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
     );
     let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
@@ -209,16 +215,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
-    ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
     // Create node.
-    let mut node = Node::new(
-        &mut event_loop,
-        &server_cfg,
-        &cfg.raft_store,
-        pd_client.clone(),
-    );
+    let mut node = Node::new(system, &server_cfg, &cfg.raft_store, pd_client.clone());
 
     // Create CoprocessorHost.
     let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
@@ -228,16 +230,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     region_info_accessor.start();
 
     node.start(
-        event_loop,
         engines.clone(),
         trans,
         snap_mgr,
-        significant_msg_receiver,
         pd_worker,
         local_reader,
         coprocessor_host,
         importer,
-    ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start auto gc
@@ -426,7 +427,7 @@ fn main() {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validata()`,
     // because `initial_logger()` handles various conditions.
-    initial_logger(&config).cancel_reset();
+    initial_logger(&config);
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     // Print version information.

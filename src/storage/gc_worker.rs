@@ -33,7 +33,7 @@ use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use pd::PdClient;
 use raftstore::store::keys;
-use raftstore::store::msg::Msg as RaftStoreMsg;
+use raftstore::store::msg::{Msg as RaftStoreMsg, StoreMsg};
 use raftstore::store::util::{delete_all_in_range_cf, find_peer};
 use raftstore::store::SeekRegionResult;
 use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
@@ -173,7 +173,8 @@ impl<E: Engine> GCRunner<E> {
             }
             Some((_, Err(e))) => Err(e),
             None => Err(EngineError::Timeout(timeout)),
-        }.map_err(Error::from)
+        }
+        .map_err(Error::from)
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
@@ -366,10 +367,10 @@ impl<E: Engine> GCRunner<E> {
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
-                .send(RaftStoreMsg::ClearRegionSizeInRange {
+                .send(RaftStoreMsg::StoreMsg(StoreMsg::ClearRegionSizeInRange {
                     start_key: start_key.as_encoded().to_vec(),
                     end_key: end_key.as_encoded().to_vec(),
-                })
+                }))
                 .unwrap_or_else(|e| {
                     // Warn and ignore it.
                     warn!(
@@ -817,27 +818,35 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// example, when we just starts to do GC, our progress is like this: ('^' means our current
     /// progress)
     ///
-    ///      | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///      ^
+    /// ```text
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ^
+    /// ```
     ///
     /// And after a while, our GC progress is like this:
     ///
-    ///      | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///      ----------------------^
+    /// ```text
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ----------------------^
+    /// ```
     ///
     /// At this time we found that safe point was updated, so rewinding will happen. First we
     /// continue working to the end: ('#' indicates the position that safe point updates)
     ///
-    ///      | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///      ----------------------#------------------------------------------^
+    /// ```text
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ----------------------#------------------------------------------^
+    /// ```
     ///
     /// Then region 1-2 were GC-ed with the old safe point and region 3-6 were GC-ed with the new
     /// new one. Then, we *rewind* to the very beginning and continue GC to the position that safe
     /// point updates:
     ///
-    ///      | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
-    ///      ----------------------#------------------------------------------^
-    ///      ----------------------^
+    /// ```text
+    /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
+    /// ----------------------#------------------------------------------^
+    /// ----------------------^
+    /// ```
     ///
     /// Then GC finishes.
     /// If safe point updates again at some time, it will still try to GC all regions with the
@@ -1294,7 +1303,6 @@ mod tests {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
             .map(|(start_key, end_key, id)| (start_key, (id, end_key)))
-            .into_iter()
             .collect();
 
         let mut test_util = GCManagerTestUtil::new(regions);
@@ -1547,8 +1555,9 @@ mod tests {
             start_ts,
             Options::default(),
             cb
-        )).unwrap()
-            .unwrap();
+        ))
+        .unwrap()
+        .unwrap();
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
@@ -1574,8 +1583,9 @@ mod tests {
             start_key,
             end_key,
             cb
-        )).unwrap()
-            .unwrap();
+        ))
+        .unwrap()
+        .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
@@ -1597,7 +1607,8 @@ mod tests {
             10,
             b"key2",
             b"key4",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[b"key1".to_vec(), b"key9".to_vec()],
@@ -1605,7 +1616,8 @@ mod tests {
             10,
             b"key3",
             b"key7",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -1619,7 +1631,8 @@ mod tests {
             10,
             b"key1",
             b"key9",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -1633,7 +1646,8 @@ mod tests {
             10,
             b"key2\x00",
             b"key4",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -1646,7 +1660,8 @@ mod tests {
             10,
             b"key1\x00",
             b"key1\x00\x00",
-        ).unwrap();
+        )
+        .unwrap();
 
         test_destroy_range_impl(
             &[
@@ -1659,6 +1674,7 @@ mod tests {
             10,
             b"key1\x00",
             b"key1\x00",
-        ).unwrap();
+        )
+        .unwrap();
     }
 }

@@ -22,7 +22,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
 
 use tikv::raftstore::store::{
-    cmd_resp, engine, util, Callback, Msg, ReadResponse, RegionSnapshot, SignificantMsg,
+    cmd_resp, engine, util, Callback, Msg, PeerMsg, ReadResponse, RegionSnapshot, SignificantMsg,
     WriteResponse,
 };
 use tikv::raftstore::Result;
@@ -51,9 +51,9 @@ impl SyncBenchRouter {
     fn invoke(&self, msg: Msg) {
         let mut response = RaftCmdResponse::new();
         cmd_resp::bind_term(&mut response, 1);
-        if let Msg::RaftCmd {
+        if let Msg::PeerMsg(PeerMsg::RaftCmd {
             request, callback, ..
-        } = msg
+        }) = msg
         {
             match callback {
                 Callback::Read(cb) => {
@@ -88,7 +88,7 @@ impl RaftStoreRouter for SyncBenchRouter {
         Ok(())
     }
 
-    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, _region_id: u64, _: SignificantMsg) -> Result<()> {
         Ok(())
     }
 }
@@ -185,6 +185,7 @@ fn bench_async_write(b: &mut test::Bencher) {
                 Key::from_encoded(b"fooo".to_vec()),
             )],
             on_finished,
-        ).unwrap();
+        )
+        .unwrap();
     });
 }

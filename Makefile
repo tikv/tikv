@@ -45,12 +45,12 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@cargo clippy --all --all-targets -- \
-		-A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
-		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
-		-A implicit_hasher -A large_enum_variant -A new_without_default \
-		-A new_without_default_derive -A neg_cmp_op_on_partial_ord \
-		-A too_many_arguments -A excessive_precision -A collapsible_if \
-		-A blacklisted_name
+		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cyclomatic_complexity \
+		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
+		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
+		-A clippy::new_without_default_derive -A clippy::neg_cmp_op_on_partial_ord \
+		-A clippy::too_many_arguments -A clippy::excessive_precision -A clippy::collapsible_if \
+		-A clippy::blacklisted_name -A clippy::needless_range_loop
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
@@ -85,8 +85,13 @@ trace_test:
 	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
 
 test:
-	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
-	# again here. LOCAL_DIR is defined in .travis.yml.
+        # When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
+        # again here. LOCAL_DIR is defined in .travis.yml.
+        # The special linux case below is testing the mem-profiling
+        # features in tikv_alloc, which are marked #[ignore] since
+        # they require special compile-time and run-time setup
+        # Forturately rebuilding with the mem-profiling feature will only
+        # rebuild starting at jemalloc-sys.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
@@ -94,9 +99,9 @@ test:
 	cargo test --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
-	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
+	bash etc/check-bins-for-jemalloc.sh
 
 bench:
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --features "${ENABLE_FEATURES}" -- --nocapture

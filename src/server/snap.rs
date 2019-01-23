@@ -40,6 +40,7 @@ pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_POOL_SIZE: usize = 4;
 
+/// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
     Recv {
         stream: RequestStream<SnapshotChunk>,
@@ -295,7 +296,8 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
             sink.fail(status)
         }
-    }).map_err(Error::from)
+    })
+    .map_err(Error::from)
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {

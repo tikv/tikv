@@ -11,11 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::Bound::Excluded;
 use std::iter::FromIterator;
-use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
@@ -40,7 +38,7 @@ use raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use raftstore::store::{keys, CacheQueryStats, Engines, Iterable, Peekable, PeerStorage};
+use raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
 use storage::mvcc::{Lock, LockType, Write, WriteType};
 use storage::types::Key;
 use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -56,7 +54,7 @@ use util::worker::Worker;
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         InvalidArgument(msg: String) {
@@ -76,6 +74,7 @@ quick_error!{
     }
 }
 
+/// Describes the meta information of a Region.
 #[derive(PartialEq, Debug, Default)]
 pub struct RegionInfo {
     pub raft_local_state: Option<RaftLocalState>,
@@ -97,6 +96,7 @@ impl RegionInfo {
     }
 }
 
+/// A thin wrapper of `DBBottommostLevelCompaction`.
 #[derive(Copy, Clone, Debug)]
 pub struct BottommostLevelCompaction(pub DBBottommostLevelCompaction);
 
@@ -206,18 +206,16 @@ impl Debugger {
         let raft_state = box_try!(self.engines.raft.get_msg::<RaftLocalState>(&raft_state_key));
 
         let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
-        );
+        let apply_state = box_try!(self
+            .engines
+            .kv
+            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key));
 
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        );
+        let region_state = box_try!(self
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
 
         match (raft_state, apply_state, region_state) {
             (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
@@ -352,7 +350,7 @@ impl Debugger {
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
         let db = &self.engines.kv;
 
-        println!("Calculating split keys...");
+        v1!("Calculating split keys...");
         let split_keys = divide_db(db, threads).unwrap().into_iter().map(|k| {
             let k = Key::from_encoded(keys::origin_key(&k).to_vec())
                 .truncate_ts()
@@ -374,7 +372,7 @@ impl Debugger {
             let thread = ThreadBuilder::new()
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn(move || {
-                    println!(
+                    v1!(
                         "thread {}: started on range [\"{}\", \"{}\")",
                         thread_index,
                         escape(&start_key),
@@ -393,7 +391,7 @@ impl Debugger {
             .map(|h: JoinHandle<Result<()>>| h.join())
             .map(|r| {
                 if let Err(e) = &r {
-                    eprintln!("{:?}", e);
+                    ve1!("{:?}", e);
                 }
                 r
             })
@@ -445,7 +443,6 @@ impl Debugger {
                 region,
                 fake_snap_worker.scheduler(),
                 tag.clone(),
-                Rc::new(RefCell::new(CacheQueryStats::default())),
             ));
 
             let raft_cfg = raft::Config {
@@ -687,11 +684,10 @@ impl Debugger {
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        );
+        let region_state = box_try!(self
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key));
         match region_state {
             Some(v) => Ok(v),
             None => Err(Error::NotFound(format!("region {}", region_id))),
@@ -733,9 +729,10 @@ impl Debugger {
             ("mvcc.num_puts", mvcc_properties.num_puts),
             ("mvcc.num_versions", mvcc_properties.num_versions),
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
-        ].iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         res.push((
             "middle_key_by_approximate_size".to_string(),
             escape(&middle_key),
@@ -767,10 +764,10 @@ fn recover_mvcc_for_range(
             write_opts.set_sync(true);
             box_try!(db.write_opt(wb, &write_opts));
         } else {
-            println!("thread {}: skip write {} rows", thread_index, batch_size);
+            v1!("thread {}: skip write {} rows", thread_index, batch_size);
         }
 
-        println!(
+        v1!(
             "thread {}: total fix default: {}, lock: {}, write: {}",
             thread_index,
             mvcc_checker.default_fix_count,
@@ -779,7 +776,7 @@ fn recover_mvcc_for_range(
         );
 
         if batch_size < wb_limit {
-            println!("thread {} has finished working.", thread_index);
+            v1!("thread {} has finished working.", thread_index);
             return Ok(());
         }
     }
@@ -831,11 +828,13 @@ impl MvccChecker {
             None
         };
         match (key, iter_key) {
-            (Some(a), Some(b)) => if a < b {
-                Some(a)
-            } else {
-                Some(b)
-            },
+            (Some(a), Some(b)) => {
+                if a < b {
+                    Some(a)
+                } else {
+                    Some(b)
+                }
+            }
             (Some(a), None) => Some(a),
             (None, Some(b)) => Some(b),
             (None, None) => None,
@@ -867,9 +866,10 @@ impl MvccChecker {
     fn check_mvcc_key(&mut self, wb: &WriteBatch, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
-            println!(
+            v1!(
                 "thread {}: scan {} rows",
-                self.thread_index, self.scan_count
+                self.thread_index,
+                self.scan_count
             );
         }
 
@@ -895,7 +895,7 @@ impl MvccChecker {
                 // All write records' ts should be less than lock's ts.
                 if let Some((commit_ts, _)) = write {
                     if l.ts <= commit_ts {
-                        println!(
+                        v1!(
                             "thread {}: LOCK ts is less than WRITE ts, key: {}, lock_ts: {}, commit_ts: {}",
                             self.thread_index,
                             escape(key),
@@ -917,7 +917,7 @@ impl MvccChecker {
                             next_default = true;
                         }
                         _ => {
-                            println!(
+                            v1!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
                                 escape(key),
@@ -957,7 +957,7 @@ impl MvccChecker {
             }
 
             if next_default {
-                println!(
+                v1!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
                     escape(key),
@@ -969,7 +969,7 @@ impl MvccChecker {
 
             if next_write {
                 if let Some((commit_ts, ref w)) = write {
-                    println!(
+                    v1!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
                         escape(key),
@@ -1179,9 +1179,11 @@ impl MvccInfoIterator {
         }
         if self.default_iter.valid() {
             match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
-                Ordering::Equal => if let Some((_, values)) = self.next_default()? {
-                    mvcc_info.set_values(values);
-                },
+                Ordering::Equal => {
+                    if let Some((_, values)) = self.next_default()? {
+                        mvcc_info.set_values(values);
+                    }
+                }
                 Ordering::Greater => {}
                 _ => {
                     let err_msg = format!(
@@ -1210,7 +1212,7 @@ impl Iterator for MvccInfoIterator {
     }
 }
 
-pub fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
+fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     match (db, cf) {
         (DBType::KV, CF_DEFAULT)
         | (DBType::KV, CF_WRITE)
@@ -1316,7 +1318,7 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<
         );
     }
 
-    println!(
+    v1!(
         "({} points found, {} points selected for dividing)",
         found_keys_count,
         keys.len()
@@ -1472,7 +1474,8 @@ mod tests {
                     CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
                     CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
                 ],
-            ).unwrap(),
+            )
+            .unwrap(),
         );
 
         let engines = Engines::new(Arc::clone(&engine), engine);
@@ -2017,7 +2020,7 @@ mod tests {
         let path = TempDir::new("test_mvcc_checker").expect("");
         let path_str = path.path().to_str().unwrap();
         let cfs_opts = ALL_CFS
-            .into_iter()
+            .iter()
             .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
         let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
@@ -2028,7 +2031,8 @@ mod tests {
                 get_cf_handle(&db, cf).unwrap(),
                 &keys::data_key(k.as_encoded()),
                 v,
-            ).unwrap();
+            )
+            .unwrap();
         }
         db.write(wb).unwrap();
         // Fix problems.
@@ -2038,11 +2042,12 @@ mod tests {
         db.write(wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
-            let data =
-                db.get_cf(
+            let data = db
+                .get_cf(
                     get_cf_handle(&db, cf).unwrap(),
                     &keys::data_key(k.as_encoded()),
-                ).unwrap();
+                )
+                .unwrap();
             match expect {
                 Expect::Keep => assert!(data.is_some()),
                 Expect::Remove => assert!(data.is_none()),

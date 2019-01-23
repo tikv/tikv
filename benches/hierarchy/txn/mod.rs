@@ -61,7 +61,8 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
                     Mutation::Put((Key::from_raw(&k), v.clone())),
                     &k.clone(),
                     &option,
-                ).unwrap();
+                )
+                .unwrap();
             }
             let modifies = txn.into_modifies();
             let _ = engine.write(&ctx, modifies);

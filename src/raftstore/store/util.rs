@@ -391,9 +391,11 @@ pub fn get_region_approximate_size_cf(
 pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u64> {
     // try to get from RangeProperties first.
     match get_region_approximate_keys_cf(db, CF_WRITE, region) {
-        Ok(v) => if v > 0 {
-            return Ok(v);
-        },
+        Ok(v) => {
+            if v > 0 {
+                return Ok(v);
+            }
+        }
         Err(e) => debug!(
             "old_version:get keys from RangeProperties failed with err:{:?}",
             e
@@ -704,9 +706,11 @@ impl Lease {
         let bound = self.next_expired_time(send_ts);
         match self.bound {
             // Longer than suspect ts or longer than valid ts.
-            Some(Either::Left(ts)) | Some(Either::Right(ts)) => if ts <= bound {
-                self.bound = Some(Either::Right(bound));
-            },
+            Some(Either::Left(ts)) | Some(Either::Right(ts)) => {
+                if ts <= bound {
+                    self.bound = Some(Either::Right(bound));
+                }
+            }
             // Or an empty lease
             None => {
                 self.bound = Some(Either::Right(bound));
@@ -734,11 +738,13 @@ impl Lease {
     pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
         match self.bound {
             Some(Either::Left(_)) => LeaseState::Suspect,
-            Some(Either::Right(bound)) => if ts.unwrap_or_else(monotonic_raw_now) < bound {
-                LeaseState::Valid
-            } else {
-                LeaseState::Expired
-            },
+            Some(Either::Right(bound)) => {
+                if ts.unwrap_or_else(monotonic_raw_now) < bound {
+                    LeaseState::Valid
+                } else {
+                    LeaseState::Expired
+                }
+            }
             None => LeaseState::Expired,
         }
     }
@@ -1348,6 +1354,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_region_maybe_inaccurate_approximate_size() {
+        let path =
+            TempDir::new("_test_raftstore_region_maybe_inaccurate_approximate_size").expect("");
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_disable_auto_compactions(true);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.range-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocksdb_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut cf_size = 0;
+        for i in 0..100 {
+            let k1 = keys::data_key(format!("k1{}", i).as_bytes());
+            let k2 = keys::data_key(format!("k9{}", i).as_bytes());
+            let v = vec![0; 4096];
+            cf_size += k1.len() + k2.len() + v.len() * 2;
+            let cf = db.cf_handle("default").unwrap();
+            db.put_cf(cf, &k1, &v).unwrap();
+            db.put_cf(cf, &k2, &v).unwrap();
+            db.flush_cf(cf, true).unwrap();
+        }
+
+        let region = make_region(1, vec![], vec![]);
+        let size = get_region_approximate_size(&db, &region).unwrap();
+        assert_eq!(size, cf_size as u64);
+
+        let region = make_region(1, b"k2".to_vec(), b"k8".to_vec());
+        let size = get_region_approximate_size(&db, &region).unwrap();
+        assert_eq!(size, 0);
+    }
+
     fn check_data(db: &DB, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
             let handle = get_cf_handle(db, cf).unwrap();
@@ -1367,7 +1410,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
-            .into_iter()
+            .iter()
             .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
@@ -1403,7 +1446,8 @@ mod tests {
             start.as_encoded().as_slice(),
             end.as_encoded().as_slice(),
             use_delete_range,
-        ).unwrap();
+        )
+        .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -1423,7 +1467,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         let cfs_opts = ALL_CFS
-            .into_iter()
+            .iter()
             .map(|cf| {
                 let mut cf_opts = ColumnFamilyOptions::new();
                 cf_opts.set_level_zero_file_num_compaction_trigger(1);
