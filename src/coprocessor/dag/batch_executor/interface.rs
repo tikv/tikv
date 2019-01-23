@@ -86,5 +86,5 @@ pub struct ExecutorContextInner {
 /// The old executors will not be refined to return this kind of result.
 pub struct BatchExecuteResult {
     pub data: LazyBatchColumnVec,
-    pub error: Option<Error>,
+    pub is_drained: Result<bool, Error>,
 }

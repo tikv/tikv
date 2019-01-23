@@ -39,7 +39,7 @@ pub struct BatchIndexScanExecutor<S: Store> {
     /// Whether PK handle column is interested. Handle will be always placed in the last column.
     decode_handle: bool,
 
-    has_thrown_error: bool,
+    is_ended: bool,
 }
 
 impl<S: Store> BatchIndexScanExecutor<S> {
@@ -75,7 +75,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
 
             columns_len_without_handle,
             decode_handle,
-            has_thrown_error: false,
+            is_ended: false,
         })
     }
 
@@ -120,14 +120,14 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         &mut self,
         expect_rows: usize,
         columns: &mut LazyBatchColumnVec,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         use byteorder::{BigEndian, ReadBytesExt};
         use coprocessor::codec::datum;
         use util::codec::number;
 
-        if expect_rows == 0 {
-            return Ok(());
-        }
+        assert!(expect_rows > 0);
+
+        let mut is_drained = false;
 
         loop {
             let range = self.ranges.next();
@@ -138,7 +138,10 @@ impl<S: Store> BatchIndexScanExecutor<S> {
                     self.scan_next()?
                 }
                 ConsumerResult::Continue => self.scan_next()?,
-                ConsumerResult::Drained => break,
+                ConsumerResult::Drained => {
+                    is_drained = true;
+                    break;
+                }
             };
             if let Some((key, value)) = some_row {
                 // The payload part of the key
@@ -200,14 +203,15 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             }
         }
 
-        Ok(())
+        Ok(is_drained)
     }
 }
 
 impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        assert!(!self.has_thrown_error);
+        assert!(!self.is_ended);
+        assert!(expect_rows > 0);
 
         // Construct empty columns, with PK in decoded format and the rest in raw format.
         let columns_len = self.context.columns_info.len();
@@ -227,15 +231,15 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
         }
 
         let mut data = LazyBatchColumnVec::from(columns);
-        let result = self.fill_batch_rows(expect_rows, &mut data);
-        if result.is_err() {
-            self.has_thrown_error = true;
-        }
+        let is_drained = self.fill_batch_rows(expect_rows, &mut data);
 
-        BatchExecuteResult {
-            data,
-            error: result.err(),
-        }
+        match &is_drained {
+            Err(_) => self.is_ended = true,
+            Ok(true) => self.is_ended = true,
+            Ok(false) => {}
+        };
+
+        BatchExecuteResult { data, is_drained }
     }
 }
 

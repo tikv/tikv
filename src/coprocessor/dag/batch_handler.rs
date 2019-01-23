@@ -20,6 +20,10 @@ use super::batch_executor::interface::{BatchExecutor, ExecutorContext};
 use super::executor::ExecutorMetrics;
 use coprocessor::*;
 
+const BATCH_INITIAL_SIZE: usize = 32;
+const BATCH_MAX_SIZE: usize = 1024;
+const BATCH_GROW_FACTOR: usize = 2;
+
 /// Must be built from DAGRequestHandler.
 pub struct BatchDAGHandler {
     out_most_executor: Box<BatchExecutor>,
@@ -44,13 +48,17 @@ impl BatchDAGHandler {
 impl RequestHandler for BatchDAGHandler {
     fn handle_request(&mut self) -> Result<Response> {
         let mut chunks = vec![];
+        let mut batch_size = BATCH_INITIAL_SIZE;
+
         loop {
             // self.deadline.check_if_exceeded()?;
-            let result = self.out_most_executor.next_batch(1024);
+            let result = self.out_most_executor.next_batch(batch_size);
+
+            let is_drained;
 
             // Check error first, because it means that we should directly respond error.
-            match result.error {
-                Some(Error::Eval(err)) => {
+            match result.is_drained {
+                Err(Error::Eval(err)) => {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(err);
@@ -58,12 +66,11 @@ impl RequestHandler for BatchDAGHandler {
                     resp.set_data(data);
                     return Ok(resp);
                 }
-                Some(e) => return Err(e),
-                None => {}
+                Err(e) => return Err(e),
+                Ok(f) => is_drained = f,
             }
 
-            let number_of_rows = result.data.rows_len();
-            if number_of_rows > 0 {
+            if result.data.rows_len() > 0 {
                 let mut chunk = Chunk::new();
                 {
                     let data = chunk.mut_rows_data();
@@ -75,7 +82,9 @@ impl RequestHandler for BatchDAGHandler {
                     )?;
                 }
                 chunks.push(chunk);
-            } else {
+            }
+
+            if is_drained {
                 let mut resp = Response::new();
                 let mut sel_resp = SelectResponse::new();
                 sel_resp.set_chunks(RepeatedField::from_vec(chunks));
@@ -86,6 +95,14 @@ impl RequestHandler for BatchDAGHandler {
                 let data = box_try!(sel_resp.write_to_bytes());
                 resp.set_data(data);
                 return Ok(resp);
+            }
+
+            // Grow batch size
+            if batch_size < BATCH_MAX_SIZE {
+                batch_size *= BATCH_GROW_FACTOR;
+                if batch_size > BATCH_MAX_SIZE {
+                    batch_size = BATCH_MAX_SIZE
+                }
             }
         }
     }

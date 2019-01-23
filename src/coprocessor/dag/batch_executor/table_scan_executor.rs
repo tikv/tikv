@@ -58,10 +58,10 @@ pub struct BatchTableScanExecutor<S: Store> {
     /// is fixed for each `next_batch` call.
     is_column_filled: Vec<bool>,
 
-    /// A flag indicating whether this executor has encountered an error and the error has been
-    /// thrown to the upper executor during `next_batch`. If the implementation is correct, in
-    /// this case, `next_batch` should be never called again.
-    has_thrown_error: bool,
+    /// A flag indicating whether this executor is ended. When table is drained or there was an
+    /// error scanning the table, this flag will be set to `true` and `next_batch` should be never
+    /// called again.
+    is_ended: bool,
 }
 
 impl<S: Store> BatchTableScanExecutor<S> {
@@ -102,7 +102,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             column_id_index,
 
             is_column_filled,
-            has_thrown_error: false,
+            is_ended: false,
         })
     }
 
@@ -147,26 +147,30 @@ impl<S: Store> BatchTableScanExecutor<S> {
         &mut self,
         expect_rows: usize,
         columns: &mut LazyBatchColumnVec,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         use coprocessor::codec::datum;
         use util::codec::number;
 
-        if expect_rows == 0 {
-            return Ok(());
-        }
+        assert!(expect_rows > 0);
 
+        let mut is_drained = false;
         let columns_len = self.context.columns_info.len();
 
         loop {
             let range = self.ranges.next();
             let some_row = match range {
                 ConsumerResult::NewPointRange(r) => self.point_get(r)?,
+                // There might be lock when retriving this row.
                 ConsumerResult::NewNonPointRange(r) => {
                     self.reset_range(r)?;
                     self.scan_next()?
                 }
                 ConsumerResult::Continue => self.scan_next()?,
-                ConsumerResult::Drained => break,
+                // There might be lock when retriving this row.
+                ConsumerResult::Drained => {
+                    is_drained = true;
+                    break;
+                }
             };
             if let Some((key, value)) = some_row {
                 let mut decoded_columns = 0;
@@ -175,6 +179,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
                 if self.handle_index != ::std::usize::MAX {
                     if !self.is_column_filled[self.handle_index] {
                         let handle_id = table::decode_handle(&key)?;
+                        // FIXME: The columns may be not in the same length if there is error.
                         columns[self.handle_index]
                             .mut_decoded()
                             .push_int(Some(handle_id));
@@ -199,6 +204,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
                         remaining = &remaining[1..];
                         let column_id = box_try!(number::decode_var_i64(&mut remaining));
                         let (val, new_remaining) = datum::split_datum(remaining, false)?;
+                        // FIXME: The columns may be not in the same length if there is error.
                         let some_index = self.column_id_index.get(&column_id);
                         if let Some(index) = some_index {
                             let index = *index;
@@ -237,14 +243,15 @@ impl<S: Store> BatchTableScanExecutor<S> {
             }
         }
 
-        Ok(())
+        Ok(is_drained)
     }
 }
 
 impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        assert!(!self.has_thrown_error);
+        assert!(!self.is_ended);
+        assert!(expect_rows > 0);
 
         // Construct empty columns, with PK in decoded format and the rest in raw format.
         let columns_len = self.context.columns_info.len();
@@ -263,15 +270,25 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
         }
 
         let mut data = LazyBatchColumnVec::from(columns);
-        let result = self.fill_batch_rows(expect_rows, &mut data);
-        if result.is_err() {
-            self.has_thrown_error = true;
-        }
+        let is_drained = self.fill_batch_rows(expect_rows, &mut data);
 
-        BatchExecuteResult {
-            data,
-            error: result.err(),
-        }
+        // After calling `fill_batch_rows`, columns' length may not be identical in some special
+        // cases, for example, meet decoding errors when decoding the last column. We need to trim
+        // extra elements.
+
+        // TODO
+
+        // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
+        // these rows. After that, if we only consumes some of the rows (TopN / Limit), we should
+        // ignore this error.
+
+        match &is_drained {
+            Err(_) => self.is_ended = true,
+            Ok(true) => self.is_ended = true,
+            Ok(false) => {}
+        };
+
+        BatchExecuteResult { data, is_drained }
     }
 }
 
@@ -314,7 +331,7 @@ mod tests {
             BatchTableScanExecutor::new(store, context.clone(), ranges, false).unwrap();
 
         let result = table_scanner.next_batch(10);
-        assert!(result.error.is_none());
+        assert!(result.is_drained.as_ref().unwrap(), true);
         assert_eq!(result.data.columns_len(), 2);
         assert_eq!(result.data.rows_len(), 1);
 
@@ -349,16 +366,16 @@ mod tests {
         let mut table_scanner =
             BatchTableScanExecutor::new(store, context.clone(), ranges, false).unwrap();
 
-        let mut data = table_scanner.next_batch(0).data;
+        let mut data = table_scanner.next_batch(1).data;
         {
             let mut rng = ::rand::thread_rng();
             loop {
                 let mut result = table_scanner.next_batch(rng.gen_range(1, KEY_NUMBER / 5));
-                assert!(result.error.is_none());
-                if result.data.rows_len() == 0 {
+                assert!(result.is_drained.is_ok());
+                data.append(&mut result.data);
+                if result.is_drained.unwrap() {
                     break;
                 }
-                data.append(&mut result.data);
             }
         }
         assert_eq!(data.columns_len(), 3);
