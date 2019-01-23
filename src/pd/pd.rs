@@ -492,7 +492,7 @@ impl<T: PdClient> Runner<T> {
 
                         if pd_region
                             .get_peers()
-                            .into_iter()
+                            .iter()
                             .all(|p| p.get_id() != peer.get_id())
                         {
                             // Peer is not a member of this Region anymore. Probably it's removed out.

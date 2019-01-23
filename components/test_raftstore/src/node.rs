@@ -221,14 +221,13 @@ impl Simulator for NodeCluster {
             local_reader,
             coprocessor_host,
             importer,
-        ).unwrap();
-        assert!(
-            engines
-                .kv
-                .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-                .unwrap()
-                .is_none()
-        );
+        )
+        .unwrap();
+        assert!(engines
+            .kv
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+            .unwrap()
+            .is_none());
         assert!(node_id == 0 || node_id == node.id());
         debug!(
             "node_id: {} tmp: {:?}",

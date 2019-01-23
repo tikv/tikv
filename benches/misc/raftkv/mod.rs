@@ -185,6 +185,7 @@ fn bench_async_write(b: &mut test::Bencher) {
                 Key::from_encoded(b"fooo".to_vec()),
             )],
             on_finished,
-        ).unwrap();
+        )
+        .unwrap();
     });
 }
