@@ -406,16 +406,20 @@ fn cmp_i64_with_unsigned_flag(
             let rhs = rhs as u64;
             lhs.cmp(&rhs)
         }
-        (true, false) => if rhs < 0 || lhs as u64 > i64::MAX as u64 {
-            Ordering::Greater
-        } else {
-            lhs.cmp(&rhs)
-        },
-        (false, true) => if lhs < 0 || rhs as u64 > i64::MAX as u64 {
-            Ordering::Less
-        } else {
-            lhs.cmp(&rhs)
-        },
+        (true, false) => {
+            if rhs < 0 || lhs as u64 > i64::MAX as u64 {
+                Ordering::Greater
+            } else {
+                lhs.cmp(&rhs)
+            }
+        }
+        (false, true) => {
+            if lhs < 0 || rhs as u64 > i64::MAX as u64 {
+                Ordering::Less
+            } else {
+                lhs.cmp(&rhs)
+            }
+        }
     }
 }
 
