@@ -108,7 +108,7 @@ fn test_log_key() {
     let buffer = ::test_util::SyncLoggerBuffer::new();
     let logger = buffer.build_logger();
     slog_info!(logger, "foo"; "bar" => Key(b"\xAB \xCD"));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD");
+    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
 }
 
 pub mod kvproto {
