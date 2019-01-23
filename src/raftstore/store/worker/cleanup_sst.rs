@@ -89,7 +89,7 @@ impl<C: PdClient> Runner<C> {
                     invalid_ssts.push(sst);
                 }
                 Err(e) => {
-                    error!("get region failed: {:?}", e);
+                    error!("get region failed"; "error" => %e);
                 }
             }
         }
@@ -99,7 +99,7 @@ impl<C: PdClient> Runner<C> {
         // destroyed.
         let msg = Msg::StoreMsg(StoreMsg::ValidateSSTResult { invalid_ssts });
         if let Err(e) = self.store_ch.try_send(msg) {
-            error!("send validate sst result: {:?}", e);
+            error!("send validate sst result failed"; "error" => %e);
         }
     }
 }

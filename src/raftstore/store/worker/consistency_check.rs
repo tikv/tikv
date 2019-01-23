@@ -67,7 +67,11 @@ impl<C: MsgSender> Runner<C> {
     /// Computes the hash of the Region.
     fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
         let region_id = region.get_id();
-        info!("[region {}] computing hash at {}", region_id, index);
+        info!(
+            "computing hash";
+            "region" => region_id,
+            "index" => index,
+        );
         REGION_HASH_COUNTER_VEC
             .with_label_values(&["compute", "all"])
             .inc();
@@ -90,7 +94,11 @@ impl<C: MsgSender> Runner<C> {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
                     .inc();
-                error!("[region {}] failed to calculate hash: {:?}", region_id, e);
+                error!(
+                    "failed to calculate hash";
+                    "region" => region_id,
+                    "error" => %e,
+                );
                 return;
             }
         }
@@ -103,7 +111,11 @@ impl<C: MsgSender> Runner<C> {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
                     .inc();
-                error!("[region {}] failed to get region state: {:?}", region_id, e);
+                error!(
+                    "failed to get region state";
+                    "region" => region_id,
+                    "error" => %e,
+                );
                 return;
             }
             Ok(Some(v)) => digest.write(&v),
@@ -121,8 +133,9 @@ impl<C: MsgSender> Runner<C> {
         });
         if let Err(e) = self.ch.try_send(msg) {
             warn!(
-                "[region {}] failed to send hash compute result, err {:?}",
-                region_id, e
+                "failed to send hash compute result";
+                "region" => region_id,
+                "error" => %e,
             );
         }
     }

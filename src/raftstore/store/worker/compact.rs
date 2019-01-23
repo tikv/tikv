@@ -127,11 +127,11 @@ impl Runner {
         );
         compact_range_timer.observe_duration();
         info!(
-            "compact range ({:?}, {:?}) for cf {:?} finished, takes: {:?}",
-            &start.as_ref().map(|k| escape(k)),
-            &end.as_ref().map(|k| escape(k)),
-            cf_name,
-            timer.elapsed()
+            "compact range finished";
+            "range_start" => %start,
+            "range_end" => %end,
+            "cf" => cf_name,
+            "time_takes" => ?timer.elapsed(),
         );
         Ok(())
     }
@@ -147,7 +147,7 @@ impl Runnable<Task> for Runner {
             } => {
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
-                    error!("execute compact range for cf {} failed, err {}", &cf, e);
+                    error!("execute compact range failed"; "cf" => cf, "error" => %e);
                 }
             }
             Task::CheckAndCompact {
@@ -169,13 +169,16 @@ impl Runnable<Task> for Runner {
                             Some(end.clone()),
                         ) {
                             error!(
-                                "compact range ({:?}, {:?}) for cf {:?} failed, error {:?}",
-                                start, end, cf, e
+                                "compact range failed";
+                                "range_start" => %start,
+                                "range_end" => %end,
+                                "cf" => cf,
+                                "error" => %e,
                             );
                         }
                     }
                 },
-                Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
+                Err(e) => warn!("check ranges need reclaim failed"; "error" => %e),
             },
         }
     }
