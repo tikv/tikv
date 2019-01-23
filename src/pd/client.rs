@@ -56,7 +56,7 @@ impl RpcClient {
                     return Ok(RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         leader_client: LeaderClient::new(env, security_mgr, client, members),
-                    })
+                    });
                 }
                 Err(e) => {
                     warn!("validate PD endpoints failed: {:?}", e);

@@ -67,12 +67,14 @@ enum SchedulePolicy {
 impl SchedulePolicy {
     fn schedule(&mut self) -> bool {
         match *self {
-            SchedulePolicy::Repeat(ref mut c) => if *c > 0 {
-                *c -= 1;
-                true
-            } else {
-                false
-            },
+            SchedulePolicy::Repeat(ref mut c) => {
+                if *c > 0 {
+                    *c -= 1;
+                    true
+                } else {
+                    false
+                }
+            }
             SchedulePolicy::TillSuccess => true,
             SchedulePolicy::Stop => false,
         }
@@ -334,16 +336,14 @@ impl Cluster {
 
     fn add_region(&mut self, region: &metapb::Region) {
         let end_key = enc_end_key(region);
-        assert!(
-            self.regions
-                .insert(end_key.clone(), region.clone())
-                .is_none()
-        );
-        assert!(
-            self.region_id_keys
-                .insert(region.get_id(), end_key.clone())
-                .is_none()
-        );
+        assert!(self
+            .regions
+            .insert(end_key.clone(), region.clone())
+            .is_none());
+        assert!(self
+            .region_id_keys
+            .insert(region.get_id(), end_key.clone())
+            .is_none());
     }
 
     fn remove_region(&mut self, region: &metapb::Region) {
@@ -1015,7 +1015,8 @@ impl PdClient for TestPdClient {
                     stream::unfold(timer, |timer| {
                         let interval = timer.delay(Instant::now() + Duration::from_millis(500));
                         Some(interval.then(|_| Ok(((), timer))))
-                    }).map(move |_| {
+                    })
+                    .map(move |_| {
                         let mut cluster = cluster1.wl();
                         cluster.poll_heartbeat_responses_for(store_id)
                     }),

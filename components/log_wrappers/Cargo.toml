@@ -1,0 +1,10 @@
+[package]
+name = "log_wrappers"
+version = "0.0.1"
+publish = false
+
+[dependencies]
+slog = "2.3"
+slog-term = "2.4"
+hex = "0.3"
+kvproto = { path = "../kvproto" }

@@ -812,7 +812,7 @@ pub mod log_level_serde {
             .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(trivially_copy_pass_by_ref))]
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -854,13 +854,15 @@ macro_rules! readpool_config {
                     return Err(format!(
                         "readpool.{}.high-concurrency should be > 0",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.normal_concurrency == 0 {
                     return Err(format!(
                         "readpool.{}.normal-concurrency should be > 0",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.low_concurrency == 0 {
                     return Err(
@@ -876,19 +878,22 @@ macro_rules! readpool_config {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-high should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_normal <= 1 {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-normal should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_low <= 1 {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-low should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
 
                 Ok(())
@@ -1084,7 +1089,8 @@ impl TiKvConfig {
                 "grpc_keepalive_time is too small, it should not less than the double of \
                  raft tick interval (>= {})",
                 duration_to_sec(expect_keepalive)
-            ).into());
+            )
+            .into());
         }
 
         self.rocksdb.validate()?;
@@ -1181,7 +1187,8 @@ impl TiKvConfig {
                  current db wal_dir is {}, please guarantee all data wal log \
                  have been moved to destination directory.",
                 last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
+            )
+            .into());
         }
 
         if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
@@ -1190,7 +1197,8 @@ impl TiKvConfig {
                  current raftdb wal_dir is {}, please guarantee all raft wal log \
                  have been moved to destination directory.",
                 last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
+            )
+            .into());
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
@@ -1198,7 +1206,8 @@ impl TiKvConfig {
                 "storage data dir have been changed, former data dir is {}, \
                  current data dir is {}, please check if it is expected.",
                 last_cfg.storage.data_dir, self.storage.data_dir
-            ).into());
+            )
+            .into());
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
@@ -1206,7 +1215,8 @@ impl TiKvConfig {
                 "raft dir have been changed, former raft dir is {}, \
                  current raft dir is {}, please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
-            ).into());
+            )
+            .into());
         }
 
         Ok(())

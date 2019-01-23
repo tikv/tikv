@@ -53,7 +53,7 @@ impl DAGBuilder {
         for mut exec in exec_descriptors {
             let curr: Box<Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                    return Err(box_err!("got too much *scan exec, should be only one"))
+                    return Err(box_err!("got too much *scan exec, should be only one"));
                 }
                 ExecType::TypeSelection => Box::new(SelectionExecutor::new(
                     exec.take_selection(),
