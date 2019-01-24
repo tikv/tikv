@@ -31,6 +31,7 @@ use super::engine::{
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use log_wrappers::DisplayValue;
 use pd::PdClient;
 use raftstore::store::keys;
 use raftstore::store::msg::{Msg as RaftStoreMsg, StoreMsg};
@@ -40,7 +41,6 @@ use server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use util::rocksdb::get_cf_handle;
 use util::time::{duration_to_sec, SlowTimer};
 use util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
-use log_wrappers::DisplayValue;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
