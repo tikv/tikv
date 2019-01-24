@@ -812,9 +812,17 @@ impl TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
 
-            let now = self.get_region_by_id(region.get_id()).wait().unwrap().unwrap();
-            if now.get_start_key() != region.get_start_key() || now.get_end_key() != region.get_end_key() {
-                assert!(now.get_region_epoch().get_version() > region.get_region_epoch().get_version());
+            let now = self
+                .get_region_by_id(region.get_id())
+                .wait()
+                .unwrap()
+                .unwrap();
+            if now.get_start_key() != region.get_start_key()
+                || now.get_end_key() != region.get_end_key()
+            {
+                assert!(
+                    now.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+                );
                 return;
             }
         }
