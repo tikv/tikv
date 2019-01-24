@@ -883,7 +883,7 @@ impl ApplyDelegate {
     ///
     /// An apply operation can fail in the following situations:
     ///   1. it encounters an error that will occur on all stores, it can continue
-    /// applying next entry safely, like stale epoch for example;
+    /// applying next entry safely, like epoch not match for example;
     ///   2. it encounters an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
@@ -905,7 +905,7 @@ impl ApplyDelegate {
                 // clear dirty values.
                 ctx.wb_mut().rollback_to_save_point().unwrap();
                 match e {
-                    Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
+                    Error::EpochNotMatch(..) => debug!("{} epoch not match err: {:?}", self.tag, e),
                     _ => error!("{} execute raft command err: {:?}", self.tag, e),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
@@ -986,7 +986,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
-        // Include region for stale epoch after merge may cause key not in range.
+        // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(&req, &self.region, include_region)?;
@@ -1980,7 +1980,7 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
         || epoch.get_version() != region_epoch.get_version()
     {
         let error = format!("{:?} != {:?}", epoch, region_epoch);
-        return Err(Error::StaleEpoch(error, vec![region.clone()]));
+        return Err(Error::EpochNotMatch(error, vec![region.clone()]));
     }
 
     let range = sst.get_range();
@@ -3165,7 +3165,7 @@ mod tests {
             .build();
         router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert!(resp.get_header().get_error().has_stale_epoch());
+        assert!(resp.get_header().get_error().has_epoch_not_match());
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 3);
@@ -3275,12 +3275,12 @@ mod tests {
             .ingest_sst(&meta1)
             .epoch(0, 3)
             .build();
-        let ingest_stale_epoch = EntryBuilder::new(11, 3)
+        let ingest_epoch_not_match = EntryBuilder::new(11, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .ingest_sst(&meta2)
             .epoch(0, 3)
             .build();
-        let entries = vec![put_ok, ingest_ok, ingest_stale_epoch];
+        let entries = vec![put_ok, ingest_ok, ingest_epoch_not_match];
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);

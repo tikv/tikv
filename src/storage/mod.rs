@@ -1744,7 +1744,7 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::RegionNotFound
     } else if header.has_key_not_in_region() {
         ErrorHeaderKind::KeyNotInRegion
-    } else if header.has_stale_epoch() {
+    } else if header.has_epoch_not_match() {
         ErrorHeaderKind::StaleEpoch
     } else if header.has_server_is_busy() {
         ErrorHeaderKind::ServerIsBusy

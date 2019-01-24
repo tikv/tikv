@@ -192,7 +192,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                 region.leader = new_leader;
                 Err(Error::UpdateRegion(region))
             }
-            Err(Error::StaleEpoch(new_regions)) => {
+            Err(Error::EpochNotMatch(new_regions)) => {
                 let new_region = new_regions.iter().find(|&r| self.need_split(r)).cloned();
                 match new_region {
                     Some(new_region) => {
@@ -202,8 +202,8 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                         Err(Error::UpdateRegion(RegionInfo::new(new_region, new_leader)))
                     }
                     None => {
-                        warn!("{} stale epoch {:?}", self.tag, new_regions);
-                        Err(Error::StaleEpoch(new_regions))
+                        warn!("{} epoch not match {:?}", self.tag, new_regions);
+                        Err(Error::EpochNotMatch(new_regions))
                     }
                 }
             }
@@ -231,7 +231,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                     Ok(resp)
                 } else {
                     match Error::from(resp.take_region_error()) {
-                        e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
+                        e @ Error::NotLeader(_) | e @ Error::EpochNotMatch(_) => return Err(e),
                         e => Err(e),
                     }
                 }

@@ -115,7 +115,7 @@ quick_error! {
             description("request timeout")
             display("Timeout {}", msg)
         }
-        StaleEpoch(msg: String, new_regions: Vec<metapb::Region>) {
+        EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
             description("region is stale")
             display("StaleEpoch {}", msg)
         }
@@ -186,10 +186,10 @@ impl Into<errorpb::Error> for Error {
                     .mut_key_not_in_region()
                     .set_end_key(region.get_end_key().to_vec());
             }
-            Error::StaleEpoch(_, new_regions) => {
-                let mut e = errorpb::StaleEpoch::new();
-                e.set_new_regions(RepeatedField::from_vec(new_regions));
-                errorpb.set_stale_epoch(e);
+            Error::EpochNotMatch(_, new_regions) => {
+                let mut e = errorpb::EpochNotMatch::new();
+                e.set_current_regions(RepeatedField::from_vec(new_regions));
+                errorpb.set_epoch_not_match(e);
             }
             Error::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::new());

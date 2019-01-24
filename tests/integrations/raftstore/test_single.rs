@@ -16,7 +16,7 @@ use std::time::Duration;
 use test_raftstore::*;
 use tikv::util::config::*;
 
-// TODO add stale epoch test cases.
+// TODO add epoch not match test cases.
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
