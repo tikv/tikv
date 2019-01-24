@@ -243,7 +243,7 @@ impl SnapContext {
         if let Err(e) = notifier.try_send(snap) {
             info!(
                 "failed to notify snap result, leadership may have changed, ignore error";
-                "region" => region_id,
+                "region_id" => region_id,
                 "err" => %e,
             );
         }
@@ -259,7 +259,7 @@ impl SnapContext {
         let timer = gen_histogram.start_coarse_timer();
 
         if let Err(e) = self.generate_snap(region_id, notifier) {
-            error!("failed to generate snap!!!"; "region" => region_id, "err" => %e);
+            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
             return;
         }
 
@@ -271,7 +271,7 @@ impl SnapContext {
 
     /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
-        info!("begin apply snap data"; "region" => region_id);
+        info!("begin apply snap data"; "region_id" => region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
@@ -342,7 +342,7 @@ impl SnapContext {
         });
         info!(
             "apply new data";
-            "region" => region_id,
+            "region_id" => region_id,
             "time_takes" => ?timer.elapsed(),
         );
         Ok(())
@@ -363,7 +363,7 @@ impl SnapContext {
                     .inc();
             }
             Err(Error::Abort) => {
-                warn!("applying snapshot is aborted"; "region" => region_id);
+                warn!("applying snapshot is aborted"; "region_id" => region_id);
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
@@ -394,7 +394,7 @@ impl SnapContext {
             if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, start_key, end_key) {
                 error!(
                     "failed to delete files in range";
-                    "region" => region_id,
+                    "region_id" => region_id,
                     "start_key" => ::log_wrappers::Key(start_key),
                     "end_key" => ::log_wrappers::Key(end_key),
                     "err" => %e,
@@ -407,7 +407,7 @@ impl SnapContext {
         {
             error!(
                 "failed to delete data in range";
-                "region" => region_id,
+                "region_id" => region_id,
                 "start_key" => ::log_wrappers::Key(start_key),
                 "end_key" => ::log_wrappers::Key(end_key),
                 "err" => %e,
@@ -415,7 +415,7 @@ impl SnapContext {
         } else {
             info!(
                 "succeed in deleting data in range";
-                "region" => region_id,
+                "region_id" => region_id,
                 "start_key" => ::log_wrappers::Key(start_key),
                 "end_key" => ::log_wrappers::Key(end_key),
             );
@@ -448,7 +448,7 @@ impl SnapContext {
 
         info!(
             "register deleting data in range";
-            "region" => region_id,
+            "region_id" => region_id,
             "start_key" => ::log_wrappers::Key(start_key),
             "end_key" => ::log_wrappers::Key(end_key),
         );

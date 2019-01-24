@@ -81,7 +81,7 @@ impl Runner {
             }
         }
         if first_idx >= end_idx {
-            info!("no need to gc"; "region" => region_id);
+            info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
         let mut raft_wb = WriteBatch::new();
@@ -117,7 +117,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         debug!(
             "execute gc log";
-            "region" => task.region_id,
+            "region_id" => task.region_id,
             "end_index" => task.end_idx,
         );
         match self.gc_raft_log(
@@ -127,11 +127,11 @@ impl Runnable<Task> for Runner {
             task.end_idx,
         ) {
             Err(e) => {
-                error!("failed to gc"; "region" => task.region_id, "err" => %e);
+                error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
                 self.report_collected(0);
             }
             Ok(n) => {
-                debug!("collected log entries"; "region" => task.region_id, "entry_count" => n);
+                debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
                 self.report_collected(n);
             }
         }

@@ -182,7 +182,7 @@ impl<C: Sender<Msg>> Runner<C> {
         let end_key = keys::enc_end_key(region);
         debug!(
             "executing task";
-            "region" => region_id,
+            "region_id" => region_id,
             "start_key" => ::log_wrappers::Key(&start_key),
             "end_key" => ::log_wrappers::Key(&end_key),
         );
@@ -195,7 +195,7 @@ impl<C: Sender<Msg>> Runner<C> {
             task.policy,
         );
         if host.skip() {
-            debug!("skip split check"; "region" => region.get_id());
+            debug!("skip split check"; "region_id" => region.get_id());
             return;
         }
 
@@ -204,7 +204,7 @@ impl<C: Sender<Msg>> Runner<C> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("failed to scan split key"; "region" => region_id, "err" => %e);
+                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
                         return;
                     }
                 }
@@ -217,13 +217,13 @@ impl<C: Sender<Msg>> Runner<C> {
                 Err(e) => {
                     error!(
                         "failed to get approxiamte split key, try scan way";
-                        "region" => region_id,
+                        "region_id" => region_id,
                         "err" => %e,
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("failed to scan split key"; "region" => region_id, "err" => %e);
+                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
                             return;
                         }
                     }
@@ -237,7 +237,7 @@ impl<C: Sender<Msg>> Runner<C> {
                 .ch
                 .try_send(new_split_region(region_id, region_epoch, split_keys));
             if let Err(e) = res {
-                warn!("failed to send check result"; "region" => region_id, "err" => %e);
+                warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
             }
 
             CHECK_SPILT_COUNTER_VEC
@@ -246,7 +246,7 @@ impl<C: Sender<Msg>> Runner<C> {
         } else {
             debug!(
                 "no need to send, split key not found";
-                "region" => region_id,
+                "region_id" => region_id,
             );
 
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();

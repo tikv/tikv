@@ -327,7 +327,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
             }
             None => {
                 self.metrics.borrow_mut().rejected_by_no_region += 1;
-                debug!("rejected by no region"; "region" => region_id);
+                debug!("rejected by no region"; "region_id" => region_id);
                 return Ok(None);
             }
         };
@@ -481,7 +481,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                     } else {
                         warn!(
                             "update unregistered ReadDelegate";
-                            "region" => region_id,
+                            "region_id" => region_id,
                             "progress" => ?progress,
                         );
                     }

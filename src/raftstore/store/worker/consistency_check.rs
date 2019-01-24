@@ -69,7 +69,7 @@ impl<C: MsgSender> Runner<C> {
         let region_id = region.get_id();
         info!(
             "computing hash";
-            "region" => region_id,
+            "region_id" => region_id,
             "index" => index,
         );
         REGION_HASH_COUNTER_VEC
@@ -96,7 +96,7 @@ impl<C: MsgSender> Runner<C> {
                     .inc();
                 error!(
                     "failed to calculate hash";
-                    "region" => region_id,
+                    "region_id" => region_id,
                     "err" => %e,
                 );
                 return;
@@ -113,7 +113,7 @@ impl<C: MsgSender> Runner<C> {
                     .inc();
                 error!(
                     "failed to get region state";
-                    "region" => region_id,
+                    "region_id" => region_id,
                     "err" => %e,
                 );
                 return;
@@ -134,7 +134,7 @@ impl<C: MsgSender> Runner<C> {
         if let Err(e) = self.ch.try_send(msg) {
             warn!(
                 "failed to send hash compute result";
-                "region" => region_id,
+                "region_id" => region_id,
                 "err" => %e,
             );
         }
