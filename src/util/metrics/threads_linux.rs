@@ -159,7 +159,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
             let file_name = match task {
                 Ok(t) => t.file_name(),
                 Err(e) => {
-                    error!("read task failed"; "pid" => pid, "error" => ?e);
+                    error!("read task failed"; "pid" => pid, "err" => ?e);
                     return None;
                 }
             };
@@ -168,12 +168,12 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
                 Some(tid) => match tid.parse() {
                     Ok(tid) => Some(tid),
                     Err(e) => {
-                        error!("fail to read task of {}, error {:?}", pid, e);
+                        error!("read task failed"; "pid" => pid, "err" => ?e);
                         None
                     }
                 },
                 None => {
-                    error!("fail to read task of {}", pid);
+                    error!("read task failed"; "pid" => pid);
                     None
                 }
             }
