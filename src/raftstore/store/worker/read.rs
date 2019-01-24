@@ -488,7 +488,7 @@ impl<C: Sender<StoreMsg>> Runnable<Task> for LocalReader<C> {
                 }
                 Task::Destroy(region_id) => {
                     if let Some(delegate) = self.delegates.remove(&region_id) {
-                        info!("destroy ReadDelegate"; "tag" => delegate.tag);
+                        info!("destroy ReadDelegate"; "tag" => &delegate.tag);
                     }
                 }
             }
