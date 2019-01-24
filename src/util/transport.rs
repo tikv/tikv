@@ -24,7 +24,8 @@ lazy_static! {
         "tikv_channel_full_total",
         "Total number of channel full errors.",
         &["type"]
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 const MAX_SEND_RETRY_CNT: usize = 5;

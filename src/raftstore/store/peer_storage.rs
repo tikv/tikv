@@ -464,7 +464,7 @@ fn init_last_term(
                 "[region {}] entry at {} doesn't exist, may lose data.",
                 region.get_id(),
                 last_idx
-            ))
+            ));
         }
         Some(e) => e.get_term(),
     })
@@ -822,7 +822,7 @@ impl PeerStorage {
         }
 
         // Delete any previously appended log entries which never committed.
-        for i in (last_index + 1)..(prev_last_index + 1) {
+        for i in (last_index + 1)..=prev_last_index {
             ready_ctx
                 .raft_wb_mut()
                 .delete(&keys::raft_log_key(self.get_region_id(), i))?;
@@ -929,10 +929,9 @@ impl PeerStorage {
     pub fn clear_data(&self) -> Result<()> {
         let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
-        box_try!(
-            self.region_sched
-                .schedule(RegionTask::destroy(region_id, start_key, end_key))
-        );
+        box_try!(self
+            .region_sched
+            .schedule(RegionTask::destroy(region_id, start_key, end_key)));
         Ok(())
     }
 
@@ -1008,23 +1007,25 @@ impl PeerStorage {
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_cancelled = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => if status.compare_and_swap(
-                JOB_STATUS_PENDING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_PENDING
-            {
-                true
-            } else if status.compare_and_swap(
-                JOB_STATUS_RUNNING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_RUNNING
-            {
-                return false;
-            } else {
-                false
-            },
+            SnapState::Applying(ref status) => {
+                if status.compare_and_swap(
+                    JOB_STATUS_PENDING,
+                    JOB_STATUS_CANCELLING,
+                    Ordering::SeqCst,
+                ) == JOB_STATUS_PENDING
+                {
+                    true
+                } else if status.compare_and_swap(
+                    JOB_STATUS_RUNNING,
+                    JOB_STATUS_CANCELLING,
+                    Ordering::SeqCst,
+                ) == JOB_STATUS_RUNNING
+                {
+                    return false;
+                } else {
+                    false
+                }
+            }
             _ => return false,
         };
         if is_cancelled {
@@ -1058,9 +1059,12 @@ impl PeerStorage {
             status,
         };
         // TODO: gracefully remove region instead.
-        self.region_sched
-            .schedule(task)
-            .expect("snap apply job should not fail");
+        if self.region_sched.schedule(task).is_err() {
+            info!(
+                "{} fail to schedule apply job, are we shutting down?",
+                self.tag
+            );
+        }
     }
 
     /// Save memory states to disk.
@@ -1275,7 +1279,7 @@ pub fn clear_meta(
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
         })?;
-    for id in first_index..last_index + 1 {
+    for id in first_index..=last_index {
         raft_wb.delete(&keys::raft_log_key(region_id, id))?;
     }
     raft_wb.delete(&keys::raft_state_key(region_id))?;
@@ -1303,7 +1307,7 @@ pub fn do_snapshot(
                 return Err(storage_error(format!(
                     "could not load raft state of region {}",
                     region_id
-                )))
+                )));
             }
             Some(state) => state,
         };
@@ -1317,7 +1321,7 @@ pub fn do_snapshot(
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
                     idx, region_id
-                )))
+                )));
             }
             Some(entry) => entry.get_term(),
         }
@@ -1817,7 +1821,8 @@ mod tests {
             &mut ctx,
             &[new_entry(6, 5), new_entry(7, 5)],
             &mut ready_ctx,
-        ).unwrap();
+        )
+        .unwrap();
         let mut hs = HardState::new();
         hs.set_commit(7);
         hs.set_term(5);
@@ -2011,14 +2016,14 @@ mod tests {
         let cap = MAX_CACHE_CAPACITY as u64;
 
         // result overflow
-        entries = (3..cap + 1).map(|i| new_entry(i + 5, 8)).collect();
+        entries = (3..=cap).map(|i| new_entry(i + 5, 8)).collect();
         append_ents(&mut store, &entries);
         exp_res.remove(0);
         exp_res.extend_from_slice(&entries);
         validate_cache(&store, &exp_res);
 
         // input overflow
-        entries = (0..cap + 1).map(|i| new_entry(i + cap + 6, 8)).collect();
+        entries = (0..=cap).map(|i| new_entry(i + cap + 6, 8)).collect();
         append_ents(&mut store, &entries);
         exp_res = entries[entries.len() - cap as usize..].to_vec();
         validate_cache(&store, &exp_res);
@@ -2036,7 +2041,7 @@ mod tests {
         assert!(store.cache.cache.capacity() < cap as usize);
 
         // append shrink
-        entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
+        entries = (0..=cap).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
         assert!(store.cache.cache.capacity() >= cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);

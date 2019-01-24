@@ -490,7 +490,7 @@ mod tests {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
+    #[allow(clippy::type_complexity)]
     fn new_runner(
         cap: usize,
     ) -> (
