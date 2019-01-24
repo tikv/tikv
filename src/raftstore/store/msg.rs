@@ -105,7 +105,7 @@ impl fmt::Debug for Callback {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PeerTick {
     Raft,
     RaftLogGc,
