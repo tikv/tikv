@@ -28,6 +28,7 @@ extern crate rocksdb;
 #[cfg(unix)]
 extern crate signal;
 #[macro_use(
+    kv,
     slog_kv,
     slog_error,
     slog_info,

@@ -28,15 +28,15 @@ mod imp {
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT | SIGHUP => {
-                    info!("receive signal {}, stopping server...", sig as c_int);
+                    info!("stopping server..."; "received signal" => sig as c_int);
                     break;
                 }
                 SIGUSR1 => {
                     // Use SIGUSR1 to log metrics.
-                    info!("{}", metrics::dump());
+                    info!(""; "metric" => metrics::dump());
                     if let Some(ref engines) = engines {
-                        info!("{:?}", rocksdb_stats::dump(&engines.kv));
-                        info!("{:?}", rocksdb_stats::dump(&engines.raft));
+                        info!(""; "kvdb-stats" => ?rocksdb_stats::dump(&engines.kv));
+                        info!(""; "raftdb-status" => ?rocksdb_stats::dump(&engines.raft));
                     }
                 }
                 SIGUSR2 => tikv_alloc::dump_prof(None),

@@ -22,5 +22,5 @@ pub fn tikv_version_info() -> String {
 /// Prints the tikv version information to the standard output.
 #[allow(dead_code)]
 pub fn print_tikv_info() {
-    info!("Welcome to TiKV. {}", tikv_version_info());
+    info!("Welcome to TiKV"; "version" => tikv_version_info());
 }

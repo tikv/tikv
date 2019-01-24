@@ -26,6 +26,7 @@ extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
 #[macro_use(
+    kv,
     slog_kv,
     slog_error,
     slog_warn,
