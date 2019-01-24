@@ -90,12 +90,14 @@ impl ScalarFunc {
 
         match res {
             Ok(v) => Ok(Some(v)),
-            Err(e) => if e.is_overflow() {
-                ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
-                    .map(Some)
-            } else {
-                Err(e)
-            },
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
+                        .map(Some)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
@@ -443,12 +445,14 @@ impl ScalarFunc {
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
-            Err(e) => if e.is_overflow() {
-                ctx.handle_overflow(e)?;
-                Ok(None)
-            } else {
-                Err(e)
-            },
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.handle_overflow(e)?;
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
@@ -620,7 +624,9 @@ impl ScalarFunc {
         if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(val);
         }
-        let res = val.into_owned().convert_to(ctx, flen as u8, decimal as u8)?;
+        let res = val
+            .into_owned()
+            .convert_to(ctx, flen as u8, decimal as u8)?;
         Ok(Cow::Owned(res))
     }
 
@@ -749,7 +755,7 @@ mod tests {
     fn test_cast_as_int() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
+        #[allow(clippy::inconsistent_digit_grouping)]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -874,7 +880,7 @@ mod tests {
     fn test_cast_as_real() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
+        #[allow(clippy::inconsistent_digit_grouping)]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![

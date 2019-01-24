@@ -55,7 +55,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let peer = new_peer(store_id, node_id);
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
-    for id in 2..cluster.engines.len() as u64 + 1 {
+    for id in 2..=cluster.engines.len() as u64 {
         cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
     }
 

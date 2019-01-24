@@ -385,7 +385,12 @@ impl Peer {
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
-        ctx.local_reader.schedule(ReadTask::register(self)).unwrap();
+        if ctx.local_reader.schedule(ReadTask::register(self)).is_err() {
+            info!(
+                "{} fails to schedule local reader, are we shutting down?",
+                self.tag
+            );
+        }
 
         ctx.coprocessor_host.on_region_changed(
             self.region(),
@@ -971,7 +976,8 @@ impl Peer {
                     &ctx.trans,
                     ready.messages.drain(..),
                     &mut ctx.raft_metrics.message,
-                ).unwrap_or_else(|e| {
+                )
+                .unwrap_or_else(|e| {
                     warn!("{} follower send messages err {:?}", self.tag, e);
                 });
                 ctx.need_flush_trans = true;
@@ -1263,7 +1269,7 @@ impl Peer {
             Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
             Ok(RequestPolicy::ProposeNormal) => self.propose_normal(ctx, req),
             Ok(RequestPolicy::ProposeTransferLeader) => {
-                return self.propose_transfer_leader(ctx, req, cb)
+                return self.propose_transfer_leader(ctx, req, cb);
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 is_conf_change = true;
@@ -1465,13 +1471,14 @@ impl Peer {
     }
 
     fn pre_read_index(&self) -> Result<()> {
-        fail_point!("before_propose_readindex", |s| {
-            if s.map_or(true, |s| s.parse().unwrap_or(true)) {
+        fail_point!(
+            "before_propose_readindex",
+            |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
                 Err(box_err!("can not read due to injected failure"))
             }
-        });
+        );
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
@@ -1519,8 +1526,7 @@ impl Peer {
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = self.pending_reads.next_id();
-        let ctx = id.to_bytes();
-        // TODO: Replace with to_ne_bytes() here if we upgrade rustc to 1.30 or above
+        let ctx = id.to_ne_bytes();
         self.raft_group.read_index(ctx.to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
@@ -1789,7 +1795,8 @@ impl Peer {
             ctx.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
-        ).execute(&req, self.region());
+        )
+        .execute(&req, self.region());
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -1862,7 +1869,7 @@ impl Peer {
                     "failed to look up recipient peer {} in region {}",
                     msg.get_to(),
                     self.region_id
-                ))
+                ));
             }
         };
 
@@ -2295,7 +2302,7 @@ mod tests {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(useless_vec))]
+    #[allow(clippy::useless_vec)]
     #[test]
     fn test_request_inspector() {
         struct DummyInspector {
