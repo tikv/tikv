@@ -185,12 +185,19 @@ fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
         Ok(s) => match s.trim().parse::<f64>() {
             Ok(f) => f,
             Err(e) => {
-                error!("failed to parse float from {}: {}", s, e);
+                error!(
+                    "failed to parse float";
+                    "from" => s,
+                    "err" => %e,
+                );
                 0.0
             }
         },
         Err(e) => {
-            error!("failed to convert bytes to str: {:?}", e);
+            error!(
+                "failed to convert bytes to str";
+                "err" => %e
+            );
             0.0
         }
     };

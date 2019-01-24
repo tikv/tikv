@@ -1059,9 +1059,12 @@ impl PeerStorage {
             status,
         };
         // TODO: gracefully remove region instead.
-        self.region_sched
-            .schedule(task)
-            .expect("snap apply job should not fail");
+        if self.region_sched.schedule(task).is_err() {
+            info!(
+                "{} fail to schedule apply job, are we shutting down?",
+                self.tag
+            );
+        }
     }
 
     /// Save memory states to disk.
