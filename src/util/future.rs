@@ -83,7 +83,7 @@ where
                         Ok(Async::Ready(r)) => Ok(Async::Ready(Ok(r))),
                         Ok(Async::NotReady) => Ok(Async::NotReady),
                         Err(e) => Ok(Async::Ready(Err(e))),
-                    }
+                    };
                 }
             };
             self.f2 = Either::Right(res);

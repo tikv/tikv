@@ -137,10 +137,10 @@ impl RaftRouter {
         match self.try_send(id, PeerMsg::RaftMessage(msg)) {
             Either::Left(Ok(())) => return Ok(()),
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Full(m))
+                return Err(TrySendError::Full(m));
             }
             Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m)))) => {
-                return Err(TrySendError::Disconnected(m))
+                return Err(TrySendError::Disconnected(m));
             }
             Either::Right(PeerMsg::RaftMessage(m)) => msg = m,
             _ => unreachable!(),
@@ -630,7 +630,18 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
-                Ok(msg) => self.peer_msg_buf.push(msg),
+                Ok(msg) => {
+                    fail_point!(
+                        "pause_on_apply_res_1",
+                        peer.peer_id() == 1
+                            && match msg {
+                                PeerMsg::ApplyRes { .. } => true,
+                                _ => false,
+                            },
+                        |_| unreachable!()
+                    );
+                    self.peer_msg_buf.push(msg)
+                }
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
                     break;
@@ -1049,11 +1060,9 @@ impl RaftBatchSystem {
         box_try!(workers.pd_worker.start(pd_runner));
 
         let consistency_check_runner = ConsistencyCheckRunner::new(sendch.clone());
-        box_try!(
-            workers
-                .consistency_check_worker
-                .start(consistency_check_runner)
-        );
+        box_try!(workers
+            .consistency_check_worker
+            .start(consistency_check_runner));
 
         let cleanup_sst_runner = CleanupSSTRunner::new(
             builder.store.get_id(),
@@ -1486,7 +1495,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 ranges: ranges_need_check,
                 tombstones_num_threshold: self.ctx.cfg.region_compact_min_tombstones,
                 tombstones_percent_threshold: self.ctx.cfg.region_compact_tombstones_percent,
-            }) {
+            })
+        {
             error!(
                 "{} failed to schedule space check task: {}",
                 self.fsm.store.tag, e

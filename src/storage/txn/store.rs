@@ -378,7 +378,8 @@ mod tests {
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &Options::default(),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
@@ -541,7 +542,7 @@ mod tests {
         let result = scanner.scan(half).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
@@ -565,7 +566,7 @@ mod tests {
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         expect.reverse();
@@ -624,46 +625,32 @@ mod tests {
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
         assert!(store.scanner(false, false, None, None).is_ok());
-        assert!(
-            store
-                .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
-                .is_ok()
-        );
-        assert!(
-            store
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
-                .is_err()
-        );
-        assert!(
-            store
-                .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
-                .is_err()
-        );
-        assert!(
-            store
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
-                .is_err()
-        );
+        assert!(store
+            .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
+            .is_ok());
+        assert!(store
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
+            .is_err());
+        assert!(store
+            .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
+            .is_err());
+        assert!(store
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
+            .is_err());
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
         let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::SI, true);
         assert!(store2.scanner(false, false, None, None).is_ok());
-        assert!(
-            store2
-                .scanner(false, false, Some(bound_a.clone()), None)
-                .is_ok()
-        );
-        assert!(
-            store2
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
-                .is_ok()
-        );
-        assert!(
-            store2
-                .scanner(false, false, None, Some(bound_c.clone()))
-                .is_ok()
-        );
+        assert!(store2
+            .scanner(false, false, Some(bound_a.clone()), None)
+            .is_ok());
+        assert!(store2
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
+            .is_ok());
+        assert!(store2
+            .scanner(false, false, None, Some(bound_c.clone()))
+            .is_ok());
     }
 
     fn gen_fixture_store() -> FixtureStore {

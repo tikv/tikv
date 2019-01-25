@@ -64,9 +64,11 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
     let f = check_key_file(tag, path)?;
     match f {
         None => return Ok(vec![]),
-        Some(mut f) => if let Err(e) = f.read_to_end(&mut key) {
-            return Err(format!("failed to load {} from path {}: {:?}", tag, path, e).into());
-        },
+        Some(mut f) => {
+            if let Err(e) = f.read_to_end(&mut key) {
+                return Err(format!("failed to load {} from path {}: {:?}", tag, path, e).into());
+            }
+        }
     }
     Ok(key)
 }
@@ -184,7 +186,7 @@ mod tests {
         let example_cert = temp.path().join("cert");
         let example_key = temp.path().join("key");
         for (id, f) in (&[&example_ca, &example_cert, &example_key])
-            .into_iter()
+            .iter()
             .enumerate()
         {
             File::create(f).unwrap().write_all(&[id as u8]).unwrap();

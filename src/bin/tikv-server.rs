@@ -12,7 +12,7 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(proc_macro_non_items)]
+#![feature(proc_macro_hygiene)]
 
 extern crate chrono;
 extern crate clap;
@@ -26,6 +26,7 @@ extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
 #[macro_use(
+    kv,
     slog_kv,
     slog_error,
     slog_warn,
@@ -33,7 +34,7 @@ extern crate signal;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;
@@ -90,16 +91,25 @@ fn check_system_config(config: &TiKvConfig) {
     }
 
     for e in tikv_util::config::check_kernel() {
-        warn!("{:?}", e);
+        warn!(
+            "check-kernel";
+            "err" => %e
+        );
     }
 
     // check rocksdb data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!("rockdsb check data dir: {:?}", e);
+        warn!(
+            "rocksdb check data dir";
+            "err" => %e
+        );
     }
     // check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!("raft check data dir: {:?}", e);
+        warn!(
+            "raft check data dir";
+            "err" => %e
+        );
     }
 }
 
@@ -166,7 +176,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         storage_read_pool,
         Some(Arc::clone(&kv_engine)),
         Some(raft_router.clone()),
-    ).unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to create raft stroage: {:?}", e));
 
     // Create raft engine.
     let raft_db_opts = cfg.raftdb.build_opt();
@@ -176,7 +187,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
             raft_db_cf_opts,
-        ).unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
+        )
+        .unwrap_or_else(|s| fatal!("failed to create raft engine: {:?}", s)),
     );
     let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
@@ -213,7 +225,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
-    ).unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to create server: {:?}", e));
     let trans = server.transport();
 
     // Create node.
@@ -234,7 +247,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         local_reader,
         coprocessor_host,
         importer,
-    ).unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
+    )
+    .unwrap_or_else(|e| fatal!("failed to start node: {:?}", e));
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start auto gc
@@ -250,7 +264,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Start metrics flusher
     if let Err(e) = metrics_flusher.start() {
-        error!("failed to start metrics flusher, error: {:?}", e);
+        error!(
+            "failed to start metrics flusher";
+            "err" => %e
+        );
     }
 
     // Run server.
@@ -266,7 +283,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     if status_enabled {
         // Start the status server.
         if let Err(e) = status_server.start(server_cfg.status_addr) {
-            error!("failed to bind addr for status service, error: {:?}", e);
+            error!(
+                "failed to bind addr for status service";
+                "err" => %e
+            );
             status_enabled = false;
         }
     }
@@ -291,7 +311,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     region_info_accessor.stop();
 
     if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
-        info!("ignore failure when stopping resolver: {:?}", e);
+        info!(
+            "ignore failure when stopping resolver";
+            "err" => ?e
+        );
     }
 }
 
@@ -434,8 +457,8 @@ fn main() {
         fatal!("invalid configuration: {:?}", e);
     }
     info!(
-        "using config: {}",
-        serde_json::to_string_pretty(&config).unwrap()
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
     );
 
     // Before any startup, check system configuration.
@@ -456,7 +479,10 @@ fn main() {
         fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
     }
     config.server.cluster_id = cluster_id;
-    info!("connect to PD cluster {}", cluster_id);
+    info!(
+        "connect to PD cluster";
+        "cluster_id" => cluster_id
+    );
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);

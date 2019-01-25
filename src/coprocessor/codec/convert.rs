@@ -185,12 +185,19 @@ fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
         Ok(s) => match s.trim().parse::<f64>() {
             Ok(f) => f,
             Err(e) => {
-                error!("failed to parse float from {}: {}", s, e);
+                error!(
+                    "failed to parse float";
+                    "from" => s,
+                    "err" => %e,
+                );
                 0.0
             }
         },
         Err(e) => {
-            error!("failed to convert bytes to str: {:?}", e);
+            error!(
+                "failed to convert bytes to str";
+                "err" => %e
+            );
             0.0
         }
     };
@@ -269,12 +276,14 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
         match c {
             '.' => dot_idx = Some(i),
             'e' | 'E' => e_idx = Some(i),
-            '0'...'9' => if e_idx.is_none() {
-                if dot_idx.is_none() {
-                    int_cnt += 1;
+            '0'...'9' => {
+                if e_idx.is_none() {
+                    if dot_idx.is_none() {
+                        int_cnt += 1;
+                    }
+                    digits_cnt += 1;
                 }
-                digits_cnt += 1;
-            },
+            }
             _ => (),
         }
     }

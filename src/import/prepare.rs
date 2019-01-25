@@ -226,14 +226,16 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
     fn split_region(&self, region: &RegionInfo) -> Result<RegionInfo> {
         let split_key = self.range.get_end();
         let res = match self.client.split_region(region, split_key) {
-            Ok(mut resp) => if !resp.has_region_error() {
-                Ok(resp)
-            } else {
-                match Error::from(resp.take_region_error()) {
-                    e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
-                    e => Err(e),
+            Ok(mut resp) => {
+                if !resp.has_region_error() {
+                    Ok(resp)
+                } else {
+                    match Error::from(resp.take_region_error()) {
+                        e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
+                        e => Err(e),
+                    }
                 }
-            },
+            }
             Err(e) => Err(e),
         };
 

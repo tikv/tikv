@@ -77,7 +77,7 @@ pub fn zero_datetime(tz: Tz) -> Time {
     Time::new(zero_time(tz), TimeType::DateTime, mysql::DEFAULT_FSP).unwrap()
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+#[allow(clippy::too_many_arguments)]
 #[inline]
 fn ymd_hms_nanos<T: TimeZone>(
     tz: T,
@@ -378,7 +378,7 @@ impl Time {
                             s,
                             s1,
                             s1.len()
-                        ))
+                        ));
                     }
                 }
             }
@@ -722,11 +722,13 @@ impl Time {
     pub fn last_day_of_month(&self) -> u32 {
         match self.time.month() {
             4 | 6 | 9 | 11 => 30,
-            2 => if self.is_leap_year() {
-                29
-            } else {
-                28
-            },
+            2 => {
+                if self.is_leap_year() {
+                    29
+                } else {
+                    28
+                }
+            }
             _ => 31,
         }
     }
@@ -981,7 +983,8 @@ mod tests {
                         utc_t.time - Duration::seconds(offset),
                         utc_t.time_type,
                         utc_t.fsp as i8,
-                    ).unwrap();
+                    )
+                    .unwrap();
                     assert_eq!(exp_t, t);
                 }
             });
@@ -1083,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(zero_prefixed_literal))]
+    #[allow(clippy::zero_prefixed_literal)]
     fn test_parse_datetime_system_timezone() {
         // Basically, we check whether the parse result is the same when construcing using local.
         let tables = vec![
