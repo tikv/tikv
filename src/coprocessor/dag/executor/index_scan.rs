@@ -212,7 +212,7 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
 
     fn start_scan(&mut self) {
         if let Some(range) = self.current_range.as_ref() {
-            if !util::is_point(range) {
+            if !self.is_point(range) {
                 let scanner = self.scanner.as_ref().unwrap();
                 return scanner.start_scan(&mut self.scan_range);
             }
@@ -231,7 +231,7 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
         let mut ret_range = mem::replace(&mut self.scan_range, KeyRange::default());
         match self.current_range.as_ref() {
             Some(range) => {
-                if !util::is_point(range) {
+                if !self.is_point(range) {
                     let scanner = self.scanner.as_mut().unwrap();
                     if scanner.stop_scan(&mut ret_range) {
                         return Some(ret_range);
