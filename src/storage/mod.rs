@@ -1705,7 +1705,7 @@ pub enum ErrorHeaderKind {
     NotLeader,
     RegionNotFound,
     KeyNotInRegion,
-    StaleEpoch,
+    EpochNotMatch,
     ServerIsBusy,
     StaleCommand,
     StoreNotMatch,
@@ -1721,7 +1721,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::NotLeader => "not_leader",
             ErrorHeaderKind::RegionNotFound => "region_not_found",
             ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
-            ErrorHeaderKind::StaleEpoch => "stale_epoch",
+            ErrorHeaderKind::EpochNotMatch => "stale_epoch",
             ErrorHeaderKind::ServerIsBusy => "server_is_busy",
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
@@ -1745,7 +1745,7 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     } else if header.has_key_not_in_region() {
         ErrorHeaderKind::KeyNotInRegion
     } else if header.has_epoch_not_match() {
-        ErrorHeaderKind::StaleEpoch
+        ErrorHeaderKind::EpochNotMatch
     } else if header.has_server_is_busy() {
         ErrorHeaderKind::ServerIsBusy
     } else if header.has_stale_command() {

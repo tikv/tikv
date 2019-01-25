@@ -59,7 +59,7 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::NotLeader => RequestStatusKind::err_not_leader,
             ErrorHeaderKind::RegionNotFound => RequestStatusKind::err_region_not_found,
             ErrorHeaderKind::KeyNotInRegion => RequestStatusKind::err_key_not_in_region,
-            ErrorHeaderKind::StaleEpoch => RequestStatusKind::err_epoch_not_match,
+            ErrorHeaderKind::EpochNotMatch => RequestStatusKind::err_epoch_not_match,
             ErrorHeaderKind::ServerIsBusy => RequestStatusKind::err_server_is_busy,
             ErrorHeaderKind::StaleCommand => RequestStatusKind::err_stale_command,
             ErrorHeaderKind::StoreNotMatch => RequestStatusKind::err_store_not_match,
