@@ -32,6 +32,7 @@ pub mod datum;
 pub mod error;
 pub mod mysql;
 mod overflow;
+mod row_codec;
 pub mod table;
 
 pub use self::datum::Datum;
