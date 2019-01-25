@@ -89,44 +89,33 @@ impl<S: Snapshot> SnapshotStore<S> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
 
-        let (forward_scanner, backward_scanner) = if !desc {
-            let forward_scanner = ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                .range(lower_bound, upper_bound)
-                .omit_value(key_only)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .build()?;
-            (Some(forward_scanner), None)
-        } else {
-            let backward_scanner =
-                BackwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                    .range(lower_bound, upper_bound)
-                    .omit_value(key_only)
-                    .fill_cache(self.fill_cache)
-                    .isolation_level(self.isolation_level)
-                    .build()?;
-            (None, Some(backward_scanner))
+        let (forward_scanner, backward_scanner) = match mode {
+            ScanMode::Forward => {
+                let forward_scanner =
+                    ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+                        .range(lower_bound, upper_bound)
+                        .omit_value(key_only)
+                        .fill_cache(self.fill_cache)
+                        .isolation_level(self.isolation_level)
+                        .build()?;
+                (Some(forward_scanner), None)
+            }
+            ScanMode::Backward => {
+                let backward_scanner =
+                    BackwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
+                        .range(lower_bound, upper_bound)
+                        .omit_value(key_only)
+                        .fill_cache(self.fill_cache)
+                        .isolation_level(self.isolation_level)
+                        .build()?;
+                (None, Some(backward_scanner))
+            }
+            _ => unreachable!(),
         };
         Ok(StoreScanner {
             forward_scanner,
             backward_scanner,
         })
-    }
-}
-
-impl<S: Snapshot> SnapshotStore<S> {
-    pub fn new(
-        snapshot: S,
-        start_ts: u64,
-        isolation_level: IsolationLevel,
-        fill_cache: bool,
-    ) -> Self {
-        SnapshotStore {
-            snapshot,
-            start_ts,
-            isolation_level,
-            fill_cache,
-        }
     }
 
     fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
@@ -206,15 +195,14 @@ impl<S: Snapshot> StoreScanner<S> {
 mod test {
     use super::SnapshotStore;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
     use raftstore::store::engine::IterOption;
-    use storage::engine::{Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode};
-    use storage::mvcc::Error as MvccError;
+    use storage::engine::{
+        self, Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode, TEMP_DIR,
+    };
     use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, ScanMode, Statistics, ALL_CFS};
     use storage::{
-        CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
-        TestEngineBuilder, Value,
+        CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics, Value,
+        ALL_CFS,
     };
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -293,7 +281,7 @@ mod test {
     }
 
     // Snapshot with bound
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     struct MockRangeSnapshot {
         start: Vec<u8>,
         end: Vec<u8>,
@@ -511,45 +499,70 @@ mod test {
         let bound_b = Key::from_encoded(b"b".to_vec());
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
-        assert!(store.scanner(false, false, None, None).is_ok());
+        assert!(store.scanner(ScanMode::Forward, false, None, None).is_ok());
         assert!(
             store
-                .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_c.clone())
+                )
                 .is_ok()
         );
         assert!(
             store
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_c.clone())
+                )
                 .is_err()
         );
         assert!(
             store
-                .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_d.clone())
+                )
                 .is_err()
         );
         assert!(
             store
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_d.clone())
+                )
                 .is_err()
         );
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
         let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::SI, true);
-        assert!(store2.scanner(false, false, None, None).is_ok());
+        assert!(store2.scanner(ScanMode::Forward, false, None, None).is_ok());
         assert!(
             store2
-                .scanner(false, false, Some(bound_a.clone()), None)
+                .scanner(ScanMode::Forward, false, Some(bound_a.clone()), None)
                 .is_ok()
         );
         assert!(
             store2
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_b.clone())
+                )
                 .is_ok()
         );
         assert!(
             store2
-                .scanner(false, false, None, Some(bound_c.clone()))
+                .scanner(ScanMode::Forward, false, None, Some(bound_c.clone()))
                 .is_ok()
         );
     }
