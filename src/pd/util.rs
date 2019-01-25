@@ -365,7 +365,7 @@ pub fn validate_endpoints(
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
-                error!("PD failed to respond"; "endpoint" => ep, "err" => ?e);
+                error!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
                 continue;
             }
         };
@@ -393,7 +393,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) = try_connect_leader(Arc::clone(&env), security_mgr, &members)?;
-            info!("all PD endpoints are consistent"; "endpoint" => ?cfg.endpoints);
+            info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
         _ => Err(box_err!("PD cluster failed to respond")),
@@ -405,7 +405,7 @@ fn connect(
     security_mgr: &SecurityManager,
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    info!("connecting to PD endpoint"; "endpoint" => addr);
+    info!("connecting to PD endpoint"; "endpoints" => addr);
     let addr = addr
         .trim_left_matches("http://")
         .trim_left_matches("https://");
@@ -452,7 +452,7 @@ pub fn try_connect_leader(
                     }
                 }
                 Err(e) => {
-                    error!("connect failed"; "endpoint" => ep, "err" => ?e);
+                    error!("connect failed"; "endpoints" => ep, "err" => ?e);
                     continue;
                 }
             }
@@ -464,7 +464,7 @@ pub fn try_connect_leader(
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
             if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
-                info!("connected to PD leader"; "endpoint" => ep);
+                info!("connected to PD leader"; "endpoints" => ep);
                 return Ok((client, resp));
             }
         }
