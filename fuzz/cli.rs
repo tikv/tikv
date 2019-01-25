@@ -49,7 +49,7 @@ lazy_static! {
     static ref FUZZ_TARGETS: Vec<String> = {
         let source = FUZZ_ROOT.join("targets/mod.rs");
         let targets_rs = fs::read_to_string(&source).unwrap();
-        let match_fuzz_fs = regex::Regex::new(r"pub fn fuzz_(\w+)(").unwrap();
+        let match_fuzz_fs = regex::Regex::new(r"pub fn fuzz_(\w+)\(").unwrap();
         let target_names = match_fuzz_fs
             .captures_iter(&targets_rs)
             .map(|x| format!("fuzz_{}", &x[1]));
