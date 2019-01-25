@@ -1697,6 +1697,8 @@ mod tests {
             stale_version_epoch.set_version(1);
             let mut stale_region = metapb::Region::new();
             stale_region.set_region_epoch(stale_version_epoch.clone());
+            req.mut_header()
+                .set_region_epoch(stale_version_epoch.clone());
             check_region_epoch(&req, &stale_region, false).unwrap();
 
             let mut latest_version_epoch = epoch.clone();

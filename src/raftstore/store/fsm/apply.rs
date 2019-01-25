@@ -3513,9 +3513,6 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // All requests should be checked.
         assert!(error_msg(&resp).contains("id count"), "{:?}", resp);
-
-        let mut new_version = epoch.borrow().get_version() + 1;
-        epoch.borrow_mut().set_version(new_version);
         let checker = SplitResultChecker {
             db: &engines.kv,
             origin_peers: &peers,
@@ -3529,11 +3526,11 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Split should succeed.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let mut new_version = epoch.borrow().get_version() + 1;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"", b"k1", 8, &[9, 10, 11], true);
         checker.check(b"k1", b"k5", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 1;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3542,11 +3539,11 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 1;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k4", b"k5", 12, &[13, 14, 15], true);
         checker.check(b"k1", b"k4", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 2;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3558,12 +3555,12 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 2;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k1", b"k2", 16, &[17, 18, 19], true);
         checker.check(b"k2", b"k3", 20, &[21, 22, 23], true);
         checker.check(b"k3", b"k4", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 2;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3575,6 +3572,8 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 2;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
