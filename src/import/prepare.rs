@@ -192,18 +192,24 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                 region.leader = new_leader;
                 Err(Error::UpdateRegion(region))
             }
-            Err(Error::EpochNotMatch(new_regions)) => {
-                let new_region = new_regions.iter().find(|&r| self.need_split(r)).cloned();
-                match new_region {
-                    Some(new_region) => {
+            Err(Error::EpochNotMatch(current_regions)) => {
+                let current_region = current_regions
+                    .iter()
+                    .find(|&r| self.need_split(r))
+                    .cloned();
+                match current_region {
+                    Some(current_region) => {
                         let new_leader = region
                             .leader
-                            .and_then(|p| find_region_peer(&new_region, p.get_store_id()));
-                        Err(Error::UpdateRegion(RegionInfo::new(new_region, new_leader)))
+                            .and_then(|p| find_region_peer(&current_region, p.get_store_id()));
+                        Err(Error::UpdateRegion(RegionInfo::new(
+                            current_region,
+                            new_leader,
+                        )))
                     }
                     None => {
-                        warn!("{} epoch not match {:?}", self.tag, new_regions);
-                        Err(Error::EpochNotMatch(new_regions))
+                        warn!("{} epoch not match {:?}", self.tag, current_regions);
+                        Err(Error::EpochNotMatch(current_regions))
                     }
                 }
             }

@@ -116,8 +116,8 @@ quick_error! {
             display("Timeout {}", msg)
         }
         EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
-            description("region is stale")
-            display("StaleEpoch {}", msg)
+            description("region epoch is not match")
+            display("EpochNotMatch {}", msg)
         }
         StaleCommand {
             description("stale command")

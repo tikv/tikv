@@ -98,7 +98,7 @@ quick_error! {
             display("TikvRPC {:?}", err)
         }
         NotLeader(new_leader: Option<Peer>) {}
-        EpochNotMatch(new_regions: Vec<Region>) {}
+        EpochNotMatch(current_regions: Vec<Region>) {}
         UpdateRegion(new_region: RegionInfo) {}
         ImportJobFailed(tag: String) {
             display("{}", tag)
