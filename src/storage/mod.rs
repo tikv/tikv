@@ -1721,7 +1721,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::NotLeader => "not_leader",
             ErrorHeaderKind::RegionNotFound => "region_not_found",
             ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
-            ErrorHeaderKind::EpochNotMatch => "stale_epoch",
+            ErrorHeaderKind::EpochNotMatch => "epoch_not_match",
             ErrorHeaderKind::ServerIsBusy => "server_is_busy",
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",

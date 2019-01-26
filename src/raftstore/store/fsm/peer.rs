@@ -1936,7 +1936,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if let Some(sibling_region) = sibling_region {
                     new_regions.push(sibling_region);
                 }
-                self.ctx.raft_metrics.invalid_proposal.stale_epoch += 1;
+                self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
                 Err(Error::EpochNotMatch(msg, new_regions))
             }
             Err(e) => Err(e),
