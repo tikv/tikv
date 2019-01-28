@@ -398,7 +398,7 @@ where
         B::Handler: Send + 'static,
     {
         for i in 0..self.pool_size {
-            let mut handler = builder.build();
+            let handler = builder.build();
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),

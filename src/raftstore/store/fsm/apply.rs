@@ -2341,7 +2341,7 @@ impl ApplyFsm {
             }
             None => {
                 info!("{} all pending logs are applied.", self.delegate.tag);
-                if let Some(mut catch_up_logs) = state.catch_up_logs {
+                if let Some(catch_up_logs) = state.catch_up_logs {
                     // There is a merge cascade, need to notify the source peer.
                     ctx.write_to_db();
                     let region_id = self.delegate.region_id();
@@ -2762,7 +2762,7 @@ mod tests {
     fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Apply(mut res) => res,
+                TaskRes::Apply(res) => res,
                 e => panic!("unexpected res {:?}", e),
             },
             e => panic!("unexpected res {:?}", e),

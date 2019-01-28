@@ -270,7 +270,7 @@ impl Executor for StreamAggExecutor {
         while let Some(cols) = self.inner.next()? {
             self.has_data = true;
             let new_group = self.meet_new_group(&cols)?;
-            let mut ret = if new_group {
+            let ret = if new_group {
                 Some(self.get_partial_result()?)
             } else {
                 None

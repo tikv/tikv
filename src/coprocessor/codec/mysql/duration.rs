@@ -524,7 +524,7 @@ mod tests {
             ("-1 11:59:59.9999", 2),
         ];
         for (input, fsp) in cases {
-            let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(&t).unwrap();
             let got = Duration::decode(&mut buf.as_slice()).unwrap();

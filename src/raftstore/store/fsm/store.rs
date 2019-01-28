@@ -532,7 +532,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if ready_cnt != 0 {
             let mut batch_pos = 0;
             let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
-            for (mut ready, invoke_ctx) in ready_res.drain(..) {
+            for (ready, invoke_ctx) in ready_res.drain(..) {
                 let region_id = invoke_ctx.region_id;
                 if peers[batch_pos].region_id() == region_id {
                 } else {
@@ -1938,7 +1938,7 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
     end: Vec<u8>,
 ) -> bool {
     for (end_key, &id) in region_ranges.range((Excluded(start.clone()), Unbounded::<Key>)) {
-        let mut region = get_region(id);
+        let region = get_region(id);
         // find a missing range
         if start < enc_start_key(region) {
             return false;
