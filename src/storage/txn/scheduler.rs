@@ -400,7 +400,7 @@ impl<E: Engine> Scheduler<E> {
         let pr = match result {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed {
-                err: ::storage::Error::from(e),
+                err: crate::storage::Error::from(e),
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {

@@ -13,9 +13,9 @@
 
 use std::sync::Arc;
 
-use rocksdb::DB;
+use ::rocksdb::DB;
 use tempdir::TempDir;
-use test;
+use ::test;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;

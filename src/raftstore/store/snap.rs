@@ -24,7 +24,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{CFHandle, Writable, WriteBatch, DB};
+use ::rocksdb::{CFHandle, Writable, WriteBatch, DB};
 
 use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::fsm::SendCh;
@@ -222,7 +222,7 @@ pub fn retry_delete_snapshot(
 use crc::crc32::{self, Digest, Hasher32};
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use protobuf::RepeatedField;
-use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
+use ::rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -1467,7 +1467,7 @@ pub mod tests {
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
     };
-    use rocksdb::DB;
+    use ::rocksdb::DB;
     use std::path::PathBuf;
 
     use crate::raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};

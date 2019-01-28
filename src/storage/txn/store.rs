@@ -947,7 +947,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use ::test;
 
     use rand::{self, Rng};
     use std::collections::BTreeMap;

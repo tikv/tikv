@@ -26,10 +26,10 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use rocksdb::load_latest_options;
-use rocksdb::rocksdb::supported_compression;
-use rocksdb::set_external_sst_file_global_seq_no;
-use rocksdb::{
+use ::rocksdb::load_latest_options;
+use ::rocksdb::rocksdb::supported_compression;
+use ::rocksdb::set_external_sst_file_global_seq_no;
+use ::rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
@@ -42,7 +42,7 @@ use crate::util::rocksdb::engine_metrics::{
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 
-pub use rocksdb::CFHandle;
+pub use ::rocksdb::CFHandle;
 
 use super::cfs_diff;
 
@@ -581,7 +581,7 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::{
+    use ::rocksdb::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };

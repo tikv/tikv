@@ -21,7 +21,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use protobuf;
 use raft::{Ready, StateRole};
-use rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
+use ::rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

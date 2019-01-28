@@ -77,7 +77,7 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
+    use ::rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys;

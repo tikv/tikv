@@ -23,8 +23,8 @@ use std::sync::Arc;
 use std::{cmp, usize};
 
 use protobuf::RepeatedField;
-use rocksdb::rocksdb_options::WriteOptions;
-use rocksdb::{Writable, WriteBatch};
+use ::rocksdb::rocksdb_options::WriteOptions;
+use ::rocksdb::{Writable, WriteBatch};
 use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
@@ -2671,7 +2671,7 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use crate::raftstore::store::Config;
-    use rocksdb::{Writable, WriteBatch, DB};
+    use ::rocksdb::{Writable, WriteBatch, DB};
     use tempdir::TempDir;
 
     use super::*;
