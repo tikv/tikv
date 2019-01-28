@@ -127,8 +127,9 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(
-                    "[region {}] failed to get approximate keys: {}",
-                    region_id, e
+                    "failed to get approximate keys";
+                    "region_id" => region_id,
+                    "err" => %e,
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
@@ -147,18 +148,19 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
         });
         if let Err(e) = self.ch.lock().unwrap().try_send(res) {
             warn!(
-                "[region {}] failed to send approximate region keys: {}",
-                region_id, e
+                "failed to send approximate region keys";
+                "region_id" => region_id,
+                "err" => %e,
             );
         }
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
         if region_keys >= self.region_max_keys {
             info!(
-                "[region {}] approximate keys {} >= {}, need to do split check",
-                region.get_id(),
-                region_keys,
-                self.region_max_keys
+                "approximate keys over threshold, need to do split check";
+                "region_id" => region.get_id(),
+                "keys" => region_keys,
+                "threshold" => self.region_max_keys,
             );
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
@@ -170,10 +172,10 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
         } else {
             // Does not need to check keys.
             debug!(
-                "[region {}] approximate keys {} < {}, does not need to do split check",
-                region.get_id(),
-                region_keys,
-                self.region_max_keys
+                "approximate keys less than threshold, does not need to do split check";
+                "region_id" => region.get_id(),
+                "keys" => region_keys,
+                "threshold" => self.region_max_keys,
             );
         }
     }

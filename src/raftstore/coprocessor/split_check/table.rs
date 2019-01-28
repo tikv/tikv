@@ -103,9 +103,9 @@ impl SplitCheckObserver for TableCheckObserver {
             Ok(None) => return,
             Err(err) => {
                 warn!(
-                    "[region {}] failed to get region last key: {}",
-                    region.get_id(),
-                    err
+                    "failed to get region last key";
+                    "region_id" => region.get_id(),
+                    "err" => %err,
                 );
                 return;
             }
