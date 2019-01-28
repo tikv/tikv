@@ -200,15 +200,11 @@ impl Iterator for BTreeEngineIterator {
 
     #[inline]
     fn valid(&self) -> bool {
-        debug!("Iterator.valid(): {:?}", self.valid);
         self.valid
     }
 
     fn key(&self) -> &[u8] {
         assert!(self.valid());
-        debug!("Iterator.key() -> {:?}", unsafe {
-            String::from_utf8_unchecked(self.cur_key.clone().unwrap().to_raw().unwrap())
-        });
         self.cur_key.as_ref().unwrap().as_encoded()
     }
 

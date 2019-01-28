@@ -540,8 +540,7 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage referenced (reference count before operation: {})",
-            refs
+            "Storage referenced"; "original_ref" => refs
         );
 
         Self {
@@ -562,8 +561,7 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage de-referenced (reference count before operation: {})",
-            refs
+            "Storage de-referenced"; "original_ref" => refs
         );
 
         if refs != 1 {
@@ -574,17 +572,17 @@ impl<E: Engine> Drop for Storage<E> {
         // destroy the storage now.
         let mut worker = self.worker.lock().unwrap();
         if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit: {:?}", e);
+            error!("Failed to ask scheduler to quit"; "err" => ?e);
         }
 
         let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
-            error!("Failed to join sched_handle: {:?}", e);
+            error!("Failed to join sched_handle"; "err" => ?e);
         }
 
         let r = self.gc_worker.stop();
         if let Err(e) = r {
-            error!("Failed to stop gc_worker: {:?}", e);
+            error!("Failed to stop gc_worker:"; "err" => ?e);
         }
 
         info!("Storage stopped.");
