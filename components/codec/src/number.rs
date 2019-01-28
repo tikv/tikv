@@ -1640,7 +1640,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use ::test;
+    use crate::test;
 
     use byteorder;
     use protobuf::CodedOutputStream;
