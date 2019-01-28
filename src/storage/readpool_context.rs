@@ -128,7 +128,7 @@ impl futurepool::Context for Context {
                 .pd_sender
                 .schedule(pd::PdTask::ReadStats { read_stats });
             if let Err(e) = result {
-                error!("Failed to send readpool read flow statistics: {:?}", e);
+                error!("Failed to send readpool read flow statistics"; "err" => ?e);
             }
         }
     }

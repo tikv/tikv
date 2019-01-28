@@ -17,7 +17,7 @@ use std::fmt::{self, Display, Formatter};
 use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
-use hex;
+use hex::ToHex;
 
 use storage::mvcc::{Lock, Write};
 use util::codec;
@@ -225,7 +225,7 @@ impl Clone for Key {
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", hex::encode_upper(&self.0))
+        self.0.write_hex_upper(f)
     }
 }
 
