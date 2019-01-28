@@ -122,7 +122,6 @@ mod tests {
         }
         stats.record(Instant::now());
         let cpu_usage = load.load();
-        println!("cpu_usage: {}", cpu_usage);
         if cpu_usage < 80 || cpu_usage > 110 {
             panic!("the load must be heavy than 80, but got {}", cpu_usage);
         }
