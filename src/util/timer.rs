@@ -19,7 +19,7 @@ use std::time::Duration;
 use time::Timespec;
 use tokio_executor::park::ParkThread;
 use tokio_timer::{self, clock::Clock, clock::Now, timer::Handle, Delay};
-use util::time::{monotonic_raw_now, Instant};
+use crate::util::time::{monotonic_raw_now, Instant};
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -216,7 +216,7 @@ mod tests {
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
-    use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
+    use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {

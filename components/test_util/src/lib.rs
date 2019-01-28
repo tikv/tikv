@@ -28,10 +28,10 @@ mod security;
 
 use std::env;
 
-pub use kv_generator::*;
-pub use logging::*;
-pub use macros::*;
-pub use security::*;
+pub use crate::kv_generator::*;
+pub use crate::logging::*;
+pub use crate::macros::*;
+pub use crate::security::*;
 
 pub fn setup_for_ci() {
     if env::var("CI").is_ok() {

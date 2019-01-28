@@ -14,9 +14,9 @@
 use std::cmp::Ordering;
 use tipb::expression::ExprType;
 
-use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::Datum;
-use coprocessor::Result;
+use crate::coprocessor::codec::mysql::Decimal;
+use crate::coprocessor::codec::Datum;
+use crate::coprocessor::Result;
 
 use super::super::expr::{eval_arith, EvalContext};
 
@@ -300,7 +300,7 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
     use std::ops::Add;
     use std::sync::Arc;
     use std::{i64, u64};

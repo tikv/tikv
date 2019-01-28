@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::Result;
-use util::config::ReadableSize;
+use crate::util::config::ReadableSize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

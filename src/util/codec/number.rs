@@ -328,7 +328,7 @@ pub fn read_u8(data: &mut BytesSlice) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use util::codec::Error;
+    use crate::util::codec::Error;
 
     use protobuf::CodedOutputStream;
     use std::io::ErrorKind;
@@ -499,7 +499,7 @@ mod tests {
             #[allow(clippy::float_cmp)]
             mod $enc {
                 use super::{F64_TESTS, I64_TESTS, U16_TESTS, U32_TESTS, U64_TESTS};
-                use util::codec::number::*;
+                use crate::util::codec::number::*;
 
                 test_serialize!(serialize, $enc, $dec, $cases);
 

@@ -30,11 +30,11 @@ const TEN_POW: &[u32] = &[
 /// A shortcut to box an error.
 macro_rules! invalid_type {
     ($e:expr) => ({
-        use coprocessor::codec::Error;
+        use crate::coprocessor::codec::Error;
         Error::InvalidDataType(($e).into())
     });
     ($f:tt, $($arg:expr),+) => ({
-        use coprocessor::codec::Error;
+        use crate::coprocessor::codec::Error;
         Error::InvalidDataType(format!($f, $($arg),+))
     });
 }

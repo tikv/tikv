@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use futures::{Future, Sink, Stream};
-use grpc::{
+use crate::grpc::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };

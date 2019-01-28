@@ -52,7 +52,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        Option<Engines>,
+        _: Option<Engines>,
     ) -> (u64, Engines, Option<TempDir>);
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;

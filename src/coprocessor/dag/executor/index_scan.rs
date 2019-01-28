@@ -24,11 +24,11 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::{datum, table};
-use coprocessor::util;
-use coprocessor::*;
+use crate::coprocessor::codec::{datum, table};
+use crate::coprocessor::util;
+use crate::coprocessor::*;
 
-use storage::{Key, Store};
+use crate::storage::{Key, Store};
 
 use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
@@ -283,9 +283,9 @@ pub mod tests {
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum};
-    use storage::SnapshotStore;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::storage::SnapshotStore;
+    use crate::util::collections::HashMap;
 
     use super::super::scanner::tests::{new_col_info, Data, TestStore};
     use super::*;

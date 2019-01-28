@@ -16,14 +16,14 @@ use std::sync::Arc;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 
-use storage::Store;
+use crate::storage::Store;
 
 use super::executor::{
     Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
     StreamAggExecutor, TableScanExecutor, TopNExecutor,
 };
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::*;
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::*;
 
 /// Utilities to build an executor DAG.
 ///

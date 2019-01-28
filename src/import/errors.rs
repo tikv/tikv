@@ -17,14 +17,14 @@ use std::path::PathBuf;
 use std::result;
 
 use futures::sync::oneshot::Canceled;
-use grpc::Error as GrpcError;
+use crate::grpc::Error as GrpcError;
 use kvproto::errorpb;
 use kvproto::metapb::*;
 use uuid::{ParseError, Uuid};
 
-use pd::{Error as PdError, RegionInfo};
-use raftstore::errors::Error as RaftStoreError;
-use util::codec::Error as CodecError;
+use crate::pd::{Error as PdError, RegionInfo};
+use crate::raftstore::errors::Error as RaftStoreError;
+use crate::util::codec::Error as CodecError;
 
 quick_error! {
     #[derive(Debug)]

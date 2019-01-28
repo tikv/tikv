@@ -24,13 +24,13 @@ use kvproto::metapb::*;
 use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use uuid::Uuid;
 
-use pd::RegionInfo;
-use raftstore::store::keys;
+use crate::pd::RegionInfo;
+use crate::raftstore::store::keys;
 
 use super::client::*;
 use super::common::*;
 use super::Result;
-use util::collections::HashMap;
+use crate::util::collections::HashMap;
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);

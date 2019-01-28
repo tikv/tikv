@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::{thread, time};
 
 use futures::{Future, Stream};
-use grpc::*;
+use crate::grpc::*;
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};

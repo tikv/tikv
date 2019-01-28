@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
-use coprocessor::dag::expr::Expression;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
+use crate::coprocessor::dag::expr::Expression;
 use std::borrow::Cow;
 
 fn if_null<F, T>(mut f: F) -> Result<Option<T>>
@@ -232,10 +232,10 @@ mod tests {
     use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::mysql::{Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::{Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
     fn test_if_null() {

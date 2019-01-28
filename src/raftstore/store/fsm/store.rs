@@ -31,42 +31,42 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
-use pd::{PdClient, PdRunner, PdTask};
-use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use raftstore::store::util::is_initial_msg;
-use raftstore::Result;
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::collections::{HashMap, HashSet};
-use util::mpsc::{self, LooseBoundedSender, Receiver};
-use util::rocksdb::{CompactedEvent, CompactionListener};
-use util::time::{duration_to_sec, SlowTimer};
-use util::timer::SteadyTimer;
-use util::transport::RetryableSendCh;
-use util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use util::{is_zero_duration, rocksdb, sys as util_sys, Either, RingQueue};
+use crate::pd::{PdClient, PdRunner, PdTask};
+use crate::raftstore::coprocessor::split_observer::SplitObserver;
+use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::raftstore::store::util::is_initial_msg;
+use crate::raftstore::Result;
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::util::collections::{HashMap, HashSet};
+use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
+use crate::util::rocksdb::{CompactedEvent, CompactionListener};
+use crate::util::time::{duration_to_sec, SlowTimer};
+use crate::util::timer::SteadyTimer;
+use crate::util::transport::RetryableSendCh;
+use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use crate::util::{is_zero_duration, rocksdb, sys as util_sys, Either, RingQueue};
 
-use import::SSTImporter;
-use raftstore::store::config::Config;
-use raftstore::store::engine::{Iterable, Mutable, Peekable};
-use raftstore::store::fsm::metrics::*;
-use raftstore::store::fsm::peer::{new_admin_request, PeerFsm, PeerFsmDelegate};
-use raftstore::store::fsm::{
+use crate::import::SSTImporter;
+use crate::raftstore::store::config::Config;
+use crate::raftstore::store::engine::{Iterable, Mutable, Peekable};
+use crate::raftstore::store::fsm::metrics::*;
+use crate::raftstore::store::fsm::peer::{new_admin_request, PeerFsm, PeerFsmDelegate};
+use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
     BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
-use raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
-use raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use raftstore::store::local_metrics::RaftMetrics;
-use raftstore::store::metrics::*;
-use raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
-use raftstore::store::transport::Transport;
-use raftstore::store::worker::{
+use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
+use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use crate::raftstore::store::local_metrics::RaftMetrics;
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
+use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
     ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask, ReadTask, RegionRunner,
     RegionTask, SplitCheckRunner, SplitCheckTask,
 };
-use raftstore::store::{
+use crate::raftstore::store::{
     util, Callback, Engines, Msg, PeerMsg, SignificantMsg, SnapManager, SnapshotDeleter, StoreMsg,
     StoreTick,
 };
@@ -115,7 +115,7 @@ impl StoreMeta {
         host: &CoprocessorHost,
         reader: &Scheduler<ReadTask>,
         region: Region,
-        peer: &mut ::raftstore::store::Peer,
+        peer: &mut crate::raftstore::store::Peer,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {
@@ -219,7 +219,7 @@ impl RaftRouter {
 }
 
 // TODO: drop Sender support.
-impl ::util::transport::Sender<Msg> for RaftRouter {
+impl crate::util::transport::Sender<Msg> for RaftRouter {
     fn send(&self, msg: Msg) -> ::std::result::Result<(), TrySendError<Msg>> {
         match msg {
             Msg::PeerMsg(msg) => self.send_peer_msg(msg),
@@ -1957,8 +1957,8 @@ mod tests {
     use std::collections::HashMap;
 
     use protobuf::RepeatedField;
-    use util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
-    use util::rocksdb::CompactedEvent;
+    use crate::util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
+    use crate::util::rocksdb::CompactedEvent;
 
     use super::*;
 

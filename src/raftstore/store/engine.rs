@@ -20,10 +20,10 @@ use byteorder::{BigEndian, ByteOrder};
 use protobuf;
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
-use util::rocksdb;
+use crate::util::rocksdb;
 
-use raftstore::Error;
-use raftstore::Result;
+use crate::raftstore::Error;
+use crate::raftstore::Result;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -267,7 +267,7 @@ impl Default for IterOption {
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
-    fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
+    fn new_iterator_cf(&self, _: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>

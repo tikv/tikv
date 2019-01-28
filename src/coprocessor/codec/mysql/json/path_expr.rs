@@ -35,7 +35,7 @@
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
 
 use super::json_unquote::unquote_string;
-use coprocessor::codec::Result;
+use crate::coprocessor::codec::Result;
 use regex::Regex;
 use std::ops::Index;
 

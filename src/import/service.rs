@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use futures::Future;
-use grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
+use crate::grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 
 use super::Error;
 

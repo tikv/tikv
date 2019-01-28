@@ -17,9 +17,9 @@ use rocksdb::{
     self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
 };
 
-use util::collections::HashSet;
-use util::properties::RangeProperties;
-use util::rocksdb::engine_metrics::*;
+use crate::util::collections::HashSet;
+use crate::util::properties::RangeProperties;
+use crate::util::rocksdb::engine_metrics::*;
 
 pub struct EventListener {
     db_name: String,

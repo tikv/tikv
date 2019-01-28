@@ -23,20 +23,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use time::Timespec;
 
-use raftstore::errors::RAFTSTORE_IS_BUSY;
-use raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
-use raftstore::store::msg::Callback;
-use raftstore::store::util::{self, LeaseState, RemoteLease};
-use raftstore::store::{
+use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
+use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
+use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::util::{self, LeaseState, RemoteLease};
+use crate::raftstore::store::{
     cmd_resp, Msg as StoreMsg, Peer, PeerMsg, ReadExecutor, ReadResponse, RequestInspector,
     RequestPolicy,
 };
-use raftstore::Result;
-use util::collections::HashMap;
-use util::time::duration_to_sec;
-use util::timer::Timer;
-use util::transport::Sender;
-use util::worker::{Runnable, RunnableWithTimer};
+use crate::raftstore::Result;
+use crate::util::collections::HashMap;
+use crate::util::time::duration_to_sec;
+use crate::util::timer::Timer;
+use crate::util::transport::Sender;
+use crate::util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
@@ -616,11 +616,11 @@ mod tests {
     use tempdir::TempDir;
     use time::Duration;
 
-    use raftstore::store::util::Lease;
-    use raftstore::store::Callback;
-    use storage::ALL_CFS;
-    use util::rocksdb;
-    use util::time::monotonic_raw_now;
+    use crate::raftstore::store::util::Lease;
+    use crate::raftstore::store::Callback;
+    use crate::storage::ALL_CFS;
+    use crate::util::rocksdb;
+    use crate::util::time::monotonic_raw_now;
 
     use super::*;
 

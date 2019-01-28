@@ -34,7 +34,7 @@ quick_error! {
             description("compatible error")
             display("feature is not supported in other cluster components")
         }
-        Grpc(err: ::grpc::Error) {
+        Grpc(err: crate::grpc::Error) {
             from()
             cause(err)
             description(err.description())

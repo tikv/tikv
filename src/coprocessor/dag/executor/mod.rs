@@ -19,14 +19,14 @@ use kvproto::coprocessor::KeyRange;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use util::codec::number;
-use util::collections::HashSet;
+use crate::util::codec::number;
+use crate::util::collections::HashSet;
 
-use coprocessor::codec::datum::{self, Datum, DatumEncoder};
-use coprocessor::codec::table::{self, RowColsDict};
-use coprocessor::dag::expr::{EvalContext, EvalWarnings};
-use coprocessor::util;
-use coprocessor::*;
+use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
+use crate::coprocessor::codec::table::{self, RowColsDict};
+use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+use crate::coprocessor::util;
+use crate::coprocessor::*;
 
 mod aggregate;
 mod aggregation;

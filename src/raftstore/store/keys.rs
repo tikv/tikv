@@ -14,9 +14,9 @@
 use byteorder::{BigEndian, ByteOrder};
 
 use kvproto::metapb::Region;
-use raftstore::Result;
+use crate::raftstore::Result;
 use std::mem;
-use util::escape;
+use crate::util::escape;
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];

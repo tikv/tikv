@@ -14,7 +14,7 @@
 use futures::sync::oneshot;
 use futures::{Async, Future, IntoFuture, Poll};
 use std::boxed;
-use util::Either;
+use crate::util::Either;
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.

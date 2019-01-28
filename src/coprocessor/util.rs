@@ -14,8 +14,8 @@
 use kvproto::coprocessor as coppb;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::datum::Datum;
-use coprocessor::*;
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::*;
 
 /// A `RequestHandler` that always produces errors.
 pub struct ErrorRequestHandler {

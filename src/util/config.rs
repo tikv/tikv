@@ -25,7 +25,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
 use rocksdb::DBCompressionType;
-use util;
+use crate::util;
 
 quick_error! {
     #[derive(Debug)]

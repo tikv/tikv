@@ -21,14 +21,14 @@ use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use raft::SnapshotStatus;
-use raftstore::store::fsm::{RaftRouter, SendCh};
-use raftstore::store::{Callback, Msg as StoreMsg, PeerMsg, ReadTask, SignificantMsg, Transport};
-use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
-use server::raft_client::RaftClient;
-use server::Result;
-use util::collections::HashSet;
-use util::worker::Scheduler;
-use util::HandyRwLock;
+use crate::raftstore::store::fsm::{RaftRouter, SendCh};
+use crate::raftstore::store::{Callback, Msg as StoreMsg, PeerMsg, ReadTask, SignificantMsg, Transport};
+use crate::raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
+use crate::server::raft_client::RaftClient;
+use crate::server::Result;
+use crate::util::collections::HashSet;
+use crate::util::worker::Scheduler;
+use crate::util::HandyRwLock;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {

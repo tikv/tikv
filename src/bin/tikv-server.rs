@@ -48,8 +48,8 @@ extern crate toml;
 #[cfg(unix)]
 #[macro_use]
 mod util;
-use util::setup::*;
-use util::signal_handler;
+use crate::util::setup::*;
+use crate::util::signal_handler;
 
 use std::fs::File;
 use std::path::Path;

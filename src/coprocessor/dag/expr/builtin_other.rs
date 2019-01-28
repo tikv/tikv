@@ -14,7 +14,7 @@
 use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     #[inline]
@@ -41,11 +41,11 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::mysql::Decimal;
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
-    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::Decimal;
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
     use std::sync::Arc;
     use tipb::expression::ScalarFuncSig;
