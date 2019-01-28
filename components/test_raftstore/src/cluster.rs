@@ -17,7 +17,7 @@ use std::time::*;
 use std::{result, thread};
 
 use futures::Future;
-use rocksdb::DB;
+use ::rocksdb::DB;
 use tempdir::TempDir;
 
 use kvproto::errorpb::Error as PbError;
