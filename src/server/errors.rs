@@ -16,8 +16,8 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
-use futures::Canceled;
 use crate::grpc::Error as GrpcError;
+use futures::Canceled;
 use hyper::Error as HttpError;
 use protobuf::ProtobufError;
 

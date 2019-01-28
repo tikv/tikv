@@ -17,12 +17,12 @@ use kvproto::metapb::Region;
 use rocksdb::{SeekKey, DB};
 
 use crate::coprocessor::codec::table as table_codec;
-use kvproto::pdpb::CheckPolicy;
 use crate::raftstore::store::engine::{IterOption, Iterable};
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
 use crate::storage::CF_WRITE;
 use crate::util::escape;
+use kvproto::pdpb::CheckPolicy;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,

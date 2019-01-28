@@ -31,7 +31,6 @@ use super::engine::{
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use log_wrappers::DisplayValue;
 use crate::pd::PdClient;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::{Msg as RaftStoreMsg, StoreMsg};
@@ -41,6 +40,7 @@ use crate::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use crate::util::rocksdb::get_cf_handle;
 use crate::util::time::{duration_to_sec, SlowTimer};
 use crate::util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
+use log_wrappers::DisplayValue;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -1157,13 +1157,13 @@ impl<E: Engine> GCWorker<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::Future;
-    use kvproto::metapb;
     use crate::raftstore::store::SeekRegionFilter;
-    use std::collections::BTreeMap;
-    use std::sync::mpsc::{channel, Receiver, Sender};
     use crate::storage::engine::Result as EngineResult;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
+    use futures::Future;
+    use kvproto::metapb;
+    use std::collections::BTreeMap;
+    use std::sync::mpsc::{channel, Receiver, Sender};
 
     struct MockSafePointProvider {
         rx: Receiver<u64>,

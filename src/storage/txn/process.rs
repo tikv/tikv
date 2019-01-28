@@ -29,7 +29,9 @@ use crate::storage::{
 };
 use crate::storage::{Key, MvccInfo, Value};
 use crate::util::collections::HashMap;
-use crate::util::threadpool::{self, Context as ThreadContext, ContextFactory as ThreadContextFactory};
+use crate::util::threadpool::{
+    self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
+};
 use crate::util::time::SlowTimer;
 use crate::util::worker::{self, ScheduleError};
 

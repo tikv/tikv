@@ -325,15 +325,17 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use crate::raftstore::store::engine::IterOption;
-    use crate::storage::engine::{Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode};
+    use crate::storage::engine::{
+        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+    };
     use crate::storage::mvcc::Error as MvccError;
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::{
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
     };
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;

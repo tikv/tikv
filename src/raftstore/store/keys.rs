@@ -13,10 +13,10 @@
 
 use byteorder::{BigEndian, ByteOrder};
 
-use kvproto::metapb::Region;
 use crate::raftstore::Result;
-use std::mem;
 use crate::util::escape;
+use kvproto::metapb::Region;
+use std::mem;
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];

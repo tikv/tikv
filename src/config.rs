@@ -796,12 +796,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
+    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
-    use crate::util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where

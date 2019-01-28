@@ -28,7 +28,6 @@ use rocksdb::DB;
 
 use super::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
-use prometheus::local::LocalHistogram;
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::fsm::SendCh;
 use crate::raftstore::store::util::KeysInfoFormatter;
@@ -44,6 +43,7 @@ use crate::util::escape;
 use crate::util::rocksdb::*;
 use crate::util::time::time_now_sec;
 use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use prometheus::local::LocalHistogram;
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {

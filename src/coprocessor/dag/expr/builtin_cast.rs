@@ -734,7 +734,9 @@ mod tests {
     use chrono::Utc;
 
     use crate::coprocessor::codec::error::*;
-    use crate::coprocessor::codec::mysql::{self, charset, Decimal, Duration, Json, Time, TimeType, Tz};
+    use crate::coprocessor::codec::mysql::{
+        self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
+    };
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
     use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};

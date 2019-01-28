@@ -16,8 +16,8 @@ mod raft_client;
 
 use std::sync::Arc;
 
-use futures::Future;
 use crate::grpc::*;
+use futures::Future;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};

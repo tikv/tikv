@@ -20,11 +20,11 @@
 #![allow(dead_code)]
 
 use super::router::{BasicMailbox, Router};
+use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::cmp;
 use std::thread::{self, JoinHandle};
-use crate::util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {

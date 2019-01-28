@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use crate::raftstore::store::keys;
+use crate::raftstore::{Error, Result};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use crate::raftstore::store::keys;
-use crate::raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
@@ -983,7 +983,9 @@ mod tests {
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
     use crate::util::escape;
-    use crate::util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
+    use crate::util::properties::{
+        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    };
     use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::util::time::{monotonic_now, monotonic_raw_now};
 

@@ -22,9 +22,9 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
-use protobuf::RepeatedField;
 use ::rocksdb::rocksdb_options::WriteOptions;
 use ::rocksdb::{Writable, WriteBatch};
+use protobuf::RepeatedField;
 use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
@@ -38,9 +38,7 @@ use kvproto::raft_serverpb::{
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
-use crossbeam::channel::{TryRecvError, TrySendError};
 use crate::import::SSTImporter;
-use raft::NO_LIMIT;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
@@ -58,6 +56,8 @@ use crate::util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use crate::util::time::{duration_to_sec, Instant, SlowTimer};
 use crate::util::Either;
 use crate::util::{escape, rocksdb, MustConsumeVec};
+use crossbeam::channel::{TryRecvError, TrySendError};
+use raft::NO_LIMIT;
 
 use super::metrics::*;
 use super::{
@@ -2663,15 +2663,15 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use kvproto::metapb::{self, RegionEpoch};
-    use kvproto::raft_cmdpb::*;
-    use protobuf::Message;
     use crate::raftstore::coprocessor::*;
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use crate::raftstore::store::Config;
     use ::rocksdb::{Writable, WriteBatch, DB};
+    use kvproto::metapb::{self, RegionEpoch};
+    use kvproto::raft_cmdpb::*;
+    use protobuf::Message;
     use tempdir::TempDir;
 
     use super::*;

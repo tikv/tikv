@@ -331,8 +331,8 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
-    use tempdir::TempDir;
     use crate::util::rocksdb::new_engine;
+    use tempdir::TempDir;
 
     #[test]
     fn test_import_dir() {

@@ -273,8 +273,8 @@ impl CoprocessorHost {
 
 #[cfg(test)]
 mod tests {
-    use protobuf::RepeatedField;
     use crate::raftstore::coprocessor::*;
+    use protobuf::RepeatedField;
     use std::sync::atomic::*;
     use std::sync::*;
 

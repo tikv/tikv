@@ -48,9 +48,9 @@ impl ::std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Year => EvalType::Int,
             crate::FieldTypeTp::Float | crate::FieldTypeTp::Double => EvalType::Real,
             crate::FieldTypeTp::NewDecimal => EvalType::Decimal,
-            crate::FieldTypeTp::Timestamp | crate::FieldTypeTp::Date | crate::FieldTypeTp::DateTime => {
-                EvalType::DateTime
-            }
+            crate::FieldTypeTp::Timestamp
+            | crate::FieldTypeTp::Date
+            | crate::FieldTypeTp::DateTime => EvalType::DateTime,
             crate::FieldTypeTp::Duration => EvalType::Duration,
             crate::FieldTypeTp::JSON => EvalType::Json,
             crate::FieldTypeTp::VarChar

@@ -579,7 +579,9 @@ mod tests {
     use tipb::expression::ScalarFuncSig;
 
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, eval_func, eval_func_with, str2dec,
+    };
 
     #[test]
     fn test_abs() {

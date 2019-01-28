@@ -78,10 +78,10 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
-    use rand::{Rng, SeedableRng, StdRng};
-    use std::cmp::min;
     use crate::util::as_slice;
     use crate::util::collections::HashMap;
+    use rand::{Rng, SeedableRng, StdRng};
+    use std::cmp::min;
     use zipf::ZipfDistribution;
 
     impl CMSketch {

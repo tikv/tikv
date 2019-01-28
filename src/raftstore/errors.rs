@@ -18,10 +18,10 @@ use std::result;
 
 use protobuf::{ProtobufError, RepeatedField};
 
-use kvproto::{errorpb, metapb};
 use crate::pd;
-use raft;
 use crate::util::codec;
+use kvproto::{errorpb, metapb};
+use raft;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;

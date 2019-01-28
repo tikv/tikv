@@ -197,7 +197,9 @@ impl ScalarFunc {
 mod tests {
     use crate::coprocessor::codec::mysql::Duration;
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{check_overflow, datum_expr, scalar_func_expr, str2dec};
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, datum_expr, scalar_func_expr, str2dec,
+    };
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;

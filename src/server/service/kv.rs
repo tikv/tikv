@@ -14,11 +14,11 @@ use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{future, Future, Sink, Stream};
 use crate::grpc::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use futures::{future, Future, Sink, Stream};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};

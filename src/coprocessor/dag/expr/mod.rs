@@ -20,12 +20,12 @@ use rand::XorShiftRng;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use cop_datatype::prelude::*;
-use cop_datatype::FieldTypeFlag;
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::codec::{self, Datum};
 use crate::util::codec::number;
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -332,7 +332,9 @@ mod tests {
     use super::{Error, EvalConfig, EvalContext, Expression};
     use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
     use crate::coprocessor::codec::mysql::json::JsonEncoder;
-    use crate::coprocessor::codec::mysql::{charset, Decimal, DecimalEncoder, Duration, Json, Time};
+    use crate::coprocessor::codec::mysql::{
+        charset, Decimal, DecimalEncoder, Duration, Json, Time,
+    };
     use crate::coprocessor::codec::{mysql, Datum};
     use crate::util::codec::number::{self, NumberEncoder};
 

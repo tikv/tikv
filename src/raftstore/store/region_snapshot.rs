@@ -332,8 +332,8 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use kvproto::metapb::{Peer, Region};
     use ::rocksdb::Writable;
+    use kvproto::metapb::{Peer, Region};
     use tempdir::TempDir;
 
     use crate::raftstore::store::engine::*;

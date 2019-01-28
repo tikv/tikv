@@ -17,13 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use ::rocksdb::DB;
 use crate::storage::CF_WRITE;
 use crate::util::escape;
 use crate::util::rocksdb;
 use crate::util::rocksdb::compact_range;
 use crate::util::rocksdb::stats::get_range_entries_and_versions;
 use crate::util::worker::Runnable;
+use ::rocksdb::DB;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -260,7 +260,6 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys::data_key;
-    use rocksdb::{self, Writable, WriteBatch, DB};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
     use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -268,6 +267,7 @@ mod tests {
     use crate::util::rocksdb::new_engine;
     use crate::util::rocksdb::stats::get_range_entries_and_versions;
     use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+    use rocksdb::{self, Writable, WriteBatch, DB};
 
     use super::*;
 

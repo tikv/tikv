@@ -17,8 +17,8 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use futures::Stream;
 use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use futures::Stream;
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
@@ -228,7 +228,6 @@ mod tests {
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
     use crate::coprocessor;
-    use kvproto::raft_serverpb::RaftMessage;
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::Msg as StoreMsg;
     use crate::raftstore::store::*;
@@ -237,6 +236,7 @@ mod tests {
     use crate::storage::TestStorageBuilder;
     use crate::util::security::SecurityConfig;
     use crate::util::worker::FutureWorker;
+    use kvproto::raft_serverpb::RaftMessage;
 
     #[derive(Clone)]
     struct MockResolver {

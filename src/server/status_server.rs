@@ -102,9 +102,9 @@ impl StatusServer {
 
 #[cfg(test)]
 mod tests {
+    use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     use hyper::{Client, StatusCode, Uri};
-    use crate::server::status_server::StatusServer;
 
     #[test]
     fn test_status_service() {

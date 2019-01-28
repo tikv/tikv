@@ -31,7 +31,6 @@ use rocksdb::{
     WriteBatch, WriteOptions, DB,
 };
 
-use raft::{self, RawNode};
 use crate::raftstore::store::engine::{IterOption, Mutable};
 use crate::raftstore::store::util as raftstore_util;
 use crate::raftstore::store::{
@@ -51,6 +50,7 @@ use crate::util::properties::MvccProperties;
 use crate::util::rocksdb::get_cf_handle;
 use crate::util::rocksdb::properties::RangeProperties;
 use crate::util::worker::Worker;
+use raft::{self, RawNode};
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;

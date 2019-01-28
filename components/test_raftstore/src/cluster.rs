@@ -16,8 +16,8 @@ use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
-use futures::Future;
 use ::rocksdb::DB;
+use futures::Future;
 use tempdir::TempDir;
 
 use kvproto::errorpb::Error as PbError;

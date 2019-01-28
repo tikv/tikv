@@ -16,10 +16,10 @@ use std::mem;
 use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
 use crate::pd::PdTask;
-use prometheus::local::{LocalHistogramVec, LocalIntCounterVec};
 use crate::storage::engine::{FlowStatistics, Statistics};
 use crate::util::collections::HashMap;
 use crate::util::worker::FutureScheduler;
+use prometheus::local::{LocalHistogramVec, LocalIntCounterVec};
 
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
 pub struct CopFlowStatistics {

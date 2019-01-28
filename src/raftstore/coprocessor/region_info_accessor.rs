@@ -22,15 +22,17 @@ use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
 };
-use kvproto::metapb::Region;
-use raft::StateRole;
 use crate::raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
 use crate::raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
 use crate::storage::engine::{RegionInfoProvider, Result as EngineResult};
 use crate::util::collections::HashMap;
 use crate::util::escape;
 use crate::util::timer::Timer;
-use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+use crate::util::worker::{
+    Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker,
+};
+use kvproto::metapb::Region;
+use raft::StateRole;
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to

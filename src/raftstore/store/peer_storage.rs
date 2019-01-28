@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use ::rocksdb::{Writable, WriteBatch, DB};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -26,7 +27,6 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use ::rocksdb::{Writable, WriteBatch, DB};
 
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
@@ -1461,26 +1461,26 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::store::bootstrap;
+    use crate::raftstore::store::util::Engines;
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::worker::RegionTask;
+    use crate::storage::{ALL_CFS, CF_DEFAULT};
+    use crate::util::rocksdb::new_engine;
+    use crate::util::worker::{Scheduler, Worker};
+    use ::rocksdb::WriteBatch;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use protobuf;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
-    use crate::raftstore::store::bootstrap;
-    use crate::raftstore::store::util::Engines;
-    use crate::raftstore::store::worker::RegionRunner;
-    use crate::raftstore::store::worker::RegionTask;
-    use ::rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
-    use crate::storage::{ALL_CFS, CF_DEFAULT};
     use tempdir::*;
-    use crate::util::rocksdb::new_engine;
-    use crate::util::worker::{Scheduler, Worker};
 
     use super::*;
 

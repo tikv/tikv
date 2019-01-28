@@ -22,7 +22,9 @@ use tipb::executor::TableScan;
 use crate::storage::{Snapshot, SnapshotStore};
 
 use crate::coprocessor::codec::datum;
-use crate::coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
+use crate::coprocessor::dag::executor::{
+    Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor,
+};
 use crate::coprocessor::*;
 
 use super::cmsketch::CMSketch;

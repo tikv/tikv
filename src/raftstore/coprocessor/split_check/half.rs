@@ -19,9 +19,9 @@ use crate::util::config::ReadableSize;
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use crate::raftstore::store::util as raftstore_util;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use crate::raftstore::store::util as raftstore_util;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;

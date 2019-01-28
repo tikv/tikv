@@ -24,8 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use rocksdb::DBCompressionType;
 use crate::util;
+use rocksdb::DBCompressionType;
 
 quick_error! {
     #[derive(Debug)]

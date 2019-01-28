@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use ::rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use futures::Future;
 use kvproto::errorpb;
@@ -21,7 +22,6 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use protobuf;
 use raft::{Ready, StateRole};
-use ::rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1956,9 +1956,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
 
-    use protobuf::RepeatedField;
     use crate::util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::util::rocksdb::CompactedEvent;
+    use protobuf::RepeatedField;
 
     use super::*;
 

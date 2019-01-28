@@ -12,13 +12,13 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
-use chrono::offset::TimeZone;
-use chrono::{Datelike, Duration};
 use crate::coprocessor::codec::error::Error;
 use crate::coprocessor::codec::mysql::time::extension::DateTimeExtension;
 use crate::coprocessor::codec::mysql::time::weekmode::WeekMode;
 use crate::coprocessor::codec::mysql::{self, Duration as MyDuration, Time, TimeType};
 use crate::coprocessor::codec::Datum;
+use chrono::offset::TimeZone;
+use chrono::{Datelike, Duration};
 use std::borrow::Cow;
 
 fn handle_incorrect_datetime_error(ctx: &mut EvalContext, t: Cow<'_, Time>) -> Result<()> {
