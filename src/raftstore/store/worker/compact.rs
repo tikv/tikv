@@ -106,9 +106,9 @@ impl Runner {
     /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
-        cf_name: String,
-        start_key: Option<Vec<u8>>,
-        end_key: Option<Vec<u8>>,
+        cf_name: &str,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
     ) -> Result<(), Error> {
         let handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
         let timer = Instant::now();
@@ -145,8 +145,12 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                let cf = cf_name.clone();
-                if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
+                let cf = &cf_name;
+                if let Err(e) = self.compact_range_cf(
+                    cf,
+                    start_key.as_ref().map(Vec::as_slice),
+                    end_key.as_ref().map(Vec::as_slice),
+                ) {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -164,11 +168,7 @@ impl Runnable<Task> for Runner {
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
-                            if let Err(e) = self.compact_range_cf(
-                                cf.clone(),
-                                Some(start.clone()),
-                                Some(end.clone()),
-                            ) {
+                            if let Err(e) = self.compact_range_cf(cf, Some(&start), Some(&end)) {
                                 error!(
                                     "compact range failed";
                                     "range_start" => ::log_wrappers::Key(&start),
@@ -180,7 +180,7 @@ impl Runnable<Task> for Runner {
                         }
                     }
                 }
-                Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
+                Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
         }
     }
