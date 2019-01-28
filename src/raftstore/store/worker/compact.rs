@@ -115,8 +115,6 @@ impl Runner {
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
             .start_coarse_timer();
-        let start = start_key.as_ref().map(Vec::as_slice);
-        let end = end_key.as_ref().map(Vec::as_slice);
         compact_range(
             &self.engine,
             handle,
