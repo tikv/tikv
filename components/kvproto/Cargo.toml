@@ -1,8 +1,0 @@
-[package]
-name = "kvproto"
-version = "0.0.1"
-publish = false
-
-[dependencies.kvproto]
-git = "https://github.com/overvenus/kvproto.git"
-branch = "epoch-not-match"
