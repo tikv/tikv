@@ -86,6 +86,9 @@ impl<S: Snapshot> SnapshotStore<S> {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<StoreScanner<S>> {
+        // Check request bounds with physical bound
+        self.verify_range(&lower_bound, &upper_bound)?;
+
         let (forward_scanner, backward_scanner) = match mode {
             ScanMode::Forward => {
                 let forward_scanner =
@@ -113,6 +116,35 @@ impl<S: Snapshot> SnapshotStore<S> {
             forward_scanner,
             backward_scanner,
         })
+    }
+
+    fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
+        if let Some(ref l) = lower_bound {
+            if let Some(b) = self.snapshot.lower_bound() {
+                if !b.is_empty() && l.as_encoded().as_slice() < b {
+                    return Err(Error::InvalidReqRange {
+                        start: Some(l.as_encoded().clone()),
+                        end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        lower_bound: Some(b.to_vec()),
+                        upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
+                    });
+                }
+            }
+        }
+        if let Some(ref u) = upper_bound {
+            if let Some(b) = self.snapshot.upper_bound() {
+                if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
+                    return Err(Error::InvalidReqRange {
+                        start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        end: Some(u.as_encoded().clone()),
+                        lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
+                        upper_bound: Some(b.to_vec()),
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -163,9 +195,15 @@ impl<S: Snapshot> StoreScanner<S> {
 mod test {
     use super::SnapshotStore;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{self, Engine, RocksEngine, RocksSnapshot, TEMP_DIR};
+    use raftstore::store::engine::IterOption;
+    use storage::engine::{
+        self, Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode, TEMP_DIR,
+    };
     use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, ScanMode, Statistics, ALL_CFS};
+    use storage::{
+        CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics, Value,
+        ALL_CFS,
+    };
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -239,6 +277,89 @@ mod test {
                 IsolationLevel::SI,
                 true,
             )
+        }
+    }
+
+    // Snapshot with bound
+    #[derive(Clone, Debug)]
+    struct MockRangeSnapshot {
+        start: Vec<u8>,
+        end: Vec<u8>,
+    }
+
+    #[derive(Default)]
+    struct MockRangeSnapshotIter {}
+
+    impl Iterator for MockRangeSnapshotIter {
+        fn next(&mut self) -> bool {
+            true
+        }
+        fn prev(&mut self) -> bool {
+            true
+        }
+        fn seek(&mut self, _: &Key) -> EngineResult<bool> {
+            Ok(true)
+        }
+        fn seek_for_prev(&mut self, _: &Key) -> EngineResult<bool> {
+            Ok(true)
+        }
+        fn seek_to_first(&mut self) -> bool {
+            true
+        }
+        fn seek_to_last(&mut self) -> bool {
+            true
+        }
+        fn valid(&self) -> bool {
+            true
+        }
+        fn validate_key(&self, _: &Key) -> EngineResult<()> {
+            Ok(())
+        }
+        fn key(&self) -> &[u8] {
+            b""
+        }
+        fn value(&self) -> &[u8] {
+            b""
+        }
+    }
+
+    impl MockRangeSnapshot {
+        fn new(start: Vec<u8>, end: Vec<u8>) -> Self {
+            Self { start, end }
+        }
+    }
+
+    impl Snapshot for MockRangeSnapshot {
+        type Iter = MockRangeSnapshotIter;
+
+        fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn iter(&self, _: IterOption, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+            Ok(Cursor::new(
+                MockRangeSnapshotIter::default(),
+                ScanMode::Forward,
+            ))
+        }
+        fn iter_cf(
+            &self,
+            _: CfName,
+            _: IterOption,
+            _: ScanMode,
+        ) -> EngineResult<Cursor<Self::Iter>> {
+            Ok(Cursor::new(
+                MockRangeSnapshotIter::default(),
+                ScanMode::Forward,
+            ))
+        }
+        fn lower_bound(&self) -> Option<&[u8]> {
+            Some(self.start.as_slice())
+        }
+        fn upper_bound(&self) -> Option<&[u8]> {
+            Some(self.end.as_slice())
         }
     }
 
@@ -367,5 +488,82 @@ mod test {
             result.push(k);
         }
         assert_eq!(result, expected.into_iter().rev().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_scanner_verify_bound() {
+        // Store with a limited range
+        let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
+        let store = SnapshotStore::new(snap, 0, IsolationLevel::SI, true);
+        let bound_a = Key::from_encoded(b"a".to_vec());
+        let bound_b = Key::from_encoded(b"b".to_vec());
+        let bound_c = Key::from_encoded(b"c".to_vec());
+        let bound_d = Key::from_encoded(b"d".to_vec());
+        assert!(store.scanner(ScanMode::Forward, false, None, None).is_ok());
+        assert!(
+            store
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_ok()
+        );
+        assert!(
+            store
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_c.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_b.clone()),
+                    Some(bound_d.clone())
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_d.clone())
+                )
+                .is_err()
+        );
+
+        // Store with whole range
+        let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
+        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::SI, true);
+        assert!(store2.scanner(ScanMode::Forward, false, None, None).is_ok());
+        assert!(
+            store2
+                .scanner(ScanMode::Forward, false, Some(bound_a.clone()), None)
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(
+                    ScanMode::Forward,
+                    false,
+                    Some(bound_a.clone()),
+                    Some(bound_b.clone())
+                )
+                .is_ok()
+        );
+        assert!(
+            store2
+                .scanner(ScanMode::Forward, false, None, Some(bound_c.clone()))
+                .is_ok()
+        );
     }
 }
