@@ -299,7 +299,7 @@ mod tests {
             Ok(())
         }))
         .forget();
-        thread::sleep(time::Duration::from_millis(10));
+        thread::sleep(time::Duration::from_millis(100));
 
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());

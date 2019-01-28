@@ -116,14 +116,15 @@ mod tests {
         let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));
         let start = Instant::now();
         loop {
-            if (Instant::now() - start).as_millis() > 100 {
+            if (Instant::now() - start).as_millis() > 200 {
                 break;
             }
         }
         stats.record(Instant::now());
-        match load.load() {
-            80...100 => {}
-            e => panic!("the load must be heavy than 80, but got {}", e),
+        let cpu_usage = load.load();
+        println!("cpu_usage: {}", cpu_usage);
+        if cpu_usage < 80 || cpu_usage > 110 {
+            panic!("the load must be heavy than 80, but got {}", cpu_usage);
         }
     }
 }
