@@ -2,6 +2,11 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.3]
+- Support obtaining the monitoring information using the HTTP method [#3855](https://github.com/tikv/tikv/pull/3855)
+- Fix the NULL issue of `data_format` [#4075](https://github.com/tikv/tikv/pull/4075)
+- Add verifying the range for scan requests [#4124](https://github.com/tikv/tikv/pull/4124)
+
 ## [2.1.2]
 - Support the configuration format in the unit of `DAY` (`d`) and fix the configuration compatibility issue [#3931](https://github.com/tikv/tikv/pull/3931)
 - Fix the possible panic issue caused by `Approximate Size Split` [#3942](https://github.com/tikv/tikv/pull/3942)
