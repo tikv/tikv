@@ -120,8 +120,8 @@ impl Display for GCTask {
             } => {
                 let epoch = format!("{:?}", ctx.region_epoch.as_ref());
                 f.debug_struct("GC")
-                    .field("region", &ctx.get_region_id())
-                    .field("epoch", &epoch)
+                    .field("region_id", &ctx.get_region_id())
+                    .field("region_epoch", &epoch)
                     .field("safe_point", safe_point)
                     .finish()
             }
@@ -238,7 +238,7 @@ impl<E: Engine> GCRunner<E> {
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                 info!(
                     "GC found plenty versions for a key";
-                    "region" => ctx.get_region_id(),
+                    "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.found_versions,
                     "key" => %k
                 );
@@ -248,7 +248,7 @@ impl<E: Engine> GCRunner<E> {
             if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
                 info!(
                     "GC deleted plenty versions for a key";
-                    "region" => ctx.get_region_id(),
+                    "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.deleted_versions,
                     "key" => %k
                 );
@@ -271,7 +271,7 @@ impl<E: Engine> GCRunner<E> {
     fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
         debug!(
             "start doing GC";
-            "region" => ctx.get_region_id(),
+            "region_id" => ctx.get_region_id(),
             "safe_point" => safe_point
         );
 
@@ -281,7 +281,7 @@ impl<E: Engine> GCRunner<E> {
             let (keys, next) = self
                 .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
                 .map_err(|e| {
-                    warn!("gc scan_keys failed"; "region" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
+                    warn!("gc scan_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
                     e
                 })?;
             if keys.is_empty() {
@@ -290,7 +290,7 @@ impl<E: Engine> GCRunner<E> {
 
             // Does the GC operation on all scanned keys
             next_key = self.gc_keys(ctx, safe_point, keys, next).map_err(|e| {
-                warn!("gc gc_keys failed"; "region" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
+                warn!("gc gc_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
                 e
             })?;
             if next_key.is_none() {
@@ -300,7 +300,7 @@ impl<E: Engine> GCRunner<E> {
 
         debug!(
             "gc has finished";
-            "region" => ctx.get_region_id(),
+            "region_id" => ctx.get_region_id(),
             "safe_point" => safe_point
         );
         Ok(())
@@ -966,12 +966,12 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         // Ignore the error and continue, since it's useless to retry this.
         // TODO: Find a better way to handle errors. Maybe we should retry.
         debug!(
-            "trying gc"; "region" => ctx.get_region_id(), "epoch" => ?ctx.region_epoch.as_ref(),
+            "trying gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
             "end_key" => next_key.as_ref().map(DisplayValue)
         );
         if let Err(e) = gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
             error!(
-                "failed gc"; "region" => ctx.get_region_id(), "epoch" => ?ctx.region_epoch.as_ref(),
+                "failed gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
                 "end_key" => next_key.as_ref().map(DisplayValue),
                 "err" => ?e
             );
