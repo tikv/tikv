@@ -100,7 +100,10 @@ impl TimeZone for Tz {
         }
     }
 
-    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<<Self as TimeZone>::Offset> {
+    fn offset_from_local_datetime(
+        &self,
+        local: &NaiveDateTime,
+    ) -> LocalResult<<Self as TimeZone>::Offset> {
         match *self {
             Tz::Local(ref offset) => offset
                 .offset_from_local_datetime(local)
