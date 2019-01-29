@@ -125,7 +125,8 @@ mod tests {
         }
         stats.record(Instant::now());
         let cpu_usage = load.load();
-        if cpu_usage < 80 || cpu_usage > 100 {
+        assert!(cpu_usage < 100); // There is only 1 thread.
+        if cpu_usage < 80 {
             panic!("the load must be heavy than 80, but got {}", cpu_usage);
         }
     }
