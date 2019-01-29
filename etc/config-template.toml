@@ -242,7 +242,7 @@
 
 # Max size of rocksdb's MANIFEST file.
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
-# max-manifest-file-size = "20MB"
+# max-manifest-file-size = "128MB"
 
 # If true, the database will be created if it is missing.
 # create-if-missing = true
