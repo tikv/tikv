@@ -87,7 +87,10 @@ impl ThreadLoadStatistics {
 
         let millis = (current_instant - earlist_instant).as_millis() as usize;
         if millis > 0 {
-            let cpu_usage = calc_cpu_load(millis, earlist_cpu_usage, current_cpu_usage);
+            let mut cpu_usage = calc_cpu_load(millis, earlist_cpu_usage, current_cpu_usage);
+            if cpu_usage > self.tids.len() * 100 {
+                cpu_usage = self.tids.len() * 100;
+            }
             self.thread_load.load.store(cpu_usage, Ordering::Release);
             self.thread_load.term.fetch_add(1, Ordering::Release);
         }
@@ -122,7 +125,7 @@ mod tests {
         }
         stats.record(Instant::now());
         let cpu_usage = load.load();
-        if cpu_usage < 80 || cpu_usage > 110 {
+        if cpu_usage < 80 || cpu_usage > 100 {
             panic!("the load must be heavy than 80, but got {}", cpu_usage);
         }
     }
