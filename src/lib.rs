@@ -20,7 +20,6 @@
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
-#![feature(duration_as_u128)]
 #![feature(proc_macro_hygiene)]
 #![feature(cell_update)]
 #![recursion_limit = "200"]

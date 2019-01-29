@@ -485,7 +485,7 @@ impl ScalarFunc {
             return Ok(None);
         }
 
-        let n = n.trim_left();
+        let n = n.trim_start();
         let mut start = 0;
         let mut end = n.len();
         for (idx, c) in n.char_indices() {

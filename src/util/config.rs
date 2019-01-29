@@ -793,7 +793,7 @@ mod check_data_dir {
             Ok(path) => format!("{}", path.display()),
             Err(_) => String::from(fsname),
         };
-        let dev = device.trim_left_matches("/dev/");
+        let dev = device.trim_start_matches("/dev/");
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {

@@ -96,7 +96,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         return Err(box_err!("Invalid JSON path: {}", path_expr));
     }
 
-    let expr = path_expr.index(dollar_index + 1..).trim_left();
+    let expr = path_expr.index(dollar_index + 1..).trim_start();
 
     lazy_static! {
         static ref RE: Regex = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();
