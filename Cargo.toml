@@ -106,7 +106,6 @@ rust-crypto = "^0.2"
 base64 = "0.10"
 safemem = "0.3"
 smallvec = { version = "0.6", features = ["union"] }
-procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = "0.12"
@@ -114,8 +113,8 @@ tokio-threadpool = "0.1"
 vlog = "0.1.4"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
-tipb = { path = "components/tipb" }
-kvproto = { path = "components/kvproto" }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 
 [dependencies.murmur3]
@@ -144,6 +143,9 @@ arrow = "0.10.0"
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+
 [workspace]
 members = [
   "fuzz",
@@ -159,8 +161,6 @@ members = [
   "components/panic_hook",
   "components/cop_datatype",
   "components/log_wrappers",
-  "components/tipb",
-  "components/kvproto",
 ]
 
 [profile.dev]
