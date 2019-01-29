@@ -819,7 +819,8 @@ impl TestPdClient {
                 .unwrap();
             if (now.get_start_key() != region.get_start_key()
                 && self.get_region(region.get_start_key()).is_ok())
-                || (now.get_end_key() != region.get_end_key()
+                || (now.get_end_key() != region.get_end_key() 
+                    && !now.get_end_key().is_empty()
                     && self.get_region(now.get_end_key()).is_ok())
             {
                 assert!(
