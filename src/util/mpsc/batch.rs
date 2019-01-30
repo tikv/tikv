@@ -299,7 +299,14 @@ mod tests {
             Ok(())
         }))
         .forget();
-        thread::sleep(time::Duration::from_millis(10));
+
+        // Wait until the receiver is suspended.
+        loop {
+            thread::sleep(time::Duration::from_millis(10));
+            if !tx.state.recv_task.load(Ordering::SeqCst).is_null() {
+                break;
+            }
+        }
 
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());
