@@ -62,19 +62,20 @@ impl KVImporter {
 
         // Restrict max open engines
         if inner.engines.len() >= self.cfg.max_open_engines {
-            let errmsg = format!("Too many open engines {}: {}", uuid, inner.engines.len());
-            error!("{}", errmsg);
-            return Err(Error::ResourceTemporarilyUnavailable(errmsg));
+            error!("Too many open engines "; "uuid" => %uuid, "opened_engine_count" => %inner.engines.len());
+            return Err(Error::ResourceTemporarilyUnavailable(
+                "Too many open engines".to_string(),
+            ));
         }
 
         match self.dir.open(uuid) {
             Ok(engine) => {
-                info!("open {:?}", engine);
+                info!("open engine"; "engine" => ?engine);
                 inner.engines.insert(uuid, Arc::new(engine));
                 Ok(())
             }
             Err(e) => {
-                error!("open {}: {:?}", uuid, e);
+                error!("open engine failed"; "uuid" => %uuid, "err" => %e);
                 Err(e)
             }
         }
@@ -109,11 +110,11 @@ impl KVImporter {
 
         match engine.close() {
             Ok(_) => {
-                info!("close {:?}", engine);
+                info!("close engine"; "engine" => ?engine);
                 Ok(())
             }
             Err(e) => {
-                error!("close {:?}: {:?}", engine, e);
+                error!("close engine failed"; "engine" => ?engine, "err" => %e);
                 Err(e)
             }
         }
@@ -140,11 +141,11 @@ impl KVImporter {
 
         match res {
             Ok(_) => {
-                info!("import {}", uuid);
+                info!("import"; "uuid" => %uuid);
                 Ok(())
             }
             Err(e) => {
-                error!("import {}: {:?}", uuid, e);
+                error!("import failed"; "uuid" => %uuid, "err" => %e);
                 Err(e)
             }
         }
@@ -174,11 +175,11 @@ impl KVImporter {
 
         match self.dir.cleanup(uuid) {
             Ok(_) => {
-                info!("cleanup {}", uuid);
+                info!("cleanup"; "uuid" => %uuid);
                 Ok(())
             }
             Err(e) => {
-                error!("cleanup {}: {:?}", uuid, e);
+                error!("cleanup failed"; "uuid" => %uuid, "err" => %e);
                 Err(e)
             }
         }
@@ -314,7 +315,7 @@ impl EngineFile {
 impl Drop for EngineFile {
     fn drop(&mut self) {
         if let Err(e) = self.cleanup() {
-            warn!("cleanup {:?}: {:?}", self, e);
+            warn!("cleanup"; "engine file" => ?self, "err" => %e);
         }
     }
 }

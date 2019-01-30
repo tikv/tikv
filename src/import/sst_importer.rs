@@ -42,11 +42,11 @@ impl SSTImporter {
     pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
         match self.dir.create(meta) {
             Ok(f) => {
-                info!("create {:?}", f);
+                info!("create succ"; "file" => ?f);
                 Ok(f)
             }
             Err(e) => {
-                error!("create {:?}: {:?}", meta, e);
+                error!("create failed"; "meta" => ?meta, "err" => %e);
                 Err(e)
             }
         }
@@ -55,11 +55,11 @@ impl SSTImporter {
     pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
         match self.dir.delete(meta) {
             Ok(path) => {
-                info!("delete {:?}", path);
+                info!("delete succ"; "path" => ?path);
                 Ok(())
             }
             Err(e) => {
-                error!("delete {:?}: {:?}", meta, e);
+                error!("delete failed"; "meta" => ?meta, "err" => %e);
                 Err(e)
             }
         }
@@ -68,11 +68,11 @@ impl SSTImporter {
     pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
         match self.dir.ingest(meta, db) {
             Ok(_) => {
-                info!("ingest {:?}", meta);
+                info!("ingest succ"; "meta" => ?meta);
                 Ok(())
             }
             Err(e) => {
-                error!("ingest {:?}: {:?}", meta, e);
+                error!("ingest failed"; "meta" => ?meta, "err" => %e);
                 Err(e)
             }
         }
@@ -177,7 +177,9 @@ impl ImportDir {
             let path = e.path();
             match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => error!("{}: {:?}", path.to_str().unwrap(), e),
+                Err(e) => {
+                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e)
+                }
             }
         }
         Ok(ssts)
@@ -272,7 +274,7 @@ impl ImportFile {
 impl Drop for ImportFile {
     fn drop(&mut self) {
         if let Err(e) = self.cleanup() {
-            warn!("cleanup {:?}: {:?}", self, e);
+            warn!("cleanup failed"; "file" => ?self, "err" => %e);
         }
     }
 }

@@ -87,8 +87,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
         };
         match res {
-            Ok(_) => info!("switch mode {:?}", req.get_mode()),
-            Err(ref e) => error!("switch mode {:?}: {:?}", req.get_mode(), e),
+            Ok(_) => info!("switch mode succ"; "mode" => ?req.get_mode()),
+            Err(ref e) => error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e),
         }
 
         ctx.spawn(
@@ -217,15 +217,10 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             let res = compact_files_in_range(&engine, start, end, output_level);
             match res {
                 Ok(_) => info!(
-                    "compact files in range [{:?}, {:?}) to level {:?} takes {:?}",
-                    start,
-                    end,
-                    output_level,
-                    timer.elapsed()
+                    "compact files in range"; "start" => ?start, "end" => ?end, "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
                 Err(ref e) => error!(
-                    "compact files in range [{:?}, {:?}) to level {:?}: {:?}",
-                    start, end, output_level, e
+                    "compact files in range failed"; "start" => ?start, "end" => ?end, "output_level" => ?output_level, "err" => %e
                 ),
             }
 
