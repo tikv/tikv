@@ -113,7 +113,7 @@ impl Runner {
         let handle = box_try!(rocksdb::get_cf_handle(&self.engine, cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[&cf_name])
+            .with_label_values(&[cf_name])
             .start_coarse_timer();
         compact_range(
             &self.engine,
