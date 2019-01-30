@@ -820,9 +820,11 @@ impl TestPdClient {
             if (now.get_start_key() != region.get_start_key()
                 && self.get_region(region.get_start_key()).is_ok())
                 || (now.get_end_key() != region.get_end_key()
-                    && !now.get_end_key().is_empty()
                     && self.get_region(now.get_end_key()).is_ok())
             {
+                if now.get_end_key() != region.get_end_key() {
+                    assert!(now.get_end_key().is_empty());
+                }
                 assert!(
                     now.get_region_epoch().get_version() > region.get_region_epoch().get_version()
                 );
