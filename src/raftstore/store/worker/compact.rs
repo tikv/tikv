@@ -107,10 +107,10 @@ impl Runner {
     pub fn compact_range_cf(
         &mut self,
         cf_name: &str,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
-        let handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
+        let handle = box_try!(rocksdb::get_cf_handle(&self.engine, cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
@@ -118,16 +118,16 @@ impl Runner {
         compact_range(
             &self.engine,
             handle,
-            start,
-            end,
+            start_key,
+            end_key,
             false,
             1, /* threads */
         );
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
-            "range_start" => start.map(::log_wrappers::Key),
-            "range_end" => end.map(::log_wrappers::Key),
+            "range_start" => start_key.map(::log_wrappers::Key),
+            "range_end" => end_key.map(::log_wrappers::Key),
             "cf" => cf_name,
             "time_takes" => ?timer.elapsed(),
         );
