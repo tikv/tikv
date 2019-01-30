@@ -577,10 +577,10 @@ mod tests {
             assert_eq!(res, exp);
         }
 
-        let lhs = Duration::parse("00:00:01".as_bytes(), 6).unwrap();
+        let lhs = Duration::parse(b"00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
         assert_eq!(lhs.checked_add(&rhs), None);
-        let lhs = Duration::parse("-00:00:01".as_bytes(), 6).unwrap();
+        let lhs = Duration::parse(b"-00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
         assert_eq!(lhs.checked_sub(&rhs), None);
     }
