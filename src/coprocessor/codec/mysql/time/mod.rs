@@ -736,7 +736,6 @@ impl Time {
     pub fn checked_add(self, rhs: &MyDuration) -> Option<Time> {
         if let Some(add) = self
             .time
-            .clone()
             .checked_add_signed(Duration::nanoseconds(rhs.to_nanos()))
         {
             if add.year() > 9999 {
@@ -753,7 +752,6 @@ impl Time {
     pub fn checked_sub(self, rhs: &MyDuration) -> Option<Time> {
         if let Some(sub) = self
             .time
-            .clone()
             .checked_sub_signed(Duration::nanoseconds(rhs.to_nanos()))
         {
             if sub.year() < 0 {
