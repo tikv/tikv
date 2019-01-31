@@ -144,6 +144,7 @@ pub fn new_store_cfg() -> Config {
         raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
+        merge_check_tick_interval: ReadableDuration::millis(100),
         ..Config::default()
     }
 }
