@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 use std::borrow::Cow;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -126,9 +126,9 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
     #[test]

@@ -16,9 +16,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
 
+use ::rocksdb::{CompactionJobInfo, DB};
 use protobuf;
 use rand::Rng;
-use rocksdb::{CompactionJobInfo, DB};
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};

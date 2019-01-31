@@ -26,10 +26,10 @@ use super::mysql::{
     PathExpression, RoundMode, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::{convert, Error, Result};
-use coprocessor::dag::expr::EvalContext;
-use util::codec::bytes::{self, BytesEncoder};
-use util::codec::{number, BytesSlice};
-use util::escape;
+use crate::coprocessor::dag::expr::EvalContext;
+use crate::util::codec::bytes::{self, BytesEncoder};
+use crate::util::codec::{number, BytesSlice};
+use crate::util::escape;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;
@@ -1045,9 +1045,9 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext};
-    use util::as_slice;
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::util::as_slice;
 
     use std::cmp::Ordering;
     use std::sync::Arc;

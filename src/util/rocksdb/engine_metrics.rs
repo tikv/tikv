@@ -13,12 +13,12 @@
 
 use std::i64;
 
-use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
-use rocksdb::{
+use crate::util::rocksdb;
+use ::rocksdb::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
+use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use time;
-use util::rocksdb;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
@@ -1248,8 +1248,8 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use storage::ALL_CFS;
-    use util::rocksdb;
+    use crate::storage::ALL_CFS;
+    use crate::util::rocksdb;
 
     #[test]
     fn test_flush() {
