@@ -117,10 +117,6 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 
-[patch.'https://github.com/pingcap/kvproto.git'.kvproto]
-git = 'https://github.com/overvenus/kvproto.git'
-branch = 'epoch-not-match'
-
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
