@@ -172,23 +172,19 @@ impl Tracker {
                 super::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });
 
-            info!(
-                "[region {}] [slow-query] execute takes {:?}, wait takes {:?}, \
-                 peer: {:?}, start_ts: {:?}, table_id: {:?}, \
-                 tag: {} (desc: {:?}) \
-                 [keys: {}, hit: {}, ranges: {} ({:?}), perf: {:?}]",
-                self.req_ctx.context.get_region_id(),
-                self.total_process_time,
-                self.wait_time,
-                self.req_ctx.peer,
-                self.req_ctx.txn_start_ts,
-                some_table_id,
-                self.req_ctx.tag,
-                self.req_ctx.is_desc_scan,
-                self.total_exec_metrics.cf_stats.total_op_count(),
-                self.total_exec_metrics.cf_stats.total_processed(),
-                self.req_ctx.ranges_len,
-                self.req_ctx.first_range,
+            info!("slow-query";
+                "region_id" => self.req_ctx.context.get_region_id(),
+                "peer_id" => &self.req_ctx.peer,
+                "total_process_time" => ?self.total_process_time,
+                "wait_time" => ?self.wait_time,
+                "txn_start_ts" => self.req_ctx.txn_start_ts,
+                "table_id" => some_table_id,
+                "tag" => self.req_ctx.tag,
+                "scan_is_desc" => self.req_ctx.is_desc_scan,
+                "scan_iter_ops" => self.total_exec_metrics.cf_stats.total_op_count(),
+                "scan_iter_processed" => self.total_exec_metrics.cf_stats.total_processed(),
+                "scan_ranges" => self.req_ctx.ranges_len,
+                "scan_first_range" => self.req_ctx.first_range.as_ref().map(::log_wrappers::kvproto::coprocessor::KeyRange),
                 self.total_perf_statistics,
             );
         }

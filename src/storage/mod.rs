@@ -85,7 +85,7 @@ pub enum Mutation {
     Lock(Key),
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
+#[allow(clippy::match_same_arms)]
 impl Mutation {
     pub fn key(&self) -> &Key {
         match *self {
@@ -354,25 +354,29 @@ impl Command {
     pub fn write_bytes(&self) -> usize {
         let mut bytes = 0;
         match *self {
-            Command::Prewrite { ref mutations, .. } => for m in mutations {
-                match *m {
-                    Mutation::Put((ref key, ref value)) => {
-                        bytes += key.as_encoded().len();
-                        bytes += value.len();
-                    }
-                    Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
-                        bytes += key.as_encoded().len();
+            Command::Prewrite { ref mutations, .. } => {
+                for m in mutations {
+                    match *m {
+                        Mutation::Put((ref key, ref value)) => {
+                            bytes += key.as_encoded().len();
+                            bytes += value.len();
+                        }
+                        Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                            bytes += key.as_encoded().len();
+                        }
                     }
                 }
-            },
+            }
             Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
                 }
             }
-            Command::ResolveLock { ref key_locks, .. } => for lock in key_locks {
-                bytes += lock.0.as_encoded().len();
-            },
+            Command::ResolveLock { ref key_locks, .. } => {
+                for lock in key_locks {
+                    bytes += lock.0.as_encoded().len();
+                }
+            }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
             }
@@ -536,8 +540,7 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage referenced (reference count before operation: {})",
-            refs
+            "Storage referenced"; "original_ref" => refs
         );
 
         Self {
@@ -558,8 +561,7 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage de-referenced (reference count before operation: {})",
-            refs
+            "Storage de-referenced"; "original_ref" => refs
         );
 
         if refs != 1 {
@@ -570,17 +572,17 @@ impl<E: Engine> Drop for Storage<E> {
         // destroy the storage now.
         let mut worker = self.worker.lock().unwrap();
         if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit: {:?}", e);
+            error!("Failed to ask scheduler to quit"; "err" => ?e);
         }
 
         let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
-            error!("Failed to join sched_handle: {:?}", e);
+            error!("Failed to join sched_handle"; "err" => ?e);
         }
 
         let r = self.gc_worker.stop();
         if let Err(e) = r {
-            error!("Failed to stop gc_worker: {:?}", e);
+            error!("Failed to stop gc_worker:"; "err" => ?e);
         }
 
         info!("Storage stopped.");
@@ -824,8 +826,12 @@ impl<E: Engine> Storage<E> {
 
                     let mut scanner;
                     if !options.reverse_scan {
-                        scanner =
-                            snap_store.scanner(false, options.key_only, Some(start_key), end_key)?;
+                        scanner = snap_store.scanner(
+                            false,
+                            options.key_only,
+                            Some(start_key),
+                            end_key,
+                        )?;
                     } else {
                         scanner =
                             snap_store.scanner(true, options.key_only, end_key, Some(start_key))?;
@@ -1460,7 +1466,8 @@ impl<E: Engine> Storage<E> {
                             limit,
                             &mut statistics,
                             key_only,
-                        ).map_err(Error::from)
+                        )
+                        .map_err(Error::from)
                     } else {
                         Self::raw_scan(
                             &snapshot,
@@ -1470,7 +1477,8 @@ impl<E: Engine> Storage<E> {
                             limit,
                             &mut statistics,
                             key_only,
-                        ).map_err(Error::from)
+                        )
+                        .map_err(Error::from)
                     };
 
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
@@ -1895,7 +1903,6 @@ mod tests {
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                        ()
                     }
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -3100,8 +3107,9 @@ mod tests {
             (b"d".to_vec(), b"dd".to_vec()),
             (b"d1".to_vec(), b"dd11".to_vec()),
             (b"d2".to_vec(), b"dd22".to_vec()),
-        ].into_iter()
-            .map(|(k, v)| Some((k, v)));
+        ]
+        .into_iter()
+        .map(|(k, v)| Some((k, v)));
         expect_multi_values(
             results.clone().collect(),
             <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
@@ -3407,14 +3415,15 @@ mod tests {
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
-        ].into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::new();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
+        ]
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::new();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
         expect_multi_values(
             results,
             storage
@@ -3460,14 +3469,15 @@ mod tests {
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
-        ].into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::new();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
+        ]
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::new();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
         expect_multi_values(
             results,
             storage

@@ -234,6 +234,9 @@
 ## Use how many threads to handle log apply
 # apply-pool-size = 2
 
+## Use how many threads to handle raft messages
+# store-pool-size = 2
+
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
@@ -279,7 +282,7 @@
 
 ## Max size of RocksDB's MANIFEST file.
 ## For detailed explanation, please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
-# max-manifest-file-size = "20MB"
+# max-manifest-file-size = "128MB"
 
 ## If the value is `true`, the database will be created if it is missing.
 # create-if-missing = true

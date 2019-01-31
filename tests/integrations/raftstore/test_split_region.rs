@@ -272,7 +272,7 @@ impl Filter<RaftMessage> for EraseHeartbeatCommit {
 fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
     let region = cluster.pd_client.get_region(k).unwrap();
     let leader = cluster.leader_of_region(region.get_id()).unwrap();
-    for i in 1..region.get_peers().len() as u64 + 1 {
+    for i in 1..=region.get_peers().len() as u64 {
         let engine = cluster.get_engine(i);
         if all_committed || i == leader.get_store_id() {
             must_get_equal(&engine, k, v);
@@ -735,9 +735,7 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_key = put_till_size(cluster, 9 * item_len, &mut range);
     let target = pd_client.get_region(&max_key).unwrap();
     assert_eq!(region, target);
-    pd_client.half_split_region(target);
-    // it should be finished in millis if split.
-    thread::sleep(Duration::from_secs(1));
+    pd_client.must_half_split_region(target);
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();

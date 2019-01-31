@@ -127,11 +127,11 @@ impl Runner {
         );
         compact_range_timer.observe_duration();
         info!(
-            "compact range ({:?}, {:?}) for cf {:?} finished, takes: {:?}",
-            &start.as_ref().map(|k| escape(k)),
-            &end.as_ref().map(|k| escape(k)),
-            cf_name,
-            timer.elapsed()
+            "compact range finished";
+            "range_start" => start.map(::log_wrappers::Key),
+            "range_end" => end.map(::log_wrappers::Key),
+            "cf" => cf_name,
+            "time_takes" => ?timer.elapsed(),
         );
         Ok(())
     }
@@ -147,7 +147,7 @@ impl Runnable<Task> for Runner {
             } => {
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
-                    error!("execute compact range for cf {} failed, err {}", &cf, e);
+                    error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
             Task::CheckAndCompact {
@@ -161,20 +161,25 @@ impl Runnable<Task> for Runner {
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
             ) {
-                Ok(mut ranges) => for (start, end) in ranges.drain(..) {
-                    for cf in &cf_names {
-                        if let Err(e) = self.compact_range_cf(
-                            cf.clone(),
-                            Some(start.clone()),
-                            Some(end.clone()),
-                        ) {
-                            error!(
-                                "compact range ({:?}, {:?}) for cf {:?} failed, error {:?}",
-                                start, end, cf, e
-                            );
+                Ok(mut ranges) => {
+                    for (start, end) in ranges.drain(..) {
+                        for cf in &cf_names {
+                            if let Err(e) = self.compact_range_cf(
+                                cf.clone(),
+                                Some(start.clone()),
+                                Some(end.clone()),
+                            ) {
+                                error!(
+                                    "compact range failed";
+                                    "range_start" => ::log_wrappers::Key(&start),
+                                    "range_end" => ::log_wrappers::Key(&end),
+                                    "cf" => cf,
+                                    "err" => %e,
+                                );
+                            }
                         }
                     }
-                },
+                }
                 Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
             },
         }
@@ -388,7 +393,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
@@ -411,7 +417,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
