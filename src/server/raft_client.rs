@@ -17,9 +17,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::grpc::{
+    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
+};
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
@@ -30,9 +32,9 @@ use tokio::timer::Delay;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
-use util::collections::{HashMap, HashMapEntry};
-use util::mpsc::batch::{self, Sender as BatchSender};
-use util::security::SecurityManager;
+use crate::util::collections::{HashMap, HashMapEntry};
+use crate::util::mpsc::batch::{self, Sender as BatchSender};
+use crate::util::security::SecurityManager;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;

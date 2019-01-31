@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::Engines;
+use crate::raftstore::store::Engines;
+use crate::util::rocksdb::engine_metrics::*;
 use rocksdb::DB;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
-use util::rocksdb::engine_metrics::*;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
@@ -95,14 +95,14 @@ fn flush_metrics(db: &DB, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
+    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use crate::util::rocksdb::{self, CFOptions};
+    use ::rocksdb::{ColumnFamilyOptions, DBOptions};
     use std::path::Path;
     use std::sync::Arc;
     use std::thread::sleep;
     use std::time::Duration;
-    use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use tempdir::TempDir;
-    use util::rocksdb::{self, CFOptions};
 
     #[test]
     fn test_metrics_flusher() {

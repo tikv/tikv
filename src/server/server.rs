@@ -17,20 +17,20 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use futures::Stream;
-use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::timer::Interval;
 
-use coprocessor::Endpoint;
-use import::ImportSSTService;
-use raftstore::store::{Engines, SnapManager};
-use storage::{Engine, Storage};
-use util::security::SecurityManager;
-use util::worker::Worker;
+use crate::coprocessor::Endpoint;
+use crate::import::ImportSSTService;
+use crate::raftstore::store::{Engines, SnapManager};
+use crate::storage::{Engine, Storage};
+use crate::util::security::SecurityManager;
+use crate::util::worker::Worker;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;
@@ -227,16 +227,16 @@ mod tests {
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
     use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
-    use coprocessor;
+    use crate::coprocessor;
+    use crate::raftstore::store::transport::Transport;
+    use crate::raftstore::store::Msg as StoreMsg;
+    use crate::raftstore::store::*;
+    use crate::raftstore::Result as RaftStoreResult;
+    use crate::server::readpool::{self, ReadPool};
+    use crate::storage::TestStorageBuilder;
+    use crate::util::security::SecurityConfig;
+    use crate::util::worker::FutureWorker;
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::store::transport::Transport;
-    use raftstore::store::Msg as StoreMsg;
-    use raftstore::store::*;
-    use raftstore::Result as RaftStoreResult;
-    use server::readpool::{self, ReadPool};
-    use storage::TestStorageBuilder;
-    use util::security::SecurityConfig;
-    use util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {

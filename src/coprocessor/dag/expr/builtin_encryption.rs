@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 use crypto::{
     digest::Digest,
     md5::Md5,
@@ -179,9 +179,9 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{datum_expr, eval_func, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{datum_expr, eval_func, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use hex;
     use tipb::expression::ScalarFuncSig;
 

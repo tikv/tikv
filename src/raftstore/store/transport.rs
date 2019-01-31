@@ -13,7 +13,7 @@
 
 use kvproto::raft_serverpb::RaftMessage;
 
-use raftstore::Result;
+use crate::raftstore::Result;
 
 /// Transports messages between different Raft peers.
 pub trait Transport: Send + Clone {
