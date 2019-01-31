@@ -19,21 +19,21 @@ use std::sync::{Arc, Mutex};
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
-use raftstore::store::engine::{IterOption, Peekable};
-use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::raftstore::store::engine::{IterOption, Peekable};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use ::rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 
-use util::escape;
-use util::rocksdb;
-use util::rocksdb::CFOptions;
-use util::worker::{Runnable, Scheduler, Worker};
+use crate::util::escape;
+use crate::util::rocksdb;
+use crate::util::rocksdb::CFOptions;
+use crate::util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
     ScanMode, Snapshot,
 };
 
-pub use raftstore::store::engine::SyncSnapshot as RocksSnapshot;
+pub use crate::raftstore::store::engine::SyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -177,8 +177,8 @@ impl TestEngineBuilder {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
-        let cfs = self.cfs.unwrap_or_else(|| ::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = ::config::DbConfig::default();
+        let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
+        let cfg_rocksdb = crate::config::DbConfig::default();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {

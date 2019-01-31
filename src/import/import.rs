@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use pd::RegionInfo;
+use crate::pd::RegionInfo;
 
 use super::client::*;
 use super::common::*;

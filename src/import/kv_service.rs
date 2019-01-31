@@ -13,17 +13,17 @@
 
 use std::sync::Arc;
 
+use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::sync::mpsc;
 use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_kvpb::*;
 use kvproto::import_kvpb_grpc::*;
 use uuid::Uuid;
 
-use raftstore::store::keys;
-use storage::types::Key;
-use util::time::Instant;
+use crate::raftstore::store::keys;
+use crate::storage::types::Key;
+use crate::util::time::Instant;
 
 use super::client::*;
 use super::metrics::*;

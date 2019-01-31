@@ -15,11 +15,11 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::engine::SEEK_BOUND;
-use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::Result;
-use storage::{Cursor, CursorBuilder, Key, Lock, Snapshot, Statistics, Value};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::engine::SEEK_BOUND;
+use crate::storage::mvcc::write::{Write, WriteType};
+use crate::storage::mvcc::Result;
+use crate::storage::{Cursor, CursorBuilder, Key, Lock, Snapshot, Statistics, Value};
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::util::CheckLockResult;
 
@@ -476,8 +476,8 @@ impl<S: Snapshot> ForwardScanner<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::mvcc::tests::*;
-    use storage::{Engine, Key, TestEngineBuilder};
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::{Engine, Key, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 

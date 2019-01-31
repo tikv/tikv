@@ -13,12 +13,12 @@
 
 use kvproto::kvrpcpb;
 
-use storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
-use util::futurepool;
-use util::time::{self, Duration, Instant};
+use crate::storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
+use crate::util::futurepool;
+use crate::util::time::{self, Duration, Instant};
 
-use coprocessor::dag::executor::ExecutorMetrics;
-use coprocessor::*;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::*;
 
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.

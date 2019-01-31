@@ -76,12 +76,12 @@ impl CMSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::datum;
-    use coprocessor::codec::datum::Datum;
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::util::as_slice;
+    use crate::util::collections::HashMap;
     use rand::{Rng, SeedableRng, StdRng};
     use std::cmp::min;
-    use util::as_slice;
-    use util::collections::HashMap;
     use zipf::ZipfDistribution;
 
     impl CMSketch {

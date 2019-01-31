@@ -35,34 +35,34 @@ use raft::eraftpb::ConfChangeType;
 use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use pd::{PdClient, PdTask};
-use raftstore::{Error, Result};
-use storage::CF_RAFT;
-use util::mpsc::{self, LooseBoundedSender, Receiver};
-use util::time::duration_to_sec;
-use util::worker::{Scheduler, Stopped};
-use util::{escape, is_zero_duration};
+use crate::pd::{PdClient, PdTask};
+use crate::raftstore::{Error, Result};
+use crate::storage::CF_RAFT;
+use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
+use crate::util::time::duration_to_sec;
+use crate::util::worker::{Scheduler, Stopped};
+use crate::util::{escape, is_zero_duration};
 
-use raftstore::coprocessor::RegionChangeEvent;
-use raftstore::store::cmd_resp::{bind_term, new_error};
-use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
-use raftstore::store::fsm::store::{PollContext, StoreMeta};
-use raftstore::store::fsm::{
+use crate::raftstore::coprocessor::RegionChangeEvent;
+use crate::raftstore::store::cmd_resp::{bind_term, new_error};
+use crate::raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
+use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
+use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
     RegionProposal,
 };
-use raftstore::store::keys::{self, enc_end_key, enc_start_key};
-use raftstore::store::metrics::*;
-use raftstore::store::msg::Callback;
-use raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
-use raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
-use raftstore::store::transport::Transport;
-use raftstore::store::util::KeysInfoFormatter;
-use raftstore::store::worker::{
+use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
+use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
+use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
-use raftstore::store::Engines;
-use raftstore::store::{
+use crate::raftstore::store::Engines;
+use crate::raftstore::store::{
     util, Config, PeerMsg, PeerTick, SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
 };
 

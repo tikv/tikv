@@ -16,9 +16,9 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::grpc::{CallOption, EnvBuilder, WriteFlags};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
-use grpc::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use protobuf::RepeatedField;
@@ -26,10 +26,10 @@ use protobuf::RepeatedField;
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use pd::{Config, PdFuture};
-use util::security::SecurityManager;
-use util::time::{duration_to_sec, time_now_sec};
-use util::{Either, HandyRwLock};
+use crate::pd::{Config, PdFuture};
+use crate::util::security::SecurityManager;
+use crate::util::time::{duration_to_sec, time_now_sec};
+use crate::util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
