@@ -269,14 +269,12 @@ fn test_node_merge_multiple_snapshots_together() {
     test_node_merge_multiple_snapshots(true)
 }
 
-// To be fixed
-//
 // Test if a merge handled properly when there are two different snapshots of one region arrive
 // in different raftstore tick.
-// #[test]
-// fn test_node_merge_multiple_snapshots_not_together() {
-//     test_node_merge_multiple_snapshots(false)
-// }
+#[test]
+fn test_node_merge_multiple_snapshots_not_together() {
+    test_node_merge_multiple_snapshots(false)
+}
 
 fn test_node_merge_multiple_snapshots(together: bool) {
     let _guard = crate::setup();

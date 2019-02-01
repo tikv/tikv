@@ -486,6 +486,9 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm>]) {
+        // Only enable the fail point when the store id is equal to 3, which is
+        // the id of slow store in tests.
+        fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         if !self.pending_proposals.is_empty() {
             for prop in self.pending_proposals.drain(..) {
                 self.poll_ctx
