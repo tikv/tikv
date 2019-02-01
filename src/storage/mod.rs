@@ -80,9 +80,10 @@ pub fn is_short_value(value: &[u8]) -> bool {
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
-    Put((Key, Value, bool /*should not exist*/)),
+    Put((Key, Value)),
     Delete(Key),
     Lock(Key),
+    Insert((Key, Value)), // has a constraint that key should not exist.
 }
 
 #[allow(clippy::match_same_arms)]

@@ -8,4 +8,4 @@ publish = false
 slog = "2.3"
 slog-term = "2.4"
 hex = "0.3"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/zhangjinpeng1987/kvproto.git", branch="insert-update" }

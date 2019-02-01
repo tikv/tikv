@@ -32,7 +32,7 @@ const FLAG_LOCK: u8 = b'L';
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
         match *mutation {
-            Mutation::Put(_) => LockType::Put,
+            Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
             Mutation::Delete(_) => LockType::Delete,
             Mutation::Lock(_) => LockType::Lock,
         }

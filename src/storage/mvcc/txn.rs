@@ -151,9 +151,10 @@ impl<S: Snapshot> MvccTxn<S> {
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
         let (key, value, should_not_exist) = match mutation {
-            Mutation::Put((key, value, should_not_exist)) => (key, Some(value), should_not_exist),
+            Mutation::Put((key, value)) => (key, Some(value), false),
             Mutation::Delete(key) => (key, None, false),
             Mutation::Lock(key) => (key, None, false),
+            Mutation::Insert((key, value)) => (key, Some(value), true),
         };
 
         {
