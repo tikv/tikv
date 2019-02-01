@@ -440,7 +440,7 @@ fn main() {
     overwrite_config_with_cmd_args(&mut config, &matches);
 
     if let Err(e) = check_and_persist_critical_config(&config) {
-        fatal!("check critical config failed, error {:?}", e);
+        fatal!("critical config check failed: {}", e);
     }
 
     // Sets the global logger ASAP.
@@ -450,11 +450,11 @@ fn main() {
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     // Print version information.
-    util::print_tikv_info();
+    util::log_tikv_info();
 
     config.compatible_adjust();
     if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {:?}", e);
+        fatal!("invalid configuration: {}", e.description());
     }
     info!(
         "using config";
@@ -468,13 +468,13 @@ fn main() {
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
-            .unwrap_or_else(|e| fatal!("failed to create security manager: {:?}", e)),
+            .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
     );
     let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
-        .unwrap_or_else(|e| fatal!("failed to create rpc client: {:?}", e));
+        .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
     let cluster_id = pd_client
         .get_cluster_id()
-        .unwrap_or_else(|e| fatal!("failed to get cluster id: {:?}", e));
+        .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
     if cluster_id == DEFAULT_CLUSTER_ID {
         fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
     }
