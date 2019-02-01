@@ -1525,7 +1525,7 @@ mod tests {
             .map(|key| {
                 let mut value = b"value-".to_vec();
                 value.extend_from_slice(key);
-                Mutation::Put((Key::from_raw(key), value, false))
+                Mutation::Put((Key::from_raw(key), value))
             })
             .collect();
         let primary = init_keys[0].clone();

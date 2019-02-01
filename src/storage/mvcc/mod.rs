@@ -181,28 +181,37 @@ pub mod tests {
         assert!(reader.get(&Key::from_raw(key), ts).is_err());
     }
 
-    pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
-        try_prewrite_put(engine, key, value, pk, ts, false).unwrap();
-    }
-
-    pub fn try_prewrite_put<E: Engine>(
+    // Insert has a constraint that key should not exist
+    pub fn try_prewrite_insert<E: Engine>(
         engine: &E,
         key: &[u8],
         value: &[u8],
         pk: &[u8],
         ts: u64,
-        should_not_exist: bool,
     ) -> Result<()> {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         txn.prewrite(
-            Mutation::Put((Key::from_raw(key), value.to_vec(), should_not_exist)),
+            Mutation::Insert((Key::from_raw(key), value.to_vec())),
             pk,
             &Options::default(),
         )?;
         write(engine, &ctx, txn.into_modifies());
         Ok(())
+    }
+
+    pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        txn.prewrite(
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            pk,
+            &Options::default(),
+        )
+        .unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     pub fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {

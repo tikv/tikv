@@ -100,7 +100,7 @@ fn test_scheduler_leader_change_twice() {
     storage0
         .async_prewrite(
             ctx0,
-            vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec(), false))],
+            vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
             b"k".to_vec(),
             10,
             Options::default(),

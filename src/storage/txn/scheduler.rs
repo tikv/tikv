@@ -533,7 +533,7 @@ mod tests {
         let write_cmds = vec![
             Command::Prewrite {
                 ctx: Context::new(),
-                mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec(), false))],
+                mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),

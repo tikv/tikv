@@ -41,7 +41,7 @@ fn test_raft_storage() {
     storage
         .prewrite(
             ctx.clone(),
-            vec![Mutation::Put((key.clone(), b"value".to_vec(), false))],
+            vec![Mutation::Put((key.clone(), b"value".to_vec()))],
             b"key".to_vec(),
             10,
         )
@@ -107,11 +107,7 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_ok());
     let ret = storage.prewrite(
         ctx.clone(),
-        vec![Mutation::Put((
-            Key::from_raw(b"key"),
-            b"value".to_vec(),
-            false,
-        ))],
+        vec![Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()))],
         b"key".to_vec(),
         10,
     );
@@ -134,7 +130,7 @@ fn test_raft_storage_store_not_match() {
     storage
         .prewrite(
             ctx.clone(),
-            vec![Mutation::Put((key.clone(), b"value".to_vec(), false))],
+            vec![Mutation::Put((key.clone(), b"value".to_vec()))],
             b"key".to_vec(),
             10,
         )
@@ -218,7 +214,7 @@ fn write_test_data<E: Engine>(
         storage
             .prewrite(
                 ctx.clone(),
-                vec![Mutation::Put((Key::from_raw(k), v.to_vec(), false))],
+                vec![Mutation::Put((Key::from_raw(k), v.to_vec()))],
                 k.to_vec(),
                 ts,
             )

@@ -30,12 +30,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 KvGenerator::new(config.key_length, config.value_length)
                     .generate(DEFAULT_ITERATIONS)
                     .iter()
-                    .map(|(k, v)| {
-                        (
-                            Mutation::Put((Key::from_raw(&k), v.clone(), false)),
-                            k.clone(),
-                        )
-                    })
+                    .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
                     .collect();
             (mutations, &option)
         },
@@ -63,7 +58,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
                 .generate(DEFAULT_ITERATIONS);
             for (k, v) in &kvs {
                 txn.prewrite(
-                    Mutation::Put((Key::from_raw(&k), v.clone(), false)),
+                    Mutation::Put((Key::from_raw(&k), v.clone())),
                     &k.clone(),
                     &option,
                 )

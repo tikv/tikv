@@ -33,12 +33,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
             )
             .generate(DEFAULT_ITERATIONS)
             .iter()
-            .map(|(k, v)| {
-                (
-                    Mutation::Put((Key::from_raw(&k), v.clone(), false)),
-                    k.clone(),
-                )
-            })
+            .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
             .collect();
             let snapshot = engine.snapshot(&ctx).unwrap();
             (mutations, snapshot, &option)
@@ -69,7 +64,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
             .generate(DEFAULT_ITERATIONS);
             for (k, v) in &kvs {
                 txn.prewrite(
-                    Mutation::Put((Key::from_raw(&k), v.clone(), false)),
+                    Mutation::Put((Key::from_raw(&k), v.clone())),
                     &k.clone(),
                     &option,
                 )

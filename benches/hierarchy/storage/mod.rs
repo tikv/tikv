@@ -55,7 +55,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
                 .map(|(k, v)| {
                     (
                         Context::new(),
-                        vec![Mutation::Put((Key::from_raw(&k), v.clone(), false))],
+                        vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
                         k.clone(),
                     )
                 })
@@ -82,7 +82,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
                 store
                     .prewrite(
                         Context::new(),
-                        vec![Mutation::Put((Key::from_raw(&k), v.clone(), false))],
+                        vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
                         k.clone(),
                         1,
                     )

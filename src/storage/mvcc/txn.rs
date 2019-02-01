@@ -459,29 +459,40 @@ mod tests {
     }
 
     #[test]
-    fn test_mvcc_txn_prewrite_check_exist() {
+    fn test_mvcc_txn_prewrite_insert() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let (k1, v1, v2, v3) = (b"k1", b"v1", b"v2", b"v3");
-        // "k1" is not exist, so prewrite success.
-        try_prewrite_put(&engine, k1, v1, k1, 1, true).unwrap();
+        must_prewrite_put(&engine, k1, v1, k1, 1);
         must_commit(&engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_put(&engine, k1, v2, k1, 3, true).is_err());
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 3).is_err());
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
         must_commit(&engine, k1, 4, 5);
 
-        // After delete "k1", prewrite returns ok.
-        assert!(try_prewrite_put(&engine, k1, v2, k1, 6, true).is_ok());
+        // After delete "k1", insert returns ok.
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 6).is_ok());
         must_commit(&engine, k1, 6, 7);
 
         // Rollback
         must_prewrite_put(&engine, k1, v3, k1, 8);
         must_rollback(&engine, k1, 8);
 
-        assert!(try_prewrite_put(&engine, k1, v3, k1, 9, true).is_err())
+        assert!(try_prewrite_insert(&engine, k1, v3, k1, 9).is_err());
+
+        // Delete "k1" again
+        must_prewrite_delete(&engine, k1, k1, 10);
+        must_commit(&engine, k1, 10, 11);
+
+        // Rollback again
+        must_prewrite_put(&engine, k1, v3, k1, 12);
+        must_rollback(&engine, k1, 12);
+
+        // After delete "k1", insert returns ok.
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 13).is_ok());
+        must_commit(&engine, k1, 13, 14);
     }
 
     #[test]
@@ -783,7 +794,7 @@ mod tests {
         assert_eq!(txn.write_size, 0);
 
         txn.prewrite(
-            Mutation::Put((key.clone(), v.to_vec(), false)),
+            Mutation::Put((key.clone(), v.to_vec())),
             pk,
             &Options::default(),
         )
@@ -819,7 +830,7 @@ mod tests {
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         assert!(txn
             .prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
+                Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
                 &Options::default()
             )
@@ -832,7 +843,7 @@ mod tests {
         opt.skip_constraint_check = true;
         assert!(txn
             .prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec(), false)),
+                Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
                 &opt
             )

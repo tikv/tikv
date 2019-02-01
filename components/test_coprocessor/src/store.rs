@@ -141,7 +141,7 @@ impl<E: Engine> Store<E> {
         let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
-            .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v, false)))
+            .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
             .collect();
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
