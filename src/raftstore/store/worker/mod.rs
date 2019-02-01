@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore;
-use raftstore::store::fsm::SendCh;
-use raftstore::store::msg::Msg;
+use crate::raftstore;
+use crate::raftstore::store::fsm::SendCh;
+use crate::raftstore::store::msg::Msg;
 use std::sync::mpsc::Sender;
 
 pub trait MsgSender {

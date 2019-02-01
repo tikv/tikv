@@ -23,7 +23,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::Callback;
 
 fn stale_read_during_splitting(right_derive: bool) {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
@@ -224,7 +224,7 @@ fn test_node_stale_read_during_splitting_right_derive() {
 
 #[test]
 fn test_stale_read_during_merging() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     let count = 3;
     let mut cluster = new_node_cluster(0, count);

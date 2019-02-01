@@ -18,7 +18,7 @@ use futures::{stream, Future, Stream};
 use tempdir::TempDir;
 use uuid::Uuid;
 
-use grpc::{ChannelBuilder, Environment, Result, WriteFlags};
+use crate::grpc::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::import_kvpb::*;
 use kvproto::import_kvpb_grpc::*;
 

@@ -16,15 +16,15 @@ use std::fmt::{self, Display, Formatter};
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 
+use crate::raftstore::store::engine::{Iterable, Peekable, Snapshot};
+use crate::raftstore::store::{keys, Msg, PeerMsg};
+use crate::storage::CF_RAFT;
+use crate::util::worker::Runnable;
 use kvproto::metapb::Region;
-use raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use raftstore::store::{keys, Msg, PeerMsg};
-use storage::CF_RAFT;
-use util::worker::Runnable;
 
 use super::metrics::*;
 use super::MsgSender;
-use raftstore::store::metrics::*;
+use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
 pub enum Task {
@@ -156,18 +156,18 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raftstore::store::engine::Snapshot;
+    use crate::raftstore::store::{keys, Msg};
+    use crate::storage::{CF_DEFAULT, CF_RAFT};
+    use crate::util::rocksdb::new_engine;
+    use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
-    use raftstore::store::engine::Snapshot;
-    use raftstore::store::{keys, Msg};
     use rocksdb::Writable;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
-    use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
-    use util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {

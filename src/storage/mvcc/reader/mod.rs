@@ -18,12 +18,12 @@ mod util;
 use super::lock::{Lock, LockType};
 use super::write::{Write, WriteType};
 use super::{Error, Result};
+use crate::raftstore::store::engine::IterOption;
+use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::{Key, Value, CF_LOCK, CF_WRITE};
+use crate::util::properties::MvccProperties;
 use kvproto::kvrpcpb::IsolationLevel;
-use raftstore::store::engine::IterOption;
 use std::u64;
-use storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
-use storage::{Key, Value, CF_LOCK, CF_WRITE};
-use util::properties::MvccProperties;
 
 pub use self::backward_scanner::{BackwardScanner, BackwardScannerBuilder};
 pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
@@ -491,20 +491,20 @@ impl<S: Snapshot> MvccReader<S> {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::store::keys;
+    use crate::raftstore::store::RegionSnapshot;
+    use crate::storage::engine::Modify;
+    use crate::storage::mvcc::write::WriteType;
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
+    use crate::util::rocksdb::{self as rocksdb_util, CFOptions};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use raftstore::store::keys;
-    use raftstore::store::RegionSnapshot;
     use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;
-    use storage::engine::Modify;
-    use storage::mvcc::write::WriteType;
-    use storage::mvcc::{MvccReader, MvccTxn};
-    use storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
-    use util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
-    use util::rocksdb::{self as rocksdb_util, CFOptions};
 
     struct RegionEngine {
         db: Arc<DB>,
