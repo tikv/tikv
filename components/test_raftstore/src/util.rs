@@ -16,9 +16,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
 
+use ::rocksdb::{CompactionJobInfo, DB};
 use protobuf;
 use rand::Rng;
-use rocksdb::{CompactionJobInfo, DB};
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -144,6 +144,7 @@ pub fn new_store_cfg() -> Config {
         raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
+        merge_check_tick_interval: ReadableDuration::millis(100),
         ..Config::default()
     }
 }

@@ -23,14 +23,14 @@ pub use self::reader::{BackwardScanner, BackwardScannerBuilder};
 pub use self::reader::{ForwardScanner, ForwardScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
+use crate::util::escape;
 use std::error;
 use std::io;
-use util::escape;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Engine(err: ::storage::engine::Error) {
+        Engine(err: crate::storage::engine::Error) {
             from()
             cause(err)
             description(err.description())
@@ -40,7 +40,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: ::util::codec::Error) {
+        Codec(err: crate::util::codec::Error) {
             from()
             cause(err)
             description(err.description())
@@ -136,8 +136,8 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use storage::CF_WRITE;
-    use storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
+    use crate::storage::CF_WRITE;
+    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
 
     use super::*;
 

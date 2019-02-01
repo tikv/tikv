@@ -62,6 +62,8 @@ extern crate num;
 extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
+#[cfg(target_os = "linux")]
+extern crate procinfo;
 extern crate prometheus_static_metric;
 extern crate protobuf;
 #[macro_use]
@@ -139,4 +141,4 @@ pub mod raftstore;
 pub mod server;
 pub mod storage;
 
-pub use storage::Storage;
+pub use crate::storage::Storage;

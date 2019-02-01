@@ -1,7 +1,0 @@
-[package]
-name = "tipb"
-version = "0.0.1"
-publish = false
-
-[dependencies]
-tipb = { git = "https://github.com/pingcap/tipb.git" }

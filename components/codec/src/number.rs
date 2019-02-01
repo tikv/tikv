@@ -1552,7 +1552,7 @@ mod tests {
 
                 // Buffer decode with insufficient space
                 for buf_len in 0..len {
-                    let mut payload: Vec<u8> = base_buf[0..buf_len].to_vec();
+                    let payload: Vec<u8> = base_buf[0..buf_len].to_vec();
 
                     // Starting from any position in the buffer
                     for pos in 0usize..buf_len {
@@ -1640,7 +1640,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use byteorder;
     use protobuf::CodedOutputStream;

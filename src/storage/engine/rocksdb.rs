@@ -19,21 +19,21 @@ use std::sync::{Arc, Mutex};
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
-use raftstore::store::engine::{IterOption, Peekable};
-use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::raftstore::store::engine::{IterOption, Peekable};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use ::rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 
-use util::escape;
-use util::rocksdb;
-use util::rocksdb::CFOptions;
-use util::worker::{Runnable, Scheduler, Worker};
+use crate::util::escape;
+use crate::util::rocksdb;
+use crate::util::rocksdb::CFOptions;
+use crate::util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
     ScanMode, Snapshot,
 };
 
-pub use raftstore::store::engine::SyncSnapshot as RocksSnapshot;
+pub use crate::raftstore::store::engine::SyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -92,7 +92,7 @@ impl RocksEngine {
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions>>,
     ) -> Result<RocksEngine> {
-        info!("RocksEngine: creating for path {}", path);
+        info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
             TEMP_DIR => {
                 let td = TempDir::new("temp-rocksdb").unwrap();
@@ -177,8 +177,8 @@ impl TestEngineBuilder {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
-        let cfs = self.cfs.unwrap_or_else(|| ::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = ::config::DbConfig::default();
+        let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
+        let cfg_rocksdb = crate::config::DbConfig::default();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
@@ -199,30 +199,30 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
         let res = match rev {
             Modify::Delete(cf, k) => {
                 if cf == CF_DEFAULT {
-                    trace!("RocksEngine: delete {}", k);
+                    trace!("RocksEngine: delete"; "key" => %k);
                     wb.delete(k.as_encoded())
                 } else {
-                    trace!("RocksEngine: delete_cf {} {}", cf, k);
+                    trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
                     let handle = rocksdb::get_cf_handle(db, cf)?;
                     wb.delete_cf(handle, k.as_encoded())
                 }
             }
             Modify::Put(cf, k, v) => {
                 if cf == CF_DEFAULT {
-                    trace!("RocksEngine: put {},{}", k, escape(&v));
+                    trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
                     wb.put(k.as_encoded(), &v)
                 } else {
-                    trace!("RocksEngine: put_cf {}, {}, {}", cf, k, escape(&v));
+                    trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
                     let handle = rocksdb::get_cf_handle(db, cf)?;
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
             Modify::DeleteRange(cf, start_key, end_key) => {
                 trace!(
-                    "RocksEngine: delete_range_cf {}, {}, {}",
-                    cf,
-                    escape(start_key.as_encoded()),
-                    escape(end_key.as_encoded())
+                    "RocksEngine: delete_range_cf";
+                    "cf" => cf,
+                    "start_key" => %start_key,
+                    "end_key" => %end_key
                 );
                 let handle = rocksdb::get_cf_handle(db, cf)?;
                 wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
@@ -259,13 +259,13 @@ impl Snapshot for RocksSnapshot {
     type Iter = DBIterator<Arc<DB>>;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
-        trace!("RocksSnapshot: get {}", key);
+        trace!("RocksSnapshot: get"; "key" => %key);
         let v = box_try!(self.get_value(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        trace!("RocksSnapshot: get_cf {} {}", cf, key);
+        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
         let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }

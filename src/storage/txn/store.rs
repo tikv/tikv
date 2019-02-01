@@ -13,11 +13,11 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::mvcc::{
+use crate::storage::mvcc::{
     BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
 };
-use storage::mvcc::{Error as MvccError, MvccReader};
-use storage::{Key, KvPair, Snapshot, Statistics, Value};
+use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
@@ -325,15 +325,17 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use raftstore::store::engine::IterOption;
-    use storage::engine::{Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode};
-    use storage::mvcc::Error as MvccError;
-    use storage::mvcc::MvccTxn;
-    use storage::{
+    use crate::raftstore::store::engine::IterOption;
+    use crate::storage::engine::{
+        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+    };
+    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::mvcc::MvccTxn;
+    use crate::storage::{
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
     };
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -947,13 +949,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use rand::{self, Rng};
     use std::collections::BTreeMap;
 
     use super::{FixtureStore, Scanner, Store};
-    use storage::{Key, Statistics};
+    use crate::storage::{Key, Statistics};
 
     fn gen_payload(n: usize) -> Vec<u8> {
         let mut data = vec![0; n];

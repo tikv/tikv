@@ -34,12 +34,12 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
 use rocksdb::DB;
 
-use raftstore::store::engine::IterOption;
-use server::readpool::{self, ReadPool};
-use server::ServerRaftStoreRouter;
-use util;
-use util::collections::HashMap;
-use util::worker::{self, Builder, ScheduleError, Worker};
+use crate::raftstore::store::engine::IterOption;
+use crate::server::readpool::{self, ReadPool};
+use crate::server::ServerRaftStoreRouter;
+use crate::util;
+use crate::util::collections::HashMap;
+use crate::util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -474,7 +474,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        use util::worker::FutureWorker;
+        use crate::util::worker::FutureWorker;
 
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
@@ -540,8 +540,7 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage referenced (reference count before operation: {})",
-            refs
+            "Storage referenced"; "original_ref" => refs
         );
 
         Self {
@@ -562,8 +561,7 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage de-referenced (reference count before operation: {})",
-            refs
+            "Storage de-referenced"; "original_ref" => refs
         );
 
         if refs != 1 {
@@ -574,17 +572,17 @@ impl<E: Engine> Drop for Storage<E> {
         // destroy the storage now.
         let mut worker = self.worker.lock().unwrap();
         if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit: {:?}", e);
+            error!("Failed to ask scheduler to quit"; "err" => ?e);
         }
 
         let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
-            error!("Failed to join sched_handle: {:?}", e);
+            error!("Failed to join sched_handle"; "err" => ?e);
         }
 
         let r = self.gc_worker.stop();
         if let Err(e) = r {
-            error!("Failed to stop gc_worker: {:?}", e);
+            error!("Failed to stop gc_worker:"; "err" => ?e);
         }
 
         info!("Storage stopped.");
@@ -1766,9 +1764,9 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::config::ReadableSize;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
-    use util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
@@ -3697,7 +3695,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock() {
-        use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
+        use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();

@@ -20,8 +20,8 @@ use tipb::expression::ScalarFuncSig;
 
 use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
@@ -1058,7 +1058,7 @@ dispatch_call! {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::dag::expr::{Error, ScalarFunc};
+    use crate::coprocessor::dag::expr::{Error, ScalarFunc};
     use std::usize;
     use tipb::expression::ScalarFuncSig;
 

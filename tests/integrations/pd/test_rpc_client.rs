@@ -16,9 +16,9 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
+use crate::grpc::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
-use grpc::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
@@ -203,11 +203,11 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
 
 #[test]
 fn test_retry_async() {
-    let async = |client: &RpcClient| {
+    let r#async = |client: &RpcClient| {
         let region = client.get_region_by_id(1);
         region.wait().unwrap();
     };
-    test_retry(async);
+    test_retry(r#async);
 }
 
 #[test]
@@ -232,11 +232,11 @@ fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
 
 #[test]
 fn test_not_retry_async() {
-    let async = |client: &RpcClient| {
+    let r#async = |client: &RpcClient| {
         let region = client.get_region_by_id(1);
         region.wait().unwrap_err();
     };
-    test_not_retry(async);
+    test_not_retry(r#async);
 }
 
 #[test]

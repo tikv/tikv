@@ -735,9 +735,7 @@ fn test_half_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_key = put_till_size(cluster, 9 * item_len, &mut range);
     let target = pd_client.get_region(&max_key).unwrap();
     assert_eq!(region, target);
-    pd_client.half_split_region(target);
-    // it should be finished in millis if split.
-    thread::sleep(Duration::from_secs(1));
+    pd_client.must_half_split_region(target);
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();

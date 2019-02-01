@@ -18,8 +18,8 @@ use std::time::Duration;
 use kvproto::{errorpb, kvrpcpb};
 use tipb;
 
-use coprocessor;
-use storage;
+use crate::coprocessor;
+use crate::storage;
 
 quick_error! {
     #[derive(Debug)]
