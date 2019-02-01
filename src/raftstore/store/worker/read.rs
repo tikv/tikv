@@ -352,7 +352,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
             self.metrics.borrow_mut().rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("rejected by stale epoch"; "tag" => &delegate.tag);
+            debug!("rejected by epoch not match"; "tag" => &delegate.tag);
             return Ok(None);
         }
 
