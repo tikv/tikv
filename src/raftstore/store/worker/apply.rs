@@ -735,7 +735,7 @@ impl ApplyDelegate {
 
     // apply operation can fail as following situation:
     //   1. encouter an error that will occur on all store, it can continue
-    // applying next entry safely, like stale epoch for example;
+    // applying next entry safely, like epoch not match for example;
     //   2. encouter an error that may not occur on all store, in this case
     // we should try to apply the entry again or panic. Considering that this
     // usually due to disk operation fail, which is rare, so just panic is ok.
@@ -755,7 +755,7 @@ impl ApplyDelegate {
             // clear dirty values.
             ctx.wb_mut().rollback_to_save_point().unwrap();
             match e {
-                Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
+                Error::EpochNotMatch(..) => debug!("{} epoch not match err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
             }
             (cmd_resp::new_error(e), None)
@@ -882,7 +882,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
     ) -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let req = Rc::clone(&ctx.exec_ctx.as_ref().unwrap().req);
-        // Include region for stale epoch after merge may cause key not in range.
+        // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(&req, &self.region, include_region)?;
@@ -1848,7 +1848,7 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
         || epoch.get_version() != region_epoch.get_version()
     {
         let error = format!("{:?} != {:?}", epoch, region_epoch);
-        return Err(Error::StaleEpoch(error, vec![region.clone()]));
+        return Err(Error::EpochNotMatch(error, vec![region.clone()]));
     }
 
     let range = sst.get_range();
@@ -2692,7 +2692,7 @@ mod tests {
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
-        assert!(resp.get_header().get_error().has_stale_epoch());
+        assert!(resp.get_header().get_error().has_epoch_not_match());
         assert_eq!(delegate.applied_index_term, 2);
         assert_eq!(delegate.apply_state.get_applied_index(), 3);
 
@@ -2802,12 +2802,12 @@ mod tests {
             .ingest_sst(&meta1)
             .epoch(0, 3)
             .build();
-        let ingest_stale_epoch = EntryBuilder::new(11, 3)
+        let ingest_epoch_not_match = EntryBuilder::new(11, 3)
             .capture_resp(&mut delegate, tx.clone())
             .ingest_sst(&meta2)
             .epoch(0, 3)
             .build();
-        let entries = vec![put_ok, ingest_ok, ingest_stale_epoch];
+        let entries = vec![put_ok, ingest_ok, ingest_epoch_not_match];
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         apply_ctx.write_to_db(&engines.kv);
         let resp = rx.try_recv().unwrap();
@@ -3106,8 +3106,6 @@ mod tests {
         assert!(error_msg(&resp).contains("id count"), "{:?}", resp);
 
         let epoch = Rc::new(RefCell::new(delegate.region.get_region_epoch().clone()));
-        let mut new_version = epoch.borrow().get_version() + 1;
-        epoch.borrow_mut().set_version(new_version);
         let checker = SplitResultChecker {
             db: &engines.kv,
             origin_peers: &peers,
@@ -3121,11 +3119,11 @@ mod tests {
         let resp = exec_split(&mut delegate, splits.clone());
         // Split should succeed.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let mut new_version = epoch.borrow().get_version() + 1;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"", b"k1", 8, &[9, 10, 11], true);
         checker.check(b"k1", b"k5", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 1;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3134,11 +3132,11 @@ mod tests {
         let resp = exec_split(&mut delegate, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 1;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k4", b"k5", 12, &[13, 14, 15], true);
         checker.check(b"k1", b"k4", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 2;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3150,12 +3148,12 @@ mod tests {
         let resp = exec_split(&mut delegate, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 2;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k1", b"k2", 16, &[17, 18, 19], true);
         checker.check(b"k2", b"k3", 20, &[21, 22, 23], true);
         checker.check(b"k3", b"k4", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 2;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3167,6 +3165,8 @@ mod tests {
         let resp = exec_split(&mut delegate, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 2;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
