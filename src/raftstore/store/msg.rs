@@ -22,12 +22,12 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 
+use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
+use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::SnapKey;
+use crate::util::escape;
+use crate::util::rocksdb::CompactedEvent;
 use raft::{SnapshotStatus, StateRole};
-use raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
-use raftstore::store::util::KeysInfoFormatter;
-use raftstore::store::SnapKey;
-use util::escape;
-use util::rocksdb::CompactedEvent;
 
 use super::RegionSnapshot;
 

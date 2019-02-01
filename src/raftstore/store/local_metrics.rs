@@ -14,7 +14,7 @@
 use prometheus::local::LocalHistogram;
 use std::sync::{Arc, Mutex};
 
-use util::collections::HashSet;
+use crate::util::collections::HashSet;
 
 use super::metrics::*;
 

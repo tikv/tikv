@@ -48,7 +48,7 @@ use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use util::time::{Duration, Instant};
+use crate::util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;

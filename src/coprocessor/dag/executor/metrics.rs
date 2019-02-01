@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::storage::engine::Statistics;
 use prometheus::local::LocalIntCounterVec;
-use storage::engine::Statistics;
 
 /// `ExecutorMetrics` is metrics collected from executors group by request.
 #[derive(Default, Debug)]

@@ -14,7 +14,7 @@
 use prometheus::exponential_buckets;
 use prometheus_static_metric::*;
 
-use storage::ErrorHeaderKind;
+use crate::storage::ErrorHeaderKind;
 
 make_static_metric! {
     pub label_enum RequestStatusKind {

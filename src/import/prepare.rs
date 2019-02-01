@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 
 use kvproto::metapb::*;
 
-use pd::RegionInfo;
-use util::escape;
-use util::rocksdb::properties::SizeProperties;
+use crate::pd::RegionInfo;
+use crate::util::escape;
+use crate::util::rocksdb::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;
@@ -286,14 +286,14 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
     use rocksdb::Writable;
     use tempdir::TempDir;
     use uuid::Uuid;
 
-    use config::DbConfig;
-    use storage::types::Key;
+    use crate::config::DbConfig;
+    use crate::storage::types::Key;
 
     fn new_encoded_key(k: &[u8]) -> Vec<u8> {
         if k.is_empty() {

@@ -21,7 +21,7 @@ use kvproto::import_sstpb::*;
 use rocksdb::{IngestExternalFileOptions, DB};
 use uuid::Uuid;
 
-use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use crate::util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
 
 use super::{Error, Result};
 
@@ -329,10 +329,10 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
+    use crate::util::rocksdb::new_engine;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     #[test]
     fn test_import_dir() {

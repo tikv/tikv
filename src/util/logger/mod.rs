@@ -19,8 +19,8 @@ use std::io::{self, BufWriter};
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::grpc;
 use chrono::{self, Duration};
-use grpc;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};

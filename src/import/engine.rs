@@ -28,14 +28,14 @@ use rocksdb::{
     ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
 };
 
-use config::DbConfig;
-use raftstore::store::keys;
-use storage::mvcc::{Write, WriteType};
-use storage::types::Key;
-use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
-use util::config::MB;
-use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
-use util::rocksdb::{new_engine_opt, CFOptions};
+use crate::config::DbConfig;
+use crate::raftstore::store::keys;
+use crate::storage::mvcc::{Write, WriteType};
+use crate::storage::types::Key;
+use crate::storage::{is_short_value, CF_DEFAULT, CF_WRITE};
+use crate::util::config::MB;
+use crate::util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
+use crate::util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::common::*;
 use super::Result;
@@ -299,9 +299,9 @@ mod tests {
     use std::io::Write;
     use tempdir::TempDir;
 
-    use raftstore::store::RegionSnapshot;
-    use storage::mvcc::MvccReader;
-    use util::rocksdb::new_engine_opt;
+    use crate::raftstore::store::RegionSnapshot;
+    use crate::storage::mvcc::MvccReader;
+    use crate::util::rocksdb::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();

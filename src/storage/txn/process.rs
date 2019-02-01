@@ -19,19 +19,21 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use prometheus::local::LocalHistogramVec;
 
-use storage::engine::{CbContext, Modify, Result as EngineResult};
-use storage::mvcc::{
+use crate::storage::engine::{CbContext, Modify, Result as EngineResult};
+use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
-use storage::{
+use crate::storage::{
     Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
     Statistics, StatisticsSummary, StorageCb,
 };
-use storage::{Key, MvccInfo, Value};
-use util::collections::HashMap;
-use util::threadpool::{self, Context as ThreadContext, ContextFactory as ThreadContextFactory};
-use util::time::SlowTimer;
-use util::worker::{self, ScheduleError};
+use crate::storage::{Key, MvccInfo, Value};
+use crate::util::collections::HashMap;
+use crate::util::threadpool::{
+    self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
+};
+use crate::util::time::SlowTimer;
+use crate::util::worker::{self, ScheduleError};
 
 use super::super::metrics::*;
 use super::scheduler::Msg;
@@ -540,7 +542,7 @@ fn process_write_impl<S: Snapshot>(
         }
         Command::ResolveLock {
             ctx,
-            mut txn_status,
+            txn_status,
             mut scan_key,
             key_locks,
         } => {

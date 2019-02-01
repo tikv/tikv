@@ -13,8 +13,8 @@
 
 use std::error;
 
+use crate::raftstore::Error;
 use kvproto::raft_cmdpb::RaftCmdResponse;
-use raftstore::Error;
 
 pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {
     if term == 0 {

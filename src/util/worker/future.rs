@@ -194,10 +194,10 @@ mod tests {
     use std::time::Duration;
     use std::time::Instant;
 
+    use crate::util::timer::GLOBAL_TIMER_HANDLE;
     use futures::Future;
     use tokio_core::reactor::Handle;
     use tokio_timer::timer;
-    use util::timer::GLOBAL_TIMER_HANDLE;
 
     use super::*;
 

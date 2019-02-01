@@ -18,7 +18,7 @@ use cop_datatype::{self, FieldTypeTp};
 
 use super::mysql::Res;
 use super::{Error, Result};
-use coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::dag::expr::EvalContext;
 
 /// `truncate_binary` truncates a buffer to the specified length.
 #[inline]
@@ -342,7 +342,7 @@ mod tests {
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
-    use coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 
     use super::*;
 
