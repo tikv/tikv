@@ -2108,7 +2108,7 @@ impl ReadExecutor {
     pub fn execute(&mut self, msg: &RaftCmdRequest, region: &metapb::Region) -> ReadResponse {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
-                debug!("[region {}] stale epoch err: {:?}", region.get_id(), e);
+                debug!("[region {}] epoch not match err: {:?}", region.get_id(), e);
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,

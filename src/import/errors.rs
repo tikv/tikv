@@ -98,7 +98,7 @@ quick_error! {
             display("TikvRPC {:?}", err)
         }
         NotLeader(new_leader: Option<Peer>) {}
-        StaleEpoch(new_regions: Vec<Region>) {}
+        EpochNotMatch(current_regions: Vec<Region>) {}
         UpdateRegion(new_region: RegionInfo) {}
         ImportJobFailed(tag: String) {
             display("{}", tag)
@@ -124,9 +124,9 @@ impl From<errorpb::Error> for Error {
             } else {
                 Error::NotLeader(None)
             }
-        } else if err.has_stale_epoch() {
-            let mut error = err.take_stale_epoch();
-            Error::StaleEpoch(error.take_new_regions().to_vec())
+        } else if err.has_epoch_not_match() {
+            let mut error = err.take_epoch_not_match();
+            Error::EpochNotMatch(error.take_current_regions().to_vec())
         } else {
             Error::TikvRPC(err)
         }

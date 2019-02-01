@@ -610,7 +610,7 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
     }
 
     Err(box_err!(
-        "stale epoch {:?}, we are now {:?}",
+        "epoch not match {:?}, we are now {:?}",
         check_epoch,
         epoch
     ))
