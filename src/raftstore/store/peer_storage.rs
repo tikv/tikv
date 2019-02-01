@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use ::rocksdb::{Writable, WriteBatch, DB};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -26,14 +27,13 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use rocksdb::{Writable, WriteBatch, DB};
 
-use raftstore::store::util::{conf_state_from_region, Engines};
-use raftstore::store::ProposalContext;
-use raftstore::{Error, Result};
-use storage::CF_RAFT;
-use util::worker::Scheduler;
-use util::{self, rocksdb};
+use crate::raftstore::store::util::{conf_state_from_region, Engines};
+use crate::raftstore::store::ProposalContext;
+use crate::raftstore::{Error, Result};
+use crate::storage::CF_RAFT;
+use crate::util::worker::Scheduler;
+use crate::util::{self, rocksdb};
 
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
 use super::keys::{self, enc_end_key, enc_start_key};
@@ -1461,26 +1461,26 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::store::bootstrap;
+    use crate::raftstore::store::util::Engines;
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::worker::RegionTask;
+    use crate::storage::{ALL_CFS, CF_DEFAULT};
+    use crate::util::rocksdb::new_engine;
+    use crate::util::worker::{Scheduler, Worker};
+    use ::rocksdb::WriteBatch;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use protobuf;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
-    use raftstore::store::bootstrap;
-    use raftstore::store::util::Engines;
-    use raftstore::store::worker::RegionRunner;
-    use raftstore::store::worker::RegionTask;
-    use rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
-    use storage::{ALL_CFS, CF_DEFAULT};
     use tempdir::*;
-    use util::rocksdb::new_engine;
-    use util::worker::{Scheduler, Worker};
 
     use super::*;
 

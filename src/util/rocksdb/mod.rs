@@ -26,23 +26,23 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use rocksdb::load_latest_options;
-use rocksdb::rocksdb::supported_compression;
-use rocksdb::set_external_sst_file_global_seq_no;
-use rocksdb::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
-    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
-};
-use storage::{ALL_CFS, CF_DEFAULT};
-use sys_info;
-use util::file::{calc_crc32, copy_and_sync};
-use util::rocksdb;
-use util::rocksdb::engine_metrics::{
+use crate::storage::{ALL_CFS, CF_DEFAULT};
+use crate::util::file::{calc_crc32, copy_and_sync};
+use crate::util::rocksdb;
+use crate::util::rocksdb::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
+use ::rocksdb::load_latest_options;
+use ::rocksdb::rocksdb::supported_compression;
+use ::rocksdb::set_external_sst_file_global_seq_no;
+use ::rocksdb::{
+    CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
+    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
+};
+use sys_info;
 
-pub use rocksdb::CFHandle;
+pub use ::rocksdb::CFHandle;
 
 use super::cfs_diff;
 
@@ -581,11 +581,11 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocksdb::{
+    use crate::storage::CF_DEFAULT;
+    use ::rocksdb::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };
-    use storage::CF_DEFAULT;
     use tempdir::TempDir;
 
     #[test]

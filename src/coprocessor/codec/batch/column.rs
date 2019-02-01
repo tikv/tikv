@@ -15,17 +15,17 @@ use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 
-use coprocessor::codec::datum;
-use coprocessor::codec::mysql::Tz;
-use coprocessor::codec::{Error, Result};
-use util::codec::{bytes, number};
+use crate::coprocessor::codec::datum;
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::{Error, Result};
+use crate::util::codec::{bytes, number};
 
 // TODO: Move these type alias and re-exports into cop_datatype.
 // These types are ensured to be cheap to move. However clone can be expensive.
 pub type Int = i64;
 pub type Real = f64;
 pub type Bytes = Vec<u8>;
-pub use coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
+pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 /// An array of datums in the same data type and is column oriented.
 ///
@@ -818,13 +818,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use super::*;
 
     #[bench]
     fn bench_push_datum_int(b: &mut test::Bencher) {
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = BatchColumn::with_capacity(1000, EvalType::Int);
 
@@ -856,10 +856,10 @@ mod benches {
     /// Bench performance of naively decoding multiple datums (without pushing into a vector).
     #[bench]
     fn bench_batch_decode(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::table;
+        use crate::coprocessor::dag::expr::EvalContext;
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
-        use coprocessor::codec::table;
-        use coprocessor::dag::expr::EvalContext;
 
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();

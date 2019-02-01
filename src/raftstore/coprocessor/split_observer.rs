@@ -12,14 +12,14 @@
 // limitations under the License.
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use coprocessor::codec::table;
-use util::codec::bytes::{self, encode_bytes};
-use util::escape;
+use crate::coprocessor::codec::table;
+use crate::util::codec::bytes::{self, encode_bytes};
+use crate::util::escape;
 
+use crate::raftstore::store::util;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
 use protobuf::RepeatedField;
-use raftstore::store::util;
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't separate
@@ -168,13 +168,13 @@ impl AdminObserver for SplitObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coprocessor::codec::{datum, table, Datum};
+    use crate::raftstore::coprocessor::AdminObserver;
+    use crate::raftstore::coprocessor::ObserverContext;
+    use crate::util::codec::bytes::encode_bytes;
     use byteorder::{BigEndian, WriteBytesExt};
-    use coprocessor::codec::{datum, table, Datum};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use raftstore::coprocessor::AdminObserver;
-    use raftstore::coprocessor::ObserverContext;
-    use util::codec::bytes::encode_bytes;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();

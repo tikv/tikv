@@ -77,13 +77,13 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
+    use ::rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use tempdir::TempDir;
 
-    use raftstore::store::keys;
-    use storage::{Key, CF_WRITE, LARGE_CFS};
-    use util::properties::MvccPropertiesCollectorFactory;
-    use util::rocksdb::{self, CFOptions};
+    use crate::raftstore::store::keys;
+    use crate::storage::{Key, CF_WRITE, LARGE_CFS};
+    use crate::util::properties::MvccPropertiesCollectorFactory;
+    use crate::util::rocksdb::{self, CFOptions};
 
     use super::*;
 

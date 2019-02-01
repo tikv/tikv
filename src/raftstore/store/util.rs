@@ -17,22 +17,22 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use crate::raftstore::store::keys;
+use crate::raftstore::{Error, Result};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use raftstore::store::keys;
-use raftstore::{Error, Result};
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
-use storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use util::escape;
-use util::properties::RangeProperties;
-use util::rocksdb::stats::get_range_entries_and_versions;
-use util::time::monotonic_raw_now;
-use util::{rocksdb as rocksdb_util, Either};
+use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use crate::util::escape;
+use crate::util::properties::RangeProperties;
+use crate::util::rocksdb::stats::get_range_entries_and_versions;
+use crate::util::time::monotonic_raw_now;
+use crate::util::{rocksdb as rocksdb_util, Either};
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -979,13 +979,15 @@ mod tests {
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 
-    use raftstore::store::peer_storage;
-    use storage::mvcc::{Write, WriteType};
-    use storage::{Key, ALL_CFS, CF_DEFAULT};
-    use util::escape;
-    use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
-    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
-    use util::time::{monotonic_now, monotonic_raw_now};
+    use crate::raftstore::store::peer_storage;
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
+    use crate::util::escape;
+    use crate::util::properties::{
+        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    };
+    use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
+    use crate::util::time::{monotonic_now, monotonic_raw_now};
 
     use super::*;
 
