@@ -24,7 +24,8 @@ use crate::storage::types::Key;
 use crate::util::codec::number::{self, NumberEncoder};
 use crate::util::codec::{Error, Result};
 use rocksdb::{
-    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
+    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
+    UserCollectedProperties,
 };
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
@@ -364,11 +365,17 @@ impl SizePropertiesCollector {
 
 impl TablePropertiesCollector for SizePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if entry_type != DBEntryType::Put {
-            return;
-        }
-        let size = key.len() + value.len();
-        self.index_handle.size += size as u64;
+        let value_size = match entry_type {
+            DBEntryType::Put => value.len() as u64,
+            DBEntryType::BlobIndex => match TitanBlobIndex::decode_from(value) {
+                Ok(index) => index.blob_size,
+                Err(_) => return,
+            },
+            _ => return,
+        };
+
+        let size = key.len() as u64 + value_size;
+        self.index_handle.size += size;
         self.index_handle.offset += size as u64;
         // Add the start key for convenience.
         if self.last_key.is_empty() || self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
@@ -615,15 +622,20 @@ impl RangePropertiesCollector {
 
 impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if entry_type != DBEntryType::Put {
-            return;
-        }
+        let value_size = match entry_type {
+            DBEntryType::Put => value.len() as u64,
+            DBEntryType::BlobIndex => match TitanBlobIndex::decode_from(value) {
+                Ok(index) => index.blob_size,
+                Err(_) => return,
+            },
+            _ => return,
+        };
 
         // keys
         self.cur_offsets.keys += 1;
         // size
-        let size = key.len() + value.len();
-        self.cur_offsets.size += size as u64;
+        let size = key.len() as u64 + value_size;
+        self.cur_offsets.size += size;
         // Add the start key for convenience.
         if self.last_key.is_empty()
             || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE
