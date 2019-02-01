@@ -19,27 +19,27 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
+use ::rocksdb::{Writable, WriteBatch};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
 
-use raftstore::store::engine::{Mutable, Snapshot};
-use raftstore::store::peer_storage::{
+use crate::raftstore::store::engine::{Mutable, Snapshot};
+use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
-use raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use raftstore::store::util::Engines;
-use raftstore::store::{
+use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
+use crate::raftstore::store::util::Engines;
+use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
-use storage::CF_RAFT;
-use util::rocksdb::get_cf_num_files_at_level;
-use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use util::time;
-use util::timer::Timer;
-use util::worker::{Runnable, RunnableWithTimer};
-use util::{escape, rocksdb};
+use crate::storage::CF_RAFT;
+use crate::util::rocksdb::get_cf_num_files_at_level;
+use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use crate::util::time;
+use crate::util::timer::Timer;
+use crate::util::worker::{Runnable, RunnableWithTimer};
+use crate::util::{escape, rocksdb};
 
 use super::super::util;
 use super::metrics::*;
@@ -242,9 +242,9 @@ impl SnapContext {
         fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
         if let Err(e) = notifier.try_send(snap) {
             info!(
-                "[region {}] failed to notify snap result, maybe leadership has changed, \
-                 ignore: {:?}",
-                region_id, e
+                "failed to notify snap result, leadership may have changed, ignore error";
+                "region_id" => region_id,
+                "err" => %e,
             );
         }
         Ok(())
@@ -259,7 +259,7 @@ impl SnapContext {
         let timer = gen_histogram.start_coarse_timer();
 
         if let Err(e) = self.generate_snap(region_id, notifier) {
-            error!("[region {}] failed to generate snap: {:?}!!!", region_id, e);
+            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
             return;
         }
 
@@ -271,7 +271,7 @@ impl SnapContext {
 
     /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
-        info!("[region {}] begin apply snap data", region_id);
+        info!("begin apply snap data"; "region_id" => region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
@@ -341,9 +341,9 @@ impl SnapContext {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
-            "[region {}] apply new data takes {:?}",
-            region_id,
-            timer.elapsed()
+            "apply new data";
+            "region_id" => region_id,
+            "time_takes" => ?timer.elapsed(),
         );
         Ok(())
     }
@@ -363,7 +363,7 @@ impl SnapContext {
                     .inc();
             }
             Err(Error::Abort) => {
-                warn!("applying snapshot for region {} is aborted.", region_id);
+                warn!("applying snapshot is aborted"; "region_id" => region_id);
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
@@ -373,7 +373,7 @@ impl SnapContext {
                     .inc();
             }
             Err(e) => {
-                error!("failed to apply snap: {:?}!!!", e);
+                error!("failed to apply snap!!!"; "err" => %e);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
             }
@@ -393,11 +393,11 @@ impl SnapContext {
         if use_delete_files {
             if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, start_key, end_key) {
                 error!(
-                    "[region {}] failed to delete files in [{}, {}): {:?}",
-                    region_id,
-                    escape(start_key),
-                    escape(end_key),
-                    e
+                    "failed to delete files in range";
+                    "region_id" => region_id,
+                    "start_key" => ::log_wrappers::Key(start_key),
+                    "end_key" => ::log_wrappers::Key(end_key),
+                    "err" => %e,
                 );
                 return;
             }
@@ -406,18 +406,18 @@ impl SnapContext {
             util::delete_all_in_range(&self.engines.kv, start_key, end_key, self.use_delete_range)
         {
             error!(
-                "[region {}] failed to delete data in [{}, {}): {:?}",
-                region_id,
-                escape(start_key),
-                escape(end_key),
-                e
+                "failed to delete data in range";
+                "region_id" => region_id,
+                "start_key" => ::log_wrappers::Key(start_key),
+                "end_key" => ::log_wrappers::Key(end_key),
+                "err" => %e,
             );
         } else {
             info!(
-                "[region {}] succeed in deleting data in [{}, {})",
-                region_id,
-                escape(start_key),
-                escape(end_key),
+                "succeed in deleting data in range";
+                "region_id" => region_id,
+                "start_key" => ::log_wrappers::Key(start_key),
+                "end_key" => ::log_wrappers::Key(end_key),
             );
         }
     }
@@ -447,10 +447,10 @@ impl SnapContext {
         self.cleanup_overlap_ranges(start_key, end_key);
 
         info!(
-            "[region {}] register deleting data in [{}, {})",
-            region_id,
-            escape(start_key),
-            escape(end_key),
+            "register deleting data in range";
+            "region_id" => region_id,
+            "start_key" => ::log_wrappers::Key(start_key),
+            "end_key" => ::log_wrappers::Key(end_key),
         );
         let timeout = time::Instant::now() + self.clean_stale_peer_delay;
         self.pending_delete_ranges
@@ -478,7 +478,7 @@ impl SnapContext {
                 if elapsed >= CLEANUP_MAX_DURATION {
                     let len = cleaned_range_keys.len();
                     let elapsed = elapsed.as_millis() as f64 / 1000f64;
-                    info!("clean {} timeout ranges in {}s, now backoff", len, elapsed);
+                    info!("clean timeout ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
                     break;
                 }
             }
@@ -619,7 +619,7 @@ impl Runnable<Task> for Runner {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.pool.stop() {
-            warn!("Stop threadpool failed with {:?}", e);
+            warn!("Stop threadpool failed"; "err" => %e);
         }
     }
 }
@@ -659,19 +659,19 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::raftstore::store::engine::{Mutable, Peekable};
+    use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
+    use crate::raftstore::store::snap::tests::get_test_db_for_regions;
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
+    use crate::storage::{CF_DEFAULT, CF_RAFT};
+    use crate::util::rocksdb;
+    use crate::util::time;
+    use crate::util::timer::Timer;
+    use crate::util::worker::Worker;
+    use ::rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use raftstore::store::engine::{Mutable, Peekable};
-    use raftstore::store::peer_storage::JOB_STATUS_PENDING;
-    use raftstore::store::snap::tests::get_test_db_for_regions;
-    use raftstore::store::worker::RegionRunner;
-    use raftstore::store::{keys, Engines, SnapKey, SnapManager};
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
-    use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb;
-    use util::time;
-    use util::timer::Timer;
-    use util::worker::Worker;
 
     use super::Event;
     use super::PendingDeleteRanges;

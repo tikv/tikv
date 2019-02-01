@@ -29,26 +29,26 @@ use rocksdb::{
 use slog;
 use sys_info;
 
-use import::Config as ImportConfig;
-use pd::Config as PdConfig;
-use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::keys::region_raft_prefix_len;
-use raftstore::store::Config as RaftstoreConfig;
-use server::readpool;
-use server::Config as ServerConfig;
-use storage::{
+use crate::import::Config as ImportConfig;
+use crate::pd::Config as PdConfig;
+use crate::raftstore::coprocessor::Config as CopConfig;
+use crate::raftstore::store::keys::region_raft_prefix_len;
+use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::readpool;
+use crate::server::Config as ServerConfig;
+use crate::storage::{
     Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
 };
-use util::config::{
+use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
 };
-use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
-use util::rocksdb::{
+use crate::util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
+use crate::util::rocksdb::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
-use util::security::SecurityConfig;
-use util::time::duration_to_sec;
+use crate::util::security::SecurityConfig;
+use crate::util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -515,7 +515,7 @@ impl Default for DbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs: 6,
-            max_manifest_file_size: ReadableSize::mb(20),
+            max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
             enable_statistics: true,
@@ -796,12 +796,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
+    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
-    use util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where

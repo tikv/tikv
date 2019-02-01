@@ -46,8 +46,8 @@ extern crate toml;
 #[cfg(unix)]
 #[macro_use]
 mod util;
-use util::setup::*;
-use util::signal_handler;
+use crate::util::setup::*;
+use crate::util::signal_handler;
 
 use std::process;
 use std::sync::atomic::Ordering;
@@ -132,8 +132,8 @@ fn setup_config(matches: &ArgMatches) -> TiKvConfig {
         fatal!("invalid configuration: {:?}", e);
     }
     info!(
-        "using config: {}",
-        serde_json::to_string_pretty(&config).unwrap()
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
     );
 
     config

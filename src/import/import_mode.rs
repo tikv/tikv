@@ -133,8 +133,8 @@ impl ImportModeOptions {
 mod tests {
     use super::*;
 
+    use crate::util::rocksdb::new_engine;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     fn check_import_options(db: &DB, opts: &ImportModeOptions) {
         for cf_name in db.cf_names() {
