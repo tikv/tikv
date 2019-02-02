@@ -15,19 +15,19 @@ use std::io::{Cursor, Read};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use futures::future;
 use futures::{Async, Future, Poll, Stream};
-use grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 
-use pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
-use storage::types::Key;
-use util::collections::{HashMap, HashMapEntry};
-use util::security::SecurityManager;
+use crate::pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
+use crate::storage::types::Key;
+use crate::util::collections::{HashMap, HashMapEntry};
+use crate::util::security::SecurityManager;
 
 use super::common::*;
 use super::{Error, Result};

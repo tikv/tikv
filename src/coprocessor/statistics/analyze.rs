@@ -19,11 +19,13 @@ use rand::{thread_rng, Rng, ThreadRng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
 
-use storage::{Snapshot, SnapshotStore};
+use crate::storage::{Snapshot, SnapshotStore};
 
-use coprocessor::codec::datum;
-use coprocessor::dag::executor::{Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor};
-use coprocessor::*;
+use crate::coprocessor::codec::datum;
+use crate::coprocessor::dag::executor::{
+    Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor,
+};
+use crate::coprocessor::*;
 
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
@@ -301,8 +303,8 @@ impl SampleCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::datum;
-    use coprocessor::codec::datum::Datum;
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
 
     #[test]
     fn test_sample_collector() {

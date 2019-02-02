@@ -16,8 +16,8 @@ use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
+use ::rocksdb::DB;
 use futures::Future;
-use rocksdb::DB;
 use tempdir::TempDir;
 
 use kvproto::errorpb::Error as PbError;
@@ -52,7 +52,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        Option<Engines>,
+        _: Option<Engines>,
     ) -> (u64, Engines, Option<TempDir>);
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -567,7 +567,7 @@ impl<T: Simulator> Cluster<T> {
             }
 
             let resp = result.unwrap();
-            if resp.get_header().get_error().has_stale_epoch() {
+            if resp.get_header().get_error().has_epoch_not_match() {
                 warn!("seems split, let's retry");
                 sleep_ms(100);
                 continue;
@@ -832,7 +832,7 @@ impl<T: Simulator> Cluster<T> {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
-                        if error.has_stale_epoch()
+                        if error.has_epoch_not_match()
                             || error.has_not_leader()
                             || error.has_stale_command()
                         {

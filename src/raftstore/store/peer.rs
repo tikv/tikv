@@ -31,24 +31,24 @@ use rocksdb::rocksdb_options::WriteOptions;
 use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
-use pd::{PdTask, INVALID_ID};
+use crate::pd::{PdTask, INVALID_ID};
+use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
+use crate::raftstore::store::fsm::store::PollContext;
+use crate::raftstore::store::fsm::{
+    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
+};
+use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
+use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
+use crate::raftstore::{Error, Result};
+use crate::util::collections::HashMap;
+use crate::util::time::{duration_to_sec, monotonic_raw_now};
+use crate::util::worker::Scheduler;
+use crate::util::{escape, MustConsumeVec};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
 };
-use raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
-use raftstore::store::fsm::store::PollContext;
-use raftstore::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
-};
-use raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
-use raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
-use raftstore::{Error, Result};
-use util::collections::HashMap;
-use util::time::{duration_to_sec, monotonic_raw_now};
-use util::worker::Scheduler;
-use util::{escape, MustConsumeVec};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -2108,7 +2108,7 @@ impl ReadExecutor {
     pub fn execute(&mut self, msg: &RaftCmdRequest, region: &metapb::Region) -> ReadResponse {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
-                debug!("[region {}] stale epoch err: {:?}", region.get_id(), e);
+                debug!("[region {}] epoch not match err: {:?}", region.get_id(), e);
                 return ReadResponse {
                     response: cmd_resp::new_error(e),
                     snapshot: None,

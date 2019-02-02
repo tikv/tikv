@@ -60,7 +60,7 @@ pub fn load_configs<E: Engine, F: EngineFactory<E>>(engine_factory: F) -> Vec<Be
 }
 
 fn main() {
-    let mut c = Criterion::default();
+    let mut c = Criterion::default().configure_from_args();
     let btree_engine_configs = load_configs(BTreeEngineFactory {});
     let rocks_engine_configs = load_configs(RocksEngineFactory {});
 
