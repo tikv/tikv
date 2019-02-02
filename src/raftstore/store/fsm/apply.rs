@@ -22,9 +22,9 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
-use ::rocksdb::rocksdb_options::WriteOptions;
-use ::rocksdb::{Writable, WriteBatch};
 use protobuf::RepeatedField;
+use rocksdb::rocksdb_options::WriteOptions;
+use rocksdb::{Writable, WriteBatch};
 use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
@@ -55,7 +55,7 @@ use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use crate::util::time::{duration_to_sec, Instant, SlowTimer};
 use crate::util::Either;
-use crate::util::{escape, rocksdb, MustConsumeVec};
+use crate::util::{escape, rocksdb_util, MustConsumeVec};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use raft::NO_LIMIT;
 
@@ -739,7 +739,7 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, engines: &Engines, wb: &WriteBatch) {
-        rocksdb::get_cf_handle(&engines.kv, CF_RAFT)
+        rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
                 wb.put_msg_cf(
@@ -1115,7 +1115,7 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&ctx.engines.kv, cf)
+            rocksdb_util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.wb().put_cf(handle, &key, value))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1153,7 +1153,7 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&ctx.engines.kv, cf)
+            rocksdb_util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.wb().delete_cf(handle, &key))
                 .unwrap_or_else(|e| {
                     panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
@@ -1207,7 +1207,7 @@ impl ApplyDelegate {
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
-        let handle = rocksdb::get_cf_handle(&ctx.engines.kv, cf).unwrap();
+        let handle = rocksdb_util::get_cf_handle(&ctx.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
@@ -2668,10 +2668,10 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use crate::raftstore::store::Config;
-    use ::rocksdb::{Writable, WriteBatch, DB};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
+    use rocksdb::{Writable, WriteBatch, DB};
     use tempdir::TempDir;
 
     use super::*;
@@ -2680,10 +2680,12 @@ mod tests {
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
         let db = Arc::new(
-            rocksdb::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None).unwrap(),
+            rocksdb_util::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None)
+                .unwrap(),
         );
         let raft_db = Arc::new(
-            rocksdb::new_engine(path.path().join("raft").to_str().unwrap(), &[], None).unwrap(),
+            rocksdb_util::new_engine(path.path().join("raft").to_str().unwrap(), &[], None)
+                .unwrap(),
         );
         (path, Engines::new(db, raft_db))
     }

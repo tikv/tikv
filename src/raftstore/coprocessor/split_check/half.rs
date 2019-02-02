@@ -122,8 +122,9 @@ mod tests {
     use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
     use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
     use crate::util::config::ReadableSize;
-    use crate::util::properties::SizePropertiesCollectorFactory;
-    use crate::util::rocksdb::{new_engine_opt, CFOptions};
+    use crate::util::rocksdb_util::{
+        new_engine_opt, properties::SizePropertiesCollectorFactory, CFOptions,
+    };
     use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 

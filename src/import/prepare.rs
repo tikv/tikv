@@ -21,7 +21,7 @@ use kvproto::metapb::*;
 
 use crate::pd::RegionInfo;
 use crate::util::escape;
-use crate::util::rocksdb::properties::SizeProperties;
+use crate::util::rocksdb_util::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;
