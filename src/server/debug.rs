@@ -46,14 +46,13 @@ use crate::util::codec::bytes;
 use crate::util::collections::HashSet;
 use crate::util::config::ReadableSize;
 use crate::util::escape;
-use crate::util::properties::MvccProperties;
-use crate::util::rocksdb::get_cf_handle;
-use crate::util::rocksdb::properties::RangeProperties;
+use crate::util::rocksdb_util::get_cf_handle;
+use crate::util::rocksdb_util::properties::{MvccProperties, RangeProperties};
 use crate::util::worker::Worker;
 use raft::{self, RawNode};
 
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
+type DBIterator = rocksdb::DBIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
@@ -1396,7 +1395,7 @@ mod tests {
     use crate::raftstore::store::engine::Mutable;
     use crate::storage::mvcc::{Lock, LockType};
     use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb::{self as rocksdb_util, new_engine_opt, CFOptions};
+    use crate::util::rocksdb_util::{self as rocksdb_util, new_engine_opt, CFOptions};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
