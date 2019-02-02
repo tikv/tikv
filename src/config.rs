@@ -42,9 +42,10 @@ use crate::storage::{
 use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
 };
-use crate::util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
-use crate::util::rocksdb::{
-    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+use crate::util::rocksdb_util::{
+    db_exist,
+    properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
 use crate::util::security::SecurityConfig;

@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use crate::test;
-use ::rocksdb::DB;
+use rocksdb::DB;
 use tempdir::TempDir;
 
 use kvproto::kvrpcpb::Context;
@@ -33,7 +33,7 @@ use tikv::storage::engine::{
 };
 use tikv::storage::types::Key;
 use tikv::storage::{Engine, RaftKv, ALL_CFS, CF_DEFAULT};
-use tikv::util::rocksdb;
+use tikv::util::rocksdb_util;
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -96,7 +96,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = TempDir::new("bench_rafkv").unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocksdb::new_engine(&path, ALL_CFS, None).unwrap();
+    let db = rocksdb_util::new_engine(&path, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 
