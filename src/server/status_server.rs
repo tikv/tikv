@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
-use util::metrics::dump;
+use crate::util::metrics::dump;
 
 pub struct StatusServer {
     thread_pool: ThreadPool,
@@ -102,9 +102,9 @@ impl StatusServer {
 
 #[cfg(test)]
 mod tests {
+    use crate::server::status_server::StatusServer;
     use futures::future::{lazy, Future};
     use hyper::{Client, StatusCode, Uri};
-    use server::status_server::StatusServer;
 
     #[test]
     fn test_status_service() {

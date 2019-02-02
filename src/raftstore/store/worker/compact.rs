@@ -17,13 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use rocksdb::DB;
-use storage::CF_WRITE;
-use util::escape;
-use util::rocksdb;
-use util::rocksdb::compact_range;
-use util::rocksdb::stats::get_range_entries_and_versions;
-use util::worker::Runnable;
+use crate::storage::CF_WRITE;
+use crate::util::escape;
+use crate::util::rocksdb;
+use crate::util::rocksdb::compact_range;
+use crate::util::rocksdb::stats::get_range_entries_and_versions;
+use crate::util::worker::Runnable;
+use ::rocksdb::DB;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -259,15 +259,15 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use raftstore::store::keys::data_key;
+    use crate::raftstore::store::keys::data_key;
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::types::Key as MvccKey;
+    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::properties::MvccPropertiesCollectorFactory;
+    use crate::util::rocksdb::new_engine;
+    use crate::util::rocksdb::stats::get_range_entries_and_versions;
+    use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use rocksdb::{self, Writable, WriteBatch, DB};
-    use storage::mvcc::{Write, WriteType};
-    use storage::types::Key as MvccKey;
-    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::properties::MvccPropertiesCollectorFactory;
-    use util::rocksdb::new_engine;
-    use util::rocksdb::stats::get_range_entries_and_versions;
-    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
 
     use super::*;
 

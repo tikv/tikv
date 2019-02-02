@@ -15,12 +15,12 @@ use super::engine::{Iterable, Mutable};
 use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use super::util::Engines;
+use crate::raftstore::Result;
+use crate::storage::{CF_DEFAULT, CF_RAFT};
+use crate::util::rocksdb;
+use ::rocksdb::{Writable, WriteBatch, DB};
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use raftstore::Result;
-use rocksdb::{Writable, WriteBatch, DB};
-use storage::{CF_DEFAULT, CF_RAFT};
-use util::rocksdb;
 
 const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
@@ -131,10 +131,10 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use raftstore::store::engine::Peekable;
-    use raftstore::store::{keys, Engines};
-    use storage::CF_DEFAULT;
-    use util::rocksdb;
+    use crate::raftstore::store::engine::Peekable;
+    use crate::raftstore::store::{keys, Engines};
+    use crate::storage::CF_DEFAULT;
+    use crate::util::rocksdb;
 
     #[test]
     fn test_bootstrap() {

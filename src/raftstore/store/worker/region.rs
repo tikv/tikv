@@ -19,27 +19,27 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
+use ::rocksdb::{Writable, WriteBatch};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
 
-use raftstore::store::engine::{Mutable, Snapshot};
-use raftstore::store::peer_storage::{
+use crate::raftstore::store::engine::{Mutable, Snapshot};
+use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
-use raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use raftstore::store::util::Engines;
-use raftstore::store::{
+use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
+use crate::raftstore::store::util::Engines;
+use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
-use storage::CF_RAFT;
-use util::rocksdb::get_cf_num_files_at_level;
-use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use util::time;
-use util::timer::Timer;
-use util::worker::{Runnable, RunnableWithTimer};
-use util::{escape, rocksdb};
+use crate::storage::CF_RAFT;
+use crate::util::rocksdb::get_cf_num_files_at_level;
+use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use crate::util::time;
+use crate::util::timer::Timer;
+use crate::util::worker::{Runnable, RunnableWithTimer};
+use crate::util::{escape, rocksdb};
 
 use super::super::util;
 use super::metrics::*;
@@ -659,19 +659,19 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::raftstore::store::engine::{Mutable, Peekable};
+    use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
+    use crate::raftstore::store::snap::tests::get_test_db_for_regions;
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
+    use crate::storage::{CF_DEFAULT, CF_RAFT};
+    use crate::util::rocksdb;
+    use crate::util::time;
+    use crate::util::timer::Timer;
+    use crate::util::worker::Worker;
+    use ::rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use raftstore::store::engine::{Mutable, Peekable};
-    use raftstore::store::peer_storage::JOB_STATUS_PENDING;
-    use raftstore::store::snap::tests::get_test_db_for_regions;
-    use raftstore::store::worker::RegionRunner;
-    use raftstore::store::{keys, Engines, SnapKey, SnapManager};
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
-    use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb;
-    use util::time;
-    use util::timer::Timer;
-    use util::worker::Worker;
 
     use super::Event;
     use super::PendingDeleteRanges;
