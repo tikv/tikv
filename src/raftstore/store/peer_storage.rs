@@ -1784,7 +1784,14 @@ mod tests {
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
-        let runner = RegionRunner::new(s.engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let runner = RegionRunner::new(
+            s.engines.clone(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+            None,
+        );
         worker.start(runner).unwrap();
         let snap = s.snapshot();
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -2079,6 +2086,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
+            None,
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());

@@ -231,6 +231,10 @@ pub enum PeerMsg {
         res: ApplyTaskRes,
     },
     Noop(u64),
+    SnapRes {
+        term: u64,
+        region_id: u64,
+    },
 }
 
 impl fmt::Debug for PeerMsg {
@@ -311,6 +315,12 @@ impl fmt::Debug for PeerMsg {
             }
             PeerMsg::Start(region_id) => write!(fmt, "[region {}] Startup", region_id),
             PeerMsg::Noop(region_id) => write!(fmt, "[region {}] Noop", region_id),
+            PeerMsg::SnapRes { region_id, term } => write! {
+                fmt,
+                "[region {}] snaphot applied term {}",
+                region_id,
+                term,
+            },
         }
     }
 }

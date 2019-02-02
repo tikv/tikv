@@ -24,12 +24,14 @@ use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::raftstore::store::engine::{Mutable, Snapshot};
+use crate::raftstore::store::fsm::RaftRouter;
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
 use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
 use crate::raftstore::store::util::Engines;
+use crate::raftstore::store::PeerMsg;
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
@@ -222,6 +224,8 @@ struct SnapContext {
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
+    // sends snap res if the router is not None
+    raft_router: Option<RaftRouter>,
 }
 
 impl SnapContext {
@@ -345,6 +349,21 @@ impl SnapContext {
             "region_id" => region_id,
             "time_takes" => ?timer.elapsed(),
         );
+
+        if self.raft_router.is_some() {
+            if let Err(e) = self
+                .raft_router
+                .as_ref()
+                .unwrap()
+                .send_peer_msg(PeerMsg::SnapRes { region_id, term })
+            {
+                error!(
+                    "[region {}: unaable to send snap res to the peer {:?}]",
+                    region_id, e
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -529,6 +548,7 @@ impl Runner {
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
+        raft_router: Option<RaftRouter>,
     ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
@@ -541,6 +561,7 @@ impl Runner {
                 use_delete_range,
                 clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
+                raft_router,
             },
             pending_applies: VecDeque::new(),
         }
@@ -789,6 +810,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
+            None,
         );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);

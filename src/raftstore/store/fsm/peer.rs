@@ -319,6 +319,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 PeerMsg::Start(_) => self.start(),
                 PeerMsg::Noop(_) => {}
+                PeerMsg::SnapRes {term, ..} => {
+                    self.on_snap_res(term);
+                }
             }
         }
     }
@@ -476,6 +479,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.ctx.snap_mgr.delete_snapshot(&key, a.as_ref(), false);
             }
         }
+    }
+
+    fn on_snap_res(&mut self, term: u64) {
+        // apply_state will be applied on applying next raft log.
+        // on the leader change, there is a possibilty to read old value.
+        // so, updating the applied term will ask for ReadIndex
+        self.fsm.peer.mut_store().set_applied_term(term);
     }
 
     fn on_clear_region_size(&mut self) {

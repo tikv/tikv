@@ -179,6 +179,7 @@ impl RaftRouter {
             | PeerMsg::HalfSplitRegion { region_id, .. }
             | PeerMsg::MergeResult { region_id, .. }
             | PeerMsg::GcSnap { region_id, .. }
+            | PeerMsg::SnapRes { region_id, .. }
             | PeerMsg::ClearRegionSize(region_id)
             | PeerMsg::Start(region_id)
             | PeerMsg::Noop(region_id) => region_id,
@@ -1040,6 +1041,7 @@ impl RaftBatchSystem {
             builder.cfg.snap_apply_batch_size.0 as usize,
             builder.cfg.use_delete_range,
             builder.cfg.clean_stale_peer_delay.0,
+            Some(self.router()),
         );
         let timer = RegionRunner::new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
