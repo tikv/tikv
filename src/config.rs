@@ -1180,25 +1180,23 @@ impl TiKvConfig {
         }
     }
 
-    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
+    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
         if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
-                "db wal_dir have been changed, former db wal_dir is {}, \
-                 current db wal_dir is {}, please guarantee all data wal log \
+                "db wal_dir have been changed, former db wal_dir is '{}', \
+                 current db wal_dir is '{}', please guarantee all data wal logs \
                  have been moved to destination directory.",
                 last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            )
-            .into());
+            ));
         }
 
         if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
             return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
-                 current raftdb wal_dir is {}, please guarantee all raft wal log \
+                "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
+                 current raftdb wal_dir is '{}', please guarantee all raft wal logs \
                  have been moved to destination directory.",
                 last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            )
-            .into());
+            ));
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
@@ -1206,17 +1204,15 @@ impl TiKvConfig {
                 "storage data dir have been changed, former data dir is {}, \
                  current data dir is {}, please check if it is expected.",
                 last_cfg.storage.data_dir, self.storage.data_dir
-            )
-            .into());
+            ));
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
             return Err(format!(
-                "raft dir have been changed, former raft dir is {}, \
-                 current raft dir is {}, please check if it is expected.",
+                "raft dir have been changed, former raft dir is '{}', \
+                 current raft dir is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
-            )
-            .into());
+            ));
         }
 
         Ok(())
@@ -1259,15 +1255,13 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
         let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-            return Err(format!("check critical config failed, err {:?}", e));
-        }
+        config.check_critical_cfg_with(&last_cfg)?;
     }
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
         return Err(format!(
-            "create parent directory {} failed, err {:?}",
+            "create parent directory '{}' failed: {}",
             store_path.to_str().unwrap(),
             e
         ));
@@ -1276,7 +1270,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     // Persist current critical configurations to file.
     if let Err(e) = config.write_to_file(&last_cfg_path) {
         return Err(format!(
-            "persist critical config to {} failed, err {:?}",
+            "persist critical config to '{}' failed: {}",
             last_cfg_path.to_str().unwrap(),
             e
         ));
