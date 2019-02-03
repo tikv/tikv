@@ -192,8 +192,9 @@ mod tests {
     use crate::raftstore::store::{keys, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
-    use crate::util::properties::RangePropertiesCollectorFactory;
-    use crate::util::rocksdb::{new_engine_opt, CFOptions};
+    use crate::util::rocksdb_util::{
+        new_engine_opt, properties::RangePropertiesCollectorFactory, CFOptions,
+    };
     use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 

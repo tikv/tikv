@@ -20,21 +20,21 @@ use std::{error, result};
 use crate::raftstore::store::engine::IterOption;
 use crate::raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use ::rocksdb::TablePropertiesCollection;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use rocksdb::TablePropertiesCollection;
 
 mod btree_engine;
 mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
-mod rocksdb;
+mod rocksdb_engine;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 
 pub const SEEK_BOUND: u64 = 8;
 

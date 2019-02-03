@@ -36,7 +36,7 @@ pub mod io_limiter;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod rocksdb;
+pub mod rocksdb_util;
 pub mod security;
 pub mod sys;
 pub mod threadpool;
@@ -44,9 +44,6 @@ pub mod time;
 pub mod timer;
 pub mod transport;
 pub mod worker;
-
-pub use self::rocksdb::properties;
-pub use self::rocksdb::stats as rocksdb_stats;
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 

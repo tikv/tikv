@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use crate::raftstore::store::Engines;
-use crate::util::rocksdb::engine_metrics::*;
+use crate::util::rocksdb_util::engine_metrics::*;
 use rocksdb::DB;
 use std::io;
 use std::sync::mpsc::{self, Sender};
@@ -96,8 +96,8 @@ fn flush_metrics(db: &DB, name: &str) {
 mod tests {
     use super::*;
     use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use crate::util::rocksdb::{self, CFOptions};
-    use ::rocksdb::{ColumnFamilyOptions, DBOptions};
+    use crate::util::rocksdb_util::{self, CFOptions};
+    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use std::path::Path;
     use std::sync::Arc;
     use std::thread::sleep;
@@ -111,17 +111,17 @@ mod tests {
         let db_opt = DBOptions::new();
         let cf_opts = ColumnFamilyOptions::new();
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, rocksdb_util::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_LOCK, rocksdb_util::ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
         let engine = Arc::new(
-            rocksdb::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
+            rocksdb_util::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
         );
 
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
         let raft_engine = Arc::new(
-            rocksdb::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
+            rocksdb_util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
                 .unwrap(),
         );
         let engines = Engines::new(engine, raft_engine);
