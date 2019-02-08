@@ -24,8 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use crate::util;
 use rocksdb::DBCompressionType;
-use util;
 
 quick_error! {
     #[derive(Debug)]
@@ -151,7 +151,7 @@ pub mod compression_type_level_serde {
                             return Err(S::Error::invalid_value(
                                 Unexpected::Str(&value),
                                 &"invalid compression type",
-                            ))
+                            ));
                         }
                     };
                     i += 1;
@@ -237,19 +237,19 @@ macro_rules! numeric_enum_mod {
     }
 }
 
-numeric_enum_mod!{compaction_pri_serde CompactionPriority {
+numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod!{compaction_style_serde DBCompactionStyle {
+numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
 }}
 
-numeric_enum_mod!{recovery_mode_serde DBRecoveryMode {
+numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
@@ -851,7 +851,7 @@ mod check_data_dir {
                 return Err(ConfigError::FileSystem(format!(
                     "{}: path: {:?} canonicalize failed: {:?}",
                     op, data_path, e
-                )))
+                )));
             }
         };
 
@@ -983,9 +983,9 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = parts[1]
-        .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr)))?;
+    let port: u16 = parts[1].parse().map_err(|_| {
+        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+    })?;
     // Port = 0 is invalid.
     if port == 0 {
         return Err(ConfigError::Address(format!(
@@ -1196,21 +1196,19 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
         // value is wrong.
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
     }
 
     #[test]

@@ -295,7 +295,7 @@ impl Instant {
         }
     }
 
-    fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+    pub fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
         } else {
@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(eq_op))]
+    #[allow(clippy::eq_op)]
     fn test_instant() {
         Instant::now().elapsed();
         Instant::now_coarse().elapsed();

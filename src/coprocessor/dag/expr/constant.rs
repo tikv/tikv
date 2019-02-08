@@ -14,8 +14,8 @@
 use std::borrow::Cow;
 
 use super::{Constant, Result};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl Datum {
     #[inline]
@@ -126,10 +126,10 @@ impl Constant {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::datum_expr;
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::datum_expr;
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
 
     #[derive(PartialEq, Debug)]
@@ -156,7 +156,7 @@ mod tests {
             datum_expr(Datum::F64(124.32)),
             datum_expr(Datum::Dec(dec.clone())),
             datum_expr(Datum::Bytes(s.clone())),
-            datum_expr(Datum::Dur(dur.clone())),
+            datum_expr(Datum::Dur(dur)),
         ];
 
         let expecteds = vec![
@@ -166,7 +166,7 @@ mod tests {
             EvalResults(None, Some(124.32), None, None, None, None, None),
             EvalResults(None, None, Some(dec.clone()), None, None, None, None),
             EvalResults(None, None, None, Some(s.clone()), None, None, None),
-            EvalResults(None, None, None, None, None, Some(dur.clone()), None),
+            EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 
         let mut ctx = EvalContext::default();

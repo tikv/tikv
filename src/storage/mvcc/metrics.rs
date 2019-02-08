@@ -41,19 +41,22 @@ lazy_static! {
         "tikv_storage_mvcc_versions",
         "Histogram of versions for each key",
         exponential_buckets(1.0, 2.0, 30).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref GC_DELETE_VERSIONS_HISTOGRAM: Histogram = register_histogram!(
         "tikv_storage_mvcc_gc_delete_versions",
         "Histogram of versions deleted by gc for each key",
         exponential_buckets(1.0, 2.0, 30).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref MVCC_CONFLICT_COUNTER: MvccConflictCounterVec = {
         register_static_int_counter_vec!(
             MvccConflictCounterVec,
             "tikv_storage_mvcc_conflict_counter",
             "Total number of conflict error",
             &["type"]
-        ).unwrap()
+        )
+        .unwrap()
     };
     pub static ref MVCC_DUPLICATE_CMD_COUNTER_VEC: MvccDuplicateCmdCounterVec = {
         register_static_int_counter_vec!(
@@ -61,6 +64,7 @@ lazy_static! {
             "tikv_storage_mvcc_duplicate_cmd_counter",
             "Total number of duplicated commands",
             &["type"]
-        ).unwrap()
+        )
+        .unwrap()
     };
 }

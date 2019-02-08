@@ -1,5 +1,3 @@
-#[cfg(unix)]
-pub(crate) mod profiling;
 #[macro_use]
 pub(crate) mod setup;
 pub(crate) mod signal_handler;
@@ -23,6 +21,10 @@ pub fn tikv_version_info() -> String {
 
 /// Prints the tikv version information to the standard output.
 #[allow(dead_code)]
-pub fn print_tikv_info() {
-    info!("Welcome to TiKV. {}", tikv_version_info());
+pub fn log_tikv_info() {
+    info!("Welcome to TiKV.");
+    for line in tikv_version_info().lines() {
+        info!("{}", line);
+    }
+    info!("");
 }

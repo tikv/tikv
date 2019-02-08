@@ -175,19 +175,6 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 }
 
 #[test]
-fn test_raftkv_seek_region() {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-
-    let mut region_info_providers = HashMap::default();
-    for node_id in cluster.get_node_ids() {
-        region_info_providers.insert(node_id, cluster.sim.rl().storages[&node_id].clone());
-    }
-
-    test_seek_region_impl(cluster, region_info_providers);
-}
-
-#[test]
 fn test_region_collection_seek_region() {
     let mut cluster = new_node_cluster(0, 3);
 

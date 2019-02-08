@@ -19,7 +19,7 @@ use prometheus::{self, Encoder, TextEncoder};
 #[cfg(target_os = "linux")]
 mod threads_linux;
 #[cfg(target_os = "linux")]
-pub use self::threads_linux::{get_thread_ids, monitor_threads, Stat};
+pub use self::threads_linux::{cpu_total, get_thread_ids, monitor_threads};
 
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;

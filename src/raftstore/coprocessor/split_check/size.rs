@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
-
 use super::super::error::Result;
+use crate::raftstore::store::util as raftstore_util;
+use crate::raftstore::store::{keys, util, Msg, PeerMsg};
+use crate::util::transport::{RetryableSendCh, Sender};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use raftstore::store::util as raftstore_util;
-use raftstore::store::{keys, util, Msg};
 use rocksdb::DB;
-use util::transport::{RetryableSendCh, Sender};
+use std::mem;
+use std::sync::Mutex;
 
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -107,7 +107,7 @@ pub struct SizeCheckObserver<C> {
     region_max_size: u64,
     split_size: u64,
     split_limit: u64,
-    ch: RetryableSendCh<Msg, C>,
+    ch: Mutex<RetryableSendCh<Msg, C>>,
 }
 
 impl<C: Sender<Msg>> SizeCheckObserver<C> {
@@ -121,7 +121,7 @@ impl<C: Sender<Msg>> SizeCheckObserver<C> {
             region_max_size,
             split_size,
             split_limit,
-            ch,
+            ch: Mutex::new(ch),
         }
     }
 }
@@ -157,11 +157,11 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
         };
 
         // send it to rafastore to update region approximate size
-        let res = Msg::RegionApproximateSize {
+        let res = Msg::PeerMsg(PeerMsg::RegionApproximateSize {
             region_id,
             size: region_size,
-        };
-        if let Err(e) = self.ch.try_send(res) {
+        });
+        if let Err(e) = self.ch.lock().unwrap().try_send(res) {
             warn!(
                 "[region {}] failed to send approximate region size: {}",
                 region_id, e
@@ -212,14 +212,15 @@ pub mod tests {
     use tempdir::TempDir;
 
     use super::Checker;
-    use raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use raftstore::store::{keys, KeyEntry, Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::{ALL_CFS, CF_WRITE};
-    use util::config::ReadableSize;
-    use util::properties::RangePropertiesCollectorFactory;
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::transport::RetryableSendCh;
-    use util::worker::Runnable;
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
+    use crate::raftstore::store::{keys, KeyEntry, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::{ALL_CFS, CF_WRITE};
+    use crate::util::config::ReadableSize;
+    use crate::util::rocksdb_util::{
+        new_engine_opt, properties::RangePropertiesCollectorFactory, CFOptions,
+    };
+    use crate::util::transport::RetryableSendCh;
+    use crate::util::worker::Runnable;
 
     pub fn must_split_at(
         rx: &mpsc::Receiver<Msg>,
@@ -228,16 +229,16 @@ pub mod tests {
     ) {
         loop {
             match rx.try_recv() {
-                Ok(Msg::RegionApproximateSize { region_id, .. })
-                | Ok(Msg::RegionApproximateKeys { region_id, .. }) => {
+                Ok(Msg::PeerMsg(PeerMsg::RegionApproximateSize { region_id, .. }))
+                | Ok(Msg::PeerMsg(PeerMsg::RegionApproximateKeys { region_id, .. })) => {
                     assert_eq!(region_id, exp_region.get_id());
                 }
-                Ok(Msg::SplitRegion {
+                Ok(Msg::PeerMsg(PeerMsg::SplitRegion {
                     region_id,
                     region_epoch,
                     split_keys,
                     ..
-                }) => {
+                })) => {
                     assert_eq!(region_id, exp_region.get_id());
                     assert_eq!(&region_epoch, exp_region.get_region_epoch());
                     assert_eq!(split_keys, exp_split_keys);
@@ -293,7 +294,7 @@ pub mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
-            Ok(Msg::RegionApproximateSize { region_id, .. }) => {
+            Ok(Msg::PeerMsg(PeerMsg::RegionApproximateSize { region_id, .. })) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect recv empty, but got {:?}", others),

@@ -11,21 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crossbeam::{SendError, TrySendError};
+use prometheus::IntCounterVec;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
-use std::{error, io, thread};
-
-use mio;
-use prometheus::IntCounterVec;
 
 lazy_static! {
     pub static ref CHANNEL_FULL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_channel_full_total",
         "Total number of channel full errors.",
         &["type"]
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 const MAX_SEND_RETRY_CNT: usize = 5;
@@ -41,54 +41,38 @@ quick_error! {
             description("channel is closed")
             display("channel is closed")
         }
-        Other(err: Box<error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
     }
 }
 
-impl<T: Debug> From<NotifyError<T>> for Error {
-    fn from(e: NotifyError<T>) -> Error {
+impl<T: Debug> From<TrySendError<T>> for Error {
+    #[inline]
+    fn from(e: TrySendError<T>) -> Error {
         match e {
             // ALERT!! May cause sensitive data leak.
-            NotifyError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
-            NotifyError::Closed(..) => Error::Closed,
-            _ => box_err!("{:?}", e),
+            TrySendError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
+            TrySendError::Disconnected(..) => Error::Closed,
         }
     }
 }
 
-#[derive(Debug)]
-pub enum NotifyError<T> {
-    Full(T),
-    Closed(Option<T>),
-    Io(io::Error),
+impl<T: Debug> From<SendError<T>> for Error {
+    #[inline]
+    fn from(_: SendError<T>) -> Error {
+        // ALERT!! May cause sensitive data leak.
+        Error::Closed
+    }
 }
 
 pub trait Sender<T>: Clone {
-    fn send(&self, t: T) -> Result<(), NotifyError<T>>;
-}
-
-impl<T: Send> Sender<T> for mio::Sender<T> {
-    fn send(&self, t: T) -> Result<(), NotifyError<T>> {
-        match mio::Sender::send(self, t) {
-            Ok(()) => Ok(()),
-            Err(mio::NotifyError::Closed(t)) => Err(NotifyError::Closed(t)),
-            Err(mio::NotifyError::Full(t)) => Err(NotifyError::Full(t)),
-            Err(mio::NotifyError::Io(e)) => Err(NotifyError::Io(e)),
-        }
-    }
+    fn send(&self, t: T) -> Result<(), TrySendError<T>>;
 }
 
 impl<T> Sender<T> for mpsc::SyncSender<T> {
-    fn send(&self, t: T) -> Result<(), NotifyError<T>> {
+    fn send(&self, t: T) -> Result<(), TrySendError<T>> {
         match mpsc::SyncSender::try_send(self, t) {
             Ok(()) => Ok(()),
-            Err(mpsc::TrySendError::Disconnected(t)) => Err(NotifyError::Closed(Some(t))),
-            Err(mpsc::TrySendError::Full(t)) => Err(NotifyError::Full(t)),
+            Err(mpsc::TrySendError::Disconnected(t)) => Err(TrySendError::Disconnected(t)),
+            Err(mpsc::TrySendError::Full(t)) => Err(TrySendError::Full(t)),
         }
     }
 }
@@ -132,12 +116,12 @@ impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
         loop {
             t = match self.ch.send(t) {
                 Ok(_) => return Ok(()),
-                Err(NotifyError::Full(m)) => {
+                Err(TrySendError::Full(m)) => {
                     if try_times <= 1 {
                         CHANNEL_FULL_COUNTER_VEC
                             .with_label_values(&[self.name])
                             .inc();
-                        return Err(NotifyError::Full(m).into());
+                        return Err(TrySendError::Full(m).into());
                     }
                     try_times -= 1;
                     m
@@ -162,7 +146,6 @@ impl<T, C: Sender<T>> Clone for RetryableSendCh<T, C> {
     }
 }
 
-pub type SendCh<T> = RetryableSendCh<T, mio::Sender<T>>;
 pub type SyncSendCh<T> = RetryableSendCh<T, mpsc::SyncSender<T>>;
 
 #[cfg(test)]
@@ -170,8 +153,6 @@ mod tests {
     use std::sync::mpsc::Receiver;
     use std::thread;
     use std::time::Duration;
-
-    use mio::{EventLoop, EventLoopConfig, Handler};
 
     use super::*;
 
@@ -203,55 +184,6 @@ mod tests {
             }
             true
         }
-    }
-
-    impl<S: Sender<Msg>> Handler for SenderHandler<S> {
-        type Timeout = ();
-        type Message = Msg;
-
-        fn notify(&mut self, event_loop: &mut EventLoop<SenderHandler<S>>, msg: Msg) {
-            if !self.on_msg(msg) {
-                event_loop.shutdown();
-            }
-        }
-    }
-
-    #[test]
-    fn test_sendch() {
-        let mut event_loop = EventLoop::new().unwrap();
-        let ch = SendCh::new(event_loop.channel(), "test");
-        let _ch = ch.clone();
-        let h = thread::spawn(move || {
-            let mut sender = SenderHandler { ch: _ch };
-            event_loop.run(&mut sender).unwrap();
-        });
-
-        ch.try_send(Msg::Stop).unwrap();
-
-        h.join().unwrap();
-    }
-
-    #[test]
-    fn test_sendch_full() {
-        let mut config = EventLoopConfig::new();
-        config.notify_capacity(2);
-        let mut event_loop = EventLoop::configured(config).unwrap();
-        let ch = SendCh::new(event_loop.channel(), "test");
-        let _ch = ch.clone();
-        let h = thread::spawn(move || {
-            let mut sender = SenderHandler { ch: _ch };
-            event_loop.run(&mut sender).unwrap();
-        });
-
-        ch.send(Msg::Sleep(1000)).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        ch.send(Msg::Stop).unwrap();
-        match ch.send(Msg::Stop) {
-            Err(Error::Discard(_)) => {}
-            res => panic!("expect discard error, but found: {:?}", res),
-        }
-
-        h.join().unwrap();
     }
 
     #[test]

@@ -17,20 +17,32 @@
 extern crate crc;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate grpcio;
 extern crate grpcio as grpc;
 extern crate kvproto;
-#[macro_use]
-extern crate log;
 extern crate protobuf;
 extern crate raft;
 extern crate rand;
 extern crate rocksdb;
-extern crate slog;
 extern crate tempdir;
 extern crate test;
 extern crate tipb;
+extern crate tokio;
 extern crate toml;
 extern crate uuid;
+#[macro_use(
+    slog_kv,
+    slog_error,
+    slog_info,
+    slog_debug,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static
+)]
+extern crate slog;
+#[macro_use]
+extern crate slog_global;
 
 #[macro_use]
 extern crate tikv;
@@ -45,6 +57,7 @@ mod coprocessor;
 mod import;
 mod pd;
 mod raftstore;
+mod server;
 mod storage;
 
 // The prefix "_" here is to guarantee running this case first.

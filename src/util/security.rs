@@ -24,7 +24,7 @@ use super::file;
 
 use rocksdb::Env;
 
-use grpc::{
+use crate::grpc::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
 };
 
@@ -74,9 +74,11 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
     let f = check_key_file(tag, path)?;
     match f {
         None => return Ok(vec![]),
-        Some(mut f) => if let Err(e) = f.read_to_end(&mut key) {
-            return Err(format!("failed to load {} from path {}: {:?}", tag, path, e).into());
-        },
+        Some(mut f) => {
+            if let Err(e) = f.read_to_end(&mut key) {
+                return Err(format!("failed to load {} from path {}: {:?}", tag, path, e).into());
+            }
+        }
     }
     Ok(key)
 }
@@ -170,7 +172,7 @@ pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(path: P) -> Result<Arc<Env
                     return Err(format!(
                         "failed to convert file content to string, error: {:?}",
                         e
-                    ))
+                    ));
                 }
                 Ok(s) => s.trim().as_bytes().to_vec(),
             }
@@ -226,7 +228,7 @@ mod tests {
         let example_cert = temp.path().join("cert");
         let example_key = temp.path().join("key");
         for (id, f) in (&[&example_ca, &example_cert, &example_key])
-            .into_iter()
+            .iter()
             .enumerate()
         {
             File::create(f).unwrap().write_all(&[id as u8]).unwrap();

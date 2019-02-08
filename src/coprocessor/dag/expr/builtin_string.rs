@@ -13,6 +13,7 @@
 
 use base64;
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::i64;
 
@@ -22,7 +23,7 @@ use cop_datatype;
 use cop_datatype::prelude::*;
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::{datum, Datum};
 use safemem;
 
 const SPACE: u8 = 0o40u8;
@@ -58,6 +59,96 @@ impl ScalarFunc {
     pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         Ok(Some(input.len() as i64))
+    }
+
+    #[inline]
+    pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        if substr.is_empty() {
+            return Ok(Some(1));
+        }
+        if s.is_empty() {
+            return Ok(Some(0));
+        }
+        let substr = substr.to_lowercase();
+        let s = s.to_lowercase();
+        let result = match s.find(&substr) {
+            None => 0,
+            Some(i) => 1 + s[..i].chars().count() as i64,
+        };
+        Ok(Some(result))
+    }
+
+    #[inline]
+    pub fn locate_3_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        let mut pos = try_opt!(self.children[2].eval_int(ctx, row));
+
+        pos -= 1; // transfer 1-based argument to 0-based real index
+        if pos < 0 {
+            return Ok(Some(0));
+        }
+        let substr = substr.to_lowercase();
+        let s = s.to_lowercase();
+        if pos > (s.chars().count() as i64 - substr.chars().count() as i64) {
+            return Ok(Some(0));
+        }
+        if substr.is_empty() {
+            return Ok(Some(pos + 1));
+        }
+
+        let slice = s
+            .char_indices()
+            .nth(pos as usize)
+            .map(|(offset, _)| &s[offset..]);
+
+        if let Some(slice) = slice {
+            if let Some(idx) = slice.find(&substr) {
+                return Ok(Some(1 + pos + slice[..idx].chars().count() as i64));
+            }
+        }
+        Ok(Some(0))
+    }
+
+    #[inline]
+    pub fn locate_binary_2_args(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<i64>> {
+        let substr = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[1].eval_string(ctx, row));
+        if substr.is_empty() {
+            return Ok(Some(1));
+        }
+        let idx = s.windows(substr.len()).position(|w| w == &*substr);
+        Ok(Some(idx.map(|i| i as i64 + 1).unwrap_or(0)))
+    }
+
+    #[inline]
+    pub fn locate_binary_3_args(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<i64>> {
+        let substr = try_opt!(self.children[0].eval_string(ctx, row));
+        let s = try_opt!(self.children[1].eval_string(ctx, row));
+        let mut pos = try_opt!(self.children[2].eval_int(ctx, row));
+
+        pos -= 1; // transfer 1-based argument to 0-based real index
+        if pos < 0 || pos > (s.len() as i64 - substr.len() as i64) {
+            return Ok(Some(0));
+        }
+        if substr.is_empty() {
+            return Ok(Some(pos + 1));
+        }
+
+        let idx = s[pos as usize..]
+            .windows(substr.len())
+            .position(|w| w == &*substr);
+        Ok(Some(idx.map(|i| pos + i as i64 + 1).unwrap_or(0)))
     }
 
     #[inline]
@@ -313,6 +404,53 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn field_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
+        let val = try_opt_or!(self.children[0].eval_int(ctx, row), Some(0));
+
+        for (i, exp) in self.children.iter().skip(1).enumerate() {
+            match exp.eval_int(ctx, row) {
+                Err(e) => return Err(e),
+                Ok(Some(v)) if v == val => return Ok(Some(i as i64 + 1)),
+                _ => (),
+            }
+        }
+        Ok(Some(0))
+    }
+
+    #[inline]
+    pub fn field_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let val = try_opt_or!(self.children[0].eval_real(ctx, row), Some(0));
+
+        for (i, exp) in self.children.iter().skip(1).enumerate() {
+            match exp.eval_real(ctx, row) {
+                Err(e) => return Err(e),
+                Ok(Some(v)) => match datum::cmp_f64(v, val) {
+                    Ok(Ordering::Equal) => return Ok(Some(i as i64 + 1)),
+                    Err(e) => return Err(e),
+                    _ => (),
+                },
+                _ => (),
+            }
+        }
+        Ok(Some(0))
+    }
+
+    #[inline]
+    pub fn field_string(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let val = try_opt_or!(self.children[0].eval_string(ctx, row), Some(0));
+
+        for (i, exp) in self.children.iter().skip(1).enumerate() {
+            match exp.eval_string(ctx, row) {
+                Err(e) => return Err(e),
+                Ok(Some(ref v)) if *v == val => return Ok(Some(i as i64 + 1)),
+                _ => (),
+            }
+        }
+        Ok(Some(0))
+    }
+
+    #[inline]
     pub fn trim_1_arg<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -373,7 +511,7 @@ impl ScalarFunc {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
+    #[allow(clippy::wrong_self_convention)]
     #[inline]
     pub fn from_base64<'a, 'b: 'a>(
         &'b self,
@@ -434,7 +572,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
 
-        // we need to check the unsigned_flag , othewise a input larger than
+        // we need to check the unsigned_flag , otherwise a input larger than
         // i64::max_value() will overflow to a negative number
         let (pos, positive_search) = i64_to_usize(pos, self.children[1].is_unsigned());
 
@@ -912,15 +1050,16 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
+    use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
     use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
-    use coprocessor::codec::mysql::charset::CHARSET_BIN;
+    use std::{f64, i64};
     use tipb::expression::{Expr, ScalarFuncSig};
 
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
         col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
     };
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
     fn test_length() {
@@ -951,6 +1090,185 @@ mod tests {
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "length(NULL)");
+    }
+
+    #[test]
+    fn test_locate_2_args() {
+        let cases = vec![
+            ("bar", "foobarbar", 4i64),
+            ("xbar", "foobar", 0i64),
+            ("", "foobar", 1i64),
+            ("foobar", "", 0i64),
+            ("", "", 1i64),
+            ("好世", "你好世界", 2i64),
+            ("界面", "你好世界", 0i64),
+            ("b", "中a英b文", 4i64),
+            ("BaR", "foobArbar", 4i64),
+        ];
+
+        for (substr, s, exp) in cases {
+            let substr = Datum::Bytes(substr.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Locate2Args, &[substr, s]).unwrap();
+            assert_eq!(got, Datum::I64(exp));
+        }
+
+        let null_cases = vec![
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
+            (Datum::Null, Datum::Bytes(b"foobar".to_vec()), Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Bytes(b"bar".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Null, Datum::Null),
+        ];
+        for (substr, s, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::Locate2Args, &[substr, s]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_locate_binary_2_args() {
+        let cases = vec![
+            ("", "foobArbar", 1),
+            ("", "", 1),
+            ("xxx", "", 0),
+            ("BaR", "foobArbar", 0),
+            ("bar", "foobArbar", 7),
+            (
+                "好世",
+                "你好世界",
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
+        ];
+
+        for (substr, s, exp) in cases {
+            let substr = Datum::Bytes(substr.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::LocateBinary2Args, &[substr, s]).unwrap();
+            assert_eq!(got, Datum::I64(exp))
+        }
+
+        let null_cases = vec![
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Null, Datum::Null),
+        ];
+
+        for (substr, s, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::LocateBinary2Args, &[substr, s]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_locate_3_args() {
+        let cases = vec![
+            ("bar", "foobarbar", 5, 7),
+            ("xbar", "foobar", 1, 0),
+            ("", "foobar", 2, 2),
+            ("foobar", "", 1, 0),
+            ("", "", 2, 0),
+            ("A", "大A写的A", 0, 0),
+            ("A", "大A写的A", -1, 0),
+            ("A", "大A写的A", 1, 2),
+            ("A", "大A写的A", 2, 2),
+            ("A", "大A写的A", 3, 5),
+            ("bAr", "foobarBaR", 5, 7),
+            ("", "aa", 2, 2),
+            ("", "aa", 3, 3),
+            ("", "aa", 4, 0),
+        ];
+
+        for (substr, s, pos, exp) in cases {
+            let substr = Datum::Bytes(substr.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pos = Datum::I64(pos);
+            let got = eval_func(ScalarFuncSig::Locate3Args, &[substr, s, pos]).unwrap();
+            assert_eq!(got, Datum::I64(exp));
+        }
+
+        let null_cases = vec![
+            (Datum::Null, Datum::Null, Datum::I64(1), Datum::Null),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Null,
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"foo".to_vec()),
+                Datum::Null,
+                Datum::I64(-1),
+                Datum::Null,
+            ),
+            (
+                Datum::Null,
+                Datum::Bytes(b"bar".to_vec()),
+                Datum::I64(0),
+                Datum::Null,
+            ),
+        ];
+
+        for (substr, s, pos, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::Locate3Args, &[substr, s, pos]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_locate_binary_3_args() {
+        let cases = vec![
+            ("", "foobArbar", 0, 0),
+            ("", "foobArbar", 1, 1),
+            ("", "foobArbar", 2, 2),
+            ("", "foobArbar", 9, 9),
+            ("", "foobArbar", 10, 10),
+            ("", "foobArbar", 11, 0),
+            ("", "", 1, 1),
+            ("BaR", "foobArbar", 3, 0),
+            ("bar", "foobArbar", 1, 7),
+            (
+                "好世",
+                "你好世界",
+                1,
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
+        ];
+
+        for (substr, s, pos, exp) in cases {
+            let substr = Datum::Bytes(substr.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let pos = Datum::I64(pos);
+            let got = eval_func(ScalarFuncSig::LocateBinary3Args, &[substr, s, pos]).unwrap();
+            assert_eq!(got, Datum::I64(exp))
+        }
+
+        let null_cases = vec![
+            (
+                Datum::Null,
+                Datum::Bytes(b"".to_vec()),
+                Datum::I64(1),
+                Datum::Null,
+            ),
+            (
+                Datum::Bytes(b"".to_vec()),
+                Datum::Null,
+                Datum::Null,
+                Datum::Null,
+            ),
+            (Datum::Null, Datum::Null, Datum::Null, Datum::Null),
+        ];
+
+        for (substr, s, pos, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::LocateBinary3Args, &[substr, s, pos]).unwrap();
+            assert_eq!(got, exp);
+        }
     }
 
     #[test]
@@ -1561,7 +1879,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
@@ -1572,7 +1890,7 @@ mod tests {
         let cases = vec![
             (
                 vec![
-		    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b",".to_vec()),
                     Datum::Bytes(b"abc".to_vec()),
                     Datum::Bytes(b"defg".to_vec()),
                 ],
@@ -1616,7 +1934,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
@@ -1848,6 +2166,161 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::Elt, &children);
+            let e = Expression::build(&ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_field_int() {
+        let cases = vec![
+            (
+                vec![Datum::I64(1), Datum::I64(-2), Datum::I64(3)],
+                Datum::I64(0),
+            ),
+            (
+                vec![Datum::I64(-1), Datum::I64(2), Datum::I64(-1), Datum::I64(2)],
+                Datum::I64(2),
+            ),
+            (
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(0),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(3),
+            ),
+            (
+                vec![Datum::Null, Datum::I64(0), Datum::I64(0)],
+                Datum::I64(0),
+            ),
+            (vec![Datum::Null, Datum::Null, Datum::I64(0)], Datum::I64(0)),
+            (vec![Datum::I64(100)], Datum::I64(0)),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::FieldInt, &children);
+            let e = Expression::build(&ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_field_real() {
+        let cases = vec![
+            (
+                vec![Datum::F64(1.0), Datum::F64(-2.0), Datum::F64(9.0)],
+                Datum::I64(0),
+            ),
+            (
+                vec![
+                    Datum::F64(-1.0),
+                    Datum::F64(2.0),
+                    Datum::F64(-1.0),
+                    Datum::F64(2.0),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                vec![
+                    Datum::F64(f64::MAX),
+                    Datum::F64(0.0),
+                    Datum::F64(f64::MIN),
+                    Datum::F64(f64::MAX),
+                ],
+                Datum::I64(3),
+            ),
+            (
+                vec![Datum::Null, Datum::F64(1.0), Datum::F64(1.0)],
+                Datum::I64(0),
+            ),
+            (
+                vec![Datum::Null, Datum::Null, Datum::F64(0.0)],
+                Datum::I64(0),
+            ),
+            (vec![Datum::F64(10.0)], Datum::I64(0)),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::FieldReal, &children);
+            let e = Expression::build(&ctx, op).unwrap();
+            let res = e.eval(&mut ctx, &args).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_field_string() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::Bytes(b"foo".to_vec()),
+                    Datum::Bytes(b"foo".to_vec()),
+                    Datum::Bytes(b"bar".to_vec()),
+                    Datum::Bytes(b"baz".to_vec()),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"foo".to_vec()),
+                    Datum::Bytes(b"bar".to_vec()),
+                    Datum::Bytes(b"baz".to_vec()),
+                    Datum::Bytes(b"hello".to_vec()),
+                ],
+                Datum::I64(0),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"hello".to_vec()),
+                    Datum::Bytes(b"world".to_vec()),
+                    Datum::Bytes(b"world".to_vec()),
+                    Datum::Bytes(b"hello".to_vec()),
+                ],
+                Datum::I64(3),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"Hello".to_vec()),
+                    Datum::Bytes(b"Hola".to_vec()),
+                    Datum::Bytes("Cześć".as_bytes().to_vec()),
+                    Datum::Bytes("你好".as_bytes().to_vec()),
+                    Datum::Bytes("Здравствуйте".as_bytes().to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                    Datum::Bytes(b"Hello".to_vec()),
+                ],
+                Datum::I64(6),
+            ),
+            (
+                vec![
+                    Datum::Null,
+                    Datum::Bytes(b"DataBase".to_vec()),
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::I64(0),
+            ),
+            (
+                vec![
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Bytes(b"Hello World!".to_vec()),
+                ],
+                Datum::I64(0),
+            ),
+            (vec![Datum::Bytes(b"Hello World!".to_vec())], Datum::I64(0)),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (args, exp) in cases {
+            let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
+            let op = scalar_func_expr(ScalarFuncSig::FieldString, &children);
             let e = Expression::build(&ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);

@@ -1,11 +1,11 @@
 [package]
 name = "test_util"
 version = "0.0.1"
+edition = "2018"
 publish = false
 
 [dependencies]
 tikv = { path = "../../" }
 time = "0.1"
 rand = "0.5"
-slog = "2.3"
-slog-scope = "4.0"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

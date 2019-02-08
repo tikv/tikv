@@ -35,7 +35,7 @@ pub use self::split_check::{
     TableCheckObserver,
 };
 
-pub use raftstore::store::KeyEntry;
+pub use crate::raftstore::store::KeyEntry;
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.

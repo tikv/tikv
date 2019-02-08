@@ -23,6 +23,7 @@ extern crate failure;
 extern crate num_traits;
 #[cfg(test)]
 extern crate test;
+extern crate tikv_alloc;
 
 extern crate tipb;
 

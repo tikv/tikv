@@ -12,6 +12,7 @@
 // limitations under the License.
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// A load metric for all threads.
 pub struct ThreadLoad {
     term: AtomicUsize,
     load: AtomicUsize,
@@ -19,6 +20,7 @@ pub struct ThreadLoad {
 }
 
 impl ThreadLoad {
+    /// Constructs a new `ThreadLoad` with the specified threshold.
     pub fn with_threshold(threshold: usize) -> Self {
         ThreadLoad {
             term: AtomicUsize::new(0),
@@ -27,18 +29,19 @@ impl ThreadLoad {
         }
     }
 
+    /// Returns true if the current load exceeds its threshold.
     #[allow(dead_code)]
     pub fn in_heavy_load(&self) -> bool {
         self.load.load(Ordering::Acquire) > self.threshold
     }
 
-    /// Incease when every time updating `load`.
+    /// Increases when updating `load`.
     #[allow(dead_code)]
     pub fn term(&self) -> usize {
         self.term.load(Ordering::Acquire)
     }
 
-    /// For example, 200 means the threads eat 200% CPU.
+    /// Gets the current load. For example, 200 means the threads consuming 200% of the CPU resources.
     #[allow(dead_code)]
     pub fn load(&self) -> usize {
         self.load.load(Ordering::Acquire)
@@ -56,12 +59,15 @@ mod other_os {
     use std::sync::Arc;
     use std::time::Instant;
 
+    /// A dummy `ThreadLoadStatistics` implementation for non-Linux platforms
     pub struct ThreadLoadStatistics {}
 
     impl ThreadLoadStatistics {
+        /// Constructs a new `ThreadLoadStatistics`.
         pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
             ThreadLoadStatistics {}
         }
+        /// Records current thread load statistics.
         pub fn record(&mut self, _instant: Instant) {}
     }
 }

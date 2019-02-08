@@ -20,8 +20,8 @@ use rand::{Rng, SeedableRng, XorShiftRng};
 use time;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
+use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     #[inline]
@@ -578,8 +578,10 @@ mod tests {
     use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
     use tipb::expression::ScalarFuncSig;
 
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, eval_func, eval_func_with, str2dec,
+    };
 
     #[test]
     fn test_abs() {
@@ -607,7 +609,8 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -687,7 +690,8 @@ mod tests {
                         .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                         .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -760,7 +764,8 @@ mod tests {
                         .set_flen(cop_datatype::UNSPECIFIED_LENGTH)
                         .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -1351,7 +1356,8 @@ mod tests {
                         .as_mut_accessor()
                         .set_flag(FieldTypeFlag::UNSIGNED);
                 }
-            }).unwrap();
+            })
+            .unwrap();
             assert_eq!(got, exp);
         }
     }

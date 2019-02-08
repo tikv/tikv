@@ -21,14 +21,18 @@ use std::time::Duration;
 use futures::Future;
 use futures_cpupool::CpuFuture;
 
-use util;
-use util::futurepool::{self, FuturePool};
+use crate::util;
+use crate::util::futurepool::{self, FuturePool};
 
 pub use self::config::Config;
 pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
 
+/// A priority-aware thread pool for executing futures.
+///
+/// It is specifically used for all sorts of read operations like KV Get,
+/// KV Scan and Coprocessor Read to improve performance.
 pub struct ReadPool<T: futurepool::Context + 'static> {
     pool_high: FuturePool<T>,
     pool_normal: FuturePool<T>,
@@ -53,6 +57,7 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 }
 
 impl<T: futurepool::Context + 'static> ReadPool<T> {
+    /// Creates a new thread pool.
     pub fn new<F>(name_prefix: &str, config: &Config, context_factory: F) -> Self
     where
         F: Fn() -> T,

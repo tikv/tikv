@@ -39,9 +39,9 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use util::mpsc::{self, Receiver, Sender};
-use util::time::{Instant, SlowTimer};
-use util::timer::Timer;
+use crate::util::mpsc::{self, Receiver, Sender};
+use crate::util::time::{Instant, SlowTimer};
+use crate::util::timer::Timer;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -105,7 +105,7 @@ pub trait Runnable<T: Display> {
 }
 
 pub trait RunnableWithTimer<T: Display, U>: Runnable<T> {
-    fn on_timeout(&mut self, &mut Timer<U>, U);
+    fn on_timeout(&mut self, _: &mut Timer<U>, _: U);
 }
 
 struct DefaultRunnerWithTimer<R>(R);

@@ -35,13 +35,11 @@ pub use self::bootstrap::{
 };
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
-pub use self::fsm::{
-    create_event_loop, new_compaction_listener, DestroyPeerJob, Store, StoreChannel, StoreInfo,
-    StoreStat,
-};
+pub use self::fsm::{new_compaction_listener, DestroyPeerJob, StoreInfo};
 pub use self::msg::{
-    Callback, Msg, ReadCallback, ReadResponse, SeekRegionCallback, SeekRegionFilter,
-    SeekRegionResult, SignificantMsg, Tick, WriteCallback, WriteResponse,
+    Callback, Msg, PeerMsg, PeerTick, ReadCallback, ReadResponse, SeekRegionCallback,
+    SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick, WriteCallback,
+    WriteResponse,
 };
 pub use self::peer::{
     Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,

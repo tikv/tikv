@@ -19,10 +19,10 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
-use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
-use coprocessor::codec::{mysql, Datum};
+use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::mysql::decimal::RoundMode;
+use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
+use crate::coprocessor::codec::{mysql, Datum};
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -90,12 +90,14 @@ impl ScalarFunc {
 
         match res {
             Ok(v) => Ok(Some(v)),
-            Err(e) => if e.is_overflow() {
-                ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
-                    .map(Some)
-            } else {
-                Err(e)
-            },
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
+                        .map(Some)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
@@ -443,12 +445,14 @@ impl ScalarFunc {
         // TODO: port NumberToDuration from tidb.
         match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
             Ok(dur) => Ok(Some(Cow::Owned(dur))),
-            Err(e) => if e.is_overflow() {
-                ctx.handle_overflow(e)?;
-                Ok(None)
-            } else {
-                Err(e)
-            },
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.handle_overflow(e)?;
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
@@ -490,8 +494,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let mut res = val.to_duration()?;
-        res.round_frac(self.field_type.decimal() as i8)?;
+        let res = val
+            .to_duration()?
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -501,8 +506,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut res = val.into_owned();
-        res.round_frac(self.field_type.decimal() as i8)?;
+        let res = val
+            .into_owned()
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -595,7 +601,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let mut val = val.into_owned();
-        val.fsp = mysql::MAX_FSP as u8;
+        val.set_fsp(mysql::MAX_FSP as u8);
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }
@@ -618,7 +624,9 @@ impl ScalarFunc {
         if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(val);
         }
-        let res = val.into_owned().convert_to(ctx, flen as u8, decimal as u8)?;
+        let res = val
+            .into_owned()
+            .convert_to(ctx, flen as u8, decimal as u8)?;
         Ok(Cow::Owned(res))
     }
 
@@ -725,12 +733,14 @@ mod tests {
 
     use chrono::Utc;
 
-    use coprocessor::codec::error::*;
-    use coprocessor::codec::mysql::{self, charset, Decimal, Duration, Json, Time, TimeType, Tz};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
-    use coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::codec::error::*;
+    use crate::coprocessor::codec::mysql::{
+        self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
+    };
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);
@@ -747,7 +757,7 @@ mod tests {
     fn test_cast_as_int() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
+        #[allow(clippy::inconsistent_digit_grouping)]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -861,7 +871,7 @@ mod tests {
         ];
         for (sig, tp, col, expect) in cases {
             let col_expr = col_expr(0, tp);
-            let mut exp = scalar_func_expr(sig, &[col_expr]);
+            let exp = scalar_func_expr(sig, &[col_expr]);
             let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_int(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
@@ -872,7 +882,7 @@ mod tests {
     fn test_cast_as_real() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-        #[cfg_attr(feature = "cargo-clippy", allow(inconsistent_digit_grouping))]
+        #[allow(clippy::inconsistent_digit_grouping)]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
@@ -943,7 +953,7 @@ mod tests {
             (
                 ScalarFuncSig::CastDurationAsReal,
                 FieldTypeTp::Duration,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 cop_datatype::UNSPECIFIED_LENGTH,
                 120023f64,
@@ -1081,7 +1091,7 @@ mod tests {
             (
                 ScalarFuncSig::CastDurationAsDecimal,
                 FieldTypeTp::Duration,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(120023),
@@ -1232,7 +1242,7 @@ mod tests {
                 FieldTypeTp::Duration,
                 charset::CHARSET_UTF8,
                 None,
-                vec![Datum::Dur(duration_t.clone())],
+                vec![Datum::Dur(duration_t)],
                 cop_datatype::UNSPECIFIED_LENGTH,
                 dur_str.to_vec(),
             ),
@@ -1512,7 +1522,7 @@ mod tests {
         let str_cols = vec![Datum::Bytes(dur_str.as_bytes().to_vec())];
         let f64_cols = vec![Datum::F64(dur_int as f64)];
         let time_cols = vec![Datum::Time(dur_to_time)];
-        let duration_cols = vec![Datum::Dur(duration.clone())];
+        let duration_cols = vec![Datum::Dur(duration)];
         let dec_cols = vec![Datum::Dec(Decimal::from(dur_int))];
 
         let cases = vec![
@@ -1638,9 +1648,9 @@ mod tests {
             let e = Expression::build(&ctx, ex).unwrap();
             let res = e.eval_duration(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
-            let mut expt = exp.clone();
+            let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
-                expt.fsp = to_fsp as u8;
+                expt.set_fsp(to_fsp as u8);
             }
             assert_eq!(
                 data.to_string(),
@@ -1892,7 +1902,7 @@ mod tests {
             ),
         ];
         for (flag, cols, exp) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::NewDecimal);
+            let col_expr = col_expr(0, FieldTypeTp::NewDecimal);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
             ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
@@ -1940,7 +1950,7 @@ mod tests {
         ];
 
         for (flag, cols, exp, warnings_cnt) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::String);
+            let col_expr = col_expr(0, FieldTypeTp::String);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
@@ -1966,7 +1976,7 @@ mod tests {
         ];
 
         for (cols, exp) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::String);
+            let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
