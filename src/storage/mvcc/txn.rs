@@ -140,7 +140,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     fn key_exist(&mut self, key: &Key, ts: u64) -> Result<bool> {
-        Ok(self.reader.skip_lock_get(&key, ts)?.is_some())
+        Ok(self.reader.get_write(&key, ts)?.is_some())
     }
 
     pub fn prewrite(
