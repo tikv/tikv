@@ -34,8 +34,11 @@ use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::{is_short_value, CF_DEFAULT, CF_WRITE};
 use crate::util::config::MB;
-use crate::util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
-use crate::util::rocksdb::{new_engine_opt, CFOptions};
+use crate::util::rocksdb_util::{
+    new_engine_opt,
+    properties::{SizeProperties, SizePropertiesCollectorFactory},
+    CFOptions,
+};
 
 use super::common::*;
 use super::Result;
@@ -301,7 +304,7 @@ mod tests {
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
-    use crate::util::rocksdb::new_engine_opt;
+    use crate::util::rocksdb_util::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();

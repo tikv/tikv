@@ -21,7 +21,7 @@ use super::{Error, Result};
 use crate::raftstore::store::engine::IterOption;
 use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::{Key, Value, CF_LOCK, CF_WRITE};
-use crate::util::properties::MvccProperties;
+use crate::util::rocksdb_util::properties::MvccProperties;
 use kvproto::kvrpcpb::IsolationLevel;
 use std::u64;
 
@@ -501,8 +501,11 @@ mod tests {
     use crate::storage::mvcc::write::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::properties::{MvccProperties, MvccPropertiesCollectorFactory};
-    use crate::util::rocksdb::{self as rocksdb_util, CFOptions};
+    use crate::util::rocksdb_util::{
+        self as rocksdb_util,
+        properties::{MvccProperties, MvccPropertiesCollectorFactory},
+        CFOptions,
+    };
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use rocksdb::{self, Writable, WriteBatch, DB};

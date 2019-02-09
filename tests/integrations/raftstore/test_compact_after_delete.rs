@@ -19,7 +19,7 @@ use tikv::storage::mvcc::{Write, WriteType};
 use tikv::storage::types::Key as MvccKey;
 use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
-use tikv::util::rocksdb::get_cf_handle;
+use tikv::util::rocksdb_util::get_cf_handle;
 
 fn gen_mvcc_put_kv(k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) -> (Vec<u8>, Vec<u8>) {
     let k = MvccKey::from_encoded(data_key(k));

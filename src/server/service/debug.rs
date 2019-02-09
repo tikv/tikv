@@ -29,7 +29,7 @@ use crate::raftstore::store::msg::Callback;
 use crate::raftstore::store::Engines;
 use crate::server::debug::{Debugger, Error};
 use crate::server::transport::RaftStoreRouter;
-use crate::util::{metrics, rocksdb_stats};
+use crate::util::{metrics, rocksdb_util::stats as rocksdb_stats};
 use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {

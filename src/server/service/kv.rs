@@ -1625,10 +1625,6 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             warn!("txn conflicts: {:?}", err);
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Closed => {
-            warn!("tikv server is closing");
-            key_error.set_retryable(format!("{:?}", err));
-        }
         _ => {
             error!("txn aborts: {:?}", err);
             key_error.set_abort(format!("{:?}", err));

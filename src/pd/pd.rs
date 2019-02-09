@@ -40,7 +40,7 @@ use crate::raftstore::store::{Msg, PeerMsg};
 use crate::storage::FlowStatistics;
 use crate::util::collections::HashMap;
 use crate::util::escape;
-use crate::util::rocksdb::*;
+use crate::util::rocksdb_util::*;
 use crate::util::time::time_now_sec;
 use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 use prometheus::local::LocalHistogram;

@@ -79,7 +79,7 @@ use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::util::rocksdb as rocksdb_util;
+use tikv::util::rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
 
