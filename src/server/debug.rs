@@ -59,11 +59,11 @@ quick_error! {
     pub enum Error {
         InvalidArgument(msg: String) {
             description(msg)
-            display("Invalid Argument {:?}", msg)
+            display("Invalid Argument {}", msg)
         }
         NotFound(msg: String) {
             description(msg)
-            display("Not Found {:?}", msg)
+            display("Not Found {}", msg)
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
