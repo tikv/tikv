@@ -234,26 +234,16 @@ impl<S: Snapshot> MvccReader<S> {
             IsolationLevel::SI => ts = self.check_lock(key, ts)?,
             IsolationLevel::RC => {}
         }
-        loop {
-            match self.seek_write(key, ts)? {
-                Some((commit_ts, mut write)) => match write.write_type {
-                    WriteType::Put => {
-                        if write.short_value.is_some() {
-                            if self.key_only {
-                                return Ok(Some(vec![]));
-                            }
-                            return Ok(write.short_value.take());
-                        }
-                        return self.load_data(key, write.start_ts).map(Some);
-                    }
-                    WriteType::Delete => {
-                        return Ok(None);
-                    }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
-                },
-                None => return Ok(None),
+        if let Some(mut write) = self.get_write(key, ts)? {
+            if write.short_value.is_some() {
+                if self.key_only {
+                    return Ok(Some(vec![]));
+                }
+                return Ok(write.short_value.take());
             }
+            return self.load_data(key, write.start_ts).map(Some);
         }
+        Ok(None)
     }
 
     pub fn get_write(&mut self, key: &Key, mut ts: u64) -> Result<Option<Write>> {
