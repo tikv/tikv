@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use ::rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use futures::Future;
 use kvproto::errorpb;
@@ -22,6 +21,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use protobuf;
 use raft::{Ready, StateRole};
+use rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -39,12 +39,12 @@ use crate::raftstore::Result;
 use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::util::collections::{HashMap, HashSet};
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
-use crate::util::rocksdb::{CompactedEvent, CompactionListener};
+use crate::util::rocksdb_util::{self, CompactedEvent, CompactionListener};
 use crate::util::time::{duration_to_sec, SlowTimer};
 use crate::util::timer::SteadyTimer;
 use crate::util::transport::RetryableSendCh;
 use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use crate::util::{is_zero_duration, rocksdb, sys as util_sys, Either, RingQueue};
+use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::import::SSTImporter;
 use crate::raftstore::store::config::Config;
@@ -837,7 +837,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
             .unwrap();
         let key = keys::region_state_key(region.get_id());
-        let handle = rocksdb::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
+        let handle = rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
         kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
     }
 
@@ -855,7 +855,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocksdb::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
+        rocksdb_util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
 
         info!(
             "[store {}] cleans up {} ranges garbage data, takes {:?}",
@@ -1088,7 +1088,7 @@ impl RaftBatchSystem {
         let timer = LocalReader::new_timer();
         box_try!(workers.local_reader.start_with_timer(reader, timer));
 
-        if let Err(e) = util_sys::thread::set_priority(util_sys::HIGH_PRI) {
+        if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed, error: {:?}", e);
         }
         let tag = format!("raftstore-{}", builder.store.get_id());
@@ -1440,7 +1440,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return;
         }
 
-        if rocksdb::auto_compactions_is_disabled(&self.ctx.engines.kv) {
+        if rocksdb_util::auto_compactions_is_disabled(&self.ctx.engines.kv) {
             debug!(
                 "{} skip compact check when disabled auto compactions.",
                 self.fsm.store.tag
@@ -1958,8 +1958,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
 
-    use crate::util::rocksdb::properties::{IndexHandle, IndexHandles, SizeProperties};
-    use crate::util::rocksdb::CompactedEvent;
+    use crate::util::rocksdb_util::properties::{IndexHandle, IndexHandles, SizeProperties};
+    use crate::util::rocksdb_util::CompactedEvent;
     use protobuf::RepeatedField;
 
     use super::*;

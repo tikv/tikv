@@ -240,7 +240,7 @@ mod tests {
     use crate::storage::ALL_CFS;
     use crate::util::codec::number::NumberEncoder;
     use crate::util::config::ReadableSize;
-    use crate::util::rocksdb::new_engine;
+    use crate::util::rocksdb_util::new_engine;
     use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 

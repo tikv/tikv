@@ -142,7 +142,7 @@ impl Runnable<Task> for Runner {
 mod tests {
     use super::*;
     use crate::storage::CF_DEFAULT;
-    use crate::util::rocksdb::new_engine;
+    use crate::util::rocksdb_util::new_engine;
     use std::sync::mpsc;
     use std::time::Duration;
     use tempdir::TempDir;
