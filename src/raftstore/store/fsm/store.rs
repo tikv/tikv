@@ -344,18 +344,20 @@ impl<T: Transport, C> PollContext<T, C> {
 
         if !need_gc {
             info!(
-                "raft message {:?} is stale, ignore it", msg_type;
+                "raft message is stale, ignore it";
                 "region_id" => region_id,
                 "epoch" => ?cur_epoch,
+                "msg_type" => ?msg_type,
             );
             self.raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
 
         info!(
-            "raft message {:?} is stale, tell to gc", msg_type;
+            "raft message is stale, tell to gc";
             "region_id" => region_id,
             "epoch" => ?cur_epoch,
+            "msg_type" => ?msg_type,
         );
 
         let mut gc_msg = RaftMessage::new();
@@ -1212,9 +1214,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let region_epoch = region.get_region_epoch();
         if local_state.has_merge_state() {
             info!(
-                "merged peer receives a stale message {:?}", msg_type;
+                "merged peer receives a stale message";
                 "region_id" => region_id,
                 "epoch" => ?region_epoch,
+                "msg_type" => ?msg_type,
             );
 
             let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
@@ -1236,9 +1239,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // The region in this peer is already destroyed
         if util::is_epoch_stale(from_epoch, region_epoch) {
             info!(
-                "tombstone peer receives a stale message {:?}", msg_type;
+                "tombstone peer receives a stale message";
                 "region_id" => region_id,
                 "epoch" => ?region_epoch,
+                "msg_type" => ?msg_type,
             );
 
             let not_exist = util::find_peer(region, from_store_id).is_none();
@@ -1273,12 +1277,12 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
 
         debug!(
-            "handle raft message {:?}, from {} to {}",
-            msg.get_message().get_msg_type(),
+            "handle raft message, from {} to {}",
             msg.get_from_peer().get_id(),
             msg.get_to_peer().get_id();
             "store_id" => self.fsm.store.id,
             "region_id" => region_id,
+            "msg_type" => ?msg.get_message().get_msg_type(),
         );
 
         if msg.get_to_peer().get_store_id() != self.ctx.store_id() {
@@ -1332,9 +1336,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
             debug!(
-                "target peer {:?} doesn't exist, stale message {:?}",
-                target, msg_type;
+                "target peer {:?} doesn't exist, stale message", target;
                 "region_id" => region_id,
+                "msg_type" => ?msg_type,
             );
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return Ok(false);
