@@ -138,7 +138,8 @@ test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 test_coprocessor = { path = "components/test_coprocessor" }
 # See https://japaric.github.io/criterion.rs/book/user_guide/known_limitations.html
-criterion = { version = "0.2", features=['real_blackbox'] }
+# critcmp is known to support 0.2.5
+criterion = { version = "=0.2.5", features=['real_blackbox'] }
 arrow = "0.10.0"
 
 [target.'cfg(unix)'.dependencies]

@@ -11,16 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::RefCell;
+use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
 use rocksdb::DB;
-use std::cell::RefCell;
-use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use time::Timespec;
 
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
@@ -352,7 +353,7 @@ impl<C: Sender<StoreMsg>> LocalReader<C> {
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
             self.metrics.borrow_mut().rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("rejected by stale epoch"; "tag" => &delegate.tag);
+            debug!("rejected by epoch not match"; "tag" => &delegate.tag);
             return Ok(None);
         }
 
@@ -619,7 +620,7 @@ mod tests {
     use crate::raftstore::store::util::Lease;
     use crate::raftstore::store::Callback;
     use crate::storage::ALL_CFS;
-    use crate::util::rocksdb;
+    use crate::util::rocksdb_util;
     use crate::util::time::monotonic_raw_now;
 
     use super::*;
@@ -633,7 +634,7 @@ mod tests {
         Receiver<StoreMsg>,
     ) {
         let path = TempDir::new(path).unwrap();
-        let db = rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap();
+        let db = rocksdb_util::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_id,

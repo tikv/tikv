@@ -25,7 +25,7 @@ use rocksdb::DB;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use crate::util::future::paired_future_callback;
-use crate::util::rocksdb::compact_files_in_range;
+use crate::util::rocksdb_util::compact_files_in_range;
 use crate::util::time::Instant;
 
 use super::import_mode::*;
