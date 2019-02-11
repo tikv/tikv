@@ -105,7 +105,10 @@ macro_rules! box_err {
 macro_rules! slow_log {
     ($t:expr, $($arg:tt)*) => {{
         if $t.is_slow() {
-            warn!("{} [takes {:?}]", format_args!($($arg)*), $t.elapsed());
+            warn!("handle task slow";
+                "task" => format!("{}", format_args!($($arg)*)),
+                "elapsed" => ?$t.elapsed(),
+            );
         }
     }}
 }
