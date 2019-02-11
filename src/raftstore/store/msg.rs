@@ -283,7 +283,7 @@ impl fmt::Debug for PeerMsg {
                 stale,
             } => write! {
                 fmt,
-                "[reigon {}] target: {:?}, successful: {}",
+                "[region {}] target: {:?}, successful: {}",
                 region_id, target, stale
             },
             PeerMsg::GcSnap {
