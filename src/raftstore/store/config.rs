@@ -16,8 +16,8 @@ use std::u64;
 
 use time::Duration as TimeDuration;
 
-use raftstore::{coprocessor, Result};
-use util::config::{ReadableDuration, ReadableSize};
+use crate::raftstore::{coprocessor, Result};
+use crate::util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -128,6 +128,10 @@ pub struct Config {
     pub apply_max_batch_size: usize,
     pub apply_pool_size: usize,
 
+    pub store_max_batch_size: usize,
+    pub store_pool_size: usize,
+    pub future_poll_size: usize,
+
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
@@ -196,6 +200,9 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_max_batch_size: 1024,
             apply_pool_size: 2,
+            store_max_batch_size: 1024,
+            store_pool_size: 2,
+            future_poll_size: 1,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -340,6 +347,15 @@ impl Config {
         if self.apply_max_batch_size == 0 {
             return Err(box_err!("apply-max-batch-size should be greater than 0"));
         }
+        if self.store_pool_size == 0 {
+            return Err(box_err!("store-pool-size should be greater than 0"));
+        }
+        if self.store_max_batch_size == 0 {
+            return Err(box_err!("store-max-batch-size should be greater than 0"));
+        }
+        if self.future_poll_size == 0 {
+            return Err(box_err!("future-poll-size should be greater than 0."));
+        }
         Ok(())
     }
 }
@@ -348,7 +364,7 @@ impl Config {
 mod tests {
     use super::*;
 
-    use util::config::*;
+    use crate::util::config::*;
 
     #[test]
     fn test_config_validate() {
@@ -431,6 +447,10 @@ mod tests {
 
         cfg = Config::new();
         cfg.apply_pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.future_poll_size = 0;
         assert!(cfg.validate().is_err());
     }
 }

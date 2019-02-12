@@ -15,11 +15,11 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::engine::SEEK_BOUND;
-use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::Result;
-use storage::{Cursor, CursorBuilder, Key, Lock, ScanMode, Snapshot, Statistics, Value};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::engine::SEEK_BOUND;
+use crate::storage::mvcc::write::{Write, WriteType};
+use crate::storage::mvcc::Result;
+use crate::storage::{Cursor, CursorBuilder, Key, Lock, ScanMode, Snapshot, Statistics, Value};
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::util::CheckLockResult;
 
@@ -371,7 +371,7 @@ impl<S: Snapshot> BackwardScanner<S> {
 
             match write.write_type {
                 WriteType::Put => {
-                    return Ok(Some(self.reverse_load_data_by_write(write, user_key)?))
+                    return Ok(Some(self.reverse_load_data_by_write(write, user_key)?));
                 }
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
@@ -481,8 +481,8 @@ impl<S: Snapshot> BackwardScanner<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::mvcc::tests::*;
-    use storage::{Engine, Key, TestEngineBuilder};
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::{Engine, Key, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
@@ -499,14 +499,14 @@ mod tests {
 
         // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
         let k = &[9 as u8];
-        for ts in 0..REVERSE_SEEK_BOUND + 1 {
+        for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_commit(&engine, k, ts, ts);
         }
 
         // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback for key [8].
         let k = &[8 as u8];
-        for ts in 0..REVERSE_SEEK_BOUND + 1 {
+        for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             if ts < REVERSE_SEEK_BOUND / 2 {
                 must_commit(&engine, k, ts, ts);
@@ -527,7 +527,7 @@ mod tests {
             must_prewrite_delete(&engine, k, k, ts);
             must_commit(&engine, k, ts, ts);
         }
-        for ts in REVERSE_SEEK_BOUND / 2 + 1..REVERSE_SEEK_BOUND + 1 {
+        for ts in REVERSE_SEEK_BOUND / 2 + 1..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_rollback(&engine, k, ts);
         }
@@ -541,7 +541,7 @@ mod tests {
 
         // Generate REVERSE_SEEK_BOUND + 1 Rollback for key [5].
         let k = &[5 as u8];
-        for ts in 0..REVERSE_SEEK_BOUND + 1 {
+        for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
             must_rollback(&engine, k, ts);
         }
@@ -809,7 +809,7 @@ mod tests {
         // Generate 1 put and N/2 rollback for [b].
         must_prewrite_put(&engine, b"b", b"value_b", b"b", 0);
         must_commit(&engine, b"b", 0, 0);
-        for ts in 1..REVERSE_SEEK_BOUND / 2 + 1 {
+        for ts in 1..=REVERSE_SEEK_BOUND / 2 {
             must_rollback(&engine, b"b", ts);
         }
 
@@ -884,7 +884,7 @@ mod tests {
         must_commit(&engine, b"c", 1, 1);
 
         // Generate N/2 put for [b] .
-        for ts in 1..SEEK_BOUND / 2 + 1 {
+        for ts in 1..=SEEK_BOUND / 2 {
             must_prewrite_put(&engine, b"b", &[ts as u8], b"b", ts);
             must_commit(&engine, b"b", ts, ts);
         }

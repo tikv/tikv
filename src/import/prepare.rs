@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 
 use kvproto::metapb::*;
 
-use pd::RegionInfo;
-use util::escape;
-use util::rocksdb::properties::SizeProperties;
+use crate::pd::RegionInfo;
+use crate::util::escape;
+use crate::util::rocksdb_util::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;
@@ -192,18 +192,24 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                 region.leader = new_leader;
                 Err(Error::UpdateRegion(region))
             }
-            Err(Error::StaleEpoch(new_regions)) => {
-                let new_region = new_regions.iter().find(|&r| self.need_split(r)).cloned();
-                match new_region {
-                    Some(new_region) => {
+            Err(Error::EpochNotMatch(current_regions)) => {
+                let current_region = current_regions
+                    .iter()
+                    .find(|&r| self.need_split(r))
+                    .cloned();
+                match current_region {
+                    Some(current_region) => {
                         let new_leader = region
                             .leader
-                            .and_then(|p| find_region_peer(&new_region, p.get_store_id()));
-                        Err(Error::UpdateRegion(RegionInfo::new(new_region, new_leader)))
+                            .and_then(|p| find_region_peer(&current_region, p.get_store_id()));
+                        Err(Error::UpdateRegion(RegionInfo::new(
+                            current_region,
+                            new_leader,
+                        )))
                     }
                     None => {
-                        warn!("{} stale epoch {:?}", self.tag, new_regions);
-                        Err(Error::StaleEpoch(new_regions))
+                        warn!("{} epoch not match {:?}", self.tag, current_regions);
+                        Err(Error::EpochNotMatch(current_regions))
                     }
                 }
             }
@@ -226,14 +232,16 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
     fn split_region(&self, region: &RegionInfo) -> Result<RegionInfo> {
         let split_key = self.range.get_end();
         let res = match self.client.split_region(region, split_key) {
-            Ok(mut resp) => if !resp.has_region_error() {
-                Ok(resp)
-            } else {
-                match Error::from(resp.take_region_error()) {
-                    e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
-                    e => Err(e),
+            Ok(mut resp) => {
+                if !resp.has_region_error() {
+                    Ok(resp)
+                } else {
+                    match Error::from(resp.take_region_error()) {
+                        e @ Error::NotLeader(_) | e @ Error::EpochNotMatch(_) => return Err(e),
+                        e => Err(e),
+                    }
                 }
-            },
+            }
             Err(e) => Err(e),
         };
 
@@ -278,14 +286,14 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
     use rocksdb::Writable;
     use tempdir::TempDir;
     use uuid::Uuid;
 
-    use config::DbConfig;
-    use storage::types::Key;
+    use crate::config::DbConfig;
+    use crate::storage::types::Key;
 
     fn new_encoded_key(k: &[u8]) -> Vec<u8> {
         if k.is_empty() {

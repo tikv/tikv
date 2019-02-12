@@ -17,8 +17,8 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use raftstore::store::msg::Msg;
-use util::transport::{RetryableSendCh, Sender};
+use crate::raftstore::store::msg::Msg;
+use crate::util::transport::{RetryableSendCh, Sender};
 
 use super::*;
 
@@ -131,7 +131,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: Sender<Msg> + Send + Sync + 'static>(
+    pub fn new<C: Sender<Msg> + Send + 'static>(
         cfg: Config,
         ch: RetryableSendCh<Msg, C>,
     ) -> CoprocessorHost {
@@ -273,8 +273,8 @@ impl CoprocessorHost {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::*;
     use protobuf::RepeatedField;
-    use raftstore::coprocessor::*;
     use std::sync::atomic::*;
     use std::sync::*;
 

@@ -18,18 +18,18 @@ use std::result;
 
 use protobuf::{ProtobufError, RepeatedField};
 
+use crate::pd;
+use crate::util::codec;
 use kvproto::{errorpb, metapb};
-use pd;
 use raft;
-use util::codec;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use util::{escape, transport};
+use crate::util::{escape, transport};
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {
@@ -115,9 +115,9 @@ quick_error!{
             description("request timeout")
             display("Timeout {}", msg)
         }
-        StaleEpoch(msg: String, new_regions: Vec<metapb::Region>) {
-            description("region is stale")
-            display("StaleEpoch {}", msg)
+        EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
+            description("region epoch is not match")
+            display("EpochNotMatch {}", msg)
         }
         StaleCommand {
             description("stale command")
@@ -186,10 +186,10 @@ impl Into<errorpb::Error> for Error {
                     .mut_key_not_in_region()
                     .set_end_key(region.get_end_key().to_vec());
             }
-            Error::StaleEpoch(_, new_regions) => {
-                let mut e = errorpb::StaleEpoch::new();
-                e.set_new_regions(RepeatedField::from_vec(new_regions));
-                errorpb.set_stale_epoch(e);
+            Error::EpochNotMatch(_, new_regions) => {
+                let mut e = errorpb::EpochNotMatch::new();
+                e.set_current_regions(RepeatedField::from_vec(new_regions));
+                errorpb.set_epoch_not_match(e);
             }
             Error::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::new());

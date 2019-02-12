@@ -118,6 +118,9 @@ cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
 apply-max-batch-size = 22
 apply-pool-size = 4
+store-max-batch-size = 21
+store-pool-size = 3
+future-poll-size = 2
 
 [coprocessor]
 split-region-on-table = true

@@ -45,12 +45,12 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@cargo clippy --all --all-targets -- \
-		-A module_inception -A needless_pass_by_value -A cyclomatic_complexity \
-		-A unreadable_literal -A should_implement_trait -A verbose_bit_mask \
-		-A implicit_hasher -A large_enum_variant -A new_without_default \
-		-A new_without_default_derive -A neg_cmp_op_on_partial_ord \
-		-A too_many_arguments -A excessive_precision -A collapsible_if \
-		-A blacklisted_name -A needless_range_loop
+		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cyclomatic_complexity \
+		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
+		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
+		-A clippy::new_without_default_derive -A clippy::neg_cmp_op_on_partial_ord \
+		-A clippy::too_many_arguments -A clippy::excessive_precision -A clippy::collapsible_if \
+		-A clippy::blacklisted_name -A clippy::needless_range_loop
 
 dev: format clippy
 	@env FAIL_POINT=1 make test

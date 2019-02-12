@@ -23,14 +23,14 @@ pub use self::reader::{BackwardScanner, BackwardScannerBuilder};
 pub use self::reader::{ForwardScanner, ForwardScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
+use crate::util::escape;
 use std::error;
 use std::io;
-use util::escape;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Engine(err: ::storage::engine::Error) {
+        Engine(err: crate::storage::engine::Error) {
             from()
             cause(err)
             description(err.description())
@@ -40,7 +40,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: ::util::codec::Error) {
+        Codec(err: crate::util::codec::Error) {
             from()
             cause(err)
             description(err.description())
@@ -131,8 +131,8 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use storage::CF_WRITE;
-    use storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
+    use crate::storage::CF_WRITE;
+    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
 
     use super::*;
 
@@ -184,7 +184,8 @@ pub mod tests {
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             pk,
             &Options::default(),
-        ).unwrap();
+        )
+        .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -196,7 +197,8 @@ pub mod tests {
             Mutation::Delete(Key::from_raw(key)),
             pk,
             &Options::default(),
-        ).unwrap();
+        )
+        .unwrap();
         engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
@@ -213,10 +215,9 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        assert!(
-            txn.prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
-                .is_err()
-        );
+        assert!(txn
+            .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+            .is_err());
     }
 
     pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -297,12 +298,10 @@ pub mod tests {
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(
-            reader
-                .seek_write(&Key::from_raw(key), ts)
-                .unwrap()
-                .is_none()
-        );
+        assert!(reader
+            .seek_write(&Key::from_raw(key), ts)
+            .unwrap()
+            .is_none());
     }
 
     pub fn must_seek_write<E: Engine>(
@@ -324,12 +323,10 @@ pub mod tests {
     pub fn must_reverse_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
-        assert!(
-            reader
-                .reverse_seek_write(&Key::from_raw(key), ts)
-                .unwrap()
-                .is_none()
-        );
+        assert!(reader
+            .reverse_seek_write(&Key::from_raw(key), ts)
+            .unwrap()
+            .is_none());
     }
 
     pub fn must_reverse_seek_write<E: Engine>(

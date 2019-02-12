@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
 use time::{self, Tm};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -312,8 +312,8 @@ impl Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::mysql::MAX_FSP;
-    use util::escape;
+    use crate::coprocessor::codec::mysql::MAX_FSP;
+    use crate::util::escape;
 
     #[test]
     fn test_hours() {
@@ -454,9 +454,11 @@ mod tests {
                         panic!("expect parse {} to {}, got {}", escape(input), exp, s);
                     }
                 }
-                None => if !d.is_err() {
-                    panic!("{} should not be passed, got {:?}", escape(input), d);
-                },
+                None => {
+                    if !d.is_err() {
+                        panic!("{} should not be passed, got {:?}", escape(input), d);
+                    }
+                }
             }
         }
     }
@@ -522,7 +524,7 @@ mod tests {
             ("-1 11:59:59.9999", 2),
         ];
         for (input, fsp) in cases {
-            let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(&t).unwrap();
             let got = Duration::decode(&mut buf.as_slice()).unwrap();

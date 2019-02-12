@@ -14,12 +14,12 @@
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::{env, io, slice, thread, u64};
+use std::time::Duration;
+use std::{env, slice, thread, u64};
 
 use protobuf::Message;
 use rand::{self, ThreadRng};
@@ -36,7 +36,7 @@ pub mod io_limiter;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod rocksdb;
+pub mod rocksdb_util;
 pub mod security;
 pub mod sys;
 pub mod threadpool;
@@ -44,9 +44,6 @@ pub mod time;
 pub mod timer;
 pub mod transport;
 pub mod worker;
-
-pub use self::rocksdb::properties;
-pub use self::rocksdb::stats as rocksdb_stats;
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
@@ -165,14 +162,6 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     fn rl(&self) -> RwLockReadGuard<T> {
         self.read().unwrap()
     }
-}
-
-/// A helper function to parse SocketAddr for mio.
-/// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
-/// but it is just ok for "ip:port", not "host:port".
-pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
-    let addrs = addr.to_socket_addrs()?;
-    Ok(addrs.collect::<Vec<SocketAddr>>()[0])
 }
 
 /// A function to escape a byte array to a readable ascii string.
@@ -394,7 +383,7 @@ impl<T> RingQueue<T> {
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
         .filter(|x| b.iter().find(|y| y == x).is_none())
-        .map(|x| *x)
+        .cloned()
         .collect()
 }
 
@@ -529,16 +518,23 @@ pub fn check_environment_variables() {
 
     if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
         info!(
-            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
-            var
+            "environment variable is present";
+            "GRPC_POLL_STRATEGY" => var
         );
     }
 
     for proxy in &["http_proxy", "https_proxy"] {
         if let Ok(var) = env::var(proxy) {
-            info!("environment variable `{}` is present, `{}`", proxy, var);
+            info!("environment variable is present";
+                *proxy => var
+            );
         }
     }
+}
+
+#[inline]
+pub fn is_zero_duration(d: &Duration) -> bool {
+    d.as_secs() == 0 && d.subsec_nanos() == 0
 }
 
 #[cfg(test)]
@@ -546,7 +542,6 @@ mod tests {
     use super::*;
     use protobuf::Message;
     use raft::eraftpb::Entry;
-    use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
@@ -565,28 +560,6 @@ mod tests {
         let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
         create_panic_mark_file(dir.path());
         assert!(panic_mark_file_exists(dir.path()));
-    }
-
-    #[test]
-    fn test_to_socket_addr() {
-        let tbls = vec![
-            ("", false),
-            ("127.0.0.1", false),
-            ("localhost", false),
-            ("127.0.0.1:80", true),
-            ("localhost:80", true),
-        ];
-
-        for (addr, ok) in tbls {
-            assert_eq!(to_socket_addr(addr).is_ok(), ok);
-        }
-
-        let tbls = vec![("localhost:80", false), ("127.0.0.1:80", true)];
-
-        for (addr, ok) in tbls {
-            let ret: Result<SocketAddr, AddrParseError> = addr.parse();
-            assert_eq!(ret.is_ok(), ok);
-        }
     }
 
     #[test]
@@ -638,7 +611,7 @@ mod tests {
             }
         }
 
-        #[cfg_attr(feature = "cargo-clippy", allow(clone_on_copy))]
+        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
         }
@@ -684,8 +657,8 @@ mod tests {
                 v.push_back(10 + i - first);
             }
             for len in 0..10 {
-                for low in 0..len + 1 {
-                    for high in low..len + 1 {
+                for low in 0..=len {
+                    for high in low..=len {
                         let (p1, p2) = super::slices_in_range(&v, low, high);
                         let mut res = vec![];
                         res.extend_from_slice(p1);
@@ -753,5 +726,12 @@ mod tests {
         // Hex Octals
         assert_eq!(unescape(r"abc\x64\x65\x66ghi"), b"abcdefghi");
         assert_eq!(unescape(r"JKL\x4d\x4E\x4fPQR"), b"JKLMNOPQR");
+    }
+
+    #[test]
+    fn test_is_zero() {
+        assert!(is_zero_duration(&Duration::new(0, 0)));
+        assert!(!is_zero_duration(&Duration::new(1, 0)));
+        assert!(!is_zero_duration(&Duration::new(0, 1)));
     }
 }

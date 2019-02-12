@@ -57,60 +57,72 @@ lazy_static! {
         "tikv_server_send_snapshot_duration_seconds",
         "Bucketed histogram of server send snapshots duration",
         exponential_buckets(0.05, 2.0, 20).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref SNAP_TASK_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_snapshot_task_total",
         "Total number of snapshot task",
         &["type"]
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref GRPC_MSG_HISTOGRAM_VEC: GrpcMsgHistogramVec = register_static_histogram_vec!(
         GrpcMsgHistogramVec,
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
         &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec = register_static_int_counter_vec!(
         GrpcMsgFailCounterVec,
         "tikv_grpc_msg_fail_total",
         "Total number of handle grpc message failure",
         &["type"]
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
         "tikv_server_grpc_req_batch_size",
         "grpc batch size of gRPC requests",
         exponential_buckets(1f64, 2f64, 10).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref GRPC_RESP_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
         "tikv_server_grpc_resp_batch_size",
         "grpc batch size of gRPC responses",
         exponential_buckets(1f64, 2f64, 10).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_BATCH_SIZE: Histogram = register_histogram!(
         "tikv_server_raft_message_batch_size",
         "Raft messages batch size",
         exponential_buckets(1f64, 2f64, 10).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref RESOLVE_STORE_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_resolve_store_total",
         "Total number of resolving store",
         &["type"]
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref REPORT_FAILURE_MSG_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_server_report_failure_msg_total",
         "Total number of reporting failure messages",
         &["type", "store_id"]
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_flush_total",
         "Total number of raft messages flushed immediately"
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_delay_flush_total",
         "Total number of raft messages flushed delay"
-    ).unwrap();
+    )
+    .unwrap();
 }

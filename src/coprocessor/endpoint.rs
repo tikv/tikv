@@ -23,16 +23,16 @@ use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
 use tipb::select::DAGRequest;
 
-use server::readpool::{self, ReadPool};
-use server::Config;
-use storage::{self, Engine, SnapshotStore};
-use util::Either;
+use crate::server::readpool::{self, ReadPool};
+use crate::server::Config;
+use crate::storage::{self, Engine, SnapshotStore};
+use crate::util::Either;
 
-use coprocessor::dag::executor::ExecutorMetrics;
-use coprocessor::metrics::*;
-use coprocessor::tracker::Tracker;
-use coprocessor::util as cop_util;
-use coprocessor::*;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::metrics::*;
+use crate::coprocessor::tracker::Tracker;
+use crate::coprocessor::util as cop_util;
+use crate::coprocessor::*;
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 const BUSY_ERROR_MSG: &str = "server is busy (coprocessor full).";
@@ -66,7 +66,7 @@ impl<E: Engine> Clone for Endpoint<E> {
     }
 }
 
-impl<E: Engine> ::util::AssertSend for Endpoint<E> {}
+impl<E: Engine> crate::util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, engine: E, read_pool: ReadPool<ReadPoolContext>) -> Self {
@@ -228,7 +228,7 @@ impl<E: Engine> Endpoint<E> {
         engine: E,
         ctx: &kvrpcpb::Context,
     ) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = ::util::future::paired_future_callback();
+        let (callback, future) = crate::util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
             .and_then(|_| future.map_err(|cancel| storage::engine::Error::Other(box_err!(cancel))))
@@ -340,21 +340,21 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
 
-        let tracker_and_handler_future = future::result(
-            tracker.req_ctx.deadline.check_if_exceeded(),
-        ).and_then(move |_| {
-            Self::async_snapshot(engine, &tracker.req_ctx.context)
-                .map(|snapshot| (tracker, snapshot))
-        })
-            .and_then(move |(tracker, snapshot)| {
-                // When snapshot is retrieved, deadline may exceed.
-                future::result(tracker.req_ctx.deadline.check_if_exceeded())
-                    .map(|_| (tracker, snapshot))
-            })
-            .and_then(move |(tracker, snapshot)| {
-                future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
-                    .map(|handler| (tracker, handler))
-            });
+        let tracker_and_handler_future =
+            future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                .and_then(move |_| {
+                    Self::async_snapshot(engine, &tracker.req_ctx.context)
+                        .map(|snapshot| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    // When snapshot is retrieved, deadline may exceed.
+                    future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                        .map(|_| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
+                        .map(|handler| (tracker, handler))
+                });
 
         tracker_and_handler_future
             .map(|(mut tracker, handler)| {
@@ -408,7 +408,8 @@ impl<E: Engine> Endpoint<E> {
                             None
                         }
                     }
-                }).filter_map(|resp_or_tracker| match resp_or_tracker {
+                })
+                .filter_map(|resp_or_tracker| match resp_or_tracker {
                     Either::Left(resp) => Some(resp),
                     Either::Right(mut tracker) => {
                         tracker.on_finish_all_items();
@@ -487,7 +488,10 @@ fn make_tag(is_table_scan: bool) -> &'static str {
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
-    error!("{:?}", e);
+    error!(
+        "error-response";
+        "err" => %e
+    );
     let mut resp = coppb::Response::new();
     let tag;
     match e {
@@ -535,8 +539,8 @@ mod tests {
     use tipb::executor::Executor;
     use tipb::expression::Expr;
 
-    use storage::TestEngineBuilder;
-    use util::worker::FutureWorker;
+    use crate::storage::TestEngineBuilder;
+    use crate::util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -1031,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_handle_time() {
-        use util::config::ReadableDuration;
+        use crate::util::config::ReadableDuration;
 
         /// Asserted that the snapshot can be retrieved in 500ms.
         const SNAPSHOT_DURATION_MS: i64 = 500;
@@ -1075,7 +1079,8 @@ mod tests {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_SMALL as u64,
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1147,7 +1152,8 @@ mod tests {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_LARGE as u64,
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1169,7 +1175,8 @@ mod tests {
                         PAYLOAD_LARGE as u64,
                         PAYLOAD_SMALL as u64,
                     ],
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_3 =
                 cop.handle_stream_request(req_with_exec_detail.clone(), handler_builder);

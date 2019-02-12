@@ -34,7 +34,7 @@ extern crate signal;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;
@@ -78,8 +78,8 @@ use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::util::rocksdb as rocksdb_util;
+use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::util::rocksdb_util;
 use tikv::util::security::{SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
 
@@ -247,43 +247,64 @@ trait DebugExecutor {
             limit = 1;
         }
 
-        let scan_future = self.get_mvcc_infos(from.clone(), to, limit).for_each(
-            move |(key, mvcc)| {
-                if point_query && key != from {
-                    v1!("no mvcc infos for {}", escape(&from));
-                }
+        let scan_future =
+            self.get_mvcc_infos(from.clone(), to, limit)
+                .for_each(move |(key, mvcc)| {
+                    if point_query && key != from {
+                        v1!("no mvcc infos for {}", escape(&from));
+                    }
 
-                v1!("key: {}", escape(&key));
-                if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
-                    let lock_info = mvcc.get_lock();
-                    if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
-                        v1!("\tlock cf value: {:?}", lock_info);
-                    }
-                }
-                if cfs.contains(&CF_DEFAULT) {
-                    for value_info in mvcc.get_values() {
-                        if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
-                            v1!("\tdefault cf value: {:?}", value_info);
+                    v1!("key: {}", escape(&key));
+                    if cfs.contains(&CF_LOCK) && mvcc.has_lock() {
+                        let lock_info = mvcc.get_lock();
+                        if start_ts.map_or(true, |ts| lock_info.get_start_ts() == ts) {
+                            v1!("\tlock cf value: {:?}", lock_info);
                         }
                     }
-                }
-                if cfs.contains(&CF_WRITE) {
-                    for write_info in mvcc.get_writes() {
-                        if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
-                            && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
-                        {
-                            v1!("\t write cf value: {:?}", write_info);
+                    if cfs.contains(&CF_DEFAULT) {
+                        for value_info in mvcc.get_values() {
+                            if commit_ts.map_or(true, |ts| value_info.get_start_ts() == ts) {
+                                v1!("\tdefault cf value: {:?}", value_info);
+                            }
                         }
                     }
-                }
-                v1!("");
-                future::ok::<(), String>(())
-            },
-        );
+                    if cfs.contains(&CF_WRITE) {
+                        for write_info in mvcc.get_writes() {
+                            if start_ts.map_or(true, |ts| write_info.get_start_ts() == ts)
+                                && commit_ts.map_or(true, |ts| write_info.get_commit_ts() == ts)
+                            {
+                                v1!("\t write cf value: {:?}", write_info);
+                            }
+                        }
+                    }
+                    v1!("");
+                    future::ok::<(), String>(())
+                });
         if let Err(e) = scan_future.wait() {
             ve1!("{}", e);
             process::exit(-1);
         }
+    }
+
+    fn raw_scan(&self, from_key: &[u8], to_key: &[u8], limit: usize, cf: &str) {
+        if !ALL_CFS.contains(&cf) {
+            eprintln!("CF \"{}\" doesn't exist.", cf);
+            process::exit(-1);
+        }
+        if !to_key.is_empty() && from_key >= to_key {
+            eprintln!(
+                "to_key should be greater than from_key, but got from_key: \"{}\", to_key: \"{}\"",
+                escape(from_key),
+                escape(to_key)
+            );
+            process::exit(-1);
+        }
+        if limit == 0 {
+            eprintln!("limit should be greater than 0");
+            process::exit(-1);
+        }
+
+        self.raw_scan_impl(from_key, to_key, limit, cf);
     }
 
     fn diff_region(
@@ -532,6 +553,8 @@ trait DebugExecutor {
         limit: u64,
     ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
+    fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str);
+
     fn do_compaction(
         &self,
         db: DBType,
@@ -633,6 +656,10 @@ impl DebugExecutor for DebugClient {
                 .map_err(|e| e.to_string())
                 .map(|mut resp| (resp.take_key(), resp.take_info())),
         ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+    }
+
+    fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
+        unimplemented!();
     }
 
     fn do_compaction(
@@ -775,6 +802,18 @@ impl DebugExecutor for Debugger {
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         let stream = stream::iter_result(iter).map_err(|e| e.to_string());
         Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+    }
+
+    fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
+        let res = self
+            .raw_scan(from_key, end_key, limit, cf)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::raw_scan_impl", e));
+
+        for (k, v) in &res {
+            println!("key: \"{}\", value: \"{}\"", escape(k), escape(v));
+        }
+        println!();
+        println!("Total scanned keys: {}", res.len());
     }
 
     fn do_compaction(
@@ -1114,6 +1153,40 @@ fn main() {
                         .default_value(CF_DEFAULT)
                         .help("column family names, combined from default/lock/write"),
                 ),
+        )
+        .subcommand(
+            SubCommand::with_name("raw-scan")
+                .about("print all raw keys in the range")
+                .arg(
+                    Arg::with_name("from")
+                        .short("f")
+                        .long("from")
+                        .takes_value(true)
+                        .default_value("")
+                        .help(raw_key_hint)
+                )
+                .arg(
+                    Arg::with_name("to")
+                        .short("t")
+                        .long("to")
+                        .takes_value(true)
+                        .default_value("")
+                        .help(raw_key_hint)
+                )
+                .arg(
+                    Arg::with_name("limit")
+                        .long("limit")
+                        .takes_value(true)
+                        .default_value("30")
+                        .help("at most how many keys to scan")
+                )
+                .arg(
+                    Arg::with_name("cf")
+                        .long("cf")
+                        .takes_value(true)
+                        .default_value("default")
+                        .help("the cf to scan")
+                )
         )
         .subcommand(
             SubCommand::with_name("print")
@@ -1730,6 +1803,12 @@ fn main() {
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
+    } else if let Some(matches) = matches.subcommand_matches("raw-scan") {
+        let from = unescape(matches.value_of("from").unwrap());
+        let to = unescape(matches.value_of("to").unwrap());
+        let limit: usize = matches.value_of("limit").unwrap().parse().unwrap();
+        let cf = matches.value_of("cf").unwrap();
+        debug_executor.raw_scan(&from, &to, limit, cf);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let from = unescape(matches.value_of("key").unwrap());
         let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());

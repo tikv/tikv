@@ -26,11 +26,13 @@ use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use cop_datatype::FieldTypeTp;
 
-use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use coprocessor::codec::mysql::{self, Decimal};
-use coprocessor::codec::{Error, Result, TEN_POW};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
+use crate::coprocessor::codec::mysql::duration::{
+    Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
+};
+use crate::coprocessor::codec::mysql::{self, Decimal};
+use crate::coprocessor::codec::{Error, Result, TEN_POW};
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 
 pub use self::extension::*;
 pub use self::weekmode::WeekMode;
@@ -77,7 +79,7 @@ pub fn zero_datetime(tz: Tz) -> Time {
     Time::new(zero_time(tz), TimeType::DateTime, mysql::DEFAULT_FSP).unwrap()
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+#[allow(clippy::too_many_arguments)]
 #[inline]
 fn ymd_hms_nanos<T: TimeZone>(
     tz: T,
@@ -378,7 +380,7 @@ impl Time {
                             s,
                             s1,
                             s1.len()
-                        ))
+                        ));
                     }
                 }
             }
@@ -722,11 +724,13 @@ impl Time {
     pub fn last_day_of_month(&self) -> u32 {
         match self.time.month() {
             4 | 6 | 9 | 11 => 30,
-            2 => if self.is_leap_year() {
-                29
-            } else {
-                28
-            },
+            2 => {
+                if self.is_leap_year() {
+                    29
+                } else {
+                    28
+                }
+            }
             _ => 31,
         }
     }
@@ -877,7 +881,7 @@ mod tests {
 
     use chrono::{Duration, Local};
 
-    use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -981,7 +985,8 @@ mod tests {
                         utc_t.time - Duration::seconds(offset),
                         utc_t.time_type,
                         utc_t.fsp as i8,
-                    ).unwrap();
+                    )
+                    .unwrap();
                     assert_eq!(exp_t, t);
                 }
             });
@@ -1083,7 +1088,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(zero_prefixed_literal))]
+    #[allow(clippy::zero_prefixed_literal)]
     fn test_parse_datetime_system_timezone() {
         // Basically, we check whether the parse result is the same when construcing using local.
         let tables = vec![

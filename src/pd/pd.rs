@@ -27,23 +27,23 @@ use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
 
 use super::metrics::*;
-use pd::{Error, PdClient, RegionStat};
-use prometheus::local::LocalHistogram;
-use raftstore::store::cmd_resp::new_error;
-use raftstore::store::util::KeysInfoFormatter;
-use raftstore::store::util::{
+use crate::pd::{Error, PdClient, RegionStat};
+use crate::raftstore::store::cmd_resp::new_error;
+use crate::raftstore::store::fsm::SendCh;
+use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
-use raftstore::store::Callback;
-use raftstore::store::Msg;
-use raftstore::store::StoreInfo;
-use storage::FlowStatistics;
-use util::collections::HashMap;
-use util::escape;
-use util::rocksdb::*;
-use util::time::time_now_sec;
-use util::transport::SendCh;
-use util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use crate::raftstore::store::Callback;
+use crate::raftstore::store::StoreInfo;
+use crate::raftstore::store::{Msg, PeerMsg};
+use crate::storage::FlowStatistics;
+use crate::util::collections::HashMap;
+use crate::util::escape;
+use crate::util::rocksdb_util::*;
+use crate::util::time::time_now_sec;
+use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use prometheus::local::LocalHistogram;
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -193,7 +193,7 @@ impl Display for Task {
 pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    ch: SendCh<Msg>,
+    ch: SendCh,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -209,7 +209,7 @@ impl<T: PdClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        ch: SendCh<Msg>,
+        ch: SendCh,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
     ) -> Runner<T> {
@@ -492,7 +492,7 @@ impl<T: PdClient> Runner<T> {
 
                         if pd_region
                             .get_peers()
-                            .into_iter()
+                            .iter()
                             .all(|p| p.get_id() != peer.get_id())
                         {
                             // Peer is not a member of this Region anymore. Probably it's removed out.
@@ -508,7 +508,7 @@ impl<T: PdClient> Runner<T> {
                                 .with_label_values(&["peer stale"])
                                 .inc();
                             if let Some(source) = merge_source {
-                                send_merge_fail(ch, source);
+                                send_merge_fail(ch, source, peer);
                             } else {
                                 send_destroy_peer_message(ch, local_region, peer, pd_region);
                             }
@@ -800,7 +800,7 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 }
 
 fn send_admin_request(
-    ch: &SendCh<Msg>,
+    ch: &SendCh,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -825,15 +825,23 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(ch: SendCh<Msg>, source: u64) {
-    if let Err(e) = ch.send(Msg::MergeFail { region_id: source }) {
-        error!("[region {}] failed to report merge fail: {:?}", source, e);
+fn send_merge_fail(ch: SendCh, source_region_id: u64, target: metapb::Peer) {
+    let target_id = target.get_id();
+    if let Err(e) = ch.send(Msg::PeerMsg(PeerMsg::MergeResult {
+        region_id: source_region_id,
+        target,
+        stale: true,
+    })) {
+        error!(
+            "[region {}] failed to report merge {} fail: {:?}",
+            source_region_id, target_id, e
+        );
     }
 }
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    ch: SendCh<Msg>,
+    ch: SendCh,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
@@ -844,7 +852,7 @@ fn send_destroy_peer_message(
     message.set_to_peer(peer.clone());
     message.set_region_epoch(pd_region.get_region_epoch().clone());
     message.set_is_tombstone(true);
-    if let Err(e) = ch.try_send(Msg::RaftMessage(message)) {
+    if let Err(e) = ch.try_send(Msg::PeerMsg(PeerMsg::RaftMessage(message))) {
         error!(
             "send gc peer request to region {} err {:?}",
             local_region.get_id(),

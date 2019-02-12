@@ -29,26 +29,27 @@ use rocksdb::{
 use slog;
 use sys_info;
 
-use import::Config as ImportConfig;
-use pd::Config as PdConfig;
-use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::keys::region_raft_prefix_len;
-use raftstore::store::Config as RaftstoreConfig;
-use server::readpool;
-use server::Config as ServerConfig;
-use storage::{
+use crate::import::Config as ImportConfig;
+use crate::pd::Config as PdConfig;
+use crate::raftstore::coprocessor::Config as CopConfig;
+use crate::raftstore::store::keys::region_raft_prefix_len;
+use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::readpool;
+use crate::server::Config as ServerConfig;
+use crate::storage::{
     Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
 };
-use util::config::{
+use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
 };
-use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
-use util::rocksdb::{
-    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+use crate::util::rocksdb_util::{
+    db_exist,
+    properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
-use util::security::SecurityConfig;
-use util::time::duration_to_sec;
+use crate::util::security::SecurityConfig;
+use crate::util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -515,7 +516,7 @@ impl Default for DbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs: 6,
-            max_manifest_file_size: ReadableSize::mb(20),
+            max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
             enable_statistics: true,
@@ -796,12 +797,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
+    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
-    use util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where
@@ -812,7 +813,7 @@ pub mod log_level_serde {
             .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(trivially_copy_pass_by_ref))]
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -854,13 +855,15 @@ macro_rules! readpool_config {
                     return Err(format!(
                         "readpool.{}.high-concurrency should be > 0",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.normal_concurrency == 0 {
                     return Err(format!(
                         "readpool.{}.normal-concurrency should be > 0",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.low_concurrency == 0 {
                     return Err(
@@ -876,19 +879,22 @@ macro_rules! readpool_config {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-high should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_normal <= 1 {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-normal should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_low <= 1 {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-low should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
 
                 Ok(())
@@ -1084,7 +1090,8 @@ impl TiKvConfig {
                 "grpc_keepalive_time is too small, it should not less than the double of \
                  raft tick interval (>= {})",
                 duration_to_sec(expect_keepalive)
-            ).into());
+            )
+            .into());
         }
 
         self.rocksdb.validate()?;
@@ -1174,23 +1181,23 @@ impl TiKvConfig {
         }
     }
 
-    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
+    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
         if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
-                "db wal_dir have been changed, former db wal_dir is {}, \
-                 current db wal_dir is {}, please guarantee all data wal log \
+                "db wal_dir have been changed, former db wal_dir is '{}', \
+                 current db wal_dir is '{}', please guarantee all data wal logs \
                  have been moved to destination directory.",
                 last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
+            ));
         }
 
         if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
             return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
-                 current raftdb wal_dir is {}, please guarantee all raft wal log \
+                "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
+                 current raftdb wal_dir is '{}', please guarantee all raft wal logs \
                  have been moved to destination directory.",
                 last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
+            ));
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
@@ -1198,15 +1205,15 @@ impl TiKvConfig {
                 "storage data dir have been changed, former data dir is {}, \
                  current data dir is {}, please check if it is expected.",
                 last_cfg.storage.data_dir, self.storage.data_dir
-            ).into());
+            ));
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
             return Err(format!(
-                "raft dir have been changed, former raft dir is {}, \
-                 current raft dir is {}, please check if it is expected.",
+                "raft dir have been changed, former raft dir is '{}', \
+                 current raft dir is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
-            ).into());
+            ));
         }
 
         Ok(())
@@ -1249,15 +1256,13 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
         let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-            return Err(format!("check critical config failed, err {:?}", e));
-        }
+        config.check_critical_cfg_with(&last_cfg)?;
     }
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
         return Err(format!(
-            "create parent directory {} failed, err {:?}",
+            "create parent directory '{}' failed: {}",
             store_path.to_str().unwrap(),
             e
         ));
@@ -1266,7 +1271,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     // Persist current critical configurations to file.
     if let Err(e) = config.write_to_file(&last_cfg_path) {
         return Err(format!(
-            "persist critical config to {} failed, err {:?}",
+            "persist critical config to '{}' failed: {}",
             last_cfg_path.to_str().unwrap(),
             e
         ));

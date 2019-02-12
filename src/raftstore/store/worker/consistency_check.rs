@@ -16,15 +16,15 @@ use std::fmt::{self, Display, Formatter};
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 
+use crate::raftstore::store::engine::{Iterable, Peekable, Snapshot};
+use crate::raftstore::store::{keys, Msg, PeerMsg};
+use crate::storage::CF_RAFT;
+use crate::util::worker::Runnable;
 use kvproto::metapb::Region;
-use raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use raftstore::store::{keys, Msg};
-use storage::CF_RAFT;
-use util::worker::Runnable;
 
 use super::metrics::*;
 use super::MsgSender;
-use raftstore::store::metrics::*;
+use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
 pub enum Task {
@@ -67,7 +67,11 @@ impl<C: MsgSender> Runner<C> {
     /// Computes the hash of the Region.
     fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
         let region_id = region.get_id();
-        info!("[region {}] computing hash at {}", region_id, index);
+        info!(
+            "computing hash";
+            "region_id" => region_id,
+            "index" => index,
+        );
         REGION_HASH_COUNTER_VEC
             .with_label_values(&["compute", "all"])
             .inc();
@@ -90,7 +94,11 @@ impl<C: MsgSender> Runner<C> {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
                     .inc();
-                error!("[region {}] failed to calculate hash: {:?}", region_id, e);
+                error!(
+                    "failed to calculate hash";
+                    "region_id" => region_id,
+                    "err" => %e,
+                );
                 return;
             }
         }
@@ -103,7 +111,11 @@ impl<C: MsgSender> Runner<C> {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
                     .inc();
-                error!("[region {}] failed to get region state: {:?}", region_id, e);
+                error!(
+                    "failed to get region state";
+                    "region_id" => region_id,
+                    "err" => %e,
+                );
                 return;
             }
             Ok(Some(v)) => digest.write(&v),
@@ -114,15 +126,16 @@ impl<C: MsgSender> Runner<C> {
 
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
-        let msg = Msg::ComputeHashResult {
+        let msg = Msg::PeerMsg(PeerMsg::ComputeHashResult {
             region_id,
             index,
             hash: checksum,
-        };
+        });
         if let Err(e) = self.ch.try_send(msg) {
             warn!(
-                "[region {}] failed to send hash compute result, err {:?}",
-                region_id, e
+                "failed to send hash compute result";
+                "region_id" => region_id,
+                "err" => %e,
             );
         }
     }
@@ -143,18 +156,18 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raftstore::store::engine::Snapshot;
+    use crate::raftstore::store::{keys, Msg};
+    use crate::storage::{CF_DEFAULT, CF_RAFT};
+    use crate::util::rocksdb_util::new_engine;
+    use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
-    use raftstore::store::engine::Snapshot;
-    use raftstore::store::{keys, Msg};
     use rocksdb::Writable;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
-    use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
-    use util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {
@@ -191,11 +204,11 @@ mod tests {
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         match res {
-            Msg::ComputeHashResult {
+            Msg::PeerMsg(PeerMsg::ComputeHashResult {
                 region_id,
                 index,
                 hash,
-            } => {
+            }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
                 assert_eq!(hash, checksum_bytes);

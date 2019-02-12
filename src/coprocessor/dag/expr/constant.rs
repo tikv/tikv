@@ -14,8 +14,8 @@
 use std::borrow::Cow;
 
 use super::{Constant, Result};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl Datum {
     #[inline]
@@ -126,10 +126,10 @@ impl Constant {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::datum_expr;
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::datum_expr;
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
 
     #[derive(PartialEq, Debug)]

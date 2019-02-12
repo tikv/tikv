@@ -396,7 +396,7 @@ impl NumberCodec {
     /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
     #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
-        #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
+        #[allow(clippy::cast_lossless)]
         unsafe {
             let mut ptr = buf.as_ptr();
             let len = buf.len();
@@ -970,7 +970,7 @@ mod tests {
         get_u16_samples().into_iter().map(|v| v as i16).collect()
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
+    #[allow(clippy::cast_lossless)]
     fn get_u32_samples() -> Vec<u32> {
         let mut samples = vec![
             (::std::i32::MIN as u32),
@@ -994,7 +994,7 @@ mod tests {
         get_u32_samples().into_iter().map(|v| v as i32).collect()
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
+    #[allow(clippy::cast_lossless)]
     fn get_u64_samples() -> Vec<u64> {
         let mut samples = vec![
             (::std::i64::MIN as u64),
@@ -1018,7 +1018,7 @@ mod tests {
         get_u64_samples().into_iter().map(|v| v as i64).collect()
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_lossless))]
+    #[allow(clippy::cast_lossless)]
     fn get_f64_samples() -> Vec<f64> {
         vec![
             -1.0,
@@ -1142,7 +1142,7 @@ mod tests {
                     }
 
                     // the cursor leaves sufficient space for encoding
-                    for pos in 0usize..buf_len - len + 1 {
+                    for pos in 0usize..=buf_len - len {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
@@ -1167,9 +1167,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(
-                            super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err()
-                        );
+                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1222,7 +1220,7 @@ mod tests {
                     }
 
                     // the cursor leaves sufficient space for decoding
-                    for pos in 0usize..buf_len - len + 1 {
+                    for pos in 0usize..=buf_len - len {
                         let mut buf = payload.clone();
                         super::NumberCodec::$enc(&mut buf.as_mut_slice()[pos..], sample);
                         let mut cursor = ::std::io::Cursor::new(buf);
@@ -1366,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_f64() {
         test_mem_compare!(
             get_f64_samples(),
@@ -1379,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_f64_desc() {
         test_mem_compare!(
             get_f64_samples(),
@@ -1458,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_f64_le() {
         test_codec!(
             get_f64_samples(),
@@ -1504,9 +1502,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(
-                            super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err()
-                        );
+                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1521,7 +1517,7 @@ mod tests {
                     }
 
                     // the cursor leaves sufficient space for encoding
-                    for pos in 0usize..buf_len - super::MAX_VARINT64_LENGTH + 1 {
+                    for pos in 0usize..=buf_len - super::MAX_VARINT64_LENGTH {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
@@ -1547,9 +1543,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = ::std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(
-                            super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err()
-                        );
+                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1558,7 +1552,7 @@ mod tests {
 
                 // Buffer decode with insufficient space
                 for buf_len in 0..len {
-                    let mut payload: Vec<u8> = base_buf[0..buf_len].to_vec();
+                    let payload: Vec<u8> = base_buf[0..buf_len].to_vec();
 
                     // Starting from any position in the buffer
                     for pos in 0usize..buf_len {
@@ -1578,7 +1572,7 @@ mod tests {
                     for _ in 0..buf_len {
                         payload.push(rand::random::<u8>());
                     }
-                    for pos in 0usize..buf_len - len + 1 {
+                    for pos in 0usize..=buf_len - len {
                         let mut buf = payload.clone();
                         buf[pos..pos + len].clone_from_slice(&base_buf[0..len]);
 
@@ -1646,7 +1640,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use byteorder;
     use protobuf::CodedOutputStream;
@@ -1858,7 +1852,8 @@ mod benches {
             OldVarIntEncoder::encode_var_u64(
                 test::black_box(&mut buf),
                 test::black_box(VARINT_SAMPLE),
-            ).unwrap();
+            )
+            .unwrap();
             test::black_box(&buf);
             unsafe { buf.set_len(0) };
         });

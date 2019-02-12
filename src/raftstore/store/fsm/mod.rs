@@ -20,12 +20,12 @@ mod batch;
 mod metrics;
 mod peer;
 mod router;
-mod store;
+pub mod store;
 
 pub use self::apply::{
     create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
-    Builder as ApplyPollerBuilder, ChangePeer, ExecResult, Msg as ApplyTask, Proposal,
-    RegionProposal, Registration, TaskRes as ApplyTaskRes,
+    Builder as ApplyPollerBuilder, ChangePeer, ExecResult, Msg as ApplyTask,
+    Notifier as ApplyNotifier, Proposal, RegionProposal, Registration, TaskRes as ApplyTaskRes,
 };
 pub use self::batch::{
     BatchRouter, BatchSystem, Fsm, HandlerBuilder, NormalScheduler, PollHandler,
@@ -33,94 +33,6 @@ pub use self::batch::{
 pub use self::peer::DestroyPeerJob;
 pub use self::router::{BasicMailbox, Mailbox};
 pub use self::store::{
-    create_event_loop, new_compaction_listener, StoreChannel, StoreInfo, StoreStat,
+    create_raft_batch_system, new_compaction_listener, RaftBatchSystem, RaftPollerBuilder,
+    RaftRouter, SendCh, StoreInfo,
 };
-
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::sync::mpsc::Receiver as StdReceiver;
-use std::sync::Arc;
-use std::u64;
-use time::Timespec;
-
-use kvproto::metapb;
-use kvproto::raft_serverpb::RaftMessage;
-
-use pd::PdTask;
-use raftstore::coprocessor::CoprocessorHost;
-use util::collections::{HashMap, HashSet};
-use util::transport::SendCh;
-use util::worker::{FutureWorker, Worker};
-use util::RingQueue;
-
-use super::config::Config;
-use super::local_metrics::RaftMetrics;
-use super::peer::Peer;
-use super::peer_storage::CacheQueryStats;
-use super::worker::{
-    CleanupSSTTask, CompactTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask,
-    SplitCheckTask,
-};
-use super::{Engines, Msg, SignificantMsg, SnapManager};
-use import::SSTImporter;
-
-type Key = Vec<u8>;
-
-pub struct Store<T: 'static, C: 'static> {
-    cfg: Rc<Config>,
-    engines: Engines,
-    store: metapb::Store,
-    sendch: SendCh<Msg>,
-
-    significant_msg_receiver: StdReceiver<SignificantMsg>,
-
-    // region_id -> peers
-    region_peers: HashMap<u64, Peer>,
-    merging_regions: Option<Vec<metapb::Region>>,
-    pending_raft_groups: HashSet<u64>,
-    // region end key -> region id
-    region_ranges: BTreeMap<Key, u64>,
-    // the regions with pending snapshots between two mio ticks.
-    pending_snapshot_regions: Vec<metapb::Region>,
-    // A marker used to indicate if the peer of a region is going to apply a snapshot
-    // with different range.
-    // It assumes that when a peer is going to accept snapshot, it can never
-    // captch up by normal log replication.
-    pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
-
-    split_check_worker: Worker<SplitCheckTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask>,
-    region_worker: Worker<RegionTask>,
-    compact_worker: Worker<CompactTask>,
-    pd_worker: FutureWorker<PdTask>,
-    consistency_check_worker: Worker<ConsistencyCheckTask>,
-    cleanup_sst_worker: Worker<CleanupSSTTask>,
-    apply_system: ApplyBatchSystem,
-    apply_router: ApplyRouter,
-    local_reader: Worker<ReadTask>,
-    apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
-
-    last_compact_checked_key: Key,
-
-    trans: T,
-    pd_client: Arc<C>,
-
-    pub coprocessor_host: Arc<CoprocessorHost>,
-
-    pub importer: Arc<SSTImporter>,
-
-    snap_mgr: SnapManager,
-
-    raft_metrics: RaftMetrics,
-    pub entry_cache_metries: Rc<RefCell<CacheQueryStats>>,
-
-    tag: String,
-
-    start_time: Timespec,
-    is_busy: bool,
-
-    pending_votes: RingQueue<RaftMessage>,
-
-    store_stat: StoreStat,
-}

@@ -13,11 +13,11 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::mvcc::{
+use crate::storage::mvcc::{
     BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
 };
-use storage::mvcc::{Error as MvccError, MvccReader};
-use storage::{Key, KvPair, Snapshot, Statistics, Value};
+use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
@@ -325,15 +325,17 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use raftstore::store::engine::IterOption;
-    use storage::engine::{Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode};
-    use storage::mvcc::Error as MvccError;
-    use storage::mvcc::MvccTxn;
-    use storage::{
+    use crate::raftstore::store::engine::IterOption;
+    use crate::storage::engine::{
+        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+    };
+    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::mvcc::MvccTxn;
+    use crate::storage::{
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
     };
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -378,7 +380,8 @@ mod tests {
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &Options::default(),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
@@ -541,7 +544,7 @@ mod tests {
         let result = scanner.scan(half).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
@@ -565,7 +568,7 @@ mod tests {
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         expect.reverse();
@@ -624,46 +627,32 @@ mod tests {
         let bound_c = Key::from_encoded(b"c".to_vec());
         let bound_d = Key::from_encoded(b"d".to_vec());
         assert!(store.scanner(false, false, None, None).is_ok());
-        assert!(
-            store
-                .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
-                .is_ok()
-        );
-        assert!(
-            store
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
-                .is_err()
-        );
-        assert!(
-            store
-                .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
-                .is_err()
-        );
-        assert!(
-            store
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
-                .is_err()
-        );
+        assert!(store
+            .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
+            .is_ok());
+        assert!(store
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
+            .is_err());
+        assert!(store
+            .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
+            .is_err());
+        assert!(store
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
+            .is_err());
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
         let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::SI, true);
         assert!(store2.scanner(false, false, None, None).is_ok());
-        assert!(
-            store2
-                .scanner(false, false, Some(bound_a.clone()), None)
-                .is_ok()
-        );
-        assert!(
-            store2
-                .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
-                .is_ok()
-        );
-        assert!(
-            store2
-                .scanner(false, false, None, Some(bound_c.clone()))
-                .is_ok()
-        );
+        assert!(store2
+            .scanner(false, false, Some(bound_a.clone()), None)
+            .is_ok());
+        assert!(store2
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
+            .is_ok());
+        assert!(store2
+            .scanner(false, false, None, Some(bound_c.clone()))
+            .is_ok());
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -960,13 +949,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use rand::{self, Rng};
     use std::collections::BTreeMap;
 
     use super::{FixtureStore, Scanner, Store};
-    use storage::{Key, Statistics};
+    use crate::storage::{Key, Statistics};
 
     fn gen_payload(n: usize) -> Vec<u8> {
         let mut data = vec![0; n];

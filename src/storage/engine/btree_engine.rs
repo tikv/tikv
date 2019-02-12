@@ -20,12 +20,12 @@ use std::sync::{Arc, RwLock};
 
 use kvproto::kvrpcpb::Context;
 
-use raftstore::store::engine::IterOption;
-use storage::engine::{
+use crate::raftstore::store::engine::IterOption;
+use crate::storage::engine::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError, Iterator, Modify,
     Result as EngineResult, ScanMode, Snapshot,
 };
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -200,15 +200,11 @@ impl Iterator for BTreeEngineIterator {
 
     #[inline]
     fn valid(&self) -> bool {
-        debug!("Iterator.valid(): {:?}", self.valid);
         self.valid
     }
 
     fn key(&self) -> &[u8] {
         assert!(self.valid());
-        debug!("Iterator.key() -> {:?}", unsafe {
-            String::from_utf8_unchecked(self.cur_key.clone().unwrap().to_raw().unwrap())
-        });
         self.cur_key.as_ref().unwrap().as_encoded()
     }
 

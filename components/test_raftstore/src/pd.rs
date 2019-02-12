@@ -67,12 +67,14 @@ enum SchedulePolicy {
 impl SchedulePolicy {
     fn schedule(&mut self) -> bool {
         match *self {
-            SchedulePolicy::Repeat(ref mut c) => if *c > 0 {
-                *c -= 1;
-                true
-            } else {
-                false
-            },
+            SchedulePolicy::Repeat(ref mut c) => {
+                if *c > 0 {
+                    *c -= 1;
+                    true
+                } else {
+                    false
+                }
+            }
             SchedulePolicy::TillSuccess => true,
             SchedulePolicy::Stop => false,
         }
@@ -334,16 +336,14 @@ impl Cluster {
 
     fn add_region(&mut self, region: &metapb::Region) {
         let end_key = enc_end_key(region);
-        assert!(
-            self.regions
-                .insert(end_key.clone(), region.clone())
-                .is_none()
-        );
-        assert!(
-            self.region_id_keys
-                .insert(region.get_id(), end_key.clone())
-                .is_none()
-        );
+        assert!(self
+            .regions
+            .insert(end_key.clone(), region.clone())
+            .is_none());
+        assert!(self
+            .region_id_keys
+            .insert(region.get_id(), end_key.clone())
+            .is_none());
     }
 
     fn remove_region(&mut self, region: &metapb::Region) {
@@ -610,7 +610,7 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
     }
 
     Err(box_err!(
-        "stale epoch {:?}, we are now {:?}",
+        "epoch not match {:?}, we are now {:?}",
         check_epoch,
         epoch
     ))
@@ -805,6 +805,34 @@ impl TestPdClient {
             region_epoch: region.take_region_epoch(),
         };
         self.schedule_operator(region.get_id(), op);
+    }
+
+    pub fn must_half_split_region(&self, region: metapb::Region) {
+        self.half_split_region(region.clone());
+        for _ in 1..500 {
+            sleep_ms(10);
+
+            let now = self
+                .get_region_by_id(region.get_id())
+                .wait()
+                .unwrap()
+                .unwrap();
+            if (now.get_start_key() != region.get_start_key()
+                && self.get_region(region.get_start_key()).is_ok())
+                || (now.get_end_key() != region.get_end_key()
+                    && self.get_region(now.get_end_key()).is_ok())
+            {
+                if now.get_end_key() != region.get_end_key() {
+                    assert!(now.get_end_key().is_empty());
+                }
+                assert!(
+                    now.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+                );
+                return;
+            }
+        }
+
+        panic!("region {:?} is still not split.", region);
     }
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -1015,7 +1043,8 @@ impl PdClient for TestPdClient {
                     stream::unfold(timer, |timer| {
                         let interval = timer.delay(Instant::now() + Duration::from_millis(500));
                         Some(interval.then(|_| Ok(((), timer))))
-                    }).map(move |_| {
+                    })
+                    .map(move |_| {
                         let mut cluster = cluster1.wl();
                         cluster.poll_heartbeat_responses_for(store_id)
                     }),

@@ -162,8 +162,8 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
+    use crate::util::rocksdb_util::new_engine;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     fn check_import_options(
         db: &DB,
