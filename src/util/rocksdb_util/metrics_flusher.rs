@@ -73,7 +73,7 @@ impl MetricsFlusher {
         }
         drop(self.sender.take().unwrap());
         if let Err(e) = h.unwrap().join() {
-            error!("join metrics flusher failed {:?}", e);
+            error!("join metrics flusher failed"; "err" => ?e);
             return;
         }
     }
