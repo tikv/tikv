@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::cell::RefCell;
+use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic, Arc};
@@ -24,7 +25,9 @@ use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response,
     TransferLeaderRequest, TransferLeaderResponse,
 };
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftMessage};
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
+};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -38,6 +41,7 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
 };
+use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
@@ -514,7 +518,7 @@ impl Peer {
         self.mut_store().set_region(region.clone());
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a follower
-        // becomeing a leader.
+        // becoming a leader.
         self.maybe_update_read_progress(local_reader, progress);
 
         if !self.pending_remove {
@@ -560,7 +564,11 @@ impl Peer {
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
-        self.raft_group.get_snap().is_some()
+        self.get_pending_snapshot().is_some()
+    }
+
+    pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
+        self.raft_group.get_snap()
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -887,14 +895,49 @@ impl Peer {
                 });
         }
 
-        if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
-            debug!(
-                "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
-                self.tag,
-                self.get_store().applied_index(),
-                self.last_applying_idx
-            );
-            return;
+        if let Some(snap) = self.get_pending_snapshot() {
+            if !self.ready_to_handle_pending_snap() {
+                debug!(
+                    "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
+                    self.tag,
+                    self.get_store().applied_index(),
+                    self.last_applying_idx,
+                );
+                return;
+            }
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data
+                .merge_from_bytes(snap.get_data())
+                .unwrap_or_else(|e| {
+                    warn!("{} snap data err {:?}", self.tag, e);
+                });
+            let region = snap_data.take_region();
+            let start_key = enc_start_key(&region);
+            let end_key = enc_end_key(&region);
+
+            let meta = ctx.store_meta.lock().unwrap();
+            for r in meta
+                .region_ranges
+                .range((Excluded(start_key), Unbounded::<Vec<u8>>))
+                .map(|(_, &region_id)| &meta.regions[&region_id])
+            {
+                if r.get_id() == region.get_id() {
+                    continue;
+                }
+                if enc_start_key(r) >= end_key {
+                    break;
+                }
+
+                debug!(
+                    "{} [apply_idx: {}, last_applying_idx: {}] overlap range with {:?}, wait destroy finish",
+                    self.tag,
+                    self.get_store().applied_index(),
+                    self.last_applying_idx,
+                    r,
+                );
+                return;
+            }
         }
 
         if !self
