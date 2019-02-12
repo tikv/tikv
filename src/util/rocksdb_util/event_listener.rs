@@ -185,7 +185,7 @@ impl rocksdb::EventListener for CompactionListener {
                     output_props.push(prop);
                 }
             } else {
-                warn!("Decode size properties from sst file failed.");
+                warn!("Decode size properties from sst file failed");
                 return;
             }
         }

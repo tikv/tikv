@@ -340,9 +340,9 @@ impl<T: Display + Send + 'static> Worker<T> {
         U: Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
-        info!("starting working thread: {}", self.scheduler.name);
+        info!("starting working thread"; "worker" => &self.scheduler.name);
         if receiver.is_none() {
-            warn!("worker {} has been started.", self.scheduler.name);
+            warn!("worker has been started"; "worker" => &self.scheduler.name);
             return Ok(());
         }
 
@@ -380,10 +380,10 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Stops the worker thread.
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // Closes sender explicitly so the background thread will exit.
-        info!("stoping {}", self.scheduler.name);
+        info!("stoping worker"; "worker" => &self.scheduler.name);
         let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.send(None) {
-            warn!("failed to stop worker thread: {:?}", e);
+            warn!("failed to stop worker thread"; "err" => ?e);
         }
         Some(handle)
     }
