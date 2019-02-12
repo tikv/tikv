@@ -51,7 +51,7 @@ use crate::raftstore::store::config::Config;
 use crate::raftstore::store::engine::{Iterable, Mutable, Peekable};
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
-    check_merge_target, new_admin_request, PeerFsm, PeerFsmDelegate,
+    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
@@ -1354,7 +1354,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 data_key(msg.get_start_key()),
                 data_end_key(msg.get_end_key()),
             ) {
-                if check_merge_target(
+                if maybe_destroy_source(
                     meta,
                     region_id,
                     exist_region.get_id(),

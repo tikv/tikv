@@ -929,8 +929,7 @@ impl Peer {
                 .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
                 .map(|(_, &region_id)| &meta.regions[&region_id])
                 .take_while(|r| enc_start_key(r) < enc_end_key(&region))
-                .filter(|r| r.get_id() != region.get_id())
-                .next()
+                .find(|r| r.get_id() != region.get_id())
             {
                 debug!(
                     "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",

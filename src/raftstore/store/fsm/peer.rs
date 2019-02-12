@@ -1013,7 +1013,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         for exist_region in meta
             .region_ranges
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Vec<u8>>))
-            .map(|(_, &id)| &meta.regions[&id])
+            .map(|(_, &region_id)| &meta.regions[&region_id])
             .take_while(|r| enc_start_key(r) < enc_end_key(&snap_region))
             .filter(|r| r.get_id() != region_id)
         {
@@ -1025,7 +1025,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
             // here may cause source peer destroyed improperly. So just drop message here if peer is applying snapshot.
             if !self.fsm.peer.is_applying_snapshot() && !self.fsm.peer.has_pending_snapshot() {
-                if check_merge_target(
+                if maybe_destroy_source(
                     &meta,
                     self.region_id(),
                     exist_region.get_id(),
@@ -2506,32 +2506,31 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 }
 
-// check merge target
-pub fn check_merge_target(
+/// Checks merge target, returns whether the source peer should be destroyed.
+pub fn maybe_destroy_source(
     meta: &StoreMeta,
     target_region_id: u64,
     source_region_id: u64,
     region_epoch: RegionEpoch,
 ) -> bool {
-    if let Some(targets) = meta.pending_merge_targets.get(&target_region_id) {
-        if let Some(epoch) = targets.get(&source_region_id).or_else(|| {
+    if let Some(merge_targets) = meta.pending_merge_targets.get(&target_region_id) {
+        if let Some(target_epoch) = merge_targets.get(&source_region_id).or_else(|| {
             meta.regions
                 .get(&source_region_id)
                 .map(|r| r.get_region_epoch())
         }) {
             info!(
                 "{} checking source {} epoch: {:?}, merge target epoch: {:?}",
-                target_region_id, source_region_id, region_epoch, epoch,
+                target_region_id, source_region_id, region_epoch, target_epoch,
             );
             // The target peer will move on, namely, it will apply a snapshot generated after merge,
             // so destroy source peer.
-            if region_epoch.get_version() > epoch.get_version() {
+            if region_epoch.get_version() > target_epoch.get_version() {
                 return true;
             }
             // Wait till the target peer has caught up logs and source peer will be destroyed at that time.
             return false;
         }
-        // may be not created by split yet
     }
     false
 }
