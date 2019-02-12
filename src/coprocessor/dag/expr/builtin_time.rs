@@ -431,10 +431,7 @@ impl ScalarFunc {
             Some(result) => result,
             None => return Err(box_err!("sub duration {} from duration {} error", d1, d0)),
         };
-        let res = match MyDuration::from_nanos(diff, d0.fsp().max(d1.fsp()) as i8) {
-            Ok(result) => result,
-            Err(e) => return Err(e),
-        };
+        let res = MyDuration::from_nanos(diff, d0.fsp().max(d1.fsp()) as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 }
