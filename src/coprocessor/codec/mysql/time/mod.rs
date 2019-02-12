@@ -735,6 +735,7 @@ impl Time {
         }
     }
 
+    /// Checked time addition. Computes self + rhs, returning None if overflow occurred.
     pub fn checked_add(self, rhs: &MyDuration) -> Option<Time> {
         if let Some(add) = self
             .time
@@ -751,6 +752,7 @@ impl Time {
         }
     }
 
+    /// Checked time subtraction. Computes self - rhs, returning None if overflow occurred.
     pub fn checked_sub(self, rhs: &MyDuration) -> Option<Time> {
         if let Some(sub) = self
             .time
@@ -1568,14 +1570,14 @@ mod tests {
         for (lhs, rhs, exp) in cases.clone() {
             let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
             let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
-            let res = lhs.clone().checked_add(&rhs).unwrap();
+            let res = lhs.checked_add(&rhs).unwrap();
             let exp = Time::parse_utc_datetime(exp, 6).unwrap();
             assert_eq!(res, exp);
         }
         for (exp, rhs, lhs) in cases {
             let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
             let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
-            let res = lhs.clone().checked_sub(&rhs).unwrap();
+            let res = lhs.checked_sub(&rhs).unwrap();
             let exp = Time::parse_utc_datetime(exp, 6).unwrap();
             assert_eq!(res, exp);
         }

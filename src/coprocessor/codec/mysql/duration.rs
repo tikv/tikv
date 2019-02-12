@@ -245,6 +245,7 @@ impl Duration {
         Ok(self)
     }
 
+    /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
     pub fn checked_add(self, rhs: &Duration) -> Option<Duration> {
         let add = match self.to_nanos().checked_add(rhs.to_nanos()) {
             Some(result) => result,
@@ -256,6 +257,7 @@ impl Duration {
         }
     }
 
+    /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
     pub fn checked_sub(self, rhs: &Duration) -> Option<Duration> {
         let sub = match self.to_nanos().checked_sub(rhs.to_nanos()) {
             Some(result) => result,
