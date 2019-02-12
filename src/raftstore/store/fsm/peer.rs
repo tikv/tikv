@@ -840,6 +840,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn need_gc_merge(&mut self, msg: &RaftMessage) -> Result<bool> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
+        debug!(
+            "{} receive merge targets {:?}",
+            self.fsm.peer.tag, merge_target
+        );
 
         // When receiving message that has a merge target, it indicates that the source peer on this store is stale,
         // the peers on other stores are already merged. The epoch in merge target is the state of target peer at the
@@ -847,10 +851,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // this store to decide whether to destroy the source peer.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.targets_map.insert(self.region_id(), target_region_id);
-        debug!(
-            "{} update merge targets {:?}",
-            self.fsm.peer.tag, merge_target
-        );
         let v = meta
             .pending_merge_targets
             .entry(target_region_id)
@@ -870,12 +870,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .get(&target_region_id)
             .map(|r| r.get_region_epoch())
         {
+            // In the case the the target peer's range isn't overlapped with target's anymore, so target peer can't
+            // find the source peer. If that, source peer still need to decide to destroy itself. When the target peer
+            // has already moved on, source peer can destroy itself.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
             return Ok(false);
         }
 
+        // Check whether target peer is set to tombstone already.
         let state_key = keys::region_state_key(target_region_id);
         if let Some(state) = self
             .ctx
@@ -1019,8 +1023,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
             // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
-            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
-            // `pending_cross_snap` here if peer is applying snapshot.
+            // here may cause source peer destroyed improperly. So just drop message here if peer is applying snapshot.
             if !self.fsm.peer.is_applying_snapshot() && !self.fsm.peer.has_pending_snapshot() {
                 if check_merge_target(
                     &meta,
@@ -1036,7 +1039,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(Some(key));
         }
 
-        // check if snapshot file exists.
+        // Check if snapshot file exists.
         self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
 
         meta.pending_snapshot_regions.push(snap_region);
@@ -1053,10 +1056,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     },
                 )
                 .unwrap();
-            match meta.pending_merge_targets.get_mut(&self.region_id()) {
-                None => unreachable!(),
-                Some(map) => map.remove(&region_id),
-            };
         }
 
         Ok(None)
@@ -1089,15 +1088,27 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = self.region_id();
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.fsm.peer.is_applying_snapshot());
+
+        // Clear merge related structures.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.pending_merge_targets.remove(&region_id);
         if let Some(target) = meta.targets_map.remove(&region_id) {
-            meta.pending_merge_targets
-                .get_mut(&target)
-                .unwrap()
-                .remove(&region_id);
+            if meta.pending_merge_targets.contains_key(&target) {
+                meta.pending_merge_targets
+                    .get_mut(&target)
+                    .unwrap()
+                    .remove(&region_id);
+                // When the target doesn't exist(add peer but the store is isolated), source peer decide to destroy by itself.
+                // Without target, the `pending_merge_targets` for target won't be removed, so here source peer help target to clear.
+                if meta.regions.get(&target).is_none()
+                    && meta.pending_merge_targets.get(&target).unwrap().is_empty()
+                {
+                    meta.pending_merge_targets.remove(&target);
+                }
+            }
         }
         meta.merge_locks.remove(&region_id);
+
         // Destroy read delegates.
         if self
             .ctx
@@ -1113,6 +1124,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.ctx
             .apply_router
             .schedule_task(region_id, ApplyTask::destroy(region_id));
+
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
             self.fsm.peer.region(),

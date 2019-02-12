@@ -491,6 +491,7 @@ impl Peer {
         Ok(())
     }
 
+    #[inline]
     pub fn is_initialized(&self) -> bool {
         self.get_store().is_initialized()
     }
@@ -526,22 +527,27 @@ impl Peer {
         }
     }
 
+    #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
     }
 
+    #[inline]
     pub fn get_raft_status(&self) -> raft::Status {
         self.raft_group.status()
     }
 
+    #[inline]
     pub fn leader_id(&self) -> u64 {
         self.raft_group.raft.leader_id
     }
 
+    #[inline]
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
     }
 
+    #[inline]
     pub fn get_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
@@ -567,6 +573,7 @@ impl Peer {
         self.get_pending_snapshot().is_some()
     }
 
+    #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
         self.raft_group.get_snap()
     }
@@ -913,24 +920,20 @@ impl Peer {
                     warn!("{} snap data err {:?}", self.tag, e);
                 });
             let region = snap_data.take_region();
-            let start_key = enc_start_key(&region);
-            let end_key = enc_end_key(&region);
 
             let meta = ctx.store_meta.lock().unwrap();
-            for r in meta
+            // For merge process, when applying snapshot or create new peer the stale source peer is destroyed asynchronously.
+            // So here checks whether there is any overlap, if so, wait and do not handle raft ready.
+            if let Some(r) = meta
                 .region_ranges
-                .range((Excluded(start_key), Unbounded::<Vec<u8>>))
+                .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
                 .map(|(_, &region_id)| &meta.regions[&region_id])
+                .take_while(|r| enc_start_key(r) < enc_end_key(&region))
+                .filter(|r| r.get_id() != region.get_id())
+                .next()
             {
-                if r.get_id() == region.get_id() {
-                    continue;
-                }
-                if enc_start_key(r) >= end_key {
-                    break;
-                }
-
                 debug!(
-                    "{} [apply_idx: {}, last_applying_idx: {}] overlap range with {:?}, wait destroy finish",
+                    "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",
                     self.tag,
                     self.get_store().applied_index(),
                     self.last_applying_idx,

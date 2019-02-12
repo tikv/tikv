@@ -1380,10 +1380,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     },
                 )
                 .unwrap();
-            match meta.pending_merge_targets.get_mut(&region_id) {
-                None => unreachable!(),
-                Some(map) => map.remove(&id),
-            };
         }
 
         // New created peers should know it's learner or not.

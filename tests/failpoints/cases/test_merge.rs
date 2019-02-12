@@ -348,8 +348,6 @@ fn test_node_merge_multiple_snapshots(together: bool) {
 
     // Let peer of right region on store 3 to make append response to trigger a new snapshot
     // one is snapshot before merge, the other is snapshot after merge.
-    // Then the old and new snapshot messages are received and handled in one tick,
-    // so `pending_cross_snap` may updated improperly and make merge source peer destory itself.
     // Here blocks raftstore for a while to make it not to apply snapshot and receive new log now.
     fail::cfg("on_raft_ready", "sleep(100)").unwrap();
     cluster.clear_send_filters();
@@ -369,8 +367,7 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     fail::cfg("on_raft_ready", "off").unwrap();
 
     // Wait some time to let already merged peer on store 1 or store 2 to notify
-    // the peer of left region on store 3 is stale, and then the peer will check
-    // `pending_cross_snap`
+    // the peer of left region on store 3 is stale.
     thread::sleep(Duration::from_millis(300));
 
     cluster.must_put(b"k9", b"v9");
