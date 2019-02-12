@@ -28,11 +28,11 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use crate::util::escape;
-use crate::util::properties::RangeProperties;
-use crate::util::rocksdb::stats::get_range_entries_and_versions;
+use crate::util::rocksdb_util::{
+    self, properties::RangeProperties, stats::get_range_entries_and_versions,
+};
 use crate::util::time::monotonic_raw_now;
-use crate::util::{rocksdb as rocksdb_util, Either};
+use crate::util::{escape, Either};
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -278,29 +278,37 @@ pub fn check_region_epoch(
     }
 
     let from_epoch = req.get_header().get_region_epoch();
-    let latest_epoch = region.get_region_epoch();
+    let current_epoch = region.get_region_epoch();
 
-    // should we use not equal here?
-    if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver())
-        || (check_ver && from_epoch.get_version() < latest_epoch.get_version())
+    // We must check epochs strictly to avoid key not in region error.
+    //
+    // A 3 nodes TiKV cluster with merge enabled, after commit merge, TiKV A
+    // tells TiDB with a epoch not match error contains the latest target Region
+    // info, TiDB updates its region cache and sends requests to TiKV B,
+    // and TiKV B has not applied commit merge yet, since the region epoch in
+    // request is higher than TiKV B, the request must be denied due to epoch
+    // not match, so it does not read on a stale snapshot, thus avoid the
+    // KeyNotInRegion error.
+    if (check_conf_ver && from_epoch.get_conf_ver() != current_epoch.get_conf_ver())
+        || (check_ver && from_epoch.get_version() != current_epoch.get_version())
     {
         debug!(
-            "[region {}] received stale epoch {:?}, mine: {:?}",
-            region.get_id(),
-            from_epoch,
-            latest_epoch
+            "epoch not match";
+            "region_id" => region.get_id(),
+            "from_epoch" => ?from_epoch,
+            "current_epoch" => ?current_epoch,
         );
         let regions = if include_region {
             vec![region.to_owned()]
         } else {
             vec![]
         };
-        return Err(Error::StaleEpoch(
+        return Err(Error::EpochNotMatch(
             format!(
-                "latest_epoch of region {} is {:?}, but you \
+                "current epoch of region {} is {:?}, but you \
                  sent {:?}",
                 region.get_id(),
-                latest_epoch,
+                current_epoch,
                 from_epoch
             ),
             regions,
@@ -983,10 +991,11 @@ mod tests {
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
     use crate::util::escape;
-    use crate::util::properties::{
-        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    use crate::util::rocksdb_util::{
+        get_cf_handle, new_engine_opt,
+        properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+        CFOptions,
     };
-    use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::util::time::{monotonic_now, monotonic_raw_now};
 
     use super::*;
@@ -1694,8 +1703,14 @@ mod tests {
             req.mut_header()
                 .set_region_epoch(stale_version_epoch.clone());
             check_region_epoch(&req, &stale_region, false).unwrap();
-            check_region_epoch(&req, &region, false).unwrap_err();
-            check_region_epoch(&req, &region, true).unwrap_err();
+
+            let mut latest_version_epoch = epoch.clone();
+            latest_version_epoch.set_version(3);
+            for epoch in &[stale_version_epoch, latest_version_epoch] {
+                req.mut_header().set_region_epoch(epoch.clone());
+                check_region_epoch(&req, &region, false).unwrap_err();
+                check_region_epoch(&req, &region, true).unwrap_err();
+            }
         }
 
         // These admin commands requires epoch.conf_version.
@@ -1722,8 +1737,14 @@ mod tests {
             stale_region.set_region_epoch(stale_conf_epoch.clone());
             req.mut_header().set_region_epoch(stale_conf_epoch.clone());
             check_region_epoch(&req, &stale_region, false).unwrap();
-            check_region_epoch(&req, &region, false).unwrap_err();
-            check_region_epoch(&req, &region, true).unwrap_err();
+
+            let mut latest_conf_epoch = epoch.clone();
+            latest_conf_epoch.set_conf_ver(3);
+            for epoch in &[stale_conf_epoch, latest_conf_epoch] {
+                req.mut_header().set_region_epoch(epoch.clone());
+                check_region_epoch(&req, &region, false).unwrap_err();
+                check_region_epoch(&req, &region, true).unwrap_err();
+            }
         }
     }
 

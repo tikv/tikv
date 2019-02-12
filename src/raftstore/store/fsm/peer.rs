@@ -1952,7 +1952,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
-            Err(Error::StaleEpoch(msg, mut new_regions)) => {
+            Err(Error::EpochNotMatch(msg, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
@@ -1961,8 +1961,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if let Some(sibling_region) = sibling_region {
                     new_regions.push(sibling_region);
                 }
-                self.ctx.raft_metrics.invalid_proposal.stale_epoch += 1;
-                Err(Error::StaleEpoch(msg, new_regions))
+                self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
+                Err(Error::EpochNotMatch(msg, new_regions))
             }
             Err(e) => Err(e),
             Ok(()) => Ok(None),
@@ -2255,7 +2255,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 region.get_region_epoch(),
                 epoch
             );
-            return Err(Error::StaleEpoch(
+            return Err(Error::EpochNotMatch(
                 format!(
                     "{} epoch changed {:?} != {:?}, retry later",
                     self.fsm.peer.tag, latest_epoch, epoch
