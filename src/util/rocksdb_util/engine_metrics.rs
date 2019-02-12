@@ -121,7 +121,9 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
 pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
     let v = value as i64;
     if v < 0 {
-        warn!("engine ticker {:?} is overflow {}", t, value);
+        warn!("engine ticker is overflow";
+            "ticker" => ?t, "value" => value
+        );
         return;
     }
 
