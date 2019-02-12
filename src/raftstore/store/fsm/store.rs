@@ -83,18 +83,25 @@ pub struct StoreInfo {
 }
 
 pub struct StoreMeta {
-    // region end key -> region id
+    /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
-    // region_id -> region
+    /// region_id -> region
     pub regions: HashMap<u64, Region>,
-    // target_region_id -> (source_region_id -> merge_target_epoch)
-    pub pending_merge_targets: HashMap<u64, HashMap<u64, RegionEpoch>>,
-    // source_region_id -> target_region_id
-    pub targets_map: HashMap<u64, u64>,
+    /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
+    /// such Region in this store now. So the messages are recorded temporarily and will be handled later.
     pub pending_votes: RingQueue<RaftMessage>,
-    // the regions with pending snapshots.
+    /// The regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
-    // source_region_id -> (version, BiLock).
+    /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
+    /// target_region_id -> (source_region_id -> merge_target_epoch)
+    pub pending_merge_targets: HashMap<u64, HashMap<u64, RegionEpoch>>,
+    /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
+    /// source_region_id -> target_region_id
+    pub targets_map: HashMap<u64, u64>,
+    /// In raftstore, the execute order of `PrepareMerge` and `CommitMerge` is not certain because of the messages
+    /// belongs two regions. To make them in order, `PrepareMerge` will set this structure and `CommitMerge` will retry
+    /// later if there is no related lock.
+    /// source_region_id -> (version, BiLock).
     pub merge_locks: HashMap<u64, (u64, Option<Arc<AtomicBool>>)>,
 }
 
@@ -103,10 +110,10 @@ impl StoreMeta {
         StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
-            pending_merge_targets: HashMap::default(),
-            targets_map: HashMap::default(),
             pending_votes: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
+            pending_merge_targets: HashMap::default(),
+            targets_map: HashMap::default(),
             merge_locks: HashMap::default(),
         }
     }
