@@ -22,6 +22,12 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref BATCH_FETCH_INTERVAL: Histogram = register_histogram!(
+        "tikv_raftstore_batch_fetch_interval",
+        "The interval of 2 batch fetch",
+        exponential_buckets(0.001, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
 
 #[derive(Default)]

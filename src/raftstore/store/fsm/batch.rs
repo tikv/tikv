@@ -19,12 +19,14 @@
 // TODO: remove this
 #![allow(dead_code)]
 
+use super::metrics::*;
 use super::router::{BasicMailbox, Router};
 use crate::util::mpsc;
+use crate::util::time::duration_to_sec;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
-use std::cmp;
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -294,20 +296,29 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     fn fetch_batch(&self, batch: &mut Batch<N, C>, max_size: usize) {
-        let mut pushed = match self.fsm_receiver.recv() {
-            Ok(fsm) => batch.push(fsm),
-            Err(_) => return,
+        let mut curr_batch_len = batch.len();
+        if batch.control.is_some() || curr_batch_len >= max_size {
+            return;
+        }
+
+        let mut pushed = if curr_batch_len == 0 {
+            match self.fsm_receiver.recv() {
+                Ok(fsm) => batch.push(fsm),
+                Err(_) => return,
+            }
+        } else {
+            true
         };
-        let mut tried = 1;
+
         while pushed {
-            if tried < max_size {
+            if curr_batch_len < max_size {
                 let fsm = match self.fsm_receiver.try_recv() {
                     Ok(fsm) => fsm,
                     Err(TryRecvError::Empty) => return,
                     Err(TryRecvError::Disconnected) => unreachable!(),
                 };
                 pushed = batch.push(fsm);
-                tried += 1;
+                curr_batch_len += 1;
             } else {
                 return;
             }
@@ -317,10 +328,11 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     fn poll(&mut self) {
-        let mut batch_size = self.max_batch_size;
-        let mut batch = Batch::with_capacity(batch_size);
-        let mut exhausted_fsms = Vec::with_capacity(batch_size);
-        self.fetch_batch(&mut batch, batch_size);
+        let mut batch = Batch::with_capacity(self.max_batch_size);
+        let mut exhausted_fsms = Vec::with_capacity(self.max_batch_size);
+
+        self.fetch_batch(&mut batch, self.max_batch_size);
+        let mut fetch_time = Instant::now();
         while !batch.is_empty() {
             self.handler.begin(batch.len());
             if batch.control.is_some() {
@@ -351,12 +363,11 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
-            if batch.is_empty() {
-                batch_size = cmp::min(batch_size + 1, self.max_batch_size);
-                self.fetch_batch(&mut batch, batch_size);
-            } else {
-                batch_size = cmp::max(batch_size - 1, 1);
-            }
+
+            self.fetch_batch(&mut batch, self.max_batch_size);
+            let now = Instant::now();
+            BATCH_FETCH_INTERVAL.observe(duration_to_sec(now - fetch_time));
+            fetch_time = now;
         }
     }
 }
@@ -407,9 +418,7 @@ where
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || {
-                    poller.poll();
-                })
+                .spawn(move || poller.poll())
                 .unwrap();
             self.workers.push(t);
         }
