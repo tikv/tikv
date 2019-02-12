@@ -26,11 +26,13 @@ use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use cop_datatype::FieldTypeTp;
 
-use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use coprocessor::codec::mysql::{self, Decimal};
-use coprocessor::codec::{Error, Result, TEN_POW};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
+use crate::coprocessor::codec::mysql::duration::{
+    Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
+};
+use crate::coprocessor::codec::mysql::{self, Decimal};
+use crate::coprocessor::codec::{Error, Result, TEN_POW};
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 
 pub use self::extension::*;
 pub use self::weekmode::WeekMode;
@@ -911,7 +913,7 @@ mod tests {
 
     use chrono::{Duration, Local};
 
-    use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -1578,12 +1580,11 @@ mod tests {
             assert_eq!(res, exp);
         }
 
-        use coprocessor::codec::mysql::duration::MAX_TIME_IN_SECS;
         let lhs = Time::parse_utc_datetime("9999-12-31 23:59:59", 6).unwrap();
-        let rhs = MyDuration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
+        let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
         assert_eq!(lhs.checked_add(&rhs), None);
         let lhs = Time::parse_utc_datetime("0000-01-01 00:00:01", 6).unwrap();
-        let rhs = MyDuration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
+        let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
         assert_eq!(lhs.checked_sub(&rhs), None);
     }
 }

@@ -13,11 +13,11 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
+#[cfg(test)]
+use crate::util::codec::BytesSlice;
 use std::io::Write;
 use tipb::expression::FieldType;
-#[cfg(test)]
-use util::codec::BytesSlice;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.
 /// See https://arrow.apache.org/docs/memory_layout.html
@@ -168,9 +168,9 @@ mod tests {
     use cop_datatype::FieldTypeTp;
 
     use super::*;
-    use coprocessor::codec::chunk::tests::*;
-    use coprocessor::codec::datum::Datum;
-    use coprocessor::codec::mysql::*;
+    use crate::coprocessor::codec::chunk::tests::*;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::coprocessor::codec::mysql::*;
 
     #[test]
     fn test_append_datum() {

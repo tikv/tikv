@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::{f64, str};
 
 use super::Json;
-use coprocessor::codec::Error;
+use crate::coprocessor::codec::Error;
 
 impl Json {
     pub fn to_string(&self) -> String {

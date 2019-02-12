@@ -37,12 +37,12 @@ use std::u64;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
-use storage::engine::Result as EngineResult;
-use storage::Key;
-use storage::{Command, Engine, Error as StorageError, StorageCb};
-use util::collections::HashMap;
-use util::threadpool::{ThreadPool, ThreadPoolBuilder};
-use util::worker::{self, Runnable};
+use crate::storage::engine::Result as EngineResult;
+use crate::storage::Key;
+use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
+use crate::util::collections::HashMap;
+use crate::util::threadpool::{ThreadPool, ThreadPoolBuilder};
+use crate::util::worker::{self, Runnable};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
@@ -400,7 +400,7 @@ impl<E: Engine> Scheduler<E> {
         let pr = match result {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed {
-                err: ::storage::Error::from(e),
+                err: crate::storage::Error::from(e),
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {
@@ -498,11 +498,11 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::mvcc;
+    use crate::storage::txn::latch::*;
+    use crate::storage::{Command, Key, Mutation, Options};
+    use crate::util::collections::HashMap;
     use kvproto::kvrpcpb::Context;
-    use storage::mvcc;
-    use storage::txn::latch::*;
-    use storage::{Command, Key, Mutation, Options};
-    use util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

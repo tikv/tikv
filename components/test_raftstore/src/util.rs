@@ -36,7 +36,7 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::{Config as StorageConfig, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use tikv::util::config::*;
 use tikv::util::escape;
-use tikv::util::rocksdb::{self, CompactionListener};
+use tikv::util::rocksdb_util::{self, CompactionListener};
 
 use super::*;
 
@@ -505,7 +505,7 @@ pub fn create_test_engine(
             ));
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine_opt(
+                rocksdb_util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
@@ -514,7 +514,7 @@ pub fn create_test_engine(
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             );
             Engines::new(engine, raft_engine)
         }

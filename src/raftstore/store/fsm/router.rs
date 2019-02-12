@@ -15,15 +15,15 @@
 #![allow(dead_code)]
 
 use super::batch::{Fsm, FsmScheduler};
+use crate::util::collections::HashMap;
+use crate::util::mpsc;
+use crate::util::Either;
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use util::collections::HashMap;
-use util::mpsc;
-use util::Either;
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;
@@ -474,12 +474,12 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::util::mpsc;
     use crossbeam::channel::{SendError, TryRecvError, TrySendError};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
     use std::thread;
     use test::Bencher;
-    use util::mpsc;
 
     pub struct Counter {
         pub counter: Arc<AtomicUsize>,

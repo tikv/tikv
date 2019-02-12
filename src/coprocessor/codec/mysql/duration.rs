@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
 use time::{self, Tm};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -29,7 +29,7 @@ const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
 
 /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
-pub const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
+const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
 
 fn check_dur(dur: &StdDuration) -> Result<()> {
     let secs = dur.as_secs();
@@ -334,8 +334,8 @@ impl Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::mysql::MAX_FSP;
-    use util::escape;
+    use crate::coprocessor::codec::mysql::MAX_FSP;
+    use crate::util::escape;
 
     #[test]
     fn test_hours() {
@@ -546,7 +546,7 @@ mod tests {
             ("-1 11:59:59.9999", 2),
         ];
         for (input, fsp) in cases {
-            let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(&t).unwrap();
             let got = Duration::decode(&mut buf.as_slice()).unwrap();

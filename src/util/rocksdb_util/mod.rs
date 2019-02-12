@@ -26,6 +26,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use self::engine_metrics::{
+    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
+};
+use crate::storage::{ALL_CFS, CF_DEFAULT};
+use crate::util::file::{calc_crc32, copy_and_sync};
 use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
@@ -33,14 +39,7 @@ use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use storage::{ALL_CFS, CF_DEFAULT};
 use sys_info;
-use util::file::{calc_crc32, copy_and_sync};
-use util::rocksdb;
-use util::rocksdb::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
 
 pub use rocksdb::CFHandle;
 
@@ -252,7 +251,7 @@ pub fn db_exist(path: &str) -> bool {
 pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
     for cf in ALL_CFS {
-        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let handle = get_cf_handle(&engine, cf).unwrap();
         let cf_used_size = engine
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .expect("rocksdb is too old, missing total-sst-files-size property");
@@ -581,11 +580,11 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::CF_DEFAULT;
     use rocksdb::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };
-    use storage::CF_DEFAULT;
     use tempdir::TempDir;
 
     #[test]

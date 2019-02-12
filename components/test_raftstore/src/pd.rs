@@ -610,7 +610,7 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
     }
 
     Err(box_err!(
-        "stale epoch {:?}, we are now {:?}",
+        "epoch not match {:?}, we are now {:?}",
         check_epoch,
         epoch
     ))
@@ -817,9 +817,14 @@ impl TestPdClient {
                 .wait()
                 .unwrap()
                 .unwrap();
-            if now.get_start_key() != region.get_start_key()
-                || now.get_end_key() != region.get_end_key()
+            if (now.get_start_key() != region.get_start_key()
+                && self.get_region(region.get_start_key()).is_ok())
+                || (now.get_end_key() != region.get_end_key()
+                    && self.get_region(now.get_end_key()).is_ok())
             {
+                if now.get_end_key() != region.get_end_key() {
+                    assert!(now.get_end_key().is_empty());
+                }
                 assert!(
                     now.get_region_epoch().get_version() > region.get_region_epoch().get_version()
                 );

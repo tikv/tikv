@@ -22,7 +22,7 @@ use tikv::util::HandyRwLock;
 
 #[test]
 fn test_destory_local_reader() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
@@ -84,7 +84,7 @@ fn test_destory_local_reader() {
 
 #[test]
 fn test_write_after_destroy() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
@@ -155,7 +155,7 @@ fn test_write_after_destroy() {
 
 #[test]
 fn test_tick_after_destroy() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 
