@@ -19,8 +19,8 @@ use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::schema::ColumnInfo;
 
 use super::BatchColumn;
-use coprocessor::codec::mysql::Tz;
-use coprocessor::codec::{datum, Error, Result};
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::{datum, Error, Result};
 
 /// A container stores an array of datums, which can be either raw, i.e. not decoded, or decoded
 /// in `BatchColumn` type.
@@ -32,13 +32,13 @@ pub enum LazyBatchColumn {
     Decoded(BatchColumn),
 }
 
-impl ::std::fmt::Debug for LazyBatchColumn {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+impl std::fmt::Debug for LazyBatchColumn {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             LazyBatchColumn::Raw(ref v) => {
                 let vec_display: Vec<_> = v
                     .iter()
-                    .map(|item| ::util::escape(item.as_slice()))
+                    .map(|item| crate::util::escape(item.as_slice()))
                     .collect();
                 f.debug_tuple("Raw").field(&vec_display).finish()
             }
@@ -266,7 +266,7 @@ impl LazyBatchColumn {
     {
         match self {
             LazyBatchColumn::Raw(ref mut dest) => match other {
-                LazyBatchColumn::Raw(ref mut src) => ::util::vec_append_by_index(dest, src, f),
+                LazyBatchColumn::Raw(ref mut src) => crate::util::vec_append_by_index(dest, src, f),
                 _ => panic!(
                     "Cannot append_by_index decoded LazyBatchColumn into raw LazyBatchColumn"
                 ),
@@ -338,7 +338,7 @@ impl LazyBatchColumn {
     pub fn take_and_collect(&mut self, n: usize) -> Self {
         match self {
             LazyBatchColumn::Raw(ref mut v) => {
-                LazyBatchColumn::Raw(::util::vec_take_and_collect(v, n))
+                LazyBatchColumn::Raw(crate::util::vec_take_and_collect(v, n))
             }
             LazyBatchColumn::Decoded(ref mut v) => LazyBatchColumn::Decoded(v.take_and_collect(n)),
         }
@@ -349,7 +349,7 @@ impl LazyBatchColumn {
 mod tests {
     use super::*;
 
-    use coprocessor::codec::datum::{Datum, DatumEncoder};
+    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
     #[test]
     fn test_lazy_batch_column_clone() {
@@ -432,8 +432,6 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
-
     use super::*;
 
     #[bench]
@@ -529,8 +527,8 @@ mod benches {
     /// Bench performance of cloning a decoded column.
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -542,7 +540,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -560,8 +558,8 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -573,7 +571,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -592,8 +590,8 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -605,7 +603,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };

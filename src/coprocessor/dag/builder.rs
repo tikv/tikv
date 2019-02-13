@@ -18,7 +18,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 
-use storage::Store;
+use crate::storage::Store;
 
 use super::batch_executor::executors::*;
 use super::batch_executor::interface::*;
@@ -26,9 +26,9 @@ use super::executor::{
     Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
     StreamAggExecutor, TableScanExecutor, TopNExecutor,
 };
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::dag::rpn_expr::RpnFunction;
-use coprocessor::*;
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::rpn_expr::RpnFunction;
+use crate::coprocessor::*;
 
 /// Utilities to build an executor DAG.
 ///

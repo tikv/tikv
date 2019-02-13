@@ -15,11 +15,11 @@ use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 
-use coprocessor::codec::datum;
-use coprocessor::codec::mysql::Tz;
-use coprocessor::codec::{Error, Result};
-use coprocessor::data_type::{Bytes, DateTime, Decimal, Duration, Int, Json, Real};
-use util::codec::{bytes, number};
+use crate::coprocessor::codec::datum;
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::{Error, Result};
+use crate::coprocessor::data_type::{Bytes, DateTime, Decimal, Duration, Int, Json, Real};
+use crate::util::codec::{bytes, number};
 
 /// An array of datums in the same data type and is column oriented.
 ///
@@ -83,19 +83,27 @@ impl Clone for BatchColumn {
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
         match self {
-            BatchColumn::Int(ref vec) => BatchColumn::Int(::util::vec_clone_with_capacity(vec)),
-            BatchColumn::Real(ref vec) => BatchColumn::Real(::util::vec_clone_with_capacity(vec)),
-            BatchColumn::Decimal(ref vec) => {
-                BatchColumn::Decimal(::util::vec_clone_with_capacity(vec))
+            BatchColumn::Int(ref vec) => {
+                BatchColumn::Int(crate::util::vec_clone_with_capacity(vec))
             }
-            BatchColumn::Bytes(ref vec) => BatchColumn::Bytes(::util::vec_clone_with_capacity(vec)),
+            BatchColumn::Real(ref vec) => {
+                BatchColumn::Real(crate::util::vec_clone_with_capacity(vec))
+            }
+            BatchColumn::Decimal(ref vec) => {
+                BatchColumn::Decimal(crate::util::vec_clone_with_capacity(vec))
+            }
+            BatchColumn::Bytes(ref vec) => {
+                BatchColumn::Bytes(crate::util::vec_clone_with_capacity(vec))
+            }
             BatchColumn::DateTime(ref vec) => {
-                BatchColumn::DateTime(::util::vec_clone_with_capacity(vec))
+                BatchColumn::DateTime(crate::util::vec_clone_with_capacity(vec))
             }
             BatchColumn::Duration(ref vec) => {
-                BatchColumn::Duration(::util::vec_clone_with_capacity(vec))
+                BatchColumn::Duration(crate::util::vec_clone_with_capacity(vec))
             }
-            BatchColumn::Json(ref vec) => BatchColumn::Json(::util::vec_clone_with_capacity(vec)),
+            BatchColumn::Json(ref vec) => {
+                BatchColumn::Json(crate::util::vec_clone_with_capacity(vec))
+            }
         }
     }
 }
@@ -262,13 +270,13 @@ impl BatchColumn {
         match self {
             BatchColumn::Int(ref mut self_vec) => match other {
                 BatchColumn::Int(ref mut other_vec) => {
-                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                    crate::util::vec_append_by_index(self_vec, other_vec, f);
                 }
                 other => panic!("Cannot append_by_index {} to Int column", other.eval_type()),
             },
             BatchColumn::Real(ref mut self_vec) => match other {
                 BatchColumn::Real(ref mut other_vec) => {
-                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                    crate::util::vec_append_by_index(self_vec, other_vec, f);
                 }
                 other => panic!(
                     "Cannot append_by_index {} to Real column",
@@ -277,7 +285,7 @@ impl BatchColumn {
             },
             BatchColumn::Decimal(ref mut self_vec) => match other {
                 BatchColumn::Decimal(ref mut other_vec) => {
-                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                    crate::util::vec_append_by_index(self_vec, other_vec, f);
                 }
                 other => panic!(
                     "Cannot append_by_index {} to Decimal column",
@@ -286,7 +294,7 @@ impl BatchColumn {
             },
             BatchColumn::Bytes(ref mut self_vec) => match other {
                 BatchColumn::Bytes(ref mut other_vec) => {
-                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                    crate::util::vec_append_by_index(self_vec, other_vec, f);
                 }
                 other => panic!(
                     "Cannot append_by_index {} to Bytes column",
@@ -295,7 +303,7 @@ impl BatchColumn {
             },
             BatchColumn::DateTime(ref mut self_vec) => match other {
                 BatchColumn::DateTime(ref mut other_vec) => {
-                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                    crate::util::vec_append_by_index(self_vec, other_vec, f);
                 }
                 other => panic!(
                     "Cannot append_by_index {} to DateTime column",
@@ -304,7 +312,7 @@ impl BatchColumn {
             },
             BatchColumn::Duration(ref mut self_vec) => match other {
                 BatchColumn::Duration(ref mut other_vec) => {
-                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                    crate::util::vec_append_by_index(self_vec, other_vec, f);
                 }
                 other => panic!(
                     "Cannot append_by_index {} to Duration column",
@@ -313,7 +321,7 @@ impl BatchColumn {
             },
             BatchColumn::Json(ref mut self_vec) => match other {
                 BatchColumn::Json(ref mut other_vec) => {
-                    ::util::vec_append_by_index(self_vec, other_vec, f);
+                    crate::util::vec_append_by_index(self_vec, other_vec, f);
                 }
                 other => panic!(
                     "Cannot append_by_index {} to Json column",
@@ -324,7 +332,7 @@ impl BatchColumn {
     }
 
     pub fn as_bools(&self, outputs: &mut [bool]) {
-        use coprocessor::data_type::AsBool;
+        use crate::coprocessor::data_type::AsBool;
 
         assert!(outputs.len() >= self.len());
         match_self!(ref self, v, {
@@ -337,24 +345,26 @@ impl BatchColumn {
     /// Takes first n elements and build a new instance.
     pub fn take_and_collect(&mut self, n: usize) -> BatchColumn {
         match self {
-            BatchColumn::Int(ref mut vec) => BatchColumn::Int(::util::vec_take_and_collect(vec, n)),
+            BatchColumn::Int(ref mut vec) => {
+                BatchColumn::Int(crate::util::vec_take_and_collect(vec, n))
+            }
             BatchColumn::Real(ref mut vec) => {
-                BatchColumn::Real(::util::vec_take_and_collect(vec, n))
+                BatchColumn::Real(crate::util::vec_take_and_collect(vec, n))
             }
             BatchColumn::Decimal(ref mut vec) => {
-                BatchColumn::Decimal(::util::vec_take_and_collect(vec, n))
+                BatchColumn::Decimal(crate::util::vec_take_and_collect(vec, n))
             }
             BatchColumn::Bytes(ref mut vec) => {
-                BatchColumn::Bytes(::util::vec_take_and_collect(vec, n))
+                BatchColumn::Bytes(crate::util::vec_take_and_collect(vec, n))
             }
             BatchColumn::DateTime(ref mut vec) => {
-                BatchColumn::DateTime(::util::vec_take_and_collect(vec, n))
+                BatchColumn::DateTime(crate::util::vec_take_and_collect(vec, n))
             }
             BatchColumn::Duration(ref mut vec) => {
-                BatchColumn::Duration(::util::vec_take_and_collect(vec, n))
+                BatchColumn::Duration(crate::util::vec_take_and_collect(vec, n))
             }
             BatchColumn::Json(ref mut vec) => {
-                BatchColumn::Json(::util::vec_take_and_collect(vec, n))
+                BatchColumn::Json(crate::util::vec_take_and_collect(vec, n))
             }
         }
     }
@@ -641,10 +651,10 @@ impl BatchColumn {
 
     /// Encodes a single element into binary format.
     pub fn encode(&self, row_index: usize, output: &mut Vec<u8>) -> Result<()> {
-        use coprocessor::codec::mysql::DecimalEncoder;
-        use coprocessor::codec::mysql::JsonEncoder;
-        use util::codec::bytes::BytesEncoder;
-        use util::codec::number::NumberEncoder;
+        use crate::coprocessor::codec::mysql::DecimalEncoder;
+        use crate::coprocessor::codec::mysql::JsonEncoder;
+        use crate::util::codec::bytes::BytesEncoder;
+        use crate::util::codec::number::NumberEncoder;
 
         match self {
             BatchColumn::Int(ref vec) => {
@@ -777,7 +787,7 @@ impl<'a> BatchColumnRef<'a> {
     }
 
     pub fn as_bools(&self, outputs: &mut [bool]) {
-        use coprocessor::data_type::AsBool;
+        use crate::coprocessor::data_type::AsBool;
 
         assert!(outputs.len() >= self.len());
         match_self_ref!(ref self, v, {
@@ -1241,13 +1251,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use super::*;
 
     #[bench]
     fn bench_push_datum_int(b: &mut test::Bencher) {
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = BatchColumn::with_capacity(1000, EvalType::Int);
 
@@ -1255,7 +1265,7 @@ mod benches {
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1279,16 +1289,16 @@ mod benches {
     /// Bench performance of naively decoding multiple datums (without pushing into a vector).
     #[bench]
     fn bench_batch_decode(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::table;
+        use crate::coprocessor::dag::expr::EvalContext;
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
-        use coprocessor::codec::table;
-        use coprocessor::dag::expr::EvalContext;
 
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };

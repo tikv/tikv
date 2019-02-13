@@ -17,8 +17,8 @@ use tipb::expression::{FieldType, ScalarFuncSig};
 
 use super::types::{RpnExpressionEvalContext, RpnStackNode};
 use super::{impl_compare, impl_dummy, impl_op};
-use coprocessor::data_type::{Evaluable, ScalarValueRef, VectorValue, VectorValueRef};
-use coprocessor::Error;
+use crate::coprocessor::data_type::{Evaluable, ScalarValueRef, VectorValue, VectorValueRef};
+use crate::coprocessor::Error;
 
 // TODO: Merge into ScalarFuncSig
 #[derive(Debug, Clone, Copy, PartialEq)]

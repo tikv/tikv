@@ -1304,7 +1304,7 @@ fn bench_dag_handle(
                 dag.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),
-                Deadline::from_now("", ::std::time::Duration::from_secs(10)),
+                Deadline::from_now("", std::time::Duration::from_secs(10)),
                 64,
                 false,
                 enable_batch,

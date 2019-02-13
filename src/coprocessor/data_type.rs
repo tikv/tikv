@@ -18,8 +18,10 @@ use cop_datatype::EvalType;
 pub type Int = i64;
 pub type Real = f64;
 pub type Bytes = Vec<u8>;
-pub use coprocessor::codec::batch::{BatchColumn as VectorValue, BatchColumnRef as VectorValueRef};
-pub use coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
+pub use crate::coprocessor::codec::batch::{
+    BatchColumn as VectorValue, BatchColumnRef as VectorValueRef,
+};
+pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 pub trait AsBool {
     fn as_bool(&self) -> bool;
@@ -64,7 +66,8 @@ impl AsBool for Option<Bytes> {
             // FIXME: No unwrap?? No without_context??
             Some(ref v) => {
                 !v.is_empty()
-                    && ::coprocessor::codec::convert::bytes_to_int_without_context(v).unwrap() != 0
+                    && crate::coprocessor::codec::convert::bytes_to_int_without_context(v).unwrap()
+                        != 0
             }
         }
     }

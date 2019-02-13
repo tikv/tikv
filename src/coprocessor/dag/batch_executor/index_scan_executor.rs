@@ -14,14 +14,14 @@
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
 
-use storage::{Key, Store};
+use crate::storage::{Key, Store};
 
 use super::interface::*;
 use super::ranges_consumer::{ConsumerResult, RangesConsumer};
-use coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use coprocessor::codec::table;
-use coprocessor::dag::Scanner;
-use coprocessor::*;
+use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::Scanner;
+use crate::coprocessor::*;
 
 // TODO: Merge with BatchTableScanExecutor
 
@@ -82,7 +82,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
     /// Creates or resets the range of inner scanner.
     #[inline]
     fn reset_range(&mut self, range: KeyRange) -> Result<()> {
-        use coprocessor::dag::ScanOn;
+        use crate::coprocessor::dag::ScanOn;
 
         self.scanner = Some(Scanner::new(
             &self.store,
@@ -109,7 +109,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
     /// Get one row from the store.
     #[inline]
     fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut statistics = ::storage::Statistics::default();
+        let mut statistics = crate::storage::Statistics::default();
         // TODO: Key and value doesn't have to be owned
         let key = range.take_start();
         let value = self.store.get(&Key::from_raw(&key), &mut statistics)?;
@@ -121,9 +121,9 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         expect_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<bool> {
+        use crate::coprocessor::codec::datum;
+        use crate::util::codec::number;
         use byteorder::{BigEndian, ReadBytesExt};
-        use coprocessor::codec::datum;
-        use util::codec::number;
 
         assert!(expect_rows > 0);
 
@@ -250,10 +250,10 @@ mod tests {
 
     use kvproto::kvrpcpb::IsolationLevel;
 
-    use storage::SnapshotStore;
+    use crate::storage::SnapshotStore;
 
     use super::*;
-    use coprocessor::dag::scanner::tests::{
+    use crate::coprocessor::dag::scanner::tests::{
         get_point_range, get_range, prepare_table_data, TestStore,
     };
 
@@ -320,7 +320,7 @@ mod tests {
 
         let mut data = table_scanner.next_batch(0).data;
         {
-            let mut rng = ::rand::thread_rng();
+            let mut rng = rand::thread_rng();
             loop {
                 let mut result = table_scanner.next_batch(rng.gen_range(1, KEY_NUMBER / 5));
                 assert!(result.error.is_none());

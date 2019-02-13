@@ -17,7 +17,7 @@ use std::result;
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Io(err: ::std::io::Error) {
+        Io(err: std::io::Error) {
             from()
             cause(err)
             description(err.description())
@@ -34,7 +34,7 @@ quick_error! {
             description("compatible error")
             display("feature is not supported in other cluster components")
         }
-        Grpc(err: ::grpc::Error) {
+        Grpc(err: crate::grpc::Error) {
             from()
             cause(err)
             description(err.description())

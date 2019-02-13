@@ -38,26 +38,26 @@ use kvproto::raft_serverpb::{
 };
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
 
-use crossbeam::channel::{TryRecvError, TrySendError};
-use import::SSTImporter;
-use raft::NO_LIMIT;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::engine::{Mutable, Peekable, Snapshot};
-use raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
-use raftstore::store::metrics::*;
-use raftstore::store::msg::{Callback, PeerMsg};
-use raftstore::store::peer::Peer;
-use raftstore::store::peer_storage::{
+use crate::import::SSTImporter;
+use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
+use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::msg::{Callback, PeerMsg};
+use crate::raftstore::store::peer::Peer;
+use crate::raftstore::store::peer_storage::{
     self, compact_raft_log, write_initial_apply_state, write_peer_state,
 };
-use raftstore::store::util::check_region_epoch;
-use raftstore::store::{cmd_resp, keys, util, Config, Engines};
-use raftstore::{Error, Result};
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use util::time::{duration_to_sec, Instant, SlowTimer};
-use util::Either;
-use util::{escape, rocksdb, MustConsumeVec};
+use crate::raftstore::store::util::check_region_epoch;
+use crate::raftstore::store::{cmd_resp, keys, util, Config, Engines};
+use crate::raftstore::{Error, Result};
+use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
+use crate::util::time::{duration_to_sec, Instant, SlowTimer};
+use crate::util::Either;
+use crate::util::{escape, rocksdb_util, MustConsumeVec};
+use crossbeam::channel::{TryRecvError, TrySendError};
+use raft::NO_LIMIT;
 
 use super::metrics::*;
 use super::{
@@ -739,7 +739,7 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, engines: &Engines, wb: &WriteBatch) {
-        rocksdb::get_cf_handle(&engines.kv, CF_RAFT)
+        rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
                 wb.put_msg_cf(
@@ -883,7 +883,7 @@ impl ApplyDelegate {
     ///
     /// An apply operation can fail in the following situations:
     ///   1. it encounters an error that will occur on all stores, it can continue
-    /// applying next entry safely, like stale epoch for example;
+    /// applying next entry safely, like epoch not match for example;
     ///   2. it encounters an error that may not occur on all stores, in this case
     /// we should try to apply the entry again or panic. Considering that this
     /// usually due to disk operation fail, which is rare, so just panic is ok.
@@ -905,7 +905,7 @@ impl ApplyDelegate {
                 // clear dirty values.
                 ctx.wb_mut().rollback_to_save_point().unwrap();
                 match e {
-                    Error::StaleEpoch(..) => debug!("{} stale epoch err: {:?}", self.tag, e),
+                    Error::EpochNotMatch(..) => debug!("{} epoch not match err: {:?}", self.tag, e),
                     _ => error!("{} execute raft command err: {:?}", self.tag, e),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
@@ -986,7 +986,7 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext,
         req: RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
-        // Include region for stale epoch after merge may cause key not in range.
+        // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(&req, &self.region, include_region)?;
@@ -1004,13 +1004,13 @@ impl ApplyDelegate {
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
-        if cmd_type != AdminCmdType::CompactLog {
+        if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
             info!(
                 "{} execute admin command {:?} at [term: {}, index: {}]",
                 self.tag,
                 request,
                 ctx.exec_ctx.as_ref().unwrap().term,
-                ctx.exec_ctx.as_ref().unwrap().index
+                ctx.exec_ctx.as_ref().unwrap().index,
             );
         }
 
@@ -1115,7 +1115,7 @@ impl ApplyDelegate {
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&ctx.engines.kv, cf)
+            rocksdb_util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.wb().put_cf(handle, &key, value))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1153,7 +1153,7 @@ impl ApplyDelegate {
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            rocksdb::get_cf_handle(&ctx.engines.kv, cf)
+            rocksdb_util::get_cf_handle(&ctx.engines.kv, cf)
                 .and_then(|handle| ctx.wb().delete_cf(handle, &key))
                 .unwrap_or_else(|e| {
                     panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
@@ -1207,7 +1207,7 @@ impl ApplyDelegate {
         if ALL_CFS.iter().find(|x| **x == cf).is_none() {
             return Err(box_err!("invalid delete range command, cf: {:?}", cf));
         }
-        let handle = rocksdb::get_cf_handle(&ctx.engines.kv, cf).unwrap();
+        let handle = rocksdb_util::get_cf_handle(&ctx.engines.kv, cf).unwrap();
 
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
@@ -1286,7 +1286,12 @@ impl ApplyDelegate {
 
         fail_point!(
             "apply_on_conf_change_1_3_1",
-            { (self.id == 1 || self.id == 3) && self.region_id() == 1 },
+            (self.id == 1 || self.id == 3) && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
+            "apply_on_conf_change_all_1",
+            self.region_id() == 1,
             |_| panic!("should not use return")
         );
         info!(
@@ -1733,6 +1738,16 @@ impl ApplyDelegate {
             ));
         }
 
+        info!(
+            "{} execute CommitMerge for region {:?} commit {} entries count {} at [term: {}, index: {}]",
+            self.tag,
+            source_region,
+            merge.get_commit(),
+            merge.get_entries().len(),
+            ctx.exec_ctx.as_ref().unwrap().term,
+            ctx.exec_ctx.as_ref().unwrap().index,
+        );
+
         self.ready_source_region_id = 0;
 
         let region_state_key = keys::region_state_key(source_region_id);
@@ -1980,7 +1995,7 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
         || epoch.get_version() != region_epoch.get_version()
     {
         let error = format!("{:?} != {:?}", epoch, region_epoch);
-        return Err(Error::StaleEpoch(error, vec![region.clone()]));
+        return Err(Error::EpochNotMatch(error, vec![region.clone()]));
     }
 
     let range = sst.get_range();
@@ -2326,7 +2341,7 @@ impl ApplyFsm {
             }
             None => {
                 info!("{} all pending logs are applied.", self.delegate.tag);
-                if let Some(mut catch_up_logs) = state.catch_up_logs {
+                if let Some(catch_up_logs) = state.catch_up_logs {
                     // There is a merge cascade, need to notify the source peer.
                     ctx.write_to_db();
                     let region_id = self.delegate.region_id();
@@ -2648,27 +2663,29 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
+    use crate::raftstore::coprocessor::*;
+    use crate::raftstore::store::msg::WriteResponse;
+    use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
+    use crate::raftstore::store::util::{new_learner_peer, new_peer};
+    use crate::raftstore::store::Config;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
-    use raftstore::coprocessor::*;
-    use raftstore::store::msg::WriteResponse;
-    use raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
-    use raftstore::store::util::{new_learner_peer, new_peer};
-    use raftstore::store::Config;
     use rocksdb::{Writable, WriteBatch, DB};
     use tempdir::TempDir;
 
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
         let db = Arc::new(
-            rocksdb::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None).unwrap(),
+            rocksdb_util::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None)
+                .unwrap(),
         );
         let raft_db = Arc::new(
-            rocksdb::new_engine(path.path().join("raft").to_str().unwrap(), &[], None).unwrap(),
+            rocksdb_util::new_engine(path.path().join("raft").to_str().unwrap(), &[], None)
+                .unwrap(),
         );
         (path, Engines::new(db, raft_db))
     }
@@ -2747,7 +2764,7 @@ mod tests {
     fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Apply(mut res) => res,
+                TaskRes::Apply(res) => res,
                 e => panic!("unexpected res {:?}", e),
             },
             e => panic!("unexpected res {:?}", e),
@@ -3165,7 +3182,7 @@ mod tests {
             .build();
         router.schedule_task(1, Msg::apply(Apply::new(1, 2, vec![put_entry])));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert!(resp.get_header().get_error().has_stale_epoch());
+        assert!(resp.get_header().get_error().has_epoch_not_match());
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_index_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 3);
@@ -3275,12 +3292,12 @@ mod tests {
             .ingest_sst(&meta1)
             .epoch(0, 3)
             .build();
-        let ingest_stale_epoch = EntryBuilder::new(11, 3)
+        let ingest_epoch_not_match = EntryBuilder::new(11, 3)
             .capture_resp(&router, 3, 1, capture_tx.clone())
             .ingest_sst(&meta2)
             .epoch(0, 3)
             .build();
-        let entries = vec![put_ok, ingest_ok, ingest_stale_epoch];
+        let entries = vec![put_ok, ingest_ok, ingest_epoch_not_match];
         router.schedule_task(1, Msg::apply(Apply::new(1, 3, entries)));
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
@@ -3513,9 +3530,6 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // All requests should be checked.
         assert!(error_msg(&resp).contains("id count"), "{:?}", resp);
-
-        let mut new_version = epoch.borrow().get_version() + 1;
-        epoch.borrow_mut().set_version(new_version);
         let checker = SplitResultChecker {
             db: &engines.kv,
             origin_peers: &peers,
@@ -3529,11 +3543,11 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Split should succeed.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let mut new_version = epoch.borrow().get_version() + 1;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"", b"k1", 8, &[9, 10, 11], true);
         checker.check(b"k1", b"k5", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 1;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3542,11 +3556,11 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 1;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k4", b"k5", 12, &[13, 14, 15], true);
         checker.check(b"k1", b"k4", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 2;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3558,12 +3572,12 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 2;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k1", b"k2", 16, &[17, 18, 19], true);
         checker.check(b"k2", b"k3", 20, &[21, 22, 23], true);
         checker.check(b"k3", b"k4", 1, &[3, 5, 7], false);
 
-        new_version = epoch.borrow().get_version() + 2;
-        epoch.borrow_mut().set_version(new_version);
         splits.mut_requests().clear();
         splits
             .mut_requests()
@@ -3575,6 +3589,8 @@ mod tests {
         let resp = exec_split(&router, splits.clone());
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+        new_version = epoch.borrow().get_version() + 2;
+        epoch.borrow_mut().set_version(new_version);
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);

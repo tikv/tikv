@@ -14,16 +14,16 @@
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
 
-use storage::{Key, Store};
+use crate::storage::{Key, Store};
 
-use util::collections::HashMap;
+use crate::util::collections::HashMap;
 
 use super::interface::*;
 use super::ranges_consumer::{ConsumerResult, RangesConsumer};
-use coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use coprocessor::codec::table;
-use coprocessor::dag::Scanner;
-use coprocessor::*;
+use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::Scanner;
+use crate::coprocessor::*;
 
 pub struct BatchTableScanExecutor<S: Store> {
     context: ExecutorContext,
@@ -79,7 +79,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
         let is_column_filled = vec![false; context.columns_info.len()];
 
         let mut key_only = true;
-        let mut handle_index = ::std::usize::MAX;
+        let mut handle_index = std::usize::MAX;
         let mut column_id_index = HashMap::default();
         for (index, column_info) in context.columns_info.iter().enumerate() {
             if column_info.get_pk_handle() {
@@ -109,7 +109,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
     /// Creates or resets the range of inner scanner.
     #[inline]
     fn reset_range(&mut self, range: KeyRange) -> Result<()> {
-        use coprocessor::dag::ScanOn;
+        use crate::coprocessor::dag::ScanOn;
 
         self.scanner = Some(Scanner::new(
             &self.store,
@@ -136,7 +136,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
     /// Get one row from the store.
     #[inline]
     fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut statistics = ::storage::Statistics::default();
+        let mut statistics = crate::storage::Statistics::default();
         // TODO: Key and value doesn't have to be owned
         let key = range.take_start();
         let value = self.store.get(&Key::from_raw(&key), &mut statistics)?;
@@ -148,8 +148,8 @@ impl<S: Store> BatchTableScanExecutor<S> {
         expect_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<bool> {
-        use coprocessor::codec::datum;
-        use util::codec::number;
+        use crate::coprocessor::codec::datum;
+        use crate::util::codec::number;
 
         assert!(expect_rows > 0);
 
@@ -176,7 +176,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
                 let mut decoded_columns = 0;
 
                 // Decode handle from key if handle is specified in columns.
-                if self.handle_index != ::std::usize::MAX {
+                if self.handle_index != std::usize::MAX {
                     if !self.is_column_filled[self.handle_index] {
                         let handle_id = table::decode_handle(&key)?;
                         // FIXME: The columns may be not in the same length if there is error.
@@ -298,10 +298,10 @@ mod tests {
 
     use kvproto::kvrpcpb::IsolationLevel;
 
-    use storage::SnapshotStore;
+    use crate::storage::SnapshotStore;
 
     use super::*;
-    use coprocessor::dag::scanner::tests::{
+    use crate::coprocessor::dag::scanner::tests::{
         get_point_range, get_range, prepare_table_data, TestStore,
     };
 
@@ -368,7 +368,7 @@ mod tests {
 
         let mut data = table_scanner.next_batch(1).data;
         {
-            let mut rng = ::rand::thread_rng();
+            let mut rng = rand::thread_rng();
             loop {
                 let mut result = table_scanner.next_batch(rng.gen_range(1, KEY_NUMBER / 5));
                 assert!(result.is_drained.is_ok());

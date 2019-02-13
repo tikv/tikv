@@ -17,10 +17,10 @@ use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::function::RpnFunction;
-use coprocessor::codec::batch::LazyBatchColumnVec;
-use coprocessor::codec::mysql::Tz;
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::data_type::{ScalarValue, ScalarValueRef, VectorValue, VectorValueRef};
+use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::data_type::{ScalarValue, ScalarValueRef, VectorValue, VectorValueRef};
 
 /// Global variables needed in evaluating RPN expression.
 #[derive(Debug)]
@@ -188,7 +188,7 @@ impl RpnExpressionNode {
 #[derive(Debug)]
 pub struct RpnExpressionNodeVec(Vec<RpnExpressionNode>);
 
-impl ::std::ops::Deref for RpnExpressionNodeVec {
+impl std::ops::Deref for RpnExpressionNodeVec {
     type Target = Vec<RpnExpressionNode>;
 
     fn deref(&self) -> &Vec<RpnExpressionNode> {
@@ -196,7 +196,7 @@ impl ::std::ops::Deref for RpnExpressionNodeVec {
     }
 }
 
-impl ::std::ops::DerefMut for RpnExpressionNodeVec {
+impl std::ops::DerefMut for RpnExpressionNodeVec {
     fn deref_mut(&mut self) -> &mut Vec<RpnExpressionNode> {
         &mut self.0
     }
@@ -273,7 +273,7 @@ impl RpnExpressionNodeVec {
         columns: &LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
     ) {
-        use coprocessor::data_type::AsBool;
+        use crate::coprocessor::data_type::AsBool;
 
         assert!(outputs.len() >= rows);
         let values = self.eval(context, rows, columns);
@@ -302,9 +302,9 @@ impl RpnExpressionNodeVec {
         time_zone: Tz,
         rpn_nodes: &mut Vec<RpnExpressionNode>,
     ) {
-        use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+        use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+        use crate::util::codec::number;
         use std::convert::{TryFrom, TryInto};
-        use util::codec::number;
 
         let field_type = def.take_field_type();
         let eval_type = EvalType::try_from(field_type.tp()).unwrap();
@@ -442,7 +442,7 @@ impl RpnExpressionNodeVec {
             }
             ExprType::ScalarFunc => {
                 let func = RpnFunction::try_from(def.get_sig()).unwrap();
-                let mut args = def.take_children().into_vec();
+                let args = def.take_children().into_vec();
                 // FIXME: Don't use assert_eq
                 assert_eq!(func.args_len(), args.len());
                 rpn_nodes.push(RpnExpressionNode::Fn { func, field_type });
@@ -468,11 +468,11 @@ mod tests {
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
 
-    use coprocessor::codec::batch::LazyBatchColumn;
+    use crate::coprocessor::codec::batch::LazyBatchColumn;
 
     fn new_gt_int_def(offset: usize, val: u64) -> Expr {
         // GTInt(ColumnRef(offset), Uint64(val))
-        use util::codec::number::NumberEncoder;
+        use crate::util::codec::number::NumberEncoder;
 
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);

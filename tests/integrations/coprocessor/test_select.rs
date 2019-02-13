@@ -1362,7 +1362,7 @@ fn test_handle_truncate() {
 
         // Do NOT ignore truncate error.
         let req = DAGSelect::from(&product).where_expr(cond.clone()).build();
-        let mut resp = handle_select(&endpoint, req);
+        let resp = handle_select(&endpoint, req);
         assert!(resp.has_error());
         assert!(resp.get_warnings().is_empty());
     }

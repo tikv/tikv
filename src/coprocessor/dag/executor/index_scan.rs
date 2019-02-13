@@ -24,15 +24,15 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::{datum, table};
-use coprocessor::util;
-use coprocessor::*;
+use crate::coprocessor::codec::{datum, table};
+use crate::coprocessor::util;
+use crate::coprocessor::*;
 
-use storage::{Key, Store};
+use crate::storage::{Key, Store};
 
 use super::ExecutorMetrics;
 use super::{Executor, Row};
-use coprocessor::dag::{ScanOn, Scanner};
+use crate::coprocessor::dag::{ScanOn, Scanner};
 
 /// Scans rows from table indexes.
 ///
@@ -212,7 +212,7 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
 
     fn start_scan(&mut self) {
         if let Some(range) = self.current_range.as_ref() {
-            if !util::is_point(range) {
+            if !self.is_point(range) {
                 let scanner = self.scanner.as_ref().unwrap();
                 return scanner.start_scan(&mut self.scan_range);
             }
@@ -231,7 +231,7 @@ impl<S: Store> Executor for IndexScanExecutor<S> {
         let mut ret_range = mem::replace(&mut self.scan_range, KeyRange::default());
         match self.current_range.as_ref() {
             Some(range) => {
-                if !util::is_point(range) {
+                if !self.is_point(range) {
                     let scanner = self.scanner.as_mut().unwrap();
                     if scanner.stop_scan(&mut ret_range) {
                         return Some(ret_range);
@@ -283,12 +283,12 @@ pub mod tests {
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum};
-    use storage::SnapshotStore;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::storage::SnapshotStore;
+    use crate::util::collections::HashMap;
 
     use super::*;
-    use coprocessor::dag::scanner::tests::{new_col_info, Data, TestStore};
+    use crate::coprocessor::dag::scanner::tests::{new_col_info, Data, TestStore};
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

@@ -14,7 +14,7 @@
 use std::slice::Iter;
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 const MAX_RECURSE_LEVEL: usize = 1024;
@@ -122,9 +122,9 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
     #[test]

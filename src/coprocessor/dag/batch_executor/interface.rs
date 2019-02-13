@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::batch::LazyBatchColumnVec;
-use coprocessor::Error;
+use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::Error;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
 /// pulls data in batch and stores data by column.
@@ -54,7 +54,7 @@ impl ExecutorContext {
     }
 }
 
-impl ::std::ops::Deref for ExecutorContext {
+impl std::ops::Deref for ExecutorContext {
     type Target = ExecutorContextInner;
 
     fn deref(&self) -> &ExecutorContextInner {
@@ -62,9 +62,9 @@ impl ::std::ops::Deref for ExecutorContext {
     }
 }
 
-impl ::util::AssertSend for ExecutorContext {}
+impl crate::util::AssertSend for ExecutorContext {}
 
-impl ::util::AssertSync for ExecutorContext {}
+impl crate::util::AssertSync for ExecutorContext {}
 
 pub struct ExecutorContextInner {
     pub collect_range_counts: bool,

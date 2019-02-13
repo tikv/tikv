@@ -14,7 +14,7 @@
 mod chunk;
 mod column;
 
-pub use coprocessor::codec::{Error, Result};
+pub use crate::coprocessor::codec::{Error, Result};
 
 pub use self::chunk::{Chunk, ChunkEncoder};
 

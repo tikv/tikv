@@ -27,32 +27,32 @@ use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use rocksdb::{
-    CompactOptions, DBBottommostLevelCompaction, Kv, Range, SeekKey, Writable, WriteBatch,
-    WriteOptions, DB,
+    CompactOptions, DBBottommostLevelCompaction, Kv, Range, ReadOptions, SeekKey, Writable,
+    WriteBatch, WriteOptions, DB,
 };
 
-use raft::{self, RawNode};
-use raftstore::store::engine::{IterOption, Mutable};
-use raftstore::store::util as raftstore_util;
-use raftstore::store::{
+use crate::raftstore::store::engine::{IterOption, Mutable};
+use crate::raftstore::store::util as raftstore_util;
+use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
-use storage::mvcc::{Lock, LockType, Write, WriteType};
-use storage::types::Key;
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::codec::bytes;
-use util::collections::HashSet;
-use util::config::ReadableSize;
-use util::escape;
-use util::properties::MvccProperties;
-use util::rocksdb::get_cf_handle;
-use util::rocksdb::properties::RangeProperties;
-use util::worker::Worker;
+use crate::raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
+use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
+use crate::storage::types::Key;
+use crate::storage::Iterator as EngineIterator;
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::util::codec::bytes;
+use crate::util::collections::HashSet;
+use crate::util::config::ReadableSize;
+use crate::util::escape;
+use crate::util::rocksdb_util::get_cf_handle;
+use crate::util::rocksdb_util::properties::{MvccProperties, RangeProperties};
+use crate::util::worker::Worker;
+use raft::{self, RawNode};
 
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
+type DBIterator = rocksdb::DBIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
@@ -275,6 +275,35 @@ impl Debugger {
         MvccInfoIterator::new(&self.engines.kv, start, end, limit)
     }
 
+    /// Scan raw keys for given range `[start, end)` in given cf.
+    pub fn raw_scan(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: usize,
+        cf: &str,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let db = &self.engines.kv;
+        let cf_handle = get_cf_handle(db, cf).unwrap();
+        let mut read_opt = ReadOptions::new();
+        read_opt.set_total_order_seek(true);
+        read_opt.set_iterate_lower_bound(start);
+        if !end.is_empty() {
+            read_opt.set_iterate_upper_bound(end);
+        }
+        let mut iter = db.iter_cf_opt(cf_handle, read_opt);
+        if !iter.seek_to_first() {
+            return Ok(vec![]);
+        }
+
+        let mut res = vec![(iter.key().to_vec(), iter.value().to_vec())];
+        while res.len() < limit && iter.next() {
+            res.push((iter.key().to_vec(), iter.value().to_vec()));
+        }
+
+        Ok(res)
+    }
+
     /// Compact the cf[start..end) in the db.
     pub fn compact(
         &self,
@@ -290,13 +319,13 @@ impl Debugger {
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
-        info!("Debugger starts manual comapct on {:?}.{}", db, cf);
+        info!("Debugger starts manual compact on {:?}.{}", db, cf);
         let mut opts = CompactOptions::new();
         opts.set_max_subcompactions(threads as i32);
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishs manual comapct on {:?}.{}", db, cf);
+        info!("Debugger finishs manual compact on {:?}.{}", db, cf);
         Ok(())
     }
 
@@ -1275,7 +1304,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     Ok(())
 }
 
-fn divide_db(db: &DB, parts: usize) -> ::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     let mut fake_region = Region::default();
     fake_region.set_start_key(vec![]);
     fake_region.set_end_key(vec![]);
@@ -1295,7 +1324,7 @@ fn divide_db(db: &DB, parts: usize) -> ::raftstore::Result<Vec<Vec<u8>>> {
     divide_db_cf(db, parts, cf)
 }
 
-fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     let cf = get_cf_handle(db, cf)?;
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
@@ -1363,10 +1392,10 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use raftstore::store::engine::Mutable;
-    use storage::mvcc::{Lock, LockType};
-    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::rocksdb::{self as rocksdb_util, new_engine_opt, CFOptions};
+    use crate::raftstore::store::engine::Mutable;
+    use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::rocksdb_util::{self as rocksdb_util, new_engine_opt, CFOptions};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -2053,5 +2082,68 @@ mod tests {
                 Expect::Remove => assert!(data.is_none()),
             }
         }
+    }
+
+    #[test]
+    fn test_debug_raw_scan() {
+        let keys: &[&[u8]] = &[
+            b"a",
+            b"a1",
+            b"a2",
+            b"a2\x00",
+            b"a2\x00\x00",
+            b"b",
+            b"b1",
+            b"b2",
+            b"b2\x00",
+            b"b2\x00\x00",
+            b"c",
+            b"c1",
+            b"c2",
+            b"c2\x00",
+            b"c2\x00\x00",
+        ];
+
+        let debugger = new_debugger();
+
+        let wb = WriteBatch::new();
+        for key in keys {
+            let data_key = keys::data_key(key);
+            let value = key.to_vec();
+            wb.put(&data_key, &value).unwrap();
+        }
+        debugger.engines.kv.write(wb).unwrap();
+
+        let check = |result: Result<_>, expected: &[&[u8]]| {
+            assert_eq!(
+                result.unwrap(),
+                expected
+                    .iter()
+                    .map(|k| (keys::data_key(k), k.to_vec()))
+                    .collect::<Vec<_>>()
+            );
+        };
+
+        check(debugger.raw_scan(b"z", &[b'z' + 1], 100, CF_DEFAULT), keys);
+        check(debugger.raw_scan(b"za", b"zz", 100, CF_DEFAULT), keys);
+        check(debugger.raw_scan(b"za1", b"za1", 100, CF_DEFAULT), &[]);
+        check(
+            debugger.raw_scan(b"za1", b"za2\x00\x00", 100, CF_DEFAULT),
+            &keys[1..4],
+        );
+        check(
+            debugger.raw_scan(b"za2\x00", b"za2\x00\x00", 100, CF_DEFAULT),
+            &keys[3..4],
+        );
+        check(
+            debugger.raw_scan(b"zb\x00", b"zb2\x00\x00", 100, CF_DEFAULT),
+            &keys[6..9],
+        );
+        check(debugger.raw_scan(b"za1", b"zz", 1, CF_DEFAULT), &keys[1..2]);
+        check(debugger.raw_scan(b"za1", b"zz", 3, CF_DEFAULT), &keys[1..4]);
+        check(
+            debugger.raw_scan(b"za1", b"zb2\x00\x00", 8, CF_DEFAULT),
+            &keys[1..9],
+        );
     }
 }

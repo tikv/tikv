@@ -20,14 +20,14 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
 
-use storage::{Key, Store};
-use util::collections::HashSet;
+use crate::storage::{Key, Store};
+use crate::util::collections::HashSet;
 
 use super::{Executor, ExecutorMetrics, Row};
-use coprocessor::codec::table;
-use coprocessor::dag::{ScanOn, Scanner};
-use coprocessor::util;
-use coprocessor::*;
+use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::{ScanOn, Scanner};
+use crate::coprocessor::util;
+use crate::coprocessor::*;
 
 /// Scans rows from table records.
 ///
@@ -234,10 +234,10 @@ mod tests {
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use storage::SnapshotStore;
+    use crate::storage::SnapshotStore;
 
     use super::*;
-    use coprocessor::dag::scanner::tests::{
+    use crate::coprocessor::dag::scanner::tests::{
         get_point_range, get_range, prepare_table_data, Data, TestStore,
     };
 

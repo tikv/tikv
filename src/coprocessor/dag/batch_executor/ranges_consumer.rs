@@ -44,7 +44,7 @@ pub enum ConsumerResult {
 pub struct RangesConsumer {
     in_range: bool,
     emit_point_range: bool,
-    iter: ::std::vec::IntoIter<KeyRange>,
+    iter: std::vec::IntoIter<KeyRange>,
 }
 
 impl RangesConsumer {
@@ -65,7 +65,7 @@ impl RangesConsumer {
         match self.iter.next() {
             None => ConsumerResult::Drained,
             Some(range) => {
-                if ::coprocessor::util::is_point(&range) && self.emit_point_range {
+                if crate::coprocessor::util::is_point(&range) && self.emit_point_range {
                     self.in_range = false;
                     ConsumerResult::NewPointRange(range)
                 } else {

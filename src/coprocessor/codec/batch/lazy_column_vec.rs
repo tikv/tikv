@@ -14,8 +14,8 @@
 use tipb::schema::ColumnInfo;
 
 use super::{BatchColumn, LazyBatchColumn};
-use coprocessor::codec::mysql::Tz;
-use coprocessor::codec::Result;
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::Result;
 
 /// Stores multiple `LazyBatchColumn`s. Each column have equal length.
 #[derive(Clone, Debug)]
@@ -239,7 +239,7 @@ impl LazyBatchColumnVec {
     }
 }
 
-impl ::std::ops::Deref for LazyBatchColumnVec {
+impl std::ops::Deref for LazyBatchColumnVec {
     type Target = [LazyBatchColumn];
 
     #[inline]
@@ -248,7 +248,7 @@ impl ::std::ops::Deref for LazyBatchColumnVec {
     }
 }
 
-impl ::std::ops::DerefMut for LazyBatchColumnVec {
+impl std::ops::DerefMut for LazyBatchColumnVec {
     #[inline]
     fn deref_mut(&mut self) -> &mut [LazyBatchColumn] {
         self.columns.deref_mut()
@@ -261,7 +261,7 @@ mod tests {
 
     use cop_datatype::{EvalType, FieldTypeAccessor};
 
-    use coprocessor::codec::datum::{Datum, DatumEncoder};
+    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
     /// Helper method to generate raw row ([u8] vector) from datum vector.
     fn raw_row_from_datums(datums: impl AsRef<[Option<Datum>]>, comparable: bool) -> Vec<Vec<u8>> {

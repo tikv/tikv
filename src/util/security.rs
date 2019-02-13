@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::Read;
 use std::ptr;
 
-use grpc::{
+use crate::grpc::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
 };
 

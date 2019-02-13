@@ -17,13 +17,11 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::storage::CF_WRITE;
+use crate::util::escape;
+use crate::util::rocksdb_util::{self, compact_range, stats::get_range_entries_and_versions};
+use crate::util::worker::Runnable;
 use rocksdb::DB;
-use storage::CF_WRITE;
-use util::escape;
-use util::rocksdb;
-use util::rocksdb::compact_range;
-use util::rocksdb::stats::get_range_entries_and_versions;
-use util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -110,7 +108,7 @@ impl Runner {
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
     ) -> Result<(), Error> {
-        let handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
+        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engine, &cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
@@ -127,11 +125,11 @@ impl Runner {
         );
         compact_range_timer.observe_duration();
         info!(
-            "compact range ({:?}, {:?}) for cf {:?} finished, takes: {:?}",
-            &start.as_ref().map(|k| escape(k)),
-            &end.as_ref().map(|k| escape(k)),
-            cf_name,
-            timer.elapsed()
+            "compact range finished";
+            "range_start" => start.map(::log_wrappers::Key),
+            "range_end" => end.map(::log_wrappers::Key),
+            "cf" => cf_name,
+            "time_takes" => ?timer.elapsed(),
         );
         Ok(())
     }
@@ -147,7 +145,7 @@ impl Runnable<Task> for Runner {
             } => {
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
-                    error!("execute compact range for cf {} failed, err {}", &cf, e);
+                    error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
             Task::CheckAndCompact {
@@ -170,8 +168,11 @@ impl Runnable<Task> for Runner {
                                 Some(end.clone()),
                             ) {
                                 error!(
-                                    "compact range ({:?}, {:?}) for cf {:?} failed, error {:?}",
-                                    start, end, cf, e
+                                    "compact range failed";
+                                    "range_start" => log_wrappers::Key(&start),
+                                    "range_end" => log_wrappers::Key(&end),
+                                    "cf" => cf,
+                                    "err" => %e,
                                 );
                             }
                         }
@@ -209,7 +210,7 @@ fn collect_ranges_need_compact(
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));
+    let cf = box_try!(rocksdb_util::get_cf_handle(engine, CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
@@ -256,15 +257,15 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use raftstore::store::keys::data_key;
+    use crate::raftstore::store::keys::data_key;
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::types::Key as MvccKey;
+    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::rocksdb_util::{
+        get_cf_handle, new_engine, new_engine_opt, properties::MvccPropertiesCollectorFactory,
+        stats::get_range_entries_and_versions, CFOptions,
+    };
     use rocksdb::{self, Writable, WriteBatch, DB};
-    use storage::mvcc::{Write, WriteType};
-    use storage::types::Key as MvccKey;
-    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::properties::MvccPropertiesCollectorFactory;
-    use util::rocksdb::new_engine;
-    use util::rocksdb::stats::get_range_entries_and_versions;
-    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
 
     use super::*;
 

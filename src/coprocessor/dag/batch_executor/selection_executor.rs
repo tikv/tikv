@@ -16,10 +16,10 @@ use std::sync::Arc;
 use tipb::expression::Expr;
 
 use super::interface::*;
-use coprocessor::dag::executor::ExprColumnRefVisitor;
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::dag::rpn_expr::{RpnExpressionEvalContext, RpnExpressionNodeVec};
-use coprocessor::*;
+use crate::coprocessor::dag::executor::ExprColumnRefVisitor;
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::rpn_expr::{RpnExpressionEvalContext, RpnExpressionNodeVec};
+use crate::coprocessor::*;
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: ExecutorContext,

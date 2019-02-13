@@ -17,9 +17,9 @@ use rocksdb::{
     self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
 };
 
-use util::collections::HashSet;
-use util::properties::RangeProperties;
-use util::rocksdb::engine_metrics::*;
+use crate::util::collections::HashSet;
+use crate::util::rocksdb_util::engine_metrics::*;
+use crate::util::rocksdb_util::properties::RangeProperties;
 
 pub struct EventListener {
     db_name: String,
@@ -152,6 +152,10 @@ impl CompactionListener {
 
 impl rocksdb::EventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
+        if info.status().is_err() {
+            return;
+        }
+
         if let Some(ref f) = self.filter {
             if !f(info) {
                 return;
@@ -181,7 +185,7 @@ impl rocksdb::EventListener for CompactionListener {
                     output_props.push(prop);
                 }
             } else {
-                warn!("Decode size properties from sst file failed.");
+                warn!("Decode size properties from sst file failed");
                 return;
             }
         }

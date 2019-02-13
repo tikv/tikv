@@ -18,11 +18,11 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
-use storage::{Snapshot, SnapshotStore};
+use crate::storage::{Snapshot, SnapshotStore};
 
-use coprocessor::dag::executor::ExecutorMetrics;
-use coprocessor::dag::{ScanOn, Scanner};
-use coprocessor::*;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::dag::{ScanOn, Scanner};
+use crate::coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {

@@ -18,7 +18,7 @@ use tipb::select::{Chunk, SelectResponse};
 
 use super::batch_executor::interface::{BatchExecutor, ExecutorContext};
 use super::executor::ExecutorMetrics;
-use coprocessor::*;
+use crate::coprocessor::*;
 
 const BATCH_INITIAL_SIZE: usize = 32;
 const BATCH_MAX_SIZE: usize = 1024;

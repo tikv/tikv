@@ -33,7 +33,7 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::storage::CF_DEFAULT;
 use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{escape, rocksdb, HandyRwLock};
+use tikv::util::{escape, rocksdb_util, HandyRwLock};
 
 use super::*;
 
@@ -52,7 +52,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        Option<Engines>,
+        _: Option<Engines>,
     ) -> (u64, Engines, Option<TempDir>);
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -132,12 +132,12 @@ impl<T: Simulator> Cluster<T> {
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocksdb_util::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
             let raft_path = path.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);
@@ -165,8 +165,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocksdb::get_cf_handle(&engine.kv, "default").unwrap();
-            rocksdb::compact_range(&engine.kv, handle, None, None, false, 1);
+            let handle = rocksdb_util::get_cf_handle(&engine.kv, "default").unwrap();
+            rocksdb_util::compact_range(&engine.kv, handle, None, None, false, 1);
         }
     }
 
@@ -567,7 +567,7 @@ impl<T: Simulator> Cluster<T> {
             }
 
             let resp = result.unwrap();
-            if resp.get_header().get_error().has_stale_epoch() {
+            if resp.get_header().get_error().has_epoch_not_match() {
                 warn!("seems split, let's retry");
                 sleep_ms(100);
                 continue;
@@ -832,7 +832,7 @@ impl<T: Simulator> Cluster<T> {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
-                        if error.has_stale_epoch()
+                        if error.has_epoch_not_match()
                             || error.has_not_leader()
                             || error.has_stale_command()
                         {

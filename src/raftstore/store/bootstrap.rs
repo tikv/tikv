@@ -15,12 +15,12 @@ use super::engine::{Iterable, Mutable};
 use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use super::util::Engines;
+use crate::raftstore::Result;
+use crate::storage::{CF_DEFAULT, CF_RAFT};
+use crate::util::rocksdb_util;
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use raftstore::Result;
 use rocksdb::{Writable, WriteBatch, DB};
-use storage::{CF_DEFAULT, CF_RAFT};
-use util::rocksdb;
 
 const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
@@ -65,7 +65,7 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
 
     let wb = WriteBatch::new();
     wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)?;
-    let handle = rocksdb::get_cf_handle(&engines.kv, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state)?;
     write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
     engines.kv.write(wb)?;
@@ -86,7 +86,7 @@ pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> 
     let wb = WriteBatch::new();
     wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
     // should clear raft initial state too.
-    let handle = rocksdb::get_cf_handle(&engines.kv, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.delete_cf(handle, &keys::region_state_key(region_id))?;
     wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
     engines.kv.write(wb)?;
@@ -131,21 +131,21 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use raftstore::store::engine::Peekable;
-    use raftstore::store::{keys, Engines};
-    use storage::CF_DEFAULT;
-    use util::rocksdb;
+    use crate::raftstore::store::engine::Peekable;
+    use crate::raftstore::store::{keys, Engines};
+    use crate::storage::CF_DEFAULT;
+    use crate::util::rocksdb_util;
 
     #[test]
     fn test_bootstrap() {
         let path = TempDir::new("var").unwrap();
         let raft_path = path.path().join("raft");
         let kv_engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT], None)
+            rocksdb_util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT], None)
                 .unwrap(),
         );
         let raft_engine = Arc::new(
-            rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+            rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
         );
         let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
