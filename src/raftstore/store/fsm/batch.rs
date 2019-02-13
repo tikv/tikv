@@ -19,14 +19,11 @@
 // TODO: remove this
 #![allow(dead_code)]
 
-use super::metrics::*;
 use super::router::{BasicMailbox, Router};
 use crate::util::mpsc;
-use crate::util::time::duration_to_sec;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -331,7 +328,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut exhausted_fsms = Vec::with_capacity(self.max_batch_size);
 
         self.fetch_batch(&mut batch, self.max_batch_size);
-        let mut fetch_time = Instant::now();
         while !batch.is_empty() {
             self.handler.begin(batch.len());
             if batch.control.is_some() {
@@ -362,11 +358,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
-
             self.fetch_batch(&mut batch, self.max_batch_size);
-            let now = Instant::now();
-            BATCH_FETCH_INTERVAL.observe(duration_to_sec(now - fetch_time));
-            fetch_time = now;
         }
     }
 }
