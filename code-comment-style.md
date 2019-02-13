@@ -1,0 +1,137 @@
+# Code Comment Style
+
+This document describes the code comment style applied to TiKV repositories. When you are to commit, be sure to follow the style to write good code comments.
+
+## Why a good comment matters?
+
+- To speed up the reviewing process
+- To help maintain the code
+- To improve the API document readability
+- To improve the development efficiency of the whole team
+
+## Where/When to comment?
+
+Write a comment where/when:
+
+- For important code
+- For obscure code
+- For tricky or interesting code
+- For a complex code block
+- If a bug exists in the code but you cannot fix it or you just want to ignore it for the moment
+- If the code is not optimal but you don’t have a smarter way now
+- To remind yourself or others of missing functionality or upcoming requirements not present in the code
+
+A comment is generally required for:
+
+- File
+- Type
+- Constant 
+- Function
+- Method
+- Variable
+- Typical algorithm
+- Exported name
+- Test case
+- TODO
+- FIXME
+
+## How to comment?
+
+### Format of a good comment (for Rust)
+
+- Non-doc comment
+        
+    - Use **//** for a line comment
+    - Use **/* … */** for a block comment (used only when needed)
+    
+- Doc comment
+        
+    - Use **///** for a line comment
+    - Use **//!** for a block comment
+    - Use **rustfmt** to format your code
+
+- Place the single-line and block comment above the code it’s annotating
+- Fold long lines of comments
+- Each line of text in your code and comment should be at most 100 characters long
+- Do not use relative URLs; use **absolute URLs** instead
+
+    Right:
+    
+    ```
+    // For more configuration details, see https://example.com/project/tools/config-items.  
+    ```
+    
+    Wrong:
+    
+    ```
+    // For more details, see [Configuration Items](../tools/config-items.md).
+    ```
+
+### Language for a good comment
+
+- Word
+    
+    - Use **American English** rather than British English
+        
+        - color, canceling, synchronize     (Recommended)
+        - colour, cancelling, synchronise   (Not recommended)
+    
+    - Use correct spelling
+
+    - Use **standard or official capitalization**
+        
+        - TiKV, TiDB-Binlog, Region, gRPC, RocksDB, GC, k8s, [mydumper](https://github.com/maxbube/mydumper), [Prometheus Pushgateway](https://github.com/prometheus/pushgateway)   (Right)
+        - Tikv, TiDB Binlog, region, grpc, rocksdb, gc, K8S, MyDumper, Prometheus PushGateway   (Wrong)
+
+    - Use words and expressions consistently
+        
+        - dead link vs. broken link (Only one of them can appear in a single document)
+    
+    - Do not use lengthy compound words
+
+    - Do not abbreviate unless it is absolutely necessary
+
+    - "we" can be used only when it means the code writer
+
+- Sentence
+
+    - Use standard grammar and correct punctuation
+    - Use relatively short sentences
+
+- For each comment, capitalize the first letter and end this sentence with a period
+    
+    - If a lower-case identifier comes at the beginning of a sentence, don't capitalize it
+
+    ```
+    // enterGame causes Players to enter the 
+    // video game, which is about a romantic
+    // story in ancient China.
+    func enterGame() os.Error {
+        ...
+    }
+    ```
+
+- When used for description, comments should be **descriptive** rather than **imperative**
+
+    - Opens the file   (Right)
+    - Open the file    (Wrong)       
+
+- Use "this" instead of "the" to refer to the current thing
+    
+    - Gets the toolkit for this component   (Recommended)
+    - Gets the toolkit for the component    (Not recommended)
+
+- The Markdown format is allowed
+    
+    - Opens the `log` file  
+
+### Tips for a good comment
+
+- Comment code while writing it
+- Do not assume the code is self-evident
+- Avoid unnecessary comments for simple code
+- Write comments as if they were for you
+- Make sure the comment is up-to-date
+- Let the code speak for itself
+
+Thanks for your contribution!
