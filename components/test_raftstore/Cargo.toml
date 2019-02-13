@@ -21,7 +21,6 @@ branch = "super-batch-streaming-old-grpc"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-branch = "titan"
 
 [dependencies.grpcio]
 git = "https://github.com/hicqu/grpc-rs.git"
