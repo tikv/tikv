@@ -28,6 +28,7 @@ pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
 pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-at-level";
 pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
 pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
+pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 
 pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
@@ -945,14 +946,20 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
                 .set(pending_compaction_bytes as i64);
         }
 
-        // Compression ratio at levels
         let opts = engine.get_options_cf(handle);
         for level in 0..opts.get_num_levels() {
+            // Compression ratio at levels
             if let Some(v) = rocksdb::get_engine_compression_ratio_at_level(engine, handle, level) {
-                let level_str = level.to_string();
                 STORE_ENGINE_COMPRESSION_RATIO_VEC
-                    .with_label_values(&[name, cf, &level_str])
+                    .with_label_values(&[name, cf, &level.to_string()])
                     .set(v);
+            }
+
+            // Num files at levels
+            if let Some(v) = rocksdb::get_cf_num_files_at_level(engine, handle, level) {
+                STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
+                    .with_label_values(&[name, cf, &level.to_string()])
+                    .set(v as i64);
             }
         }
     }
@@ -1214,6 +1221,12 @@ lazy_static! {
         "tikv_engine_oldest_snapshot_duration",
         "Oldest unreleased snapshot duration in seconds",
         &["db"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_files_at_level",
+        "Number of files at each level",
+        &["db", "cf", "level"]
     ).unwrap();
 }
 

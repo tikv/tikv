@@ -36,7 +36,8 @@ use sys_info;
 use util::file::{copy_and_sync, calc_crc32};
 use util::rocksdb;
 use util::rocksdb::engine_metrics::{ROCKSDB_COMPRESSION_RATIO_AT_LEVEL,
-                                    ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_TOTAL_SST_FILES_SIZE};
+                                    ROCKSDB_CUR_SIZE_ALL_MEM_TABLES, ROCKSDB_NUM_FILES_AT_LEVEL,
+                                    ROCKSDB_TOTAL_SST_FILES_SIZE};
 
 pub use rocksdb::CFHandle;
 
@@ -275,6 +276,11 @@ pub fn get_engine_compression_ratio_at_level(
         }
     }
     None
+}
+
+pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
+    let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
+    engine.get_property_int_cf(handle, &prop)
 }
 
 pub fn auto_compactions_is_disabled(engine: &DB) -> bool {
