@@ -953,8 +953,8 @@ fn main() {
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
     let version_info = util::tikv_version_info();
 
-    let mut app = App::new("TiKV Ctl")
-        .about("A distributed transactional key value database powered by Rust and Raft")
+    let mut app = App::new("TiKV Control (tikv-ctl)")
+        .about("A tool for interacting with TiKV deployments.")
         .author(crate_authors!())
         .version(crate_version!())
         .long_version(version_info.as_ref())
@@ -1082,7 +1082,7 @@ fn main() {
                             Arg::with_name("skip-tombstone")
                                 .long("skip-tombstone")
                                 .takes_value(false)
-                                .help("Skip tombstone region"),
+                                .help("Skip tombstone regions"),
                         ),
                 ),
         )
