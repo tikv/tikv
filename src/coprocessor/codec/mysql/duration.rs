@@ -251,10 +251,7 @@ impl Duration {
             Some(result) => result,
             None => return None,
         };
-        match Duration::from_nanos(add, self.fsp().max(rhs.fsp()) as i8) {
-            Ok(res) => Some(res),
-            Err(_) => None,
-        }
+        Duration::from_nanos(add, self.fsp().max(rhs.fsp()) as i8).ok()
     }
 
     /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
@@ -263,10 +260,7 @@ impl Duration {
             Some(result) => result,
             None => return None,
         };
-        match Duration::from_nanos(sub, self.fsp().max(rhs.fsp()) as i8) {
-            Ok(res) => Some(res),
-            Err(_) => None,
-        }
+        Duration::from_nanos(sub, self.fsp().max(rhs.fsp()) as i8).ok()
     }
 }
 
