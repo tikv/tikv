@@ -296,7 +296,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     fn fetch_batch(&self, batch: &mut Batch<N, C>, max_size: usize) {
-        let mut curr_batch_len = batch.len();
+        let curr_batch_len = batch.len();
         if batch.control.is_some() || curr_batch_len >= max_size {
             return;
         }
@@ -311,14 +311,13 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         };
 
         while pushed {
-            if curr_batch_len < max_size {
+            if batch.len() < max_size {
                 let fsm = match self.fsm_receiver.try_recv() {
                     Ok(fsm) => fsm,
                     Err(TryRecvError::Empty) => return,
                     Err(TryRecvError::Disconnected) => unreachable!(),
                 };
                 pushed = batch.push(fsm);
-                curr_batch_len += 1;
             } else {
                 return;
             }
