@@ -2167,7 +2167,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.cancel_applying_snap());
+        let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
         assert!(res.is_err());
     }
 
@@ -2216,7 +2216,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.check_applying_snap());
+        let res = panic_hook::recover_safe(|| s.check_applying_snap());
         assert!(res.is_err());
     }
 

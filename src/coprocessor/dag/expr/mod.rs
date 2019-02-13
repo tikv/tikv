@@ -81,8 +81,8 @@ struct CusRng {
     rng: RefCell<Option<XorShiftRng>>,
 }
 
-impl ::std::fmt::Debug for CusRng {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+impl std::fmt::Debug for CusRng {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "()")
     }
 }
