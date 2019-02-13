@@ -368,7 +368,7 @@ impl TablePropertiesCollector for SizePropertiesCollector {
         let value_size = match entry_type {
             DBEntryType::Put => value.len() as u64,
             DBEntryType::BlobIndex => match TitanBlobIndex::decode_from(value) {
-                Ok(index) => index.blob_size,
+                Ok(index) => index.blob_size + value.len() as u64,
                 Err(_) => return,
             },
             _ => return,
@@ -625,7 +625,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
         let value_size = match entry_type {
             DBEntryType::Put => value.len() as u64,
             DBEntryType::BlobIndex => match TitanBlobIndex::decode_from(value) {
-                Ok(index) => index.blob_size,
+                Ok(index) => index.blob_size + value.len() as u64,
                 Err(_) => return,
             },
             _ => return,
