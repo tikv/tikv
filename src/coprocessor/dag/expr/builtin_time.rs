@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::{EvalContext, Result, ScalarFunc};
-use crate::coprocessor::codec::error::{Error, ERR_DATA_OUT_OF_RANGE};
+use crate::coprocessor::codec::error::Error;
 use crate::coprocessor::codec::mysql::time::extension::DateTimeExtension;
 use crate::coprocessor::codec::mysql::time::weekmode::WeekMode;
 use crate::coprocessor::codec::mysql::{self, Duration as MyDuration, Time, TimeType};
@@ -429,12 +429,7 @@ impl ScalarFunc {
         let d1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
         let diff = match d0.to_nanos().checked_sub(d1.to_nanos()) {
             Some(result) => result,
-            None => {
-                return Err(Error::Eval(
-                    format!("sub duration {} from duration {} error", d1, d0),
-                    ERR_DATA_OUT_OF_RANGE,
-                ));
-            }
+            None => return Err(Error::overflow("DURATION", &format!("({} - {})", &d0, &d1))),
         };
         let res = MyDuration::from_nanos(diff, d0.fsp().max(d1.fsp()) as i8)?;
         Ok(Some(Cow::Owned(res)))
