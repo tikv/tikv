@@ -16,9 +16,9 @@ Please **NOTE** that:
 ## What are the type of the changes? (mandatory)
 
 The currently defined types are listed below, please pick one of the types for this PR by removing the others:
-- New feature (non-breaking change which adds functionality)
-- Improvement (non-breaking change which is an improvement to an existing feature)
-- Bug fix (non-breaking change which fixes an issue)
+- New feature (change which adds functionality)
+- Improvement (change which is an improvement to an existing feature)
+- Bug fix (change which fixes an issue)
 - Engineering (engineering change which doesn't change any feature or fix any issue)
 - Misc (other changes)
 
