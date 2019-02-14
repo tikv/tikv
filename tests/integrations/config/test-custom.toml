@@ -42,6 +42,7 @@ snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
+heavy-load-wait-duration = "2ms"
 
 [server.labels]
 a = "b"
@@ -115,6 +116,11 @@ merge-check-tick-interval = "11s"
 use-delete-range = true
 cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
+apply-max-batch-size = 22
+apply-pool-size = 4
+store-max-batch-size = 21
+store-pool-size = 3
+future-poll-size = 2
 
 [coprocessor]
 split-region-on-table = true
@@ -148,6 +154,12 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
+
+[rocksdb.titan]
+enabled = true
+dirname = "bar"
+disable-gc = false
+max-background-gc = 9
 
 [rocksdb.defaultcf]
 block-size = "12KB"
@@ -187,6 +199,16 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
+
+[rocksdb.defaultcf.titan]
+min-blob-size = 2018
+blob-file-compression = "zstd"
+blob-cache-size = "12GB"
+min-gc-batch-size = "12KB"
+max-gc-batch-size = "12MB"
+discardable-ratio = 0.00156
+sample-ratio = 0.982
+merge-small-file-threshold = "21KB"
 
 [rocksdb.writecf]
 block-size = "12KB"

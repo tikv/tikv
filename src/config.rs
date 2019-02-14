@@ -24,31 +24,32 @@ use std::usize;
 
 use rocksdb::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRecoveryMode,
+    DBCompressionType, DBOptions, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
 use sys_info;
 
-use import::Config as ImportConfig;
-use pd::Config as PdConfig;
-use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::keys::region_raft_prefix_len;
-use raftstore::store::Config as RaftstoreConfig;
-use server::readpool;
-use server::Config as ServerConfig;
-use storage::{
+use crate::import::Config as ImportConfig;
+use crate::pd::Config as PdConfig;
+use crate::raftstore::coprocessor::Config as CopConfig;
+use crate::raftstore::store::keys::region_raft_prefix_len;
+use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::readpool;
+use crate::server::Config as ServerConfig;
+use crate::storage::{
     Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
 };
-use util::config::{
-    self, compression_type_level_serde, ReadableDuration, ReadableSize, GB, KB, MB,
+use crate::util::config::{
+    self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
 };
-use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
-use util::rocksdb::{
-    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+use crate::util::rocksdb_util::{
+    db_exist,
+    properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
-use util::security::SecurityConfig;
-use util::time::duration_to_sec;
+use crate::util::security::SecurityConfig;
+use crate::util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -72,6 +73,50 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
         size = max;
     }
     size / MB as usize
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct TitanCfConfig {
+    pub min_blob_size: u64,
+    pub blob_file_compression: CompressionType,
+    pub blob_cache_size: ReadableSize,
+    pub min_gc_batch_size: ReadableSize,
+    pub max_gc_batch_size: ReadableSize,
+    pub discardable_ratio: f64,
+    pub sample_ratio: f64,
+    pub merge_small_file_threshold: ReadableSize,
+}
+
+impl Default for TitanCfConfig {
+    fn default() -> Self {
+        Self {
+            min_blob_size: ReadableSize::kb(1).0 as u64, // disable titan default
+            blob_file_compression: CompressionType::Lz4,
+            blob_cache_size: ReadableSize::mb(0),
+            min_gc_batch_size: ReadableSize::mb(16),
+            max_gc_batch_size: ReadableSize::mb(64),
+            discardable_ratio: 0.5,
+            sample_ratio: 0.1,
+            merge_small_file_threshold: ReadableSize::mb(8),
+        }
+    }
+}
+
+impl TitanCfConfig {
+    fn build_opts(&self) -> TitanDBOptions {
+        let mut opts = TitanDBOptions::new();
+        opts.set_min_blob_size(self.min_blob_size);
+        opts.set_blob_file_compression(self.blob_file_compression.into());
+        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, 0, 0.0);
+        opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
+        opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
+        opts.set_discardable_ratio(self.discardable_ratio);
+        opts.set_sample_ratio(self.sample_ratio);
+        opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
+        opts
+    }
 }
 
 macro_rules! cf_config {
@@ -112,6 +157,7 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            pub titan: TitanCfConfig,
         }
     };
 }
@@ -203,6 +249,7 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            titan: TitanCfConfig::default(),
         }
     }
 }
@@ -212,6 +259,7 @@ impl DefaultCfConfig {
         let mut cf_opts = build_cf_opt!(self);
         let f = Box::new(RangePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -220,6 +268,8 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
+        let mut titan = TitanCfConfig::default();
+        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -258,6 +308,7 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            titan,
         }
     }
 }
@@ -277,6 +328,7 @@ impl WriteCfConfig {
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
         let f = Box::new(RangePropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -285,6 +337,8 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
+        let mut titan = TitanCfConfig::default();
+        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -315,6 +369,7 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            titan,
         }
     }
 }
@@ -327,6 +382,7 @@ impl LockCfConfig {
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -335,6 +391,8 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
+        let mut titan = TitanCfConfig::default();
+        titan.min_blob_size = ReadableSize::gb(4).0 as u64;
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -365,6 +423,7 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            titan,
         }
     }
 }
@@ -377,7 +436,39 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct TitanDBConfig {
+    pub enabled: bool,
+    pub dirname: String,
+    pub disable_gc: bool,
+    pub max_background_gc: i32,
+}
+
+impl Default for TitanDBConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dirname: "".to_owned(),
+            disable_gc: false,
+            max_background_gc: 1,
+        }
+    }
+}
+
+impl TitanDBConfig {
+    fn build_opts(&self) -> TitanDBOptions {
+        let mut opts = TitanDBOptions::new();
+        opts.set_dirname(&self.dirname);
+        opts.set_disable_background_gc(self.disable_gc);
+        opts.set_max_background_gc(self.max_background_gc);
+        opts
     }
 }
 
@@ -413,6 +504,7 @@ pub struct DbConfig {
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
     pub raftcf: RaftCfConfig,
+    pub titan: TitanDBConfig,
 }
 
 impl Default for DbConfig {
@@ -424,7 +516,7 @@ impl Default for DbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs: 6,
-            max_manifest_file_size: ReadableSize::mb(20),
+            max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
             enable_statistics: true,
@@ -445,6 +537,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
+            titan: TitanDBConfig::default(),
         }
     }
 }
@@ -490,6 +583,10 @@ impl DbConfig {
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         opts.add_event_listener(EventListener::new("kv"));
+
+        if self.titan.enabled {
+            opts.set_titandb_options(&self.titan.build_opts());
+        }
         opts
     }
 
@@ -549,6 +646,7 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            titan: TitanCfConfig::default(),
         }
     }
 }
@@ -699,12 +797,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
+    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
-    use util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where
@@ -715,7 +813,7 @@ pub mod log_level_serde {
             .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(trivially_copy_pass_by_ref))]
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -757,13 +855,15 @@ macro_rules! readpool_config {
                     return Err(format!(
                         "readpool.{}.high-concurrency should be > 0",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.normal_concurrency == 0 {
                     return Err(format!(
                         "readpool.{}.normal-concurrency should be > 0",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.low_concurrency == 0 {
                     return Err(
@@ -779,19 +879,22 @@ macro_rules! readpool_config {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-high should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_normal <= 1 {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-normal should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
                 if self.max_tasks_per_worker_low <= 1 {
                     return Err(format!(
                         "readpool.{}.max-tasks-per-worker-low should be > 1",
                         $display_name
-                    ).into());
+                    )
+                    .into());
                 }
 
                 Ok(())
@@ -987,7 +1090,8 @@ impl TiKvConfig {
                 "grpc_keepalive_time is too small, it should not less than the double of \
                  raft tick interval (>= {})",
                 duration_to_sec(expect_keepalive)
-            ).into());
+            )
+            .into());
         }
 
         self.rocksdb.validate()?;
@@ -1077,23 +1181,23 @@ impl TiKvConfig {
         }
     }
 
-    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
+    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
         if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
-                "db wal_dir have been changed, former db wal_dir is {}, \
-                 current db wal_dir is {}, please guarantee all data wal log \
+                "db wal_dir have been changed, former db wal_dir is '{}', \
+                 current db wal_dir is '{}', please guarantee all data wal logs \
                  have been moved to destination directory.",
                 last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
+            ));
         }
 
         if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
             return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
-                 current raftdb wal_dir is {}, please guarantee all raft wal log \
+                "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
+                 current raftdb wal_dir is '{}', please guarantee all raft wal logs \
                  have been moved to destination directory.",
                 last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            ).into());
+            ));
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
@@ -1101,15 +1205,15 @@ impl TiKvConfig {
                 "storage data dir have been changed, former data dir is {}, \
                  current data dir is {}, please check if it is expected.",
                 last_cfg.storage.data_dir, self.storage.data_dir
-            ).into());
+            ));
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
             return Err(format!(
-                "raft dir have been changed, former raft dir is {}, \
-                 current raft dir is {}, please check if it is expected.",
+                "raft dir have been changed, former raft dir is '{}', \
+                 current raft dir is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
-            ).into());
+            ));
         }
 
         Ok(())
@@ -1152,15 +1256,13 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
         let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-            return Err(format!("check critical config failed, err {:?}", e));
-        }
+        config.check_critical_cfg_with(&last_cfg)?;
     }
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
         return Err(format!(
-            "create parent directory {} failed, err {:?}",
+            "create parent directory '{}' failed: {}",
             store_path.to_str().unwrap(),
             e
         ));
@@ -1169,7 +1271,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     // Persist current critical configurations to file.
     if let Err(e) = config.write_to_file(&last_cfg_path) {
         return Err(format!(
-            "persist critical config to {} failed, err {:?}",
+            "persist critical config to '{}' failed: {}",
             last_cfg_path.to_str().unwrap(),
             e
         ));

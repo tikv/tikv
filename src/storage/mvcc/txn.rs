@@ -16,12 +16,12 @@ use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use kvproto::kvrpcpb::IsolationLevel;
-use std::fmt;
-use storage::engine::{Modify, ScanMode, Snapshot};
-use storage::{
+use crate::storage::engine::{Modify, ScanMode, Snapshot};
+use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
+use kvproto::kvrpcpb::IsolationLevel;
+use std::fmt;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -215,8 +215,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         // None: related Rollback has been collapsed.
                         // Rollback: rollback by concurrent transaction.
                         info!(
-                            "txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
-                            key, self.start_ts, commit_ts
+                            "txn conflict (lock not found)";
+                            "key" => %key,
+                            "start_ts" => self.start_ts,
+                            "commit_ts" => commit_ts,
                         );
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
@@ -262,10 +264,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         } else {
                             MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                             info!(
-                                "txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                                key.clone(),
-                                self.start_ts,
-                                ts
+                                "txn conflict (committed)";
+                                "key" => %key,
+                                "start_ts" => self.start_ts,
+                                "commit_ts" => ts,
                             );
                             Err(Error::Committed { commit_ts: ts })
                         }
@@ -377,11 +379,13 @@ impl<S: Snapshot> MvccTxn<S> {
 mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use storage::engine::Engine;
-    use storage::mvcc::tests::*;
-    use storage::mvcc::WriteType;
-    use storage::mvcc::{MvccReader, MvccTxn};
-    use storage::{Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN};
+    use crate::storage::engine::Engine;
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::mvcc::WriteType;
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::{
+        Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
+    };
 
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -745,7 +749,8 @@ mod tests {
             Mutation::Put((key.clone(), v.to_vec())),
             pk,
             &Options::default(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(txn.write_size() > 0);
         engine.write(&ctx, txn.into_modifies()).unwrap();
 
@@ -775,26 +780,26 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
-        assert!(
-            txn.prewrite(
+        assert!(txn
+            .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
                 &Options::default()
-            ).is_err()
-        );
+            )
+            .is_err());
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5, true).unwrap();
         let mut opt = Options::default();
         opt.skip_constraint_check = true;
-        assert!(
-            txn.prewrite(
+        assert!(txn
+            .prewrite(
                 Mutation::Put((Key::from_raw(key), value.to_vec())),
                 key,
                 &opt
-            ).is_ok()
-        );
+            )
+            .is_ok());
     }
 
     #[test]

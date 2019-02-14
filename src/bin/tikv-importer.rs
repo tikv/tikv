@@ -12,18 +12,12 @@
 // limitations under the License.
 
 #![feature(slice_patterns)]
-#![feature(proc_macro_non_items)]
+#![feature(proc_macro_hygiene)]
 
 extern crate chrono;
 extern crate clap;
 extern crate fs2;
-#[cfg(feature = "mem-profiling")]
-extern crate jemallocator;
 extern crate libc;
-#[macro_use]
-extern crate log;
-#[macro_use(slog_o, slog_kv)]
-extern crate slog;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
@@ -31,19 +25,29 @@ extern crate rocksdb;
 extern crate serde_json;
 #[cfg(unix)]
 extern crate signal;
+#[macro_use(
+    slog_kv,
+    slog_error,
+    slog_info,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static
+)]
+extern crate slog;
 extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
-extern crate slog_term;
 #[macro_use]
+extern crate slog_global;
+extern crate slog_term;
 extern crate tikv;
+extern crate tikv_alloc;
 extern crate toml;
 
 #[cfg(unix)]
 #[macro_use]
 mod util;
-use util::setup::*;
-use util::signal_handler;
+use crate::util::setup::*;
+use crate::util::signal_handler;
 
 use std::process;
 use std::sync::atomic::Ordering;
@@ -52,7 +56,7 @@ use clap::{App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util as tikv_util;
+use tikv::util::{self as tikv_util, check_environment_variables};
 
 fn main() {
     let matches = App::new("TiKV Importer")
@@ -100,17 +104,17 @@ fn main() {
         .get_matches();
 
     let config = setup_config(&matches);
-    let guard = init_log(&config);
-    tikv_util::set_exit_hook(false, Some(guard), &config.storage.data_dir);
+    initial_logger(&config);
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
-    util::print_tikv_info();
+    util::log_tikv_info();
     check_environment_variables();
 
     if tikv_util::panic_mark_file_exists(&config.storage.data_dir) {
         fatal!(
-            "panic_mark_file {:?} exists, there must be something wrong with the db.",
-            tikv_util::panic_mark_file_path(&config.storage.data_dir)
+            "panic_mark_file {} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&config.storage.data_dir).display()
         );
     }
 
@@ -128,8 +132,8 @@ fn setup_config(matches: &ArgMatches) -> TiKvConfig {
         fatal!("invalid configuration: {:?}", e);
     }
     info!(
-        "using config: {}",
-        serde_json::to_string_pretty(&config).unwrap()
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
     );
 
     config

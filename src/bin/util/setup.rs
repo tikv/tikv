@@ -11,32 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
-use std::io::BufWriter;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
 use chrono;
 use clap::ArgMatches;
-use slog::{Drain, Logger};
-use slog_async::{Async, OverflowStrategy};
-use slog_scope::GlobalLoggerGuard;
-use slog_term::{PlainDecorator, TermDecorator};
 
 use tikv::config::{MetricConfig, TiKvConfig};
-use tikv::util;
 use tikv::util::collections::HashMap;
-use tikv::util::file_log::RotatingFileLogger;
-use tikv::util::logger;
+use tikv::util::{self, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
-// Default is 128.
-// Extended since blocking is set, and we don't want to block very often.
-const SLOG_CHANNEL_SIZE: usize = 10240;
-// Default is DropAndReport.
-// It is not desirable to have dropped logs in our use case.
-const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
 
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({
@@ -50,54 +36,37 @@ macro_rules! fatal {
 }
 
 #[allow(dead_code)]
-pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
-    let log_rotation_timespan = chrono::Duration::from_std(
-        config.log_rotation_timespan.clone().into(),
-    ).expect("config.log_rotation_timespan is an invalid duration.");
-    let guard = if config.log_file.is_empty() {
-        let decorator = TermDecorator::new().build();
-        let drain = logger::TikvFormat::new(decorator).fuse();
-        let drain = Async::new(drain)
-            .chan_size(SLOG_CHANNEL_SIZE)
-            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
-            .thread_name(thd_name!("term-slogger"))
-            .build()
-            .fuse();
-        let logger = Logger::root_typed(drain, slog_o!());
-        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {:?}", e);
-        })
+pub fn initial_logger(config: &TiKvConfig) {
+    let log_rotation_timespan =
+        chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
+            .expect("config.log_rotation_timespan is an invalid duration.");
+    if config.log_file.is_empty() {
+        let drainer = logger::term_drainer();
+        // use async drainer and init std log.
+        logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
+            fatal!("failed to initialize log: {}", e);
+        });
     } else {
-        let logger = BufWriter::new(
-            RotatingFileLogger::new(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
+        let drainer =
+            logger::file_drainer(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
                 fatal!(
-                    "failed to initialize log with file {:?}: {:?}",
+                    "failed to initialize log with file {}: {}",
                     config.log_file,
                     e
                 );
-            }),
-        );
-        let decorator = PlainDecorator::new(logger);
-        let drain = logger::TikvFormat::new(decorator).fuse();
-        let drain = Async::new(drain)
-            .chan_size(SLOG_CHANNEL_SIZE)
-            .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
-            .thread_name(thd_name!("file-slogger"))
-            .build()
-            .fuse();
-        let logger = Logger::root_typed(drain, slog_o!());
-        logger::init_log(logger, config.log_level).unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {:?}", e);
-        })
+            });
+        // use async drainer and init std log.
+        logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
+            fatal!("failed to initialize log: {}", e);
+        });
     };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
-    guard
 }
 
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
+        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
@@ -149,11 +118,11 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
                 let mut parts = s.split('=');
                 let key = parts.next().unwrap().to_owned();
                 let value = match parts.next() {
-                    None => fatal!("invalid label: {:?}", s),
+                    None => fatal!("invalid label: {}", s),
                     Some(v) => v.to_owned(),
                 };
                 if parts.next().is_some() {
-                    fatal!("invalid label: {:?}", s);
+                    fatal!("invalid label: {}", s);
                 }
                 labels.insert(key, value);
             })
@@ -170,32 +139,5 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(import_dir) = matches.value_of("import-dir") {
         config.import.import_dir = import_dir.to_owned();
-    }
-}
-
-/// Check environment variables that affect TiKV.
-#[allow(dead_code)]
-pub fn check_environment_variables() {
-    if cfg!(unix) && env::var("TZ").is_err() {
-        env::set_var("TZ", ":/etc/localtime");
-        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
-    }
-
-    if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
-        info!(
-            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
-            var
-        );
-    } else if cfg!(target_os = "linux") {
-        // Set gRPC event engine to epollsig if it is missing.
-        // See more: https://github.com/grpc/grpc/blob/486761d04e03a9183d8013eddd86c3134d52d459\
-        //           /src/core/lib/iomgr/ev_posix.cc#L149
-        env::set_var("GRPC_POLL_STRATEGY", "epollsig");
-    }
-
-    for proxy in &["http_proxy", "https_proxy"] {
-        if let Ok(var) = env::var(proxy) {
-            info!("environment variable `{}` is present, `{}`", proxy, var);
-        }
     }
 }

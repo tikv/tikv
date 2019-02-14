@@ -12,35 +12,41 @@
 // limitations under the License.
 
 use std::ffi::CString;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::Arc;
+use std::i64;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-use futures::sync::mpsc::{self, UnboundedSender};
-use futures::sync::oneshot::{self, Sender};
-use futures::{stream, Future, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, WriteFlags};
+use crate::grpc::{
+    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
+};
+use crossbeam::channel::SendError;
+use futures::{future, stream, Future, Poll, Sink, Stream};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
+use protobuf::RepeatedField;
+use tokio::runtime::Runtime;
+use tokio::timer::Delay;
 
+use super::load_statistics::ThreadLoad;
 use super::metrics::*;
-use super::{Config, Error, Result};
-use util::collections::HashMap;
-use util::security::SecurityManager;
+use super::{Config, Result};
+use crate::util::collections::{HashMap, HashMapEntry};
+use crate::util::mpsc::batch::{self, Sender as BatchSender};
+use crate::util::security::SecurityManager;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
-const PRESERVED_MSG_BUFFER_COUNT: usize = 1024;
+
+const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
+const RAFT_MSG_NOTIFY_SIZE: usize = 8;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 struct Conn {
-    stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
-    buffer: Option<Vec<(RaftMessage, WriteFlags)>>,
-    store_id: u64,
-    alive: Arc<AtomicBool>,
-
+    stream: BatchSender<RaftMessage>,
     _client: TikvClient,
-    _close: Sender<()>,
 }
 
 impl Conn {
@@ -53,8 +59,6 @@ impl Conn {
     ) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
-        let alive = Arc::new(AtomicBool::new(true));
-        let alive1 = Arc::clone(&alive);
         let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
@@ -68,40 +72,79 @@ impl Conn {
                 CONN_ID.fetch_add(1, Ordering::SeqCst),
             );
         let channel = security_mgr.connect(cb, addr);
-        let client = TikvClient::new(channel);
-        let (tx, rx) = mpsc::unbounded();
-        let (tx_close, rx_close) = oneshot::channel();
-        let (sink, receiver) = client.raft().unwrap();
-        let addr = addr.to_owned();
-        client.spawn(
-            rx_close
-                .map_err(|_| ())
-                .select(
-                    sink.sink_map_err(Error::from)
-                        .send_all(rx.map(stream::iter_ok).flatten().map_err(|()| Error::Sink))
-                        .then(move |r| {
-                            alive.store(false, Ordering::SeqCst);
+        let client1 = TikvClient::new(channel);
+        let client2 = client1.clone();
+
+        let (tx, rx) = batch::unbounded::<RaftMessage>(RAFT_MSG_NOTIFY_SIZE);
+        let rx = batch::BatchReceiver::new(rx, RAFT_MSG_MAX_BATCH_SIZE, Vec::new, |v, e| v.push(e));
+        // Use a mutex to make compiler happy.
+        let rx1 = Arc::new(Mutex::new(rx));
+        let rx2 = Arc::clone(&rx1);
+
+        let (batch_sink, batch_receiver) = client1.batch_raft().unwrap();
+        let batch_send_or_fallback = batch_sink
+            .send_all(Reusable(rx1).map(move |v| {
+                let mut batch_msgs = BatchRaftMessage::new();
+                batch_msgs.set_msgs(RepeatedField::from(v));
+                (batch_msgs, WriteFlags::default().buffer_hint(false))
+            }))
+            .then(move |r| {
+                drop(batch_receiver);
+                match r {
+                    Ok(_) => {
+                        info!("batch_raft RPC finished success");
+                        box future::ok(()) as Box<Future<Item = (), Error = GrpcError> + Send>
+                    }
+                    Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
+                        if status == RpcStatusCode::Unimplemented =>
+                    {
+                        // Fallback to raft RPC.
+                        warn!("batch_raft fail, fallback to raft");
+                        let (sink, receiver) = client2.raft().unwrap();
+                        let msgs = Reusable(rx2)
+                            .map(|msgs| {
+                                let len = msgs.len();
+                                let grpc_msgs = msgs.into_iter().enumerate().map(move |(i, v)| {
+                                    if i < len - 1 {
+                                        (v, WriteFlags::default().buffer_hint(true))
+                                    } else {
+                                        (v, WriteFlags::default())
+                                    }
+                                });
+                                stream::iter_ok::<_, GrpcError>(grpc_msgs)
+                            })
+                            .flatten();
+                        box sink.send_all(msgs).map(|_| ()).then(move |r| {
+                            drop(receiver);
+                            match r {
+                                Ok(_) => info!("raft RPC finished success"),
+                                Err(ref e) => error!("raft RPC finished fail: {}", e),
+                            };
                             r
                         })
-                        .map(|_| ())
-                        .map_err(move |e| {
-                            let store = store_id.to_string();
-                            REPORT_FAILURE_MSG_COUNTER
-                                .with_label_values(&["unreachable", &*store])
-                                .inc();
-                            warn!("send raftmessage to {} failed: {:?}", addr, e);
-                        }),
-                )
-                .then(|_| receiver.then(|_| Ok(()))),
+                    }
+                    Err(e) => {
+                        error!("batch_raft RPC finished fail: {}", e);
+                        box future::err(e)
+                    }
+                }
+            });
+
+        let addr = addr.to_owned();
+        client1.spawn(
+            batch_send_or_fallback
+                .map_err(move |e| {
+                    REPORT_FAILURE_MSG_COUNTER
+                        .with_label_values(&["unreachable", &*store_id.to_string()])
+                        .inc();
+                    warn!("batch_raft/raft RPC to {} finally fail: {:?}", addr, e);
+                })
+                .map(|_| ()),
         );
+
         Conn {
             stream: tx,
-            buffer: Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT)),
-            store_id,
-            alive: alive1,
-
-            _client: client,
-            _close: tx_close,
+            _client: client1,
         }
     }
 }
@@ -113,6 +156,12 @@ pub struct RaftClient {
     pub addrs: HashMap<u64, String>,
     cfg: Arc<Config>,
     security_mgr: Arc<SecurityManager>,
+
+    // To access CPU load of gRPC threads.
+    grpc_thread_load: Arc<ThreadLoad>,
+    // When message senders want to delay the notification to the gRPC client,
+    // it can put a tokio::timer::Delay to the runtime.
+    async_runtime: Arc<Runtime>,
 }
 
 impl RaftClient {
@@ -120,6 +169,8 @@ impl RaftClient {
         env: Arc<Environment>,
         cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
+        grpc_thread_load: Arc<ThreadLoad>,
+        async_runtime: Arc<Runtime>,
     ) -> RaftClient {
         RaftClient {
             env,
@@ -127,77 +178,77 @@ impl RaftClient {
             addrs: HashMap::default(),
             cfg,
             security_mgr,
+            grpc_thread_load,
+            async_runtime,
         }
     }
 
     fn get_conn(&mut self, addr: &str, region_id: u64, store_id: u64) -> &mut Conn {
         let index = region_id as usize % self.cfg.grpc_raft_conn_num;
-        let cfg = &self.cfg;
-        let security_mgr = &self.security_mgr;
-        let env = &self.env;
-        // TODO: avoid to_owned
-        self.conns
-            .entry((addr.to_owned(), index))
-            .or_insert_with(|| Conn::new(Arc::clone(env), addr, cfg, security_mgr, store_id))
+        match self.conns.entry((addr.to_owned(), index)) {
+            HashMapEntry::Occupied(e) => e.into_mut(),
+            HashMapEntry::Vacant(e) => {
+                let conn = Conn::new(
+                    Arc::clone(&self.env),
+                    addr,
+                    &self.cfg,
+                    &self.security_mgr,
+                    store_id,
+                );
+                e.insert(conn)
+            }
+        }
     }
 
     pub fn send(&mut self, store_id: u64, addr: &str, msg: RaftMessage) -> Result<()> {
-        let conn = self.get_conn(addr, msg.region_id, store_id);
-        conn.buffer
-            .as_mut()
-            .unwrap()
-            .push((msg, WriteFlags::default().buffer_hint(true)));
+        if let Err(SendError(msg)) = self
+            .get_conn(addr, msg.region_id, store_id)
+            .stream
+            .send(msg)
+        {
+            error!("RaftClient fails to send");
+            let index = msg.region_id as usize % self.cfg.grpc_raft_conn_num;
+            self.conns.remove(&(addr.to_owned(), index));
+
+            if let Some(current_addr) = self.addrs.remove(&store_id) {
+                if current_addr != *addr {
+                    self.addrs.insert(store_id, current_addr);
+                }
+            }
+        }
         Ok(())
     }
 
     pub fn flush(&mut self) {
-        let addrs = &mut self.addrs;
-        let mut counter: u64 = 0;
-        self.conns.retain(|&(ref addr, _), conn| {
-            let store_id = conn.store_id;
-            if !conn.alive.load(Ordering::SeqCst) {
-                if let Some(addr_current) = addrs.remove(&store_id) {
-                    if addr_current != *addr {
-                        addrs.insert(store_id, addr_current);
-                    }
+        let (mut counter, mut delay_counter) = (0, 0);
+        for conn in self.conns.values_mut() {
+            if let Some(notifier) = conn.stream.get_notifier() {
+                if !self.grpc_thread_load.in_heavy_load() {
+                    notifier.notify();
+                    counter += 1;
+                    continue;
                 }
-                return false;
-            }
-
-            if conn.buffer.as_ref().unwrap().is_empty() {
-                return true;
-            }
-
-            counter += 1;
-            let mut msgs = conn.buffer.take().unwrap();
-            msgs.last_mut().unwrap().1 = WriteFlags::default();
-            if let Err(e) = conn.stream.unbounded_send(msgs) {
-                error!(
-                    "server: drop conn with tikv endpoint {} flush conn error: {:?}",
-                    addr, e
+                let wait = self.cfg.heavy_load_wait_duration.0;
+                self.async_runtime.executor().spawn(
+                    Delay::new(Instant::now() + wait)
+                        .map_err(|_| error!("RaftClient delay flush error"))
+                        .inspect(move |_| notifier.notify()),
                 );
-
-                if let Some(addr_current) = addrs.remove(&store_id) {
-                    if addr_current != *addr {
-                        addrs.insert(store_id, addr_current);
-                    }
-                }
-                return false;
             }
-
-            conn.buffer = Some(Vec::with_capacity(PRESERVED_MSG_BUFFER_COUNT));
-            true
-        });
-
-        if counter > 0 {
-            RAFT_MESSAGE_FLUSH_COUNTER.inc_by(counter as i64);
+            delay_counter += 1;
         }
+        RAFT_MESSAGE_FLUSH_COUNTER.inc_by(i64::from(counter));
+        RAFT_MESSAGE_DELAY_FLUSH_COUNTER.inc_by(i64::from(delay_counter));
     }
 }
 
-impl Drop for RaftClient {
-    fn drop(&mut self) {
-        // Drop conns here to make sure all streams are dropped before Environment.
-        self.conns.clear();
+// Reusable is for fallback batch_raft call to raft call.
+struct Reusable<T>(Arc<Mutex<T>>);
+impl<T: Stream> Stream for Reusable<T> {
+    type Item = T::Item;
+    type Error = GrpcError;
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let mut t = self.0.lock().unwrap();
+        t.poll().map_err(|_| GrpcError::RpcFinished(None))
     }
 }

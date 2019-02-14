@@ -231,6 +231,12 @@
 ## Interval to clean up import SST files.
 # cleanup-import-sst-interval = "10m"
 
+## Use how many threads to handle log apply
+# apply-pool-size = 2
+
+## Use how many threads to handle raft messages
+# store-pool-size = 2
+
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
@@ -276,7 +282,7 @@
 
 ## Max size of RocksDB's MANIFEST file.
 ## For detailed explanation, please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
-# max-manifest-file-size = "20MB"
+# max-manifest-file-size = "128MB"
 
 ## If the value is `true`, the database will be created if it is missing.
 # create-if-missing = true
@@ -368,6 +374,24 @@
 ## If it is not empty, the log files will be in the specified directory, and the DB data directory's
 ## absolute path will be used as the log file name's prefix.
 # info-log-dir = ""
+
+## Options for `Titan`.
+[rocksdb.titan]
+## Enables `Titan`
+## default: false
+# enabled = false
+
+## Specifies `Titan` blob files directory
+## default: "titandb" (if not specific or empty)
+# dirname = ""
+
+## Disable blob file gc
+# default: false
+# disable-gc = false
+
+## Maximum number of threads of `Titan` background gc jobs.
+# default: 1
+# max-background-gc = 1
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
@@ -506,6 +530,53 @@
 ## whether really exists by upper logic instead of bloom filters. But we suggest to set it to false
 ## while using `Raw` mode.
 # optimize-filters-for-hits = true
+
+## Options for "Default" Column Family for `Titan`.
+[rocksdb.defaultcf.titan]
+## The smallest value to store in blob files. Value smaller than
+## this threshold will be inlined in base DB.
+## default: 1KB
+# min-blob-size = "1KB"
+
+## The compression algorithm used to compress data in blob files.
+## Compression method.
+##   no:     kNoCompression
+##   snappy: kSnappyCompression
+##   zlib:   kZlibCompression
+##   bzip2:  kBZip2Compression
+##   lz4:    kLZ4Compression
+##   lz4hc:  kLZ4HCCompression
+##   zstd:   kZSTD
+# default: lz4
+# blob-file-compression = "lz4"
+
+## Specifics cache size for blob records
+# default: 0
+# blob-cache-size = "0GB"
+
+## The minimum batch size of one gc job. The total blob file size
+## of one gc job cannot smaller than this threshold.
+## default: 16MB
+# min-gc-batch-size = "16MB"
+
+## The maximum batch size of one gc job. The total blob file size
+## of one gc job cannot exceed this threshold.
+# max-gc-batch-size = "64MB"
+
+## If the ratio of discardable size of a blob file is larger than
+## this threshold, the blob file will be GCed out.
+# default: 0.5
+# discardable-ratio = 0.5
+
+## The gc job will sample the target blob files to see if its
+## discardable ratio is smaller than discardable-ratio metioned
+## above before gc start, if so the blob file will be exclude.
+# sample-ratio = 0.1
+
+## If the size of the blob file is smaller than this threshold,
+## the blob file will be merge.
+# default: 8MB
+# merge-small-file-threshold = "8MB"
 
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]

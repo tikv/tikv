@@ -15,11 +15,12 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::Result;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
+/// Retrieves rows from the source executor and filter rows by expressions.
 pub struct SelectionExecutor {
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
@@ -101,9 +102,9 @@ mod tests {
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::datum::Datum;
-    use storage::SnapshotStore;
-    use util::codec::number::NumberEncoder;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::storage::SnapshotStore;
+    use crate::util::codec::number::NumberEncoder;
 
     use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
@@ -216,7 +217,8 @@ mod tests {
             selection,
             Arc::new(EvalConfig::default()),
             Box::new(inner_table_scan),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
@@ -269,7 +271,8 @@ mod tests {
             selection,
             Arc::new(EvalConfig::default()),
             Box::new(inner_table_scan),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {

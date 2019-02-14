@@ -14,10 +14,11 @@
 use tipb::executor::Limit;
 
 use super::ExecutorMetrics;
-use coprocessor::dag::executor::{Executor, Row};
-use coprocessor::dag::expr::EvalWarnings;
-use coprocessor::Result;
+use crate::coprocessor::dag::executor::{Executor, Row};
+use crate::coprocessor::dag::expr::EvalWarnings;
+use crate::coprocessor::Result;
 
+/// Retrieves rows from the source executor and only produces part of the rows.
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
@@ -77,8 +78,8 @@ mod tests {
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
 
-    use coprocessor::codec::datum::Datum;
-    use storage::SnapshotStore;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::storage::SnapshotStore;
 
     use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;

@@ -16,19 +16,17 @@ use std::sync::Arc;
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use storage::{Snapshot, SnapshotStore};
-use util::codec::number;
-use util::collections::HashSet;
+use crate::util::codec::number;
+use crate::util::collections::HashSet;
 
-use coprocessor::codec::datum::{self, Datum, DatumEncoder};
-use coprocessor::codec::table::{self, RowColsDict};
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
-use coprocessor::util;
-use coprocessor::*;
+use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
+use crate::coprocessor::codec::table::{self, RowColsDict};
+use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+use crate::coprocessor::util;
+use crate::coprocessor::*;
 
 mod aggregate;
 mod aggregation;
@@ -51,6 +49,7 @@ pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
 
+/// An expression tree visitor that extracts all column offsets in the tree.
 pub struct ExprColumnRefVisitor {
     cols_offset: HashSet<usize>,
     cols_len: usize,
@@ -266,82 +265,5 @@ pub trait Executor {
     /// It returns a `KeyRange` the executor has scaned.
     fn stop_scan(&mut self) -> Option<KeyRange> {
         None
-    }
-}
-
-pub fn build_exec<S: Snapshot + 'static>(
-    execs: Vec<executor::Executor>,
-    store: SnapshotStore<S>,
-    ranges: Vec<KeyRange>,
-    ctx: Arc<EvalConfig>,
-    collect: bool,
-) -> Result<Box<Executor + Send>> {
-    let mut execs = execs.into_iter();
-    let first = execs
-        .next()
-        .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-    let mut src = build_first_executor(first, store, ranges, collect)?;
-    for mut exec in execs {
-        let curr: Box<Executor + Send> = match exec.get_tp() {
-            ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                return Err(box_err!("got too much *scan exec, should be only one"))
-            }
-            ExecType::TypeSelection => Box::new(SelectionExecutor::new(
-                exec.take_selection(),
-                Arc::clone(&ctx),
-                src,
-            )?),
-            ExecType::TypeAggregation => Box::new(HashAggExecutor::new(
-                exec.take_aggregation(),
-                Arc::clone(&ctx),
-                src,
-            )?),
-            ExecType::TypeStreamAgg => Box::new(StreamAggExecutor::new(
-                Arc::clone(&ctx),
-                src,
-                exec.take_aggregation(),
-            )?),
-            ExecType::TypeTopN => {
-                Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
-            }
-            ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
-        };
-        src = curr;
-    }
-    Ok(src)
-}
-
-// We have trait objects which requires 'static.
-fn build_first_executor<S: Snapshot + 'static>(
-    mut first: executor::Executor,
-    store: SnapshotStore<S>,
-    ranges: Vec<KeyRange>,
-    collect: bool,
-) -> Result<Box<Executor + Send>> {
-    match first.get_tp() {
-        ExecType::TypeTableScan => {
-            let ex = Box::new(TableScanExecutor::new(
-                first.take_tbl_scan(),
-                ranges,
-                store,
-                collect,
-            )?);
-            Ok(ex)
-        }
-        ExecType::TypeIndexScan => {
-            let unique = first.get_idx_scan().get_unique();
-            let ex = Box::new(IndexScanExecutor::new(
-                first.take_idx_scan(),
-                ranges,
-                store,
-                unique,
-                collect,
-            )?);
-            Ok(ex)
-        }
-        _ => Err(box_err!(
-            "first exec type should be *Scan, but get {:?}",
-            first.get_tp()
-        )),
     }
 }

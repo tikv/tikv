@@ -227,7 +227,7 @@ impl RangeIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
     use std::path::Path;
     use std::sync::Arc;
@@ -235,8 +235,8 @@ mod tests {
     use rocksdb::{DBIterator, DBOptions, ReadOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use config::DbConfig;
-    use storage::types::Key;
+    use crate::config::DbConfig;
+    use crate::storage::types::Key;
 
     fn open_db<P: AsRef<Path>>(path: P) -> Arc<DB> {
         let path = path.as_ref().to_str().unwrap();

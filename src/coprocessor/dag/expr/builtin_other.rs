@@ -14,34 +14,38 @@
 use std::i64;
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     #[inline]
     pub fn bit_count(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let res = self.children[0].eval_int(ctx, row);
         match res {
-            Ok(r) => if let Some(v) = r {
-                Ok(Some(i64::from(v.count_ones())))
-            } else {
-                Ok(None)
-            },
-            Err(e) => if e.is_overflow() {
-                Ok(Some(64))
-            } else {
-                Err(e)
-            },
+            Ok(r) => {
+                if let Some(v) = r {
+                    Ok(Some(i64::from(v.count_ones())))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(e) => {
+                if e.is_overflow() {
+                    Ok(Some(64))
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::mysql::Decimal;
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
-    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::Decimal;
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
     use std::sync::Arc;
     use tipb::expression::ScalarFuncSig;
@@ -111,7 +115,8 @@ mod tests {
                 Datum::Dec(
                     Decimal::from_str(
                         "111111111111111111111111111111111111111111111111111111111111111",
-                    ).unwrap(),
+                    )
+                    .unwrap(),
                 ),
                 Datum::I64(63),
             ),
@@ -119,7 +124,8 @@ mod tests {
                 Datum::Dec(
                     Decimal::from_str(
                         "-111111111111111111111111111111111111111111111111111111111111111",
-                    ).unwrap(),
+                    )
+                    .unwrap(),
                 ),
                 Datum::I64(1),
             ),

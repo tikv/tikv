@@ -17,27 +17,28 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
 use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
 
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::*;
-use storage::{Snapshot, SnapshotStore};
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::*;
+use crate::storage::Store;
 
-use super::executor::{build_exec, Executor, ExecutorMetrics};
+use super::executor::{Executor, ExecutorMetrics};
 
-pub struct DAGContext {
+/// Handles Coprocessor DAG requests.
+pub struct DAGRequestHandler {
     deadline: Deadline,
-    exec: Box<Executor + Send>,
+    executor: Box<Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
 
-impl DAGContext {
-    pub fn new<S: Snapshot + 'static>(
+impl DAGRequestHandler {
+    pub fn build<S: Store + 'static>(
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
-        snap: S,
-        req_ctx: &ReqContext,
+        store: S,
+        deadline: Deadline,
         batch_row_limit: usize,
-    ) -> Result<Self> {
+    ) -> Result<Box<RequestHandler>> {
         let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
@@ -57,36 +58,31 @@ impl DAGContext {
         if req.has_is_strict_sql_mode() {
             eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
         }
-        let store = SnapshotStore::new(
-            snap,
-            req.get_start_ts(),
-            req_ctx.context.get_isolation_level(),
-            !req_ctx.context.get_not_fill_cache(),
-        );
-
-        let dag_executor = build_exec(
+        let executor = super::builder::DAGBuilder::build_normal(
             req.take_executors().into_vec(),
             store,
             ranges,
             Arc::new(eval_cfg),
             req.get_collect_range_counts(),
         )?;
-        Ok(Self {
-            deadline: req_ctx.deadline,
-            exec: dag_executor,
+        let handler = Self {
+            deadline,
+            executor,
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
-        })
+        };
+        Ok(handler.into_boxed())
     }
 
     fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
         let mut s_resp = StreamResponse::new();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
-        if let Some(eval_warnings) = self.exec.take_eval_warnings() {
+        if let Some(eval_warnings) = self.executor.take_eval_warnings() {
             s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
             s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
         }
-        self.exec.collect_output_counts(s_resp.mut_output_counts());
+        self.executor
+            .collect_output_counts(s_resp.mut_output_counts());
 
         let mut resp = Response::new();
         resp.set_data(box_try!(s_resp.write_to_bytes()));
@@ -97,12 +93,12 @@ impl DAGContext {
     }
 }
 
-impl RequestHandler for DAGContext {
+impl RequestHandler for DAGRequestHandler {
     fn handle_request(&mut self) -> Result<Response> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
-            match self.exec.next() {
+            match self.executor.next() {
                 Ok(Some(row)) => {
                     self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
@@ -120,11 +116,11 @@ impl RequestHandler for DAGContext {
                     let mut resp = Response::new();
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    if let Some(eval_warnings) = self.exec.take_eval_warnings() {
+                    if let Some(eval_warnings) = self.executor.take_eval_warnings() {
                         sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
                         sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
                     }
-                    self.exec
+                    self.executor
                         .collect_output_counts(sel_resp.mut_output_counts());
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
@@ -146,9 +142,9 @@ impl RequestHandler for DAGContext {
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::new();
-        self.exec.start_scan();
+        self.executor.start_scan();
         while record_cnt < self.batch_row_limit {
-            match self.exec.next() {
+            match self.executor.next() {
                 Ok(Some(row)) => {
                     self.deadline.check_if_exceeded()?;
                     record_cnt += 1;
@@ -171,7 +167,7 @@ impl RequestHandler for DAGContext {
             }
         }
         if record_cnt > 0 {
-            let range = self.exec.stop_scan();
+            let range = self.executor.stop_scan();
             return self
                 .make_stream_response(chunk, range)
                 .map(|r| (Some(r), finished));
@@ -180,6 +176,6 @@ impl RequestHandler for DAGContext {
     }
 
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.exec.collect_metrics_into(metrics);
+        self.executor.collect_metrics_into(metrics);
     }
 }

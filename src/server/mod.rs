@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod load_statistics;
 mod metrics;
 mod raft_client;
 mod service;
@@ -19,6 +18,7 @@ mod service;
 pub mod config;
 pub mod debug;
 pub mod errors;
+pub mod load_statistics;
 pub mod node;
 pub mod readpool;
 pub mod resolve;

@@ -18,11 +18,11 @@ use std::sync::Arc;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 
-use util::collections::{OrderMap, OrderMapEntry};
+use crate::util::collections::{OrderMap, OrderMapEntry};
 
-use coprocessor::codec::datum::{self, Datum};
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::*;
+use crate::coprocessor::codec::datum::{self, Datum};
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::*;
 
 use super::aggregate::{self, AggrFunc};
 use super::ExecutorMetrics;
@@ -270,7 +270,7 @@ impl Executor for StreamAggExecutor {
         while let Some(cols) = self.inner.next()? {
             self.has_data = true;
             let new_group = self.meet_new_group(&cols)?;
-            let mut ret = if new_group {
+            let ret = if new_group {
                 Some(self.get_partial_result()?)
             } else {
                 None
@@ -405,12 +405,12 @@ mod tests {
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum};
-    use coprocessor::codec::mysql::decimal::Decimal;
-    use coprocessor::codec::table;
-    use storage::SnapshotStore;
-    use util::codec::number::NumberEncoder;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::coprocessor::codec::mysql::decimal::Decimal;
+    use crate::coprocessor::codec::table;
+    use crate::storage::SnapshotStore;
+    use crate::util::codec::number::NumberEncoder;
+    use crate::util::collections::HashMap;
 
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;
@@ -527,7 +527,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 0;
         let mut row_data = Vec::with_capacity(1);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -557,7 +558,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 1;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -605,7 +607,8 @@ mod tests {
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation,
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -753,7 +756,8 @@ mod tests {
             aggregation,
             Arc::new(EvalConfig::default()),
             Box::new(ts_ect),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {

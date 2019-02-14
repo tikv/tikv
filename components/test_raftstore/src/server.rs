@@ -12,22 +12,24 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::{mpsc, Arc, RwLock};
-use std::thread;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::{thread, usize};
 
-use grpc::{EnvBuilder, Error as GrpcError};
-use tempdir::TempDir;
-
+use crate::grpc::{EnvBuilder, Error as GrpcError};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
+use tempdir::TempDir;
+use tokio::runtime::Builder as RuntimeBuilder;
 
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::store::fsm::{create_raft_batch_system, SendCh};
 use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
-use tikv::raftstore::{store, Result};
+use tikv::raftstore::Result;
+use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
@@ -39,7 +41,6 @@ use tikv::server::{
 use tikv::storage::{self, RaftKv};
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::security::SecurityManager;
-use tikv::util::transport::SendCh;
 use tikv::util::worker::{FutureWorker, Worker};
 
 use super::*;
@@ -55,7 +56,7 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    store_ch: SendCh<StoreMsg>,
+    store_ch: SendCh,
     worker: Worker<ResolveTask>,
 }
 
@@ -63,6 +64,7 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: HashMap<u64, String>,
     pub storages: HashMap<u64, SimulateEngine>,
+    pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
@@ -77,13 +79,21 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+        let raft_client = RaftClient::new(
+            env,
+            Arc::new(Config::default()),
+            security_mgr,
+            Arc::new(ThreadLoad::with_threshold(usize::MAX)),
+            Arc::new(RuntimeBuilder::new().core_threads(1).build().unwrap()),
+        );
         ServerCluster {
             metas: HashMap::default(),
             addrs: HashMap::default(),
             pd_client,
             storages: HashMap::default(),
+            region_info_accessors: HashMap::default(),
             snap_paths: HashMap::default(),
-            raft_client: RaftClient::new(env, Arc::new(Config::default()), security_mgr),
+            raft_client,
         }
     }
 
@@ -116,16 +126,14 @@ impl Simulator for ServerCluster {
         }
 
         // Initialize raftstore channels.
-        let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
-        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
-        let (snap_status_sender, snap_status_receiver) = mpsc::channel();
+        let (router, system) = create_raft_batch_system(&cfg.raft_store);
+        let store_sendch = SendCh::new(router.clone(), "raftstore");
 
         // Create localreader.
         let local_reader = Worker::new("test-local-reader");
         let local_ch = local_reader.scheduler();
 
-        let raft_router =
-            ServerRaftStoreRouter::new(store_sendch.clone(), snap_status_sender, local_ch);
+        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), router, local_ch);
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create engine
@@ -135,7 +143,7 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-future-worker");
         let storage_read_pool =
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-                || storage::ReadPoolContext::new(pd_worker.scheduler())
+                storage::ReadPoolContext::new(pd_worker.scheduler())
             });
         let store = create_raft_storage(
             sim_router.clone(),
@@ -143,7 +151,8 @@ impl Simulator for ServerCluster {
             storage_read_pool,
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         // Create import service.
@@ -165,7 +174,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-            || coprocessor::ReadPoolContext::new(pd_worker.scheduler())
+            coprocessor::ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;
@@ -202,26 +211,31 @@ impl Simulator for ServerCluster {
 
         // Create node.
         let mut node = Node::new(
-            &mut event_loop,
+            system,
             &cfg.server,
             &cfg.raft_store,
             Arc::clone(&self.pd_client),
         );
 
         // Create coprocessor.
-        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        region_info_accessor.start();
+
+        self.region_info_accessors
+            .insert(node_id, region_info_accessor);
 
         node.start(
-            event_loop,
             engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
-            snap_status_receiver,
             pd_worker,
             local_reader,
             coprocessor_host,
             importer,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
@@ -315,7 +329,7 @@ impl Simulator for ServerCluster {
         self.metas.get_mut(&node_id).unwrap().router.clear_filters();
     }
 
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<StoreMsg>> {
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh> {
         self.metas.get(&node_id).map(|m| m.store_ch.clone())
     }
 }

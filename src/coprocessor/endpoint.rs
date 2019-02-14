@@ -23,27 +23,36 @@ use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
 use tipb::select::DAGRequest;
 
-use server::readpool::{self, ReadPool};
-use server::Config;
-use storage::{self, Engine};
-use util::Either;
+use crate::server::readpool::{self, ReadPool};
+use crate::server::Config;
+use crate::storage::{self, Engine, SnapshotStore};
+use crate::util::Either;
 
-use coprocessor::dag::executor::ExecutorMetrics;
-use coprocessor::metrics::*;
-use coprocessor::tracker::Tracker;
-use coprocessor::util as cop_util;
-use coprocessor::*;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::metrics::*;
+use crate::coprocessor::tracker::Tracker;
+use crate::coprocessor::util as cop_util;
+use crate::coprocessor::*;
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 const BUSY_ERROR_MSG: &str = "server is busy (coprocessor full).";
 
+/// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
+    /// The storage engine to build Coprocessor request handlers.
     engine: E,
+
+    /// The thread pool to run Coprocessor requests.
     read_pool: ReadPool<ReadPoolContext>,
+
+    /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
+
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
     stream_channel_size: usize,
+
+    /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
 }
 
@@ -57,7 +66,7 @@ impl<E: Engine> Clone for Endpoint<E> {
     }
 }
 
-impl<E: Engine> ::util::AssertSend for Endpoint<E> {}
+impl<E: Engine> crate::util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, engine: E, read_pool: ReadPool<ReadPoolContext>) -> Self {
@@ -116,10 +125,21 @@ impl<E: Engine> Endpoint<E> {
                     Some(dag.get_start_ts()),
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                builder = box move |snap, req_ctx: &_| {
-                    // See rust-lang#41078 to know why we have `: &_` here.
-                    dag::DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
-                        .map(|h| h.into_boxed())
+                builder = box move |snap, req_ctx: &ReqContext| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
+                    let store = SnapshotStore::new(
+                        snap,
+                        dag.get_start_ts(),
+                        req_ctx.context.get_isolation_level(),
+                        !req_ctx.context.get_not_fill_cache(),
+                    );
+                    dag::DAGRequestHandler::build(
+                        dag,
+                        ranges,
+                        store,
+                        req_ctx.deadline,
+                        batch_row_limit,
+                    )
                 };
             }
             REQ_TYPE_ANALYZE => {
@@ -136,6 +156,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(analyze.get_start_ts()),
                 );
                 builder = box move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(analyze, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
                 };
@@ -154,6 +175,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(checksum.get_start_ts()),
                 );
                 builder = box move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     checksum::ChecksumContext::new(checksum, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
                 };
@@ -206,7 +228,7 @@ impl<E: Engine> Endpoint<E> {
         engine: E,
         ctx: &kvrpcpb::Context,
     ) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = ::util::future::paired_future_callback();
+        let (callback, future) = crate::util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
             .and_then(|_| future.map_err(|cancel| storage::engine::Error::Other(box_err!(cancel))))
@@ -318,21 +340,21 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
 
-        let tracker_and_handler_future = future::result(
-            tracker.req_ctx.deadline.check_if_exceeded(),
-        ).and_then(move |_| {
-            Self::async_snapshot(engine, &tracker.req_ctx.context)
-                .map(|snapshot| (tracker, snapshot))
-        })
-            .and_then(move |(tracker, snapshot)| {
-                // When snapshot is retrieved, deadline may exceed.
-                future::result(tracker.req_ctx.deadline.check_if_exceeded())
-                    .map(|_| (tracker, snapshot))
-            })
-            .and_then(move |(tracker, snapshot)| {
-                future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
-                    .map(|handler| (tracker, handler))
-            });
+        let tracker_and_handler_future =
+            future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                .and_then(move |_| {
+                    Self::async_snapshot(engine, &tracker.req_ctx.context)
+                        .map(|snapshot| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    // When snapshot is retrieved, deadline may exceed.
+                    future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                        .map(|_| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
+                        .map(|handler| (tracker, handler))
+                });
 
         tracker_and_handler_future
             .map(|(mut tracker, handler)| {
@@ -386,7 +408,8 @@ impl<E: Engine> Endpoint<E> {
                             None
                         }
                     }
-                }).filter_map(|resp_or_tracker| match resp_or_tracker {
+                })
+                .filter_map(|resp_or_tracker| match resp_or_tracker {
                     Either::Left(resp) => Some(resp),
                     Either::Right(mut tracker) => {
                         tracker.on_finish_all_items();
@@ -465,7 +488,10 @@ fn make_tag(is_table_scan: bool) -> &'static str {
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
-    error!("{:?}", e);
+    error!(
+        "error-response";
+        "err" => %e
+    );
     let mut resp = coppb::Response::new();
     let tag;
     match e {
@@ -513,8 +539,8 @@ mod tests {
     use tipb::executor::Executor;
     use tipb::expression::Expr;
 
-    use storage::TestEngineBuilder;
-    use util::worker::FutureWorker;
+    use crate::storage::TestEngineBuilder;
+    use crate::util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -639,7 +665,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -676,7 +702,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(
             &Config {
@@ -716,7 +742,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -735,7 +761,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -761,7 +787,7 @@ mod tests {
                 max_tasks_per_worker_normal: 2,
                 ..readpool::Config::default_for_test()
             },
-            || || ReadPoolContext::new(pd_worker.scheduler()),
+            || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -806,7 +832,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -821,12 +847,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
     fn test_error_streaming_response() {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -871,7 +896,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -891,7 +916,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -977,7 +1002,7 @@ mod tests {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            || ReadPoolContext::new(pd_worker.scheduler())
+            ReadPoolContext::new(pd_worker.scheduler())
         });
         let cop = Endpoint::new(
             &Config {
@@ -1010,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_handle_time() {
-        use util::config::ReadableDuration;
+        use crate::util::config::ReadableDuration;
 
         /// Asserted that the snapshot can be retrieved in 500ms.
         const SNAPSHOT_DURATION_MS: i64 = 500;
@@ -1032,7 +1057,7 @@ mod tests {
         let read_pool = ReadPool::new(
             "readpool",
             &readpool::Config::default_with_concurrency(1),
-            || || ReadPoolContext::new(pd_worker.scheduler()),
+            || ReadPoolContext::new(pd_worker.scheduler()),
         );
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =
@@ -1040,7 +1065,7 @@ mod tests {
 
         let cop = Endpoint::new(&config, engine, read_pool);
 
-        let (tx, rx) = ::std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
 
         // A request that requests execution details.
         let mut req_with_exec_detail = ReqContext::default_for_test();
@@ -1054,7 +1079,8 @@ mod tests {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_SMALL as u64,
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1126,7 +1152,8 @@ mod tests {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_LARGE as u64,
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1148,7 +1175,8 @@ mod tests {
                         PAYLOAD_LARGE as u64,
                         PAYLOAD_SMALL as u64,
                     ],
-                ).into_boxed())
+                )
+                .into_boxed())
             };
             let resp_future_3 =
                 cop.handle_stream_request(req_with_exec_detail.clone(), handler_builder);

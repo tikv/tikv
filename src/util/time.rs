@@ -22,7 +22,7 @@ use time::{Duration as TimeDuration, Timespec};
 // Re-export duration.
 pub use std::time::Duration;
 
-/// Convert Duration to milliseconds.
+/// Converts Duration to milliseconds.
 #[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
@@ -30,7 +30,7 @@ pub fn duration_to_ms(d: Duration) -> u64 {
     d.as_secs() * 1_000 + (nanos / 1_000_000)
 }
 
-/// Convert Duration to seconds.
+/// Converts Duration to seconds.
 #[inline]
 pub fn duration_to_sec(d: Duration) -> f64 {
     let nanos = f64::from(d.subsec_nanos());
@@ -38,7 +38,7 @@ pub fn duration_to_sec(d: Duration) -> f64 {
     d.as_secs() as f64 + (nanos / 1_000_000_000.0)
 }
 
-/// Convert Duration to nanoseconds.
+/// Converts Duration to nanoseconds.
 #[inline]
 pub fn duration_to_nanos(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
@@ -46,7 +46,7 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
-/// Get the current timestamp in seconds.
+/// Gets the current timestamp in seconds.
 #[inline]
 pub fn time_now_sec() -> u64 {
     SystemTime::now()
@@ -121,8 +121,10 @@ impl Monitor {
                     let after = now();
                     if let Err(e) = after.duration_since(before) {
                         error!(
-                            "system time jumped back, {:?} -> {:?}, err {:?}",
-                            before, after, e
+                            "system time jumped back";
+                            "before" => ?before,
+                            "after" => ?after,
+                            "err" => ?e,
                         );
                         on_jumped()
                     }
@@ -151,12 +153,12 @@ impl Drop for Monitor {
         }
 
         if let Err(e) = self.tx.send(true) {
-            error!("send quit message for time monitor worker failed {:?}", e);
+            error!("send quit message for time monitor worker failed"; "err" => ?e);
             return;
         }
 
         if let Err(e) = h.unwrap().join() {
-            error!("join time monitor worker failed {:?}", e);
+            error!("join time monitor worker failed"; "err" => ?e);
             return;
         }
     }
@@ -164,7 +166,7 @@ impl Drop for Monitor {
 
 use self::inner::monotonic_coarse_now;
 pub use self::inner::monotonic_now;
-/// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
+/// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
@@ -283,10 +285,10 @@ impl Instant {
         }
     }
 
-    /// checked_sub is simiar with `duration_since`, except it won't panic
-    /// if `self` is less than `other`. In this case None will be returned.
+    /// It is similar to `duration_since`, but it won't panic when `self` is less than `other`,
+    /// and `None` will be returned in this case.
     ///
-    /// Callers need to ensure that `self` and `other` are same type of Instantants.
+    /// Callers need to ensure that `self` and `other` are same type of Instants.
     pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
         if *self >= other {
             Some(self.duration_since(other))
@@ -295,7 +297,7 @@ impl Instant {
         }
     }
 
-    fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+    pub fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
         } else {
@@ -467,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(eq_op))]
+    #[allow(clippy::eq_op)]
     fn test_instant() {
         Instant::now().elapsed();
         Instant::now_coarse().elapsed();

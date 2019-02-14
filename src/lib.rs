@@ -21,17 +21,14 @@
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(duration_as_u128)]
-#![feature(entry_or_default)]
-#![feature(proc_macro_non_items)]
-#![feature(proc_macro_gen)]
-#![feature(ascii_ctype)]
+#![feature(proc_macro_hygiene)]
 #![feature(const_int_ops)]
-#![feature(use_extern_macros)]
+#![feature(cell_update)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
+#![cfg_attr(feature = "cargo-clippy", allow(clippy::nonminimal_bool))]
 
 extern crate alloc;
 extern crate backtrace;
@@ -54,21 +51,19 @@ extern crate grpcio as grpc;
 extern crate hashbrown;
 extern crate hex;
 extern crate indexmap;
-#[cfg(all(unix, not(fuzzing)))]
-extern crate jemallocator;
 extern crate kvproto;
 
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
-#[macro_use]
 extern crate log;
-extern crate mio;
 extern crate murmur3;
 extern crate num;
 extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
+#[cfg(target_os = "linux")]
+extern crate procinfo;
 extern crate prometheus_static_metric;
 extern crate protobuf;
 #[macro_use]
@@ -81,32 +76,37 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-#[cfg_attr(not(test), macro_use(slog_o, slog_kv))]
-#[cfg_attr(
-    test,
-    macro_use(
-        slog_o,
-        slog_kv,
-        slog_crit,
-        slog_log,
-        slog_record,
-        slog_b,
-        slog_record_static
-    )
+#[macro_use(
+    kv,
+    slog_o,
+    slog_kv,
+    slog_trace,
+    slog_error,
+    slog_warn,
+    slog_info,
+    slog_debug,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;
-extern crate slog_scope;
-extern crate slog_stdlog;
+#[macro_use]
+extern crate slog_derive;
+#[macro_use]
+extern crate slog_global;
 extern crate slog_term;
 extern crate sys_info;
 extern crate tempdir;
 #[cfg(test)]
 extern crate test;
+extern crate tikv_alloc;
 extern crate time;
 extern crate tipb;
 extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_executor;
 extern crate tokio_timer;
 #[cfg(test)]
 extern crate toml;
@@ -123,10 +123,13 @@ extern crate base64;
 extern crate cop_datatype;
 extern crate flate2;
 extern crate hyper;
+extern crate log_wrappers;
 extern crate panic_hook;
 extern crate safemem;
 extern crate smallvec;
 extern crate tokio_threadpool;
+#[macro_use]
+extern crate vlog;
 
 #[macro_use]
 pub mod util;
@@ -138,14 +141,4 @@ pub mod raftstore;
 pub mod server;
 pub mod storage;
 
-pub use storage::Storage;
-
-// As of now TiKV always turns on jemalloc on Unix, though libraries
-// generally shouldn't be opinionated about their allocators like
-// this. It's easier to do this in one place than to have all our bins
-// turn it on themselves.
-//
-// cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs`
-#[cfg(all(unix, not(fuzzing)))]
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+pub use crate::storage::Storage;

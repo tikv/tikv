@@ -14,9 +14,10 @@
 use kvproto::coprocessor as coppb;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::datum::Datum;
-use coprocessor::*;
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::*;
 
+/// A `RequestHandler` that always produces errors.
 pub struct ErrorRequestHandler {
     error: Option<Error>,
 }
@@ -117,6 +118,7 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
 }
 
 /// `is_point` checks if the key range represents a point.
+#[inline]
 pub fn is_point(range: &coppb::KeyRange) -> bool {
     is_prefix_next(range.get_start(), range.get_end())
 }

@@ -66,7 +66,7 @@ impl<T: Display> Scheduler<T> {
         }
     }
 
-    /// Schedule a task to run.
+    /// Schedules a task to run.
     ///
     /// If the worker is stopped, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
@@ -123,7 +123,7 @@ where
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
-    /// Create a worker.
+    /// Creates a worker.
     pub fn new<S: Into<String>>(name: S) -> Worker<T> {
         let (tx, rx) = unbounded();
         Worker {
@@ -133,15 +133,15 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
     }
 
-    /// Start the worker.
+    /// Starts the worker.
     pub fn start<R>(&mut self, runner: R) -> Result<(), io::Error>
     where
         R: Runnable<T> + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
-        info!("starting working thread: {}", self.scheduler.name);
+        info!("starting working thread"; "worker" => &self.scheduler.name);
         if receiver.is_none() {
-            warn!("worker {} has been started.", self.scheduler.name);
+            warn!("worker has been started"; "worker" => &self.scheduler.name);
             return Ok(());
         }
 
@@ -154,19 +154,19 @@ impl<T: Display + Send + 'static> Worker<T> {
         Ok(())
     }
 
-    /// Get a scheduler to schedule task.
+    /// Gets a scheduler to schedule the task.
     pub fn scheduler(&self) -> Scheduler<T> {
         self.scheduler.clone()
     }
 
-    /// Schedule a task to run.
+    /// Schedules a task to run.
     ///
     /// If the worker is stopped, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
         self.scheduler.schedule(task)
     }
 
-    /// Check if underlying worker can't handle task immediately.
+    /// Checks if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
         self.handle.is_none()
     }
@@ -175,13 +175,13 @@ impl<T: Display + Send + 'static> Worker<T> {
         self.scheduler.name.as_str()
     }
 
-    /// Stop the worker thread.
+    /// Stops the worker thread.
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
-        info!("stoping {}", self.scheduler.name);
+        info!("stoping worker"; "worker" => &self.scheduler.name);
         let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
-            warn!("failed to stop worker thread: {:?}", e);
+            warn!("failed to stop worker thread"; "err" => ?e);
         }
         Some(handle)
     }
@@ -194,10 +194,10 @@ mod tests {
     use std::time::Duration;
     use std::time::Instant;
 
+    use crate::util::timer::GLOBAL_TIMER_HANDLE;
     use futures::Future;
     use tokio_core::reactor::Handle;
     use tokio_timer::timer;
-    use util::timer::GLOBAL_TIMER_HANDLE;
 
     use super::*;
 

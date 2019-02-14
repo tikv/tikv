@@ -1,0 +1,29 @@
+[package]
+name = "tikv_alloc"
+version = "0.1.0"
+edition = "2018"
+authors = ["Brian Anderson <andersrb@gmail.com>"]
+publish = false
+
+[features]
+default = ["jemallocator"]
+
+# Build jemalloc's profiling features. Without this
+# certain profile functions will return nothing.
+mem-profiling = ["jemallocator/profiling"]
+
+# Don't build jemalloc; use the system allocator.
+no-jemalloc = []
+
+[dependencies]
+libc = "0.2"
+log = "0.3"
+
+[dev-dependencies]
+tempdir = "0.3"
+
+[dependencies.jemallocator]
+optional = true
+features = ["unprefixed_malloc_on_supported_platforms"]
+version = "0.1.9"
+

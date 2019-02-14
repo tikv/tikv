@@ -16,13 +16,13 @@ use std::cmp::Ordering;
 use kvproto::metapb::Region;
 use rocksdb::{SeekKey, DB};
 
-use coprocessor::codec::table as table_codec;
+use crate::coprocessor::codec::table as table_codec;
+use crate::raftstore::store::engine::{IterOption, Iterable};
+use crate::raftstore::store::keys;
+use crate::storage::types::Key;
+use crate::storage::CF_WRITE;
+use crate::util::escape;
 use kvproto::pdpb::CheckPolicy;
-use raftstore::store::engine::{IterOption, Iterable};
-use raftstore::store::keys;
-use storage::types::Key;
-use storage::CF_WRITE;
-use util::escape;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
@@ -234,18 +234,18 @@ mod tests {
     use rocksdb::Writable;
     use tempdir::TempDir;
 
-    use coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use raftstore::store::{Msg, SplitCheckRunner, SplitCheckTask};
-    use storage::types::Key;
-    use storage::ALL_CFS;
-    use util::codec::number::NumberEncoder;
-    use util::config::ReadableSize;
-    use util::rocksdb::new_engine;
-    use util::transport::RetryableSendCh;
-    use util::worker::Runnable;
+    use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use crate::raftstore::store::{Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::types::Key;
+    use crate::storage::ALL_CFS;
+    use crate::util::codec::number::NumberEncoder;
+    use crate::util::config::ReadableSize;
+    use crate::util::rocksdb_util::new_engine;
+    use crate::util::transport::RetryableSendCh;
+    use crate::util::worker::Runnable;
 
     use super::*;
-    use raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
 
     /// Composes table record and index prefix: `t[table_id]`.
     // Port from TiDB
@@ -349,7 +349,7 @@ mod tests {
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
-                        Ok(Msg::SplitRegion { split_keys, .. }) => {
+                        Ok(Msg::PeerMsg(PeerMsg::SplitRegion { split_keys, .. })) => {
                             assert_eq!(split_keys, vec![key.into_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),

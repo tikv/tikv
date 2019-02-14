@@ -18,14 +18,14 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use raftstore::store::keys;
+use crate::raftstore::store::keys;
+use crate::storage::mvcc::{Write, WriteType};
+use crate::storage::types::Key;
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::{Error, Result};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
 };
-use storage::mvcc::{Write, WriteType};
-use storage::types::Key;
-use util::codec::number::{self, NumberEncoder};
-use util::codec::{Error, Result};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -555,10 +555,10 @@ impl RangeProperties {
             Some((_, v)) => v.get(kind),
             None => 0,
         };
-        let mut range = self.offsets.range::<[u8], _>((Included(end), Unbounded));
-        let end_offset = match range.next() {
+        let range = self.offsets.range::<[u8], _>((Unbounded, Included(end)));
+        let end_offset = match range.last() {
             Some((_, v)) => v.get(kind),
-            None => self.offsets.iter().last().map_or(0, |(_, v)| v.get(kind)),
+            None => 0,
         };
         if end_offset < start_offset {
             panic!(
@@ -656,10 +656,10 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raftstore::store::keys;
+    use crate::raftstore::store::keys;
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::Key;
     use rocksdb::{DBEntryType, TablePropertiesCollector};
-    use storage::mvcc::{Write, WriteType};
-    use storage::Key;
     use test::Bencher;
 
     #[test]
@@ -923,8 +923,8 @@ mod tests {
             ("k", "k", k, k),
             ("a", "k", k, a),
             ("a", "i", i, a),
-            ("e", "h", i, e),
-            ("g", "h", i, e),
+            ("e", "h", e, e),
+            ("b", "h", e, a),
             ("g", "g", i, i),
         ];
         for &(start, end, end_idx, start_idx) in &cases {

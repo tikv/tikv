@@ -16,10 +16,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+/// Adds `Duration` to the initial date and time.
 fn compute_rotation_time(initial: &DateTime<Utc>, timespan: Duration) -> DateTime<Utc> {
     *initial + timespan
 }
 
+/// Rotates file path with given timestamp.
 fn rotation_file_path_with_timestamp(
     file_path: impl AsRef<Path>,
     timestamp: &DateTime<Utc>,
@@ -36,6 +38,7 @@ fn rotation_file_path_with_timestamp(
     ))
 }
 
+/// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
     let parent = path
@@ -47,6 +50,9 @@ fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     OpenOptions::new().append(true).create(true).open(path)
 }
 
+/// This FileLogger rotates logs according to a time span.
+/// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}"
+/// Note: log file will *not* be compressed or otherwise modified.
 pub struct RotatingFileLogger {
     rotation_timespan: Duration,
     next_rotation_time: DateTime<Utc>,
@@ -69,6 +75,7 @@ impl RotatingFileLogger {
         })
     }
 
+    /// Opens log file with append mode. Creates a new file if it doesn't exist.
     fn open(&mut self) -> io::Result<()> {
         self.file = Some(open_log_file(&self.file_path)?);
         Ok(())
@@ -78,6 +85,7 @@ impl RotatingFileLogger {
         Utc::now() > self.next_rotation_time
     }
 
+    /// Rotates the current file and updates the next rotation time.
     fn rotate(&mut self) -> io::Result<()> {
         self.close()?;
         let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
@@ -86,6 +94,7 @@ impl RotatingFileLogger {
         self.open()
     }
 
+    /// Updates the next rotation time.
     fn update_rotation_time(&mut self) {
         let now = Utc::now();
         self.next_rotation_time = compute_rotation_time(&now, self.rotation_timespan);
