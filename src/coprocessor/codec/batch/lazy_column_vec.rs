@@ -13,7 +13,8 @@
 
 use tipb::schema::ColumnInfo;
 
-use super::{BatchColumn, LazyBatchColumn};
+use super::LazyBatchColumn;
+use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::Result;
 
@@ -99,7 +100,7 @@ impl LazyBatchColumnVec {
         column_index: usize,
         time_zone: Tz,
         column_info: &ColumnInfo,
-    ) -> Result<&BatchColumn> {
+    ) -> Result<&VectorValue> {
         let number_of_rows = self.rows_len();
         let col = &mut self.columns[column_index];
         assert_eq!(col.len(), number_of_rows);

@@ -220,7 +220,7 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
             columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
         }
         if self.decode_handle {
-            // For primary key, we construct a decoded `BatchColumn` because it is directly
+            // For primary key, we construct a decoded `VectorValue` because it is directly
             // stored as i64, without a datum flag, in the value (for unique index).
             // Note that for normal index, primary key is appended at the end of key with a
             // datum flag.

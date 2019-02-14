@@ -127,7 +127,7 @@ impl RpnFunction {
         for _ in 0..rows {
             result.push(f(context));
         }
-        Ret::coerce_to_vector_value(result)
+        Ret::into_vector_value(result)
     }
 
     #[inline(always)]
@@ -144,19 +144,19 @@ impl RpnFunction {
     {
         let mut result = Vec::with_capacity(rows);
         if arg0.is_scalar() {
-            let v = Arg0::coerce_scalar_value_ref_as_slice(arg0.scalar_value());
+            let v = Arg0::borrow_scalar_value(arg0.scalar_value());
             let field_type = arg0.field_type();
             for _ in 0..rows {
                 result.push(f(context, field_type, v));
             }
         } else {
-            let v = Arg0::coerce_vector_value_ref_as_slice(arg0.vector_value());
+            let v = Arg0::borrow_vector_value(arg0.vector_value());
             let field_type = arg0.field_type();
             for i in 0..rows {
                 result.push(f(context, field_type, &v[i]));
             }
         }
-        Ret::coerce_to_vector_value(result)
+        Ret::into_vector_value(result)
     }
 
     #[inline(always)]
@@ -237,12 +237,12 @@ impl RpnFunction {
         F: FnMut(&mut RpnExpressionEvalContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
     {
         let mut result = Vec::with_capacity(rows);
-        let lhs = Arg0::coerce_scalar_value_ref_as_slice(lhs);
-        let rhs = Arg1::coerce_scalar_value_ref_as_slice(rhs);
+        let lhs = Arg0::borrow_scalar_value(lhs);
+        let rhs = Arg1::borrow_scalar_value(rhs);
         for _ in 0..rows {
             result.push(f(context, lhs_field_type, lhs, rhs_field_type, rhs));
         }
-        Ret::coerce_to_vector_value(result)
+        Ret::into_vector_value(result)
     }
 
     #[inline(always)]
@@ -263,12 +263,12 @@ impl RpnFunction {
     {
         debug_assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
-        let lhs = Arg0::coerce_scalar_value_ref_as_slice(lhs);
-        let rhs = Arg1::coerce_vector_value_ref_as_slice(rhs);
+        let lhs = Arg0::borrow_scalar_value(lhs);
+        let rhs = Arg1::borrow_vector_value(rhs);
         for i in 0..rows {
             result.push(f(context, lhs_field_type, lhs, rhs_field_type, &rhs[i]));
         }
-        Ret::coerce_to_vector_value(result)
+        Ret::into_vector_value(result)
     }
 
     #[inline(always)]
@@ -289,12 +289,12 @@ impl RpnFunction {
     {
         debug_assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
-        let lhs = Arg0::coerce_vector_value_ref_as_slice(lhs);
-        let rhs = Arg1::coerce_scalar_value_ref_as_slice(rhs);
+        let lhs = Arg0::borrow_vector_value(lhs);
+        let rhs = Arg1::borrow_scalar_value(rhs);
         for i in 0..rows {
             result.push(f(context, lhs_field_type, &lhs[i], rhs_field_type, rhs));
         }
-        Ret::coerce_to_vector_value(result)
+        Ret::into_vector_value(result)
     }
 
     #[inline(always)]
@@ -316,11 +316,11 @@ impl RpnFunction {
         debug_assert_eq!(rows, lhs.len());
         debug_assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
-        let lhs = Arg0::coerce_vector_value_ref_as_slice(lhs);
-        let rhs = Arg1::coerce_vector_value_ref_as_slice(rhs);
+        let lhs = Arg0::borrow_vector_value(lhs);
+        let rhs = Arg1::borrow_vector_value(rhs);
         for i in 0..rows {
             result.push(f(context, lhs_field_type, &lhs[i], rhs_field_type, &rhs[i]));
         }
-        Ret::coerce_to_vector_value(result)
+        Ret::into_vector_value(result)
     }
 }

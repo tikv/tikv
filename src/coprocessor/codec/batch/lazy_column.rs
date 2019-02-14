@@ -18,18 +18,24 @@ use smallvec::SmallVec;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::schema::ColumnInfo;
 
-use super::BatchColumn;
+use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{datum, Error, Result};
 
-/// A container stores an array of datums, which can be either raw, i.e. not decoded, or decoded
-/// in `BatchColumn` type.
+/// A container stores an array of datums, which can be either raw (not decoded), or decoded into
+/// the `VectorValue` type.
+///
+/// TODO:
+/// Since currently the data format in response can be the same as in storage, we use this structure
+/// to avoid unnecessary repeated serialization / deserialization. In future, Coprocessor will
+/// respond all data in Arrow format which is different to the format in storage. At that time,
+/// this structure is no longer useful and should be removed.
 pub enum LazyBatchColumn {
     /// Ensure that small datum values (i.e. Int, Real, Time) are stored compactly.
     /// When using VarInt encoding there are 9 bytes. Plus 1 extra byte to store the datum flag.
     /// Thus totally there are 10 bytes.
     Raw(Vec<SmallVec<[u8; 10]>>),
-    Decoded(BatchColumn),
+    Decoded(VectorValue),
 }
 
 impl std::fmt::Debug for LazyBatchColumn {
@@ -74,7 +80,7 @@ impl LazyBatchColumn {
     /// Creates a new `LazyBatchColumnb::Decoded` with specified capacity and eval type.
     #[inline]
     pub fn decoded_with_capacity_and_tp(capacity: usize, eval_tp: EvalType) -> Self {
-        LazyBatchColumn::Decoded(BatchColumn::with_capacity(capacity, eval_tp))
+        LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
     }
 
     #[inline]
@@ -94,7 +100,7 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn decoded(&self) -> &BatchColumn {
+    pub fn decoded(&self) -> &VectorValue {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
             LazyBatchColumn::Decoded(ref v) => v,
@@ -102,7 +108,7 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn mut_decoded(&mut self) -> &mut BatchColumn {
+    pub fn mut_decoded(&mut self) -> &mut VectorValue {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
             LazyBatchColumn::Decoded(ref mut v) => v,
@@ -188,7 +194,7 @@ impl LazyBatchColumn {
         let eval_type =
             EvalType::try_from(column_info.tp()).map_err(|e| Error::Other(box_err!(e)))?;
 
-        let mut decoded_column = BatchColumn::with_capacity(self.capacity(), eval_type);
+        let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
         {
             let raw_values = self.raw();
             for raw_value in raw_values {

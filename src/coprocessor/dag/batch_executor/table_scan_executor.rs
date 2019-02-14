@@ -258,7 +258,7 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
         let mut columns = Vec::with_capacity(columns_len);
         for i in 0..columns_len {
             if i == self.handle_index {
-                // For primary key, we construct a decoded `BatchColumn` because it is directly
+                // For primary key, we construct a decoded `VectorValue` because it is directly
                 // stored as i64, without a datum flag, at the end of key.
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                     expect_rows,
