@@ -117,9 +117,9 @@ pub trait JsonEncoder: NumberEncoder {
     fn encode_obj(&mut self, data: &BTreeMap<String, Json>) -> Result<()> {
         // object: element-count size key-entry* value-entry* key* value*
         let element_count = data.len();
-        // key-entry = key-offset(uint32) key-length(uint16)
+        // key-entry ::= key-offset(uint32) key-length(uint16)
         let key_entries_len = KEY_ENTRY_LEN * element_count;
-        // value-entry = type(byte) offset-or-inlined-value(uint32)
+        // value-entry ::= type(byte) offset-or-inlined-value(uint32)
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut key_entries = Vec::with_capacity(key_entries_len);
         let mut encode_keys = Vec::new();
@@ -154,7 +154,7 @@ pub trait JsonEncoder: NumberEncoder {
     }
 
     fn encode_array(&mut self, data: &[Json]) -> Result<()> {
-        // array = element-count size value-entry* value*
+        // array ::= element-count size value-entry* value*
         let element_count = data.len();
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut value_offset = (ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len) as u32;
@@ -261,7 +261,7 @@ impl Json {
         let key_entries_len = KEY_ENTRY_LEN * element_count;
         let mut key_entries_data = read_slice(buf, key_entries_len)?; //&data[0..key_entries_len];
 
-        // value-entry = type(byte) offset-or-inlined-value(uint32)
+        // value-entry ::= type(byte) offset-or-inlined-value(uint32)
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut value_entries_data = read_slice(buf, value_entries_len)?;
         let mut data = read_slice(buf, left_size - key_entries_len - value_entries_len)?;
@@ -372,7 +372,7 @@ fn get_array_binary_len(data: &[Json]) -> usize {
             values_len += v.body_binary_len();
         }
     }
-    // array = element-count size value-entry* value*
+    // array ::= element-count size value-entry* value*
     ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + values_len
 }
 

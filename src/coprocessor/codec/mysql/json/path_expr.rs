@@ -13,13 +13,13 @@
 
 // Refer to https://dev.mysql.com/doc/refman/5.7/en/json-path-syntax.html
 // From MySQL 5.7, JSON path expression grammar:
-//     pathExpression = scope (pathLeg)*
-//     scope = [ columnReference ] '$'
-//     columnReference = // omit...
-//     pathLeg = member | arrayLocation | '**'
-//     member = '.' (keyName | '*')
-//     arrayLocation = '[' (non-negative-integer | '*') ']'
-//     keyName = ECMAScript-identifier | ECMAScript-string-literal
+//     pathExpression ::= scope (pathLeg)*
+//     scope ::= [ columnReference ] '$'
+//     columnReference ::= // omit...
+//     pathLeg ::= member | arrayLocation | '**'
+//     member ::= '.' (keyName | '*')
+//     arrayLocation ::= '[' (non-negative-integer | '*') ']'
+//     keyName ::= ECMAScript-identifier | ECMAScript-string-literal
 //
 // And some implementation limits in MySQL 5.7:
 //     1) columnReference in scope must be empty now;
