@@ -122,7 +122,8 @@ log_wrappers = { path = "components/log_wrappers" }
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/DorianZheng/rust-rocksdb.git"
+branch = "add_blob_index_encoder"
 
 [dependencies.prometheus]
 version = "0.4.2"

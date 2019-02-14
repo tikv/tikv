@@ -671,6 +671,7 @@ mod tests {
     use crate::raftstore::store::keys;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
+    use rand::Rng;
     use rocksdb::{DBEntryType, TablePropertiesCollector};
     use test::Bencher;
 
@@ -951,5 +952,65 @@ mod tests {
                 keys
             );
         }
+    }
+
+    #[test]
+    fn test_range_properties_with_blob_index() {
+        let cases = [
+            ("a", 0, 1),
+            // handle "a": size(size = 1, offset = 1),keys(1,1)
+            ("b", PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            ("c", PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            ("d", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("e", PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            // handle "e": size(size = DISTANCE + 4, offset = DISTANCE + 5),keys(4,5)
+            ("f", PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            ("g", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("h", PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            ("i", PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            ("j", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("k", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
+        ];
+
+        let handles = ["a", "e", "i", "k"];
+
+        let mut rng = rand::thread_rng();
+        let mut collector = RangePropertiesCollector::default();
+        let mut extra_value_size: u64 = 0;
+        for &(k, vlen, count) in &cases {
+            if handles.contains(&k) || rng.gen_range(0, 2) == 0 {
+                for _ in 0..count {
+                    let v = vec![0; vlen as usize - extra_value_size as usize];
+                    extra_value_size = 0;
+                    collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+                }
+            } else {
+                let mut blob_index = TitanBlobIndex::default();
+                for _ in 0..count {
+                    blob_index.blob_size = vlen - extra_value_size;
+                    let v = TitanBlobIndex::encode_to(&blob_index);
+                    collector.add(k.as_bytes(), &v, DBEntryType::BlobIndex, 0, 0);
+                    extra_value_size = v.len() as u64;
+                }
+            }
+        }
+        let result = UserProperties(collector.finish());
+
+        let props = RangeProperties::decode(&result).unwrap();
+        assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
+        assert_eq!(
+            props.largest_key().unwrap(),
+            cases[cases.len() - 1].0.as_bytes()
+        );
+        assert_eq!(
+            props.get_approximate_size_in_range(b"e", b"i"),
+            PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4
+        );
+        assert_eq!(
+            props.get_approximate_size_in_range(b"", b"k"),
+            PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
+        );
     }
 }

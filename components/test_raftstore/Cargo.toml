@@ -20,4 +20,5 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/DorianZheng/rust-rocksdb.git"
+branch = "add_blob_index_encoder"
