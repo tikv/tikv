@@ -977,7 +977,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1008,7 +1008,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1040,7 +1040,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
