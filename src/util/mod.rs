@@ -509,50 +509,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     })
 }
 
-// TODO: Test
-#[inline]
-pub fn vec_append_by_index<T, F>(self_vec: &mut Vec<T>, other: &mut Vec<T>, mut f: F)
-where
-    F: FnMut(usize) -> bool,
-{
-    unsafe {
-        let self_len = self_vec.len();
-        let other_len = other.len();
-        self_vec.reserve(other_len);
-        let self_ptr_initial = self_vec.as_mut_ptr().add(self_vec.len());
-        let mut self_ptr = self_ptr_initial;
-        let mut other_ptr = other.as_ptr();
-        for i in 0..other_len {
-            // TODO: Optimization: group continuous copies together.
-            if f(i) {
-                std::ptr::copy_nonoverlapping(other_ptr, self_ptr, 1);
-                self_ptr = self_ptr.add(1);
-            }
-            other_ptr = other_ptr.add(1);
-        }
-        self_vec.set_len(self_len + (self_ptr.offset_from(self_ptr_initial)) as usize);
-        other.set_len(0);
-    }
-}
-
-#[inline]
-pub fn vec_take_and_collect<T>(src: &mut Vec<T>, n: usize) -> Vec<T> {
-    unsafe {
-        let take_n = src.len().min(n);
-
-        // Want `n`, but may only filled with `take_n` data.
-        let mut dest = Vec::with_capacity(n);
-        std::ptr::copy_nonoverlapping(src.as_ptr(), dest.as_mut_ptr(), take_n);
-        dest.set_len(take_n);
-
-        let remainings = src.len() - take_n;
-        std::ptr::copy(src.as_ptr().add(take_n), src.as_mut_ptr(), remainings);
-        src.set_len(remainings);
-
-        dest
-    }
-}
-
 #[inline]
 pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
     // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`

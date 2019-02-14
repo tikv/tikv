@@ -256,81 +256,6 @@ impl BatchColumn {
         }
     }
 
-    /// Conditionally moves elements of `other` into `Self` according to `f(index)`,
-    /// leaving `other` empty.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `other` does not have the same `EvalType` as `Self`.
-    #[inline]
-    pub fn append_by_index<F>(&mut self, other: &mut BatchColumn, f: F)
-    where
-        F: FnMut(usize) -> bool,
-    {
-        match self {
-            BatchColumn::Int(ref mut self_vec) => match other {
-                BatchColumn::Int(ref mut other_vec) => {
-                    crate::util::vec_append_by_index(self_vec, other_vec, f);
-                }
-                other => panic!("Cannot append_by_index {} to Int column", other.eval_type()),
-            },
-            BatchColumn::Real(ref mut self_vec) => match other {
-                BatchColumn::Real(ref mut other_vec) => {
-                    crate::util::vec_append_by_index(self_vec, other_vec, f);
-                }
-                other => panic!(
-                    "Cannot append_by_index {} to Real column",
-                    other.eval_type()
-                ),
-            },
-            BatchColumn::Decimal(ref mut self_vec) => match other {
-                BatchColumn::Decimal(ref mut other_vec) => {
-                    crate::util::vec_append_by_index(self_vec, other_vec, f);
-                }
-                other => panic!(
-                    "Cannot append_by_index {} to Decimal column",
-                    other.eval_type()
-                ),
-            },
-            BatchColumn::Bytes(ref mut self_vec) => match other {
-                BatchColumn::Bytes(ref mut other_vec) => {
-                    crate::util::vec_append_by_index(self_vec, other_vec, f);
-                }
-                other => panic!(
-                    "Cannot append_by_index {} to Bytes column",
-                    other.eval_type()
-                ),
-            },
-            BatchColumn::DateTime(ref mut self_vec) => match other {
-                BatchColumn::DateTime(ref mut other_vec) => {
-                    crate::util::vec_append_by_index(self_vec, other_vec, f);
-                }
-                other => panic!(
-                    "Cannot append_by_index {} to DateTime column",
-                    other.eval_type()
-                ),
-            },
-            BatchColumn::Duration(ref mut self_vec) => match other {
-                BatchColumn::Duration(ref mut other_vec) => {
-                    crate::util::vec_append_by_index(self_vec, other_vec, f);
-                }
-                other => panic!(
-                    "Cannot append_by_index {} to Duration column",
-                    other.eval_type()
-                ),
-            },
-            BatchColumn::Json(ref mut self_vec) => match other {
-                BatchColumn::Json(ref mut other_vec) => {
-                    crate::util::vec_append_by_index(self_vec, other_vec, f);
-                }
-                other => panic!(
-                    "Cannot append_by_index {} to Json column",
-                    other.eval_type()
-                ),
-            },
-        }
-    }
-
     pub fn as_bools(&self, outputs: &mut [bool]) {
         use crate::coprocessor::data_type::AsBool;
 
@@ -340,33 +265,6 @@ impl BatchColumn {
                 outputs[i] = v[i].as_bool();
             }
         });
-    }
-
-    /// Takes first n elements and build a new instance.
-    pub fn take_and_collect(&mut self, n: usize) -> BatchColumn {
-        match self {
-            BatchColumn::Int(ref mut vec) => {
-                BatchColumn::Int(crate::util::vec_take_and_collect(vec, n))
-            }
-            BatchColumn::Real(ref mut vec) => {
-                BatchColumn::Real(crate::util::vec_take_and_collect(vec, n))
-            }
-            BatchColumn::Decimal(ref mut vec) => {
-                BatchColumn::Decimal(crate::util::vec_take_and_collect(vec, n))
-            }
-            BatchColumn::Bytes(ref mut vec) => {
-                BatchColumn::Bytes(crate::util::vec_take_and_collect(vec, n))
-            }
-            BatchColumn::DateTime(ref mut vec) => {
-                BatchColumn::DateTime(crate::util::vec_take_and_collect(vec, n))
-            }
-            BatchColumn::Duration(ref mut vec) => {
-                BatchColumn::Duration(crate::util::vec_take_and_collect(vec, n))
-            }
-            BatchColumn::Json(ref mut vec) => {
-                BatchColumn::Json(crate::util::vec_take_and_collect(vec, n))
-            }
-        }
     }
 
     /// Pushes a value into the column by decoding the datum and converting to current

@@ -89,26 +89,6 @@ impl LazyBatchColumnVec {
         self.debug_assert_columns_equal_length();
     }
 
-    /// Conditionally moves elements of `other` into `Self` according to `f(index)`,
-    /// leaving `other` empty.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `other` and `Self` does not have same column schemas.
-    #[inline]
-    pub fn append_by_index<F>(&mut self, other: &mut Self, mut f: F)
-    where
-        F: FnMut(usize) -> bool,
-    {
-        let len = self.columns_len();
-        assert_eq!(len, other.columns_len());
-        for i in 0..len {
-            self.columns[i].append_by_index(&mut other[i], &mut f);
-        }
-
-        self.debug_assert_columns_equal_length();
-    }
-
     /// Ensures that a column at specified `column_index` is decoded and returns a reference
     /// to the decoded column.
     ///
@@ -217,25 +197,6 @@ impl LazyBatchColumnVec {
             }
         }
         Ok(())
-    }
-
-    /// Creates a new instance with the same schema but no data.
-    pub fn clone_schema(&self, rows_capacity: usize) -> Self {
-        let vec: Vec<_> = self
-            .columns
-            .iter()
-            .map(|c| c.clone_schema(rows_capacity))
-            .collect();
-        Self::from(vec)
-    }
-
-    /// Takes first n elements and build a new instance.
-    pub fn take_and_collect(&mut self, n: usize) -> Self {
-        let mut vec = Vec::with_capacity(self.columns.len());
-        for column in &mut self.columns {
-            vec.push(column.take_and_collect(n));
-        }
-        Self::from(vec)
     }
 }
 

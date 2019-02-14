@@ -251,35 +251,6 @@ impl LazyBatchColumn {
         }
     }
 
-    /// Conditionally moves elements of `other` into `Self` according to `f(index)`,
-    /// leaving `other` empty.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `other` and `Self` does not have identical decoded status or identical
-    /// `EvalType`, i.e. one is `decoded` but another is `raw`, or one is `decoded(Int)` but
-    /// another is `decoded(Real)`.
-    #[inline]
-    pub fn append_by_index<F>(&mut self, other: &mut Self, f: F)
-    where
-        F: FnMut(usize) -> bool,
-    {
-        match self {
-            LazyBatchColumn::Raw(ref mut dest) => match other {
-                LazyBatchColumn::Raw(ref mut src) => crate::util::vec_append_by_index(dest, src, f),
-                _ => panic!(
-                    "Cannot append_by_index decoded LazyBatchColumn into raw LazyBatchColumn"
-                ),
-            },
-            LazyBatchColumn::Decoded(ref mut dest) => match other {
-                LazyBatchColumn::Decoded(ref mut src) => dest.append_by_index(src, f),
-                _ => panic!(
-                    "Cannot append_by_index raw LazyBatchColumn into decoded LazyBatchColumn"
-                ),
-            },
-        }
-    }
-
     /// Returns maximum encoded size.
     pub fn maximum_encoded_size(&self) -> Result<usize> {
         match self {
@@ -321,26 +292,6 @@ impl LazyBatchColumn {
                 Ok(())
             }
             LazyBatchColumn::Decoded(ref v) => v.encode(row_index, output),
-        }
-    }
-
-    /// Creates a new instance with the same schema but no data.
-    pub fn clone_schema(&self, rows_capacity: usize) -> Self {
-        match self {
-            LazyBatchColumn::Raw(_) => LazyBatchColumn::raw_with_capacity(rows_capacity),
-            LazyBatchColumn::Decoded(ref v) => {
-                LazyBatchColumn::decoded_with_capacity_and_tp(rows_capacity, v.eval_type())
-            }
-        }
-    }
-
-    /// Takes first n elements and build a new instance.
-    pub fn take_and_collect(&mut self, n: usize) -> Self {
-        match self {
-            LazyBatchColumn::Raw(ref mut v) => {
-                LazyBatchColumn::Raw(crate::util::vec_take_and_collect(v, n))
-            }
-            LazyBatchColumn::Decoded(ref mut v) => LazyBatchColumn::Decoded(v.take_and_collect(n)),
         }
     }
 }
