@@ -25,7 +25,7 @@ A comment is generally required for:
 
 - File
 - Type
-- Constant 
+- Constant
 - Function
 - Method
 - Variable
@@ -40,13 +40,15 @@ A comment is generally required for:
 ### Format of a good comment (for Rust)
 
 - Non-doc comment
-        
+
+    - Used for inline code comment (for better code explaination when reviewing)
     - Use **//** for a line comment
     - Use **/* … */** for a block comment (used only when needed)
     
 - Doc comment
-        
-    - Use **///** for a line comment
+
+    - Used in module level descriptions (structures, fields, macros, etc.) for command line reference
+    - Use **///** for a line comment 
     - Use **//!** for a block comment
     - Use **rustfmt** to format your code
 
@@ -58,7 +60,7 @@ A comment is generally required for:
     Right:
     
     ```
-    // For more configuration details, see https://example.com/project/tools/config-items.  
+    // For more configuration details, see https://example.com/project/tools/config-items.
     ```
     
     Wrong:
@@ -81,7 +83,7 @@ A comment is generally required for:
     - Use **standard or official capitalization**
         
         - TiKV, TiDB-Binlog, Region, gRPC, RocksDB, GC, k8s, [mydumper](https://github.com/maxbube/mydumper), [Prometheus Pushgateway](https://github.com/prometheus/pushgateway)   (Right)
-        - Tikv, TiDB Binlog, region, grpc, rocksdb, gc, K8S, MyDumper, Prometheus PushGateway   (Wrong)
+        - Tikv, TiDB Binlog, region, grpc, rocksdb, gc, k8S, MyDumper, Prometheus PushGateway   (Wrong)
 
     - Use words and expressions consistently
         
@@ -99,17 +101,6 @@ A comment is generally required for:
     - Use relatively short sentences
 
 - For each comment, capitalize the first letter and end this sentence with a period
-    
-    - If a lower-case identifier comes at the beginning of a sentence, don't capitalize it
-
-    ```
-    // enterGame causes Players to enter the 
-    // video game, which is about a romantic
-    // story in ancient China.
-    func enterGame() os.Error {
-        ...
-    }
-    ```
 
 - When used for description, comments should be **descriptive** rather than **imperative**
 
