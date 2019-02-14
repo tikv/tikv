@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 use kvproto::metapb::*;
 
 use crate::pd::RegionInfo;
-use crate::util::escape;
 use crate::util::rocksdb_util::properties::SizeProperties;
 
 use super::client::*;
@@ -204,8 +203,8 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                         )))
                     }
                     None => {
-                        warn!("epoch not match"; "tag" => %self.tag, "new region" => ?new_regions);
-                        Err(Error::StaleEpoch(new_regions))
+                        warn!("epoch not match"; "tag" => %self.tag, "new region" => ?current_regions);
+                        Err(Error::EpochNotMatch(current_regions))
                     }
                 }
             }

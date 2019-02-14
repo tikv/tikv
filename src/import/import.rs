@@ -333,8 +333,8 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
                         )))
                     }
                     None => {
-                        warn!("epoch not match"; "tag" => %self.tag, "new region" => ?new_regions);
-                        Err(Error::StaleEpoch(new_regions))
+                        warn!("epoch not match"; "tag" => %self.tag, "new region" => ?current_regions);
+                        Err(Error::EpochNotMatch(current_regions))
                     }
                 }
             }
