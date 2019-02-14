@@ -27,16 +27,16 @@ pub mod test_util;
 ///
 /// If your type `val: T` is directly used as a field value, you may use `"key" => %value` syntax
 /// instead.
-pub struct DisplayValue<T: ::std::fmt::Display>(pub T);
+pub struct DisplayValue<T: std::fmt::Display>(pub T);
 
-impl<T: ::std::fmt::Display> ::slog::Value for DisplayValue<T> {
+impl<T: std::fmt::Display> slog::Value for DisplayValue<T> {
     #[inline]
     fn serialize(
         &self,
         _record: &::slog::Record,
-        key: ::slog::Key,
-        serializer: &mut ::slog::Serializer,
-    ) -> ::slog::Result {
+        key: slog::Key,
+        serializer: &mut slog::Serializer,
+    ) -> slog::Result {
         serializer.emit_arguments(key, &format_args!("{}", self.0))
     }
 }
@@ -47,16 +47,16 @@ impl<T: ::std::fmt::Display> ::slog::Value for DisplayValue<T> {
 ///
 /// If your type `val: T` is directly used as a field value, you may use `"key" => ?value` syntax
 /// instead.
-pub struct DebugValue<T: ::std::fmt::Debug>(pub T);
+pub struct DebugValue<T: std::fmt::Debug>(pub T);
 
-impl<T: ::std::fmt::Debug> ::slog::Value for DebugValue<T> {
+impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
     #[inline]
     fn serialize(
         &self,
         _record: &::slog::Record,
-        key: ::slog::Key,
-        serializer: &mut ::slog::Serializer,
-    ) -> ::slog::Result {
+        key: slog::Key,
+        serializer: &mut slog::Serializer,
+    ) -> slog::Result {
         serializer.emit_arguments(key, &format_args!("{:?}", self.0))
     }
 }
@@ -90,15 +90,15 @@ fn test_debug() {
 
 pub struct Key<'a>(pub &'a [u8]);
 
-impl<'a> ::slog::Value for Key<'a> {
+impl<'a> slog::Value for Key<'a> {
     #[inline]
     fn serialize(
         &self,
         _record: &::slog::Record,
-        key: ::slog::Key,
-        serializer: &mut ::slog::Serializer,
-    ) -> ::slog::Result {
-        serializer.emit_arguments(key, &format_args!("{}", ::hex::encode_upper(self.0)))
+        key: slog::Key,
+        serializer: &mut slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_arguments(key, &format_args!("{}", hex::encode_upper(self.0)))
     }
 }
 
@@ -115,20 +115,20 @@ pub mod kvproto {
     pub mod kvrpcpb {
         pub struct KeyRange<'a>(pub &'a crate::lib_kvproto::kvrpcpb::KeyRange);
 
-        impl<'a> ::slog::Value for KeyRange<'a> {
+        impl<'a> slog::Value for KeyRange<'a> {
             #[inline]
             fn serialize(
                 &self,
                 _record: &::slog::Record,
-                key: ::slog::Key,
-                serializer: &mut ::slog::Serializer,
-            ) -> ::slog::Result {
+                key: slog::Key,
+                serializer: &mut slog::Serializer,
+            ) -> slog::Result {
                 serializer.emit_arguments(
                     key,
                     &format_args!(
                         "[{}, {})",
-                        ::hex::encode_upper(self.0.get_start_key()),
-                        ::hex::encode_upper(self.0.get_end_key())
+                        hex::encode_upper(self.0.get_start_key()),
+                        hex::encode_upper(self.0.get_end_key())
                     ),
                 )
             }
@@ -167,20 +167,20 @@ pub mod kvproto {
         pub struct KeyRange<'a>(pub &'a crate::lib_kvproto::coprocessor::KeyRange);
 
         // Similar to `kvrpcpb::KeyRange`. Tests are ignored.
-        impl<'a> ::slog::Value for KeyRange<'a> {
+        impl<'a> slog::Value for KeyRange<'a> {
             #[inline]
             fn serialize(
                 &self,
                 _record: &::slog::Record,
-                key: ::slog::Key,
-                serializer: &mut ::slog::Serializer,
-            ) -> ::slog::Result {
+                key: slog::Key,
+                serializer: &mut slog::Serializer,
+            ) -> slog::Result {
                 serializer.emit_arguments(
                     key,
                     &format_args!(
                         "[{}, {})",
-                        ::hex::encode_upper(self.0.get_start()),
-                        ::hex::encode_upper(self.0.get_end())
+                        hex::encode_upper(self.0.get_start()),
+                        hex::encode_upper(self.0.get_end())
                     ),
                 )
             }
