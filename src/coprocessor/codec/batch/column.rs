@@ -15,10 +15,10 @@ use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 
+use crate::coprocessor::codec::data_type::{Bytes, DateTime, Decimal, Duration, Int, Json, Real};
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{Error, Result};
-use crate::coprocessor::data_type::{Bytes, DateTime, Decimal, Duration, Int, Json, Real};
 use crate::util::codec::{bytes, number};
 
 /// An array of datums in the same data type and is column oriented.
@@ -227,7 +227,7 @@ impl BatchColumn {
     ///
     /// The caller must provide an output buffer which is large enough for holding values.
     pub fn eval_as_mysql_bools(&self, outputs: &mut [bool]) {
-        use crate::coprocessor::data_type::AsMySQLBool;
+        use crate::coprocessor::codec::data_type::AsMySQLBool;
 
         assert!(outputs.len() >= self.len());
         match_self!(ref self, v, {

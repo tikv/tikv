@@ -18,9 +18,9 @@ use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::function::RpnFunction;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalConfig;
-use crate::coprocessor::data_type::{ScalarValue, VectorValue};
 
 /// Global variables needed in evaluating RPN expression.
 #[derive(Debug)]
@@ -273,7 +273,7 @@ impl RpnExpressionNodeVec {
         columns: &LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
     ) {
-        use crate::coprocessor::data_type::AsMySQLBool;
+        use crate::coprocessor::codec::data_type::AsMySQLBool;
 
         assert!(outputs.len() >= rows);
         let values = self.eval(context, rows, columns);

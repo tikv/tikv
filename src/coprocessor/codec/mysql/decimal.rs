@@ -1791,7 +1791,7 @@ impl Display for Decimal {
     }
 }
 
-impl crate::coprocessor::data_type::AsMySQLBool for Decimal {
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
     fn as_mysql_bool(&self) -> bool {
         // FIXME: No unwrap??
