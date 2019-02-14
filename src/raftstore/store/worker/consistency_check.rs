@@ -159,7 +159,7 @@ mod tests {
     use crate::raftstore::store::engine::Snapshot;
     use crate::raftstore::store::{keys, Msg};
     use crate::storage::{CF_DEFAULT, CF_RAFT};
-    use crate::util::rocksdb::new_engine;
+    use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};

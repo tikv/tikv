@@ -332,8 +332,8 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use ::rocksdb::Writable;
     use kvproto::metapb::{Peer, Region};
+    use rocksdb::Writable;
     use tempdir::TempDir;
 
     use crate::raftstore::store::engine::*;
@@ -341,8 +341,8 @@ mod tests {
     use crate::raftstore::store::{Engines, PeerStorage};
     use crate::raftstore::Result;
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
-    use crate::util::rocksdb::compact_files_in_range;
-    use crate::util::{escape, rocksdb, worker};
+    use crate::util::rocksdb_util::{self, compact_files_in_range};
+    use crate::util::{escape, worker};
 
     use super::*;
 
@@ -351,9 +351,11 @@ mod tests {
     fn new_temp_engine(path: &TempDir) -> Engines {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
-            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap()),
             Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
+            ),
+            Arc::new(
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             ),
         )
     }

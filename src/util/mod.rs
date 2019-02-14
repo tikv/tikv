@@ -36,7 +36,7 @@ pub mod io_limiter;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod rocksdb;
+pub mod rocksdb_util;
 pub mod security;
 pub mod sys;
 pub mod threadpool;
@@ -44,9 +44,6 @@ pub mod time;
 pub mod timer;
 pub mod transport;
 pub mod worker;
-
-pub use self::rocksdb::properties;
-pub use self::rocksdb::stats as rocksdb_stats;
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
@@ -461,7 +458,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &panic::PanicInfo| {
         use slog::Drain;
-        if ::slog_global::borrow_global().is_enabled(::slog::Level::Error) {
+        if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
                 None => match info.payload().downcast_ref::<String>() {
@@ -474,7 +471,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             let loc = info
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
-            let bt = ::backtrace::Backtrace::new();
+            let bt = backtrace::Backtrace::new();
             error!(
                 "thread '{}' panicked '{}' at {:?}\n{:?}",
                 name,
@@ -489,7 +486,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = ::log::max_log_level().to_log_level() {
+        if let Some(level) = log::max_log_level().to_log_level() {
             let drainer = logger::term_drainer();
             let _ = logger::init_log(
                 drainer,
@@ -521,14 +518,16 @@ pub fn check_environment_variables() {
 
     if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
         info!(
-            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
-            var
+            "environment variable is present";
+            "GRPC_POLL_STRATEGY" => var
         );
     }
 
     for proxy in &["http_proxy", "https_proxy"] {
         if let Ok(var) = env::var(proxy) {
-            info!("environment variable `{}` is present, `{}`", proxy, var);
+            info!("environment variable is present";
+                *proxy => var
+            );
         }
     }
 }
@@ -703,7 +702,7 @@ mod tests {
 
     #[test]
     fn test_resource_leak() {
-        let res = ::panic_hook::recover_safe(|| {
+        let res = panic_hook::recover_safe(|| {
             let mut v = MustConsumeVec::new("test");
             v.push(2);
         });

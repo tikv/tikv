@@ -23,7 +23,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIden
 use test_raftstore::*;
 use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
 use tikv::storage::CF_RAFT;
-use tikv::util::rocksdb::get_cf_handle;
+use tikv::util::rocksdb_util::get_cf_handle;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);

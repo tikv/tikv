@@ -18,8 +18,8 @@ use rocksdb::{
 };
 
 use crate::util::collections::HashSet;
-use crate::util::properties::RangeProperties;
-use crate::util::rocksdb::engine_metrics::*;
+use crate::util::rocksdb_util::engine_metrics::*;
+use crate::util::rocksdb_util::properties::RangeProperties;
 
 pub struct EventListener {
     db_name: String,
@@ -185,7 +185,7 @@ impl rocksdb::EventListener for CompactionListener {
                     output_props.push(prop);
                 }
             } else {
-                warn!("Decode size properties from sst file failed.");
+                warn!("Decode size properties from sst file failed");
                 return;
             }
         }

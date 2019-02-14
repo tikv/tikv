@@ -28,11 +28,11 @@ use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
 use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
-use crate::util::escape;
-use crate::util::properties::RangeProperties;
-use crate::util::rocksdb::stats::get_range_entries_and_versions;
+use crate::util::rocksdb_util::{
+    self, properties::RangeProperties, stats::get_range_entries_and_versions,
+};
 use crate::util::time::monotonic_raw_now;
-use crate::util::{rocksdb as rocksdb_util, Either};
+use crate::util::{escape, Either};
 
 use super::engine::{IterOption, Iterable};
 use super::peer_storage;
@@ -991,10 +991,11 @@ mod tests {
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
     use crate::util::escape;
-    use crate::util::properties::{
-        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    use crate::util::rocksdb_util::{
+        get_cf_handle, new_engine_opt,
+        properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+        CFOptions,
     };
-    use crate::util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
     use crate::util::time::{monotonic_now, monotonic_raw_now};
 
     use super::*;

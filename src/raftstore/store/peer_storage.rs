@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use ::rocksdb::{Writable, WriteBatch, DB};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -27,13 +26,14 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use rocksdb::{Writable, WriteBatch, DB};
 
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
 use crate::storage::CF_RAFT;
 use crate::util::worker::Scheduler;
-use crate::util::{self, rocksdb};
+use crate::util::{self, rocksdb_util};
 
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
 use super::keys::{self, enc_end_key, enc_start_key};
@@ -348,7 +348,7 @@ impl InvokeContext {
             .set_commit(snapshot_index);
         snapshot_raft_state.set_last_index(snapshot_index);
 
-        let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::snapshot_raft_state_key(self.region_id),
@@ -359,7 +359,7 @@ impl InvokeContext {
 
     #[inline]
     pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
-        let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::apply_state_key(self.region_id),
@@ -1265,7 +1265,7 @@ pub fn clear_meta(
     raft_state: &RaftLocalState,
 ) -> Result<()> {
     let t = Instant::now();
-    let handle = rocksdb::get_cf_handle(&engines.kv, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     kv_wb.delete_cf(handle, &keys::region_state_key(region_id))?;
     kv_wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
 
@@ -1404,7 +1404,7 @@ pub fn write_initial_apply_state<T: Mutable>(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
-    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
     Ok(())
 }
@@ -1424,7 +1424,7 @@ pub fn write_peer_state<T: Mutable>(
         region_state.set_merge_state(state);
     }
 
-    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     debug!(
         "[region {}] writing merge state: {:?}",
         region_id, region_state
@@ -1466,14 +1466,14 @@ mod tests {
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::storage::{ALL_CFS, CF_DEFAULT};
-    use crate::util::rocksdb::new_engine;
+    use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::{Scheduler, Worker};
-    use ::rocksdb::WriteBatch;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use protobuf;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
+    use rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;
@@ -2167,7 +2167,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.cancel_applying_snap());
+        let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
         assert!(res.is_err());
     }
 
@@ -2216,7 +2216,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.check_applying_snap());
+        let res = panic_hook::recover_safe(|| s.check_applying_snap());
         assert!(res.is_err());
     }
 

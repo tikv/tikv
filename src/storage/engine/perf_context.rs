@@ -29,13 +29,13 @@ pub struct PerfStatisticsFields {
 #[derive(Debug, Clone, Copy)]
 pub struct PerfStatisticsInstant(pub PerfStatisticsFields);
 
-impl ::slog::KV for PerfStatisticsInstant {
+impl slog::KV for PerfStatisticsInstant {
     fn serialize(
         &self,
         record: &::slog::Record,
-        serializer: &mut ::slog::Serializer,
-    ) -> ::slog::Result {
-        ::slog::KV::serialize(&self.0, record, serializer)
+        serializer: &mut slog::Serializer,
+    ) -> slog::Result {
+        slog::KV::serialize(&self.0, record, serializer)
     }
 }
 
@@ -78,13 +78,13 @@ impl DerefMut for PerfStatisticsInstant {
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
 pub struct PerfStatisticsDelta(pub PerfStatisticsFields);
 
-impl ::slog::KV for PerfStatisticsDelta {
+impl slog::KV for PerfStatisticsDelta {
     fn serialize(
         &self,
         record: &::slog::Record,
-        serializer: &mut ::slog::Serializer,
-    ) -> ::slog::Result {
-        ::slog::KV::serialize(&self.0, record, serializer)
+        serializer: &mut slog::Serializer,
+    ) -> slog::Result {
+        slog::KV::serialize(&self.0, record, serializer)
     }
 }
 

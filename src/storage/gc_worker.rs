@@ -37,7 +37,7 @@ use crate::raftstore::store::msg::{Msg as RaftStoreMsg, StoreMsg};
 use crate::raftstore::store::util::{delete_all_in_range_cf, find_peer};
 use crate::raftstore::store::SeekRegionResult;
 use crate::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
-use crate::util::rocksdb::get_cf_handle;
+use crate::util::rocksdb_util::get_cf_handle;
 use crate::util::time::{duration_to_sec, SlowTimer};
 use crate::util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 use log_wrappers::DisplayValue;
@@ -539,7 +539,7 @@ enum GCManagerError {
     Stopped,
 }
 
-type GCManagerResult<T> = ::std::result::Result<T, GCManagerError>;
+type GCManagerResult<T> = std::result::Result<T, GCManagerError>;
 
 /// Used to check if `GCManager` should be stopped.
 ///
