@@ -46,7 +46,7 @@ pub fn init_log<D>(
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
-    <D as Drain>::Err: ::std::fmt::Debug,
+    <D as Drain>::Err: std::fmt::Debug,
 {
     let logger = if use_async {
         let drain = Async::new(drain.fuse())
@@ -62,9 +62,9 @@ where
         slog::Logger::root(drain, slog_o!())
     };
 
-    ::slog_global::set_global(logger);
+    slog_global::set_global(logger);
     if init_stdlog {
-        ::slog_global::redirect_std_log(Some(level))?;
+        slog_global::redirect_std_log(Some(level))?;
         grpc::redirect_log();
     }
 
@@ -367,9 +367,9 @@ mod tests {
         );
 
         slog_warn!(logger, "Type";
-            "Counter" => ::std::f64::NAN,
-            "Score" => ::std::f64::INFINITY,
-            "Other" => ::std::f64::NEG_INFINITY
+            "Counter" => std::f64::NAN,
+            "Score" => std::f64::INFINITY,
+            "Other" => std::f64::NEG_INFINITY
         );
 
         let none: Option<u8> = None;

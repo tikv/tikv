@@ -40,7 +40,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
 
     let raw_key = key.to_raw()?;
 
-    if ts == ::std::u64::MAX && raw_key == lock.primary {
+    if ts == std::u64::MAX && raw_key == lock.primary {
         // When `ts == u64::MAX` (which means to get latest committed version for
         // primary key), and current key is the primary key, we return the latest
         // committed version.
