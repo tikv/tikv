@@ -190,7 +190,7 @@ impl Tracker {
         }
 
         let total_exec_metrics =
-            ::std::mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
+            std::mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
         let mut thread_ctx = self.ctxd.as_ref().unwrap().current_thread_context_mut();
         thread_ctx
             .basic_local_metrics

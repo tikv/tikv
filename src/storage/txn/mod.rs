@@ -38,7 +38,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        ProtoBuf(err: ::protobuf::error::ProtobufError) {
+        ProtoBuf(err: protobuf::error::ProtobufError) {
             from()
             cause(err)
             description(err.description())
@@ -108,4 +108,4 @@ impl Error {
     }
 }
 
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
