@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -232,6 +232,16 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
 
         let mut data = LazyBatchColumnVec::from(columns);
         let is_drained = self.fill_batch_rows(expect_rows, &mut data);
+
+        // TODO
+        // After calling `fill_batch_rows`, columns' length may not be identical in some special
+        // cases, for example, meet decoding errors when decoding the last column. We need to trim
+        // extra elements.
+
+        // TODO
+        // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
+        // these rows. After that, if we only consumes some of the rows (TopN / Limit), we should
+        // ignore this error.
 
         match &is_drained {
             Err(_) => self.is_ended = true,
