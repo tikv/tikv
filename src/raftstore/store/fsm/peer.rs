@@ -2514,13 +2514,9 @@ pub fn maybe_destroy_source(
     region_epoch: RegionEpoch,
 ) -> bool {
     if let Some(merge_targets) = meta.pending_merge_targets.get(&target_region_id) {
-        if let Some(target_epoch) = merge_targets.get(&source_region_id).or_else(|| {
-            meta.regions
-                .get(&source_region_id)
-                .map(|r| r.get_region_epoch())
-        }) {
+        if let Some(target_epoch) = merge_targets.get(&source_region_id) {
             info!(
-                "{} checking source {} epoch: {:?}, merge target epoch: {:?}",
+                "[region {}] checking source {} epoch: {:?}, merge target epoch: {:?}",
                 target_region_id, source_region_id, region_epoch, target_epoch,
             );
             // The target peer will move on, namely, it will apply a snapshot generated after merge,
