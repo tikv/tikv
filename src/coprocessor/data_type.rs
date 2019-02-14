@@ -110,17 +110,6 @@ pub enum ScalarValue {
     Json(Option<Json>),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum ScalarValueRef<'a> {
-    Int(&'a Option<Int>),
-    Real(&'a Option<Real>),
-    Decimal(&'a Option<Decimal>),
-    Bytes(&'a Option<Bytes>),
-    DateTime(&'a Option<DateTime>),
-    Duration(&'a Option<Duration>),
-    Json(&'a Option<Json>),
-}
-
 impl ScalarValue {
     #[inline]
     pub fn eval_type(&self) -> EvalType {
@@ -132,19 +121,6 @@ impl ScalarValue {
             ScalarValue::DateTime(_) => EvalType::DateTime,
             ScalarValue::Duration(_) => EvalType::Duration,
             ScalarValue::Json(_) => EvalType::Json,
-        }
-    }
-
-    #[inline]
-    pub fn borrow(&self) -> ScalarValueRef {
-        match self {
-            ScalarValue::Int(ref v) => ScalarValueRef::Int(v),
-            ScalarValue::Real(ref v) => ScalarValueRef::Real(v),
-            ScalarValue::Decimal(ref v) => ScalarValueRef::Decimal(v),
-            ScalarValue::Bytes(ref v) => ScalarValueRef::Bytes(v),
-            ScalarValue::DateTime(ref v) => ScalarValueRef::DateTime(v),
-            ScalarValue::Duration(ref v) => ScalarValueRef::Duration(v),
-            ScalarValue::Json(ref v) => ScalarValueRef::Json(v),
         }
     }
 }
@@ -160,36 +136,6 @@ impl AsBool for ScalarValue {
             ScalarValue::DateTime(ref v) => v.as_bool(),
             ScalarValue::Duration(ref v) => v.as_bool(),
             ScalarValue::Json(ref v) => v.as_bool(),
-        }
-    }
-}
-
-impl<'a> AsBool for ScalarValueRef<'a> {
-    #[inline]
-    fn as_bool(&self) -> bool {
-        match self {
-            ScalarValueRef::Int(ref v) => v.as_bool(),
-            ScalarValueRef::Real(ref v) => v.as_bool(),
-            ScalarValueRef::Decimal(ref v) => v.as_bool(),
-            ScalarValueRef::Bytes(ref v) => v.as_bool(),
-            ScalarValueRef::DateTime(ref v) => v.as_bool(),
-            ScalarValueRef::Duration(ref v) => v.as_bool(),
-            ScalarValueRef::Json(ref v) => v.as_bool(),
-        }
-    }
-}
-
-impl<'a> ScalarValueRef<'a> {
-    #[inline]
-    pub fn eval_type(&self) -> EvalType {
-        match self {
-            ScalarValueRef::Int(_) => EvalType::Int,
-            ScalarValueRef::Real(_) => EvalType::Real,
-            ScalarValueRef::Decimal(_) => EvalType::Decimal,
-            ScalarValueRef::Bytes(_) => EvalType::Bytes,
-            ScalarValueRef::DateTime(_) => EvalType::DateTime,
-            ScalarValueRef::Duration(_) => EvalType::Duration,
-            ScalarValueRef::Json(_) => EvalType::Json,
         }
     }
 }
@@ -246,34 +192,8 @@ impl_scalar_value! { DateTime, as_date_time, as_mut_date_time }
 impl_scalar_value! { Duration, as_duration, as_mut_duration }
 impl_scalar_value! { Json, as_json, as_mut_json }
 
-macro_rules! impl_scalar_value_ref {
-    ($ty:tt) => {
-        impl<'a> Into<&'a Option<$ty>> for ScalarValueRef<'a> {
-            #[inline]
-            fn into(self) -> &'a Option<$ty> {
-                match self {
-                    ScalarValueRef::$ty(ref v) => v,
-                    other => panic!(
-                        "Cannot cast {} scalar value ref into {}",
-                        other.eval_type(),
-                        stringify!($tt),
-                    ),
-                }
-            }
-        }
-    };
-}
-
-impl_scalar_value_ref! { Int }
-impl_scalar_value_ref! { Real }
-impl_scalar_value_ref! { Decimal }
-impl_scalar_value_ref! { Bytes }
-impl_scalar_value_ref! { DateTime }
-impl_scalar_value_ref! { Duration }
-impl_scalar_value_ref! { Json }
-
 pub trait Evaluable: Clone {
-    fn coerce_scalar_value_ref_as_slice(v: ScalarValueRef) -> &Self;
+    fn coerce_scalar_value_ref_as_slice(v: &ScalarValue) -> &Self;
 
     fn coerce_vector_value_ref_as_slice(v: &VectorValue) -> &[Self];
 
@@ -284,8 +204,8 @@ macro_rules! impl_evaluable_type {
     ($ty:tt) => {
         impl Evaluable for Option<$ty> {
             #[inline]
-            fn coerce_scalar_value_ref_as_slice(v: ScalarValueRef) -> &Self {
-                v.into()
+            fn coerce_scalar_value_ref_as_slice(v: &ScalarValue) -> &Self {
+                v.as_ref()
             }
 
             #[inline]

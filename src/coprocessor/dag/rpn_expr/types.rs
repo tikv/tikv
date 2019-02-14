@@ -20,7 +20,7 @@ use super::function::RpnFunction;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalConfig;
-use crate::coprocessor::data_type::{ScalarValue, ScalarValueRef, VectorValue};
+use crate::coprocessor::data_type::{ScalarValue, VectorValue};
 
 /// Global variables needed in evaluating RPN expression.
 #[derive(Debug)]
@@ -70,7 +70,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
 pub enum RpnStackNode<'a> {
     /// Represents a scalar value. Comes from a constant node in expression list.
     Scalar {
-        value: ScalarValueRef<'a>,
+        value: &'a ScalarValue,
         field_type: &'a FieldType,
     },
 
@@ -93,7 +93,7 @@ impl<'a> RpnStackNode<'a> {
     // TODO: Maybe returning Option<T> is better.
 
     #[inline]
-    pub fn scalar_value(&self) -> ScalarValueRef {
+    pub fn scalar_value(&self) -> &ScalarValue {
         match self {
             RpnStackNode::Scalar { ref value, .. } => *value,
             RpnStackNode::Vector { .. } => panic!(),
@@ -226,7 +226,7 @@ impl RpnExpressionNodeVec {
                     ref field_type,
                 } => {
                     stack.push(RpnStackNode::Scalar {
-                        value: value.borrow(),
+                        value: &value,
                         field_type,
                     });
                 }
