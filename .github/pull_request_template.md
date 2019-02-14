@@ -19,7 +19,8 @@ The currently defined types are listed below, please pick one of the types for t
 - New feature (non-breaking change which adds functionality)
 - Improvement (non-breaking change which is an improvement to an existing feature)
 - Bug fix (non-breaking change which fixes an issue)
-- Breaking change (fix or feature that would cause existing functionality to not work as expected)
+- Engineering (engineering change which doesn't change any feature or fix any issue)
+- Misc (other changes)
 
 ## How has this PR been tested? (mandatory)
 
