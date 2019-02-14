@@ -1791,6 +1791,14 @@ impl Display for Decimal {
     }
 }
 
+impl crate::coprocessor::data_type::AsMySQLBool for Decimal {
+    #[inline]
+    fn as_mysql_bool(&self) -> bool {
+        // FIXME: No unwrap??
+        self.as_f64().unwrap().round() != 0f64
+    }
+}
+
 macro_rules! write_u8 {
     ($writer:ident, $b:expr, $written:ident) => {{
         let mut b = $b;

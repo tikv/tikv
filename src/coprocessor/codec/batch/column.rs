@@ -223,13 +223,17 @@ impl BatchColumn {
         }
     }
 
-    pub fn as_bools(&self, outputs: &mut [bool]) {
-        use crate::coprocessor::data_type::AsBool;
+    /// Evaluates values into MySQL logic values.
+    ///
+    /// The caller must provide an output buffer which is large enough for holding values.
+    pub fn eval_as_mysql_bools(&self, outputs: &mut [bool]) {
+        use crate::coprocessor::data_type::AsMySQLBool;
 
         assert!(outputs.len() >= self.len());
         match_self!(ref self, v, {
-            for i in 0..self.len() {
-                outputs[i] = v[i].as_bool();
+            let l = self.len();
+            for i in 0..l {
+                outputs[i] = v[i].as_mysql_bool();
             }
         });
     }

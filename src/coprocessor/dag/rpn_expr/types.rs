@@ -266,34 +266,29 @@ impl RpnExpressionNodeVec {
     }
 
     /// Useful in selection executor
-    pub fn eval_as_bools(
+    pub fn eval_as_mysql_bools(
         &self,
         context: &mut RpnExpressionEvalContext,
         rows: usize,
         columns: &LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
     ) {
-        use crate::coprocessor::data_type::AsBool;
+        use crate::coprocessor::data_type::AsMySQLBool;
 
         assert!(outputs.len() >= rows);
         let values = self.eval(context, rows, columns);
         match values {
             RpnStackNode::Scalar { value, .. } => {
-                let b = value.as_bool();
+                let b = value.as_mysql_bool();
                 for i in 0..rows {
                     outputs[i] = b;
                 }
             }
-            RpnStackNode::Vector { value, .. } => match value {
-                RpnStackNodeVectorValue::Owned(vec) => {
-                    assert_eq!(vec.len(), rows);
-                    vec.as_bools(outputs);
-                }
-                RpnStackNodeVectorValue::Ref(vec) => {
-                    assert_eq!(vec.len(), rows);
-                    vec.as_bools(outputs);
-                }
-            },
+            RpnStackNode::Vector { value, .. } => {
+                let vec_ref = value.borrow();
+                assert_eq!(vec_ref.len(), rows);
+                vec_ref.eval_as_mysql_bools(outputs);
+            }
         }
     }
 

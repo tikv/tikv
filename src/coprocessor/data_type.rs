@@ -21,81 +21,43 @@ pub type Bytes = Vec<u8>;
 pub use crate::coprocessor::codec::batch::BatchColumn as VectorValue;
 pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
-pub trait AsBool {
-    fn as_bool(&self) -> bool;
+/// A trait of evaluating current type into a MySQL logic value, represented by Rust's `bool` type.
+pub trait AsMySQLBool {
+    fn as_mysql_bool(&self) -> bool;
 }
 
-impl AsBool for Option<Int> {
+impl AsMySQLBool for Int {
     #[inline]
-    fn as_bool(&self) -> bool {
-        match self {
-            None => false,
-            Some(ref v) => *v != 0,
-        }
+    fn as_mysql_bool(&self) -> bool {
+        *self != 0
     }
 }
 
-impl AsBool for Option<Real> {
+impl AsMySQLBool for Real {
     #[inline]
-    fn as_bool(&self) -> bool {
-        match self {
-            None => false,
-            Some(ref v) => v.round() != 0f64,
-        }
+    fn as_mysql_bool(&self) -> bool {
+        self.round() != 0f64
     }
 }
 
-impl AsBool for Option<Decimal> {
+impl AsMySQLBool for Bytes {
     #[inline]
-    fn as_bool(&self) -> bool {
-        match self {
-            None => false,
-            // FIXME: No unwrap??
-            Some(ref v) => v.as_f64().unwrap().round() != 0f64,
-        }
+    fn as_mysql_bool(&self) -> bool {
+        // FIXME: No unwrap?? No without_context??
+        !self.is_empty()
+            && crate::coprocessor::codec::convert::bytes_to_int_without_context(self).unwrap() != 0
     }
 }
 
-impl AsBool for Option<Bytes> {
-    #[inline]
-    fn as_bool(&self) -> bool {
+impl<T> AsMySQLBool for Option<T>
+where
+    T: AsMySQLBool,
+{
+    fn as_mysql_bool(&self) -> bool {
         match self {
             None => false,
-            // FIXME: No unwrap?? No without_context??
-            Some(ref v) => {
-                !v.is_empty()
-                    && crate::coprocessor::codec::convert::bytes_to_int_without_context(v).unwrap()
-                        != 0
-            }
+            Some(ref v) => v.as_mysql_bool(),
         }
-    }
-}
-
-impl AsBool for Option<DateTime> {
-    #[inline]
-    fn as_bool(&self) -> bool {
-        match self {
-            None => false,
-            Some(ref v) => !v.is_zero(),
-        }
-    }
-}
-
-impl AsBool for Option<Duration> {
-    #[inline]
-    fn as_bool(&self) -> bool {
-        match self {
-            None => false,
-            Some(ref v) => !v.is_zero(),
-        }
-    }
-}
-
-impl AsBool for Option<Json> {
-    #[inline]
-    fn as_bool(&self) -> bool {
-        // FIXME: Is it correct?
-        false
     }
 }
 
@@ -125,17 +87,17 @@ impl ScalarValue {
     }
 }
 
-impl AsBool for ScalarValue {
+impl AsMySQLBool for ScalarValue {
     #[inline]
-    fn as_bool(&self) -> bool {
+    fn as_mysql_bool(&self) -> bool {
         match self {
-            ScalarValue::Int(ref v) => v.as_bool(),
-            ScalarValue::Real(ref v) => v.as_bool(),
-            ScalarValue::Decimal(ref v) => v.as_bool(),
-            ScalarValue::Bytes(ref v) => v.as_bool(),
-            ScalarValue::DateTime(ref v) => v.as_bool(),
-            ScalarValue::Duration(ref v) => v.as_bool(),
-            ScalarValue::Json(ref v) => v.as_bool(),
+            ScalarValue::Int(ref v) => v.as_mysql_bool(),
+            ScalarValue::Real(ref v) => v.as_mysql_bool(),
+            ScalarValue::Decimal(ref v) => v.as_mysql_bool(),
+            ScalarValue::Bytes(ref v) => v.as_mysql_bool(),
+            ScalarValue::DateTime(ref v) => v.as_mysql_bool(),
+            ScalarValue::Duration(ref v) => v.as_mysql_bool(),
+            ScalarValue::Json(ref v) => v.as_mysql_bool(),
         }
     }
 }

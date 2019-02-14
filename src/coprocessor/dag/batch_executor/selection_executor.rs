@@ -85,7 +85,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         let mut head_retain_map = vec![false; rows_len];
 
         for condition in &self.conditions {
-            condition.eval_as_bools(
+            condition.eval_as_mysql_bools(
                 &mut self.eval_context,
                 rows_len,
                 &result.data,

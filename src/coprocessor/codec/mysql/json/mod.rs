@@ -95,6 +95,14 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     Ok(Json::Object(map))
 }
 
+impl crate::coprocessor::data_type::AsMySQLBool for Json {
+    #[inline]
+    fn as_mysql_bool(&self) -> bool {
+        // FIXME: Is it correct?
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
