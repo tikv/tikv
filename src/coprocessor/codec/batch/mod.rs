@@ -15,6 +15,6 @@ mod column;
 mod lazy_column;
 mod lazy_column_vec;
 
-pub use self::column::{BatchColumn, BatchColumnRef};
+pub use self::column::BatchColumn;
 pub use self::lazy_column::LazyBatchColumn;
 pub use self::lazy_column_vec::LazyBatchColumnVec;

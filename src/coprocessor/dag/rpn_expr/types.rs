@@ -20,7 +20,7 @@ use super::function::RpnFunction;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalConfig;
-use crate::coprocessor::data_type::{ScalarValue, ScalarValueRef, VectorValue, VectorValueRef};
+use crate::coprocessor::data_type::{ScalarValue, ScalarValueRef, VectorValue};
 
 /// Global variables needed in evaluating RPN expression.
 #[derive(Debug)]
@@ -53,14 +53,14 @@ pub enum RpnStackNodeVectorValue<'a> {
     // There can be frequent stack push & pops, so we wrap this field in a `Box` to reduce move
     // cost.
     Owned(Box<VectorValue>),
-    Ref(VectorValueRef<'a>),
+    Ref(&'a VectorValue),
 }
 
 impl<'a> RpnStackNodeVectorValue<'a> {
     #[inline]
-    pub fn borrow(&'a self) -> VectorValueRef<'a> {
+    pub fn borrow(&'a self) -> &'a VectorValue {
         match self {
-            RpnStackNodeVectorValue::Owned(ref value) => value.borrow(),
+            RpnStackNodeVectorValue::Owned(ref value) => &value,
             RpnStackNodeVectorValue::Ref(ref value) => *value,
         }
     }
@@ -101,7 +101,7 @@ impl<'a> RpnStackNode<'a> {
     }
 
     #[inline]
-    pub fn vector_value(&self) -> VectorValueRef {
+    pub fn vector_value(&self) -> &VectorValue {
         match self {
             RpnStackNode::Scalar { .. } => panic!(),
             RpnStackNode::Vector { ref value, .. } => value.borrow(),
@@ -236,7 +236,7 @@ impl RpnExpressionNodeVec {
                 } => {
                     let decoded_column = columns[*offset].decoded();
                     stack.push(RpnStackNode::Vector {
-                        value: RpnStackNodeVectorValue::Ref(decoded_column.borrow()),
+                        value: RpnStackNodeVectorValue::Ref(&decoded_column),
                         field_type,
                     });
                 }
@@ -540,7 +540,7 @@ mod tests {
         let ret = rpn_nodes.eval(&mut ctx, cols.rows_len(), &cols);
         assert_eq!(ret.field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(
-            ret.vector_value().into_int_slice(),
+            ret.vector_value().as_int_slice(),
             &[
                 Some(0),
                 None,

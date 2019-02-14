@@ -17,7 +17,7 @@ use tipb::expression::{FieldType, ScalarFuncSig};
 
 use super::types::{RpnExpressionEvalContext, RpnStackNode};
 use super::{impl_compare, impl_dummy, impl_op};
-use crate::coprocessor::data_type::{Evaluable, ScalarValueRef, VectorValue, VectorValueRef};
+use crate::coprocessor::data_type::{Evaluable, ScalarValueRef, VectorValue};
 use crate::coprocessor::Error;
 
 // TODO: Merge into ScalarFuncSig
@@ -253,7 +253,7 @@ impl RpnFunction {
         lhs_field_type: &FieldType,
         lhs: ScalarValueRef,
         rhs_field_type: &FieldType,
-        rhs: VectorValueRef,
+        rhs: &VectorValue,
     ) -> VectorValue
     where
         Arg0: Evaluable,
@@ -277,7 +277,7 @@ impl RpnFunction {
         mut f: F,
         context: &mut RpnExpressionEvalContext,
         lhs_field_type: &FieldType,
-        lhs: VectorValueRef,
+        lhs: &VectorValue,
         rhs_field_type: &FieldType,
         rhs: ScalarValueRef,
     ) -> VectorValue
@@ -303,9 +303,9 @@ impl RpnFunction {
         mut f: F,
         context: &mut RpnExpressionEvalContext,
         lhs_field_type: &FieldType,
-        lhs: VectorValueRef,
+        lhs: &VectorValue,
         rhs_field_type: &FieldType,
-        rhs: VectorValueRef,
+        rhs: &VectorValue,
     ) -> VectorValue
     where
         Arg0: Evaluable,

@@ -18,9 +18,7 @@ use cop_datatype::EvalType;
 pub type Int = i64;
 pub type Real = f64;
 pub type Bytes = Vec<u8>;
-pub use crate::coprocessor::codec::batch::{
-    BatchColumn as VectorValue, BatchColumnRef as VectorValueRef,
-};
+pub use crate::coprocessor::codec::batch::BatchColumn as VectorValue;
 pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 pub trait AsBool {
@@ -277,7 +275,7 @@ impl_scalar_value_ref! { Json }
 pub trait Evaluable: Clone {
     fn coerce_scalar_value_ref_as_slice(v: ScalarValueRef) -> &Self;
 
-    fn coerce_vector_value_ref_as_slice(v: VectorValueRef) -> &[Self];
+    fn coerce_vector_value_ref_as_slice(v: &VectorValue) -> &[Self];
 
     fn coerce_to_vector_value(vec: Vec<Self>) -> VectorValue;
 }
@@ -291,8 +289,8 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            fn coerce_vector_value_ref_as_slice(v: VectorValueRef) -> &[Self] {
-                v.into()
+            fn coerce_vector_value_ref_as_slice(v: &VectorValue) -> &[Self] {
+                v.as_ref()
             }
 
             #[inline]
