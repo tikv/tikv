@@ -35,7 +35,7 @@ impl fmt::Display for EvalType {
     }
 }
 
-impl ::std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
+impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
     type Error = crate::DataTypeError;
 
     fn try_from(tp: crate::FieldTypeTp) -> Result<Self, crate::DataTypeError> {
