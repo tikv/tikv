@@ -722,22 +722,7 @@ impl Snap {
         for cf in SNAPSHOT_CFS {
             self.switch_to_cf_file(cf)?;
             let (cf_key_count, cf_size) = if plain_file_used(cf) {
-                let (kv_count, cf_size) = {
-                    // If the relative files are deleted after `Snap::new` and
-                    // `init_for_building`, the file could be None.
-                    let file = match self.cf_files[self.cf_index].file.as_mut() {
-                        Some(f) => f,
-                        None => {
-                            let e = box_err!("cf_file is none for cf {}", cf);
-                            return Err(RaftStoreError::Snapshot(e));
-                        }
-                    };
-                    build_plain_cf_file(file, snap, cf, &begin_key, &end_key)?
-                };
-                // Also update kv count for plain file.
-                let cf_file = &mut self.cf_files[self.cf_index];
-                cf_file.kv_count = kv_count as u64;
-                (kv_count, cf_size)
+                self.build_plain_cf_file(snap, cf, &begin_key, &end_key)?
             } else {
                 let mut key_count = 0;
                 let mut size = 0;
@@ -788,27 +773,44 @@ impl Snap {
 
         Ok(())
     }
-}
 
-pub fn build_plain_cf_file<E: BytesEncoder>(
-    encoder: &mut E,
-    snap: &DbSnapshot,
-    cf: &str,
-    start_key: &[u8],
-    end_key: &[u8],
-) -> RaftStoreResult<(usize, usize)> {
-    let mut cf_key_count = 0;
-    let mut cf_size = 0;
-    snap.scan_cf(cf, start_key, end_key, false, |key, value| {
-        cf_key_count += 1;
-        cf_size += key.len() + value.len();
-        encoder.encode_compact_bytes(key)?;
-        encoder.encode_compact_bytes(value)?;
-        Ok(true)
-    })?;
-    // use an empty byte array to indicate that cf reaches an end.
-    box_try!(encoder.encode_compact_bytes(b""));
-    Ok((cf_key_count, cf_size))
+    fn build_plain_cf_file(
+        &mut self,
+        snap: &DbSnapshot,
+        cf: &str,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> RaftStoreResult<(usize, usize)> {
+        let mut cf_key_count = 0;
+        let mut cf_size = 0;
+        {
+            // If the relative files are deleted after `Snap::new` and
+            // `init_for_building`, the file could be None.
+            let file = match self.cf_files[self.cf_index].file.as_mut() {
+                Some(f) => f,
+                None => {
+                    let e = box_err!("cf_file is none for cf {}", cf);
+                    return Err(RaftStoreError::Snapshot(e));
+                }
+            };
+            snap.scan_cf(cf, start_key, end_key, false, |key, value| {
+                cf_key_count += 1;
+                cf_size += key.len() + value.len();
+                file.encode_compact_bytes(key)?;
+                file.encode_compact_bytes(value)?;
+                Ok(true)
+            })?;
+            if cf_key_count > 0 {
+                // use an empty byte array to indicate that cf reaches an end.
+                box_try!(file.encode_compact_bytes(b""));
+            }
+        }
+
+        // update kv count for plain file
+        let cf_file = &mut self.cf_files[self.cf_index];
+        cf_file.kv_count = cf_key_count as u64;
+        Ok((cf_key_count, cf_size))
+    }
 }
 
 fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
