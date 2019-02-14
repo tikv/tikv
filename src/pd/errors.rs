@@ -17,7 +17,7 @@ use std::result;
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Io(err: ::std::io::Error) {
+        Io(err: std::io::Error) {
             from()
             cause(err)
             description(err.description())

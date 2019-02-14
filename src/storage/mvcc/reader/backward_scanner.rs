@@ -164,7 +164,7 @@ pub struct BackwardScanner<S: Snapshot> {
 impl<S: Snapshot> BackwardScanner<S> {
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
-        ::std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
     /// Get the next key-value pair, in backward order.

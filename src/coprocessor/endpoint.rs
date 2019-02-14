@@ -1065,7 +1065,7 @@ mod tests {
 
         let cop = Endpoint::new(&config, engine, read_pool);
 
-        let (tx, rx) = ::std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
 
         // A request that requests execution details.
         let mut req_with_exec_detail = ReqContext::default_for_test();
