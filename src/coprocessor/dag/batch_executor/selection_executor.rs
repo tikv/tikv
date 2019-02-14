@@ -19,7 +19,7 @@ use super::interface::*;
 use crate::coprocessor::dag::executor::ExprColumnRefVisitor;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpressionEvalContext, RpnExpressionNodeVec};
-use crate::coprocessor::*;
+use crate::coprocessor::Result;
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: ExecutorContext,

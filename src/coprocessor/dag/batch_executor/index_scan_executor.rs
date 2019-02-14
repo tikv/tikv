@@ -14,48 +14,26 @@
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
 
-use crate::storage::{Key, Store};
+use crate::storage::Store;
 
 use super::interface::*;
-use super::ranges_consumer::{ConsumerResult, RangesConsumer};
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use crate::coprocessor::codec::table;
 use crate::coprocessor::dag::Scanner;
-use crate::coprocessor::*;
+use crate::coprocessor::{Error, Result};
 
-// TODO: Merge with BatchTableScanExecutor
-
-pub struct BatchIndexScanExecutor<S: Store> {
-    // Please refer to `BatchTableScanExecutor` for field descriptions.
-    context: ExecutorContext,
-    store: S,
-    desc: bool,
-    ranges: RangesConsumer,
-    scanner: Option<Scanner<S>>,
-
-    /// Number of interested columns (exclude PK handle column).
-    columns_len_without_handle: usize,
-
-    /// Whether PK handle column is interested. Handle will be always placed in the last column.
-    decode_handle: bool,
-
-    is_ended: bool,
-}
+pub struct BatchIndexScanExecutor<S: Store>(
+    super::scan_executor::ScanExecutor<S, IndexScanExecutorImpl>,
+);
 
 impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
         store: S,
         context: ExecutorContext,
-        mut key_ranges: Vec<KeyRange>,
+        key_ranges: Vec<KeyRange>,
         desc: bool,
         unique: bool,
         // TODO: this does not mean that it is a unique index scan. What does it mean?
     ) -> Result<Self> {
-        table::check_table_ranges(&key_ranges)?;
-        if desc {
-            key_ranges.reverse();
-        }
-
         let mut columns_len_without_handle = 0;
         let mut decode_handle = false;
         for column_info in &context.columns_info {
@@ -66,154 +44,52 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             }
         }
 
-        Ok(Self {
+        let imp = IndexScanExecutorImpl {
             context,
-            store,
-            desc,
-            ranges: RangesConsumer::new(key_ranges, unique),
-            scanner: None,
-
             columns_len_without_handle,
             decode_handle,
-            is_ended: false,
-        })
-    }
-
-    /// Creates or resets the range of inner scanner.
-    #[inline]
-    fn reset_range(&mut self, range: KeyRange) -> Result<()> {
-        use crate::coprocessor::dag::ScanOn;
-
-        self.scanner = Some(Scanner::new(
-            &self.store,
-            ScanOn::Index,
-            self.desc,
-            false,
-            range,
-        )?);
-        Ok(())
-    }
-
-    /// Scans next row from the scanner.
-    #[inline]
-    fn scan_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        // TODO: Key and value doesn't have to be owned
-        if let Some(scanner) = self.scanner.as_mut() {
-            Ok(scanner.next_row()?)
-        } else {
-            // `self.scanner` should never be `None` when this function is being called.
-            unreachable!()
-        }
-    }
-
-    /// Get one row from the store.
-    #[inline]
-    fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut statistics = crate::storage::Statistics::default();
-        // TODO: Key and value doesn't have to be owned
-        let key = range.take_start();
-        let value = self.store.get(&Key::from_raw(&key), &mut statistics)?;
-        Ok(value.map(move |v| (key, v)))
-    }
-
-    fn fill_batch_rows(
-        &mut self,
-        expect_rows: usize,
-        columns: &mut LazyBatchColumnVec,
-    ) -> Result<bool> {
-        use crate::coprocessor::codec::datum;
-        use crate::util::codec::number;
-        use byteorder::{BigEndian, ReadBytesExt};
-
-        assert!(expect_rows > 0);
-
-        let mut is_drained = false;
-
-        loop {
-            let range = self.ranges.next();
-            let some_row = match range {
-                ConsumerResult::NewPointRange(r) => self.point_get(r)?,
-                ConsumerResult::NewNonPointRange(r) => {
-                    self.reset_range(r)?;
-                    self.scan_next()?
-                }
-                ConsumerResult::Continue => self.scan_next()?,
-                ConsumerResult::Drained => {
-                    is_drained = true;
-                    break;
-                }
-            };
-            if let Some((key, value)) = some_row {
-                // The payload part of the key
-                let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
-
-                for i in 0..self.columns_len_without_handle {
-                    let (val, remaining) = datum::split_datum(key_payload, false)?;
-                    columns[i].push_raw(val);
-                    key_payload = remaining;
-                }
-
-                if self.decode_handle {
-                    // For normal index, it is placed at the end and any columns prior to it are
-                    // ensured to be interested. For unique index, it is placed in the value.
-                    let handle_val = if key_payload.is_empty() {
-                        // This is a unique index, and we should look up PK handle in value.
-
-                        // NOTE: it is not `number::decode_i64`.
-                        value.as_slice().read_i64::<BigEndian>().map_err(|_| {
-                            Error::Other(box_err!("Failed to decode handle in value as i64"))
-                        })?
-                    } else {
-                        // This is a normal index. The remaining payload part is the PK handle.
-                        // Let's decode it and put in the column.
-
-                        let flag = key_payload[0];
-                        let mut val = &key_payload[1..];
-
-                        match flag {
-                            datum::INT_FLAG => number::decode_i64(&mut val).map_err(|_| {
-                                Error::Other(box_err!("Failed to decode handle in key as i64"))
-                            })?,
-                            datum::UINT_FLAG => {
-                                (number::decode_u64(&mut val).map_err(|_| {
-                                    Error::Other(box_err!("Failed to decode handle in key as u64"))
-                                })?) as i64
-                            }
-                            _ => {
-                                return Err(Error::Other(box_err!(
-                                    "Unexpected handle flag {}",
-                                    flag
-                                )));
-                            }
-                        }
-                    };
-
-                    columns[self.columns_len_without_handle]
-                        .mut_decoded()
-                        .push_int(Some(handle_val));
-                }
-
-                columns.debug_assert_columns_equal_length();
-
-                if columns.rows_len() >= expect_rows {
-                    break;
-                }
-            } else {
-                self.ranges.consume();
-            }
-        }
-
-        Ok(is_drained)
+        };
+        let wrapper =
+            super::scan_executor::ScanExecutor::new(imp, store, desc, key_ranges, unique)?;
+        Ok(Self(wrapper))
     }
 }
 
 impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
-    #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        assert!(!self.is_ended);
-        assert!(expect_rows > 0);
+        self.0.next_batch(expect_rows)
+    }
+}
 
+struct IndexScanExecutorImpl {
+    context: ExecutorContext,
+
+    /// Number of interested columns (exclude PK handle column).
+    columns_len_without_handle: usize,
+
+    /// Whether PK handle column is interested. Handle will be always placed in the last column.
+    decode_handle: bool,
+}
+
+impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
+    fn build_scanner<S: Store>(
+        &self,
+        store: &S,
+        desc: bool,
+        range: KeyRange,
+    ) -> Result<Scanner<S>> {
+        Scanner::new(
+            store,
+            crate::coprocessor::dag::ScanOn::Index,
+            desc,
+            false,
+            range,
+        )
+    }
+
+    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
         // Construct empty columns, with PK in decoded format and the rest in raw format.
+
         let columns_len = self.context.columns_info.len();
         let mut columns = Vec::with_capacity(columns_len);
         for _ in 0..self.columns_len_without_handle {
@@ -230,26 +106,66 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
             ));
         }
 
-        let mut data = LazyBatchColumnVec::from(columns);
-        let is_drained = self.fill_batch_rows(expect_rows, &mut data);
+        LazyBatchColumnVec::from(columns)
+    }
 
-        // TODO
-        // After calling `fill_batch_rows`, columns' length may not be identical in some special
-        // cases, for example, meet decoding errors when decoding the last column. We need to trim
-        // extra elements.
+    fn process_kv_pair(
+        &mut self,
+        key: &[u8],
+        mut value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        use crate::coprocessor::codec::{datum, table};
+        use crate::util::codec::number;
+        use byteorder::{BigEndian, ReadBytesExt};
 
-        // TODO
-        // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
-        // these rows. After that, if we only consumes some of the rows (TopN / Limit), we should
-        // ignore this error.
+        // The payload part of the key
+        let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
-        match &is_drained {
-            Err(_) => self.is_ended = true,
-            Ok(true) => self.is_ended = true,
-            Ok(false) => {}
-        };
+        for i in 0..self.columns_len_without_handle {
+            let (val, remaining) = datum::split_datum(key_payload, false)?;
+            columns[i].push_raw(val);
+            key_payload = remaining;
+        }
 
-        BatchExecuteResult { data, is_drained }
+        if self.decode_handle {
+            // For normal index, it is placed at the end and any columns prior to it are
+            // ensured to be interested. For unique index, it is placed in the value.
+            let handle_val = if key_payload.is_empty() {
+                // This is a unique index, and we should look up PK handle in value.
+
+                // NOTE: it is not `number::decode_i64`.
+                value.read_i64::<BigEndian>().map_err(|_| {
+                    Error::Other(box_err!("Failed to decode handle in value as i64"))
+                })?
+            } else {
+                // This is a normal index. The remaining payload part is the PK handle.
+                // Let's decode it and put in the column.
+
+                let flag = key_payload[0];
+                let mut val = &key_payload[1..];
+
+                match flag {
+                    datum::INT_FLAG => number::decode_i64(&mut val).map_err(|_| {
+                        Error::Other(box_err!("Failed to decode handle in key as i64"))
+                    })?,
+                    datum::UINT_FLAG => {
+                        (number::decode_u64(&mut val).map_err(|_| {
+                            Error::Other(box_err!("Failed to decode handle in key as u64"))
+                        })?) as i64
+                    }
+                    _ => {
+                        return Err(Error::Other(box_err!("Unexpected handle flag {}", flag)));
+                    }
+                }
+            };
+
+            columns[self.columns_len_without_handle]
+                .mut_decoded()
+                .push_int(Some(handle_val));
+        }
+
+        Ok(())
     }
 }
 

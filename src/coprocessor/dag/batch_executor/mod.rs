@@ -15,6 +15,7 @@ pub mod interface;
 
 mod index_scan_executor;
 mod ranges_consumer;
+mod scan_executor;
 mod selection_executor;
 mod table_scan_executor;
 

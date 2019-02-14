@@ -14,30 +14,60 @@
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
 
-use crate::storage::{Key, Store};
+use crate::storage::Store;
 
 use crate::util::collections::HashMap;
 
 use super::interface::*;
-use super::ranges_consumer::{ConsumerResult, RangesConsumer};
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use crate::coprocessor::codec::table;
 use crate::coprocessor::dag::Scanner;
-use crate::coprocessor::*;
+use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store> {
+pub struct BatchTableScanExecutor<S: Store>(
+    super::scan_executor::ScanExecutor<S, TableScanExecutorImpl>,
+);
+
+impl<S: Store> BatchTableScanExecutor<S> {
+    pub fn new(
+        store: S,
+        context: ExecutorContext,
+        key_ranges: Vec<KeyRange>,
+        desc: bool,
+    ) -> Result<Self> {
+        let is_column_filled = vec![false; context.columns_info.len()];
+
+        let mut key_only = true;
+        let mut handle_index = std::usize::MAX;
+        let mut column_id_index = HashMap::default();
+        for (index, column_info) in context.columns_info.iter().enumerate() {
+            if column_info.get_pk_handle() {
+                handle_index = index;
+            } else {
+                key_only = false;
+                column_id_index.insert(column_info.get_column_id(), index);
+            }
+        }
+
+        let imp = TableScanExecutorImpl {
+            context,
+            key_only,
+            handle_index,
+            column_id_index,
+            is_column_filled,
+        };
+        let wrapper = super::scan_executor::ScanExecutor::new(imp, store, desc, key_ranges, true)?;
+        Ok(Self(wrapper))
+    }
+}
+
+impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
+    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(expect_rows)
+    }
+}
+
+struct TableScanExecutorImpl {
     context: ExecutorContext,
-    store: S,
-    desc: bool,
-
-    /// Consume and produce ranges.
-    ranges: RangesConsumer,
-
-    /// Row scanner.
-    ///
-    /// It is optional because sometimes it is not needed, e.g. when point range is given.
-    /// Also, the value may be re-constructed several times if there are multiple key ranges.
-    scanner: Option<Scanner<S>>,
 
     /// Whether or not KV value can be omitted.
     ///
@@ -57,203 +87,27 @@ pub struct BatchTableScanExecutor<S: Store> {
     /// It is a struct level field in order to prevent repeated memory allocations since its length
     /// is fixed for each `next_batch` call.
     is_column_filled: Vec<bool>,
-
-    /// A flag indicating whether this executor is ended. When table is drained or there was an
-    /// error scanning the table, this flag will be set to `true` and `next_batch` should be never
-    /// called again.
-    is_ended: bool,
 }
 
-impl<S: Store> BatchTableScanExecutor<S> {
-    pub fn new(
-        store: S,
-        context: ExecutorContext,
-        mut key_ranges: Vec<KeyRange>,
+impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
+    fn build_scanner<S: Store>(
+        &self,
+        store: &S,
         desc: bool,
-    ) -> Result<Self> {
-        table::check_table_ranges(&key_ranges)?;
-        if desc {
-            key_ranges.reverse();
-        }
-
-        let is_column_filled = vec![false; context.columns_info.len()];
-
-        let mut key_only = true;
-        let mut handle_index = std::usize::MAX;
-        let mut column_id_index = HashMap::default();
-        for (index, column_info) in context.columns_info.iter().enumerate() {
-            if column_info.get_pk_handle() {
-                handle_index = index;
-            } else {
-                key_only = false;
-                column_id_index.insert(column_info.get_column_id(), index);
-            }
-        }
-
-        Ok(Self {
-            context,
+        range: KeyRange,
+    ) -> Result<Scanner<S>> {
+        Scanner::new(
             store,
+            crate::coprocessor::dag::ScanOn::Table,
             desc,
-            ranges: RangesConsumer::new(key_ranges, true),
-            scanner: None,
-
-            handle_index,
-            key_only,
-            column_id_index,
-
-            is_column_filled,
-            is_ended: false,
-        })
-    }
-
-    /// Creates or resets the range of inner scanner.
-    #[inline]
-    fn reset_range(&mut self, range: KeyRange) -> Result<()> {
-        use crate::coprocessor::dag::ScanOn;
-
-        self.scanner = Some(Scanner::new(
-            &self.store,
-            ScanOn::Table,
-            self.desc,
             self.key_only,
             range,
-        )?);
-        Ok(())
+        )
     }
 
-    /// Scans next row from the scanner.
-    #[inline]
-    fn scan_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        // TODO: Key and value doesn't have to be owned
-        if let Some(scanner) = self.scanner.as_mut() {
-            Ok(scanner.next_row()?)
-        } else {
-            // `self.scanner` should never be `None` when this function is being called.
-            unreachable!()
-        }
-    }
-
-    /// Get one row from the store.
-    #[inline]
-    fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut statistics = crate::storage::Statistics::default();
-        // TODO: Key and value doesn't have to be owned
-        let key = range.take_start();
-        let value = self.store.get(&Key::from_raw(&key), &mut statistics)?;
-        Ok(value.map(move |v| (key, v)))
-    }
-
-    fn fill_batch_rows(
-        &mut self,
-        expect_rows: usize,
-        columns: &mut LazyBatchColumnVec,
-    ) -> Result<bool> {
-        use crate::coprocessor::codec::datum;
-        use crate::util::codec::number;
-
-        assert!(expect_rows > 0);
-
-        let mut is_drained = false;
-        let columns_len = self.context.columns_info.len();
-
-        loop {
-            let range = self.ranges.next();
-            let some_row = match range {
-                ConsumerResult::NewPointRange(r) => self.point_get(r)?,
-                // There might be lock when retriving this row.
-                ConsumerResult::NewNonPointRange(r) => {
-                    self.reset_range(r)?;
-                    self.scan_next()?
-                }
-                ConsumerResult::Continue => self.scan_next()?,
-                // There might be lock when retriving this row.
-                ConsumerResult::Drained => {
-                    is_drained = true;
-                    break;
-                }
-            };
-            if let Some((key, value)) = some_row {
-                let mut decoded_columns = 0;
-
-                // Decode handle from key if handle is specified in columns.
-                if self.handle_index != std::usize::MAX {
-                    if !self.is_column_filled[self.handle_index] {
-                        let handle_id = table::decode_handle(&key)?;
-                        // FIXME: The columns may be not in the same length if there is error.
-                        columns[self.handle_index]
-                            .mut_decoded()
-                            .push_int(Some(handle_id));
-                        decoded_columns += 1;
-                        self.is_column_filled[self.handle_index] = true;
-                    }
-                    // TODO: Shall we just returns error when met
-                    // `self.unsafe_raw_rows_cache_filled[self.handle_index] == true`?
-                }
-
-                if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
-                    // Do nothing
-                } else {
-                    // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
-                    // where each element is datum encoded.
-                    // The column id datum must be in var i64 type.
-                    let mut remaining = value.as_slice();
-                    while !remaining.is_empty() && decoded_columns < columns_len {
-                        if remaining[0] != datum::VAR_INT_FLAG {
-                            return Err(box_err!("Expect VAR_INT flag for column id"));
-                        }
-                        remaining = &remaining[1..];
-                        let column_id = box_try!(number::decode_var_i64(&mut remaining));
-                        let (val, new_remaining) = datum::split_datum(remaining, false)?;
-                        // FIXME: The columns may be not in the same length if there is error.
-                        let some_index = self.column_id_index.get(&column_id);
-                        if let Some(index) = some_index {
-                            let index = *index;
-                            if !self.is_column_filled[index] {
-                                columns[index].push_raw(val);
-                                decoded_columns += 1;
-                                self.is_column_filled[index] = true;
-                            }
-                            // TODO: Shall we just returns error when met
-                            // `self.unsafe_raw_rows_cache_filled[index] == true`?
-                        }
-                        remaining = new_remaining;
-                    }
-                }
-
-                // Some fields may be missing in the row, we push empty slot to make all columns
-                // in same length.
-                for i in 0..columns_len {
-                    if !self.is_column_filled[i] {
-                        // Missing fields must not be a primary key, so it must be
-                        // `LazyBatchColumn::raw`.
-                        columns[i].push_raw(&[]);
-                    } else {
-                        // Reset to not-filled, prepare for next function call.
-                        self.is_column_filled[i] = false;
-                    }
-                }
-
-                columns.debug_assert_columns_equal_length();
-
-                if columns.rows_len() >= expect_rows {
-                    break;
-                }
-            } else {
-                self.ranges.consume();
-            }
-        }
-
-        Ok(is_drained)
-    }
-}
-
-impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
-    #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        assert!(!self.is_ended);
-        assert!(expect_rows > 0);
-
+    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
         // Construct empty columns, with PK in decoded format and the rest in raw format.
+
         let columns_len = self.context.columns_info.len();
         let mut columns = Vec::with_capacity(columns_len);
         for i in 0..columns_len {
@@ -269,26 +123,80 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
             }
         }
 
-        let mut data = LazyBatchColumnVec::from(columns);
-        let is_drained = self.fill_batch_rows(expect_rows, &mut data);
+        LazyBatchColumnVec::from(columns)
+    }
 
-        // TODO
-        // After calling `fill_batch_rows`, columns' length may not be identical in some special
-        // cases, for example, meet decoding errors when decoding the last column. We need to trim
-        // extra elements.
+    fn process_kv_pair(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        use crate::coprocessor::codec::{datum, table};
+        use crate::util::codec::number;
 
-        // TODO
-        // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
-        // these rows. After that, if we only consumes some of the rows (TopN / Limit), we should
-        // ignore this error.
+        let columns_len = self.context.columns_info.len();
+        let mut decoded_columns = 0;
 
-        match &is_drained {
-            Err(_) => self.is_ended = true,
-            Ok(true) => self.is_ended = true,
-            Ok(false) => {}
-        };
+        // Decode handle from key if handle is specified in columns.
+        if self.handle_index != std::usize::MAX {
+            if !self.is_column_filled[self.handle_index] {
+                let handle_id = table::decode_handle(key)?;
+                // FIXME: The columns may be not in the same length if there is error.
+                columns[self.handle_index]
+                    .mut_decoded()
+                    .push_int(Some(handle_id));
+                decoded_columns += 1;
+                self.is_column_filled[self.handle_index] = true;
+            }
+            // TODO: Shall we just returns error when met
+            // `self.unsafe_raw_rows_cache_filled[self.handle_index] == true`?
+        }
 
-        BatchExecuteResult { data, is_drained }
+        if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
+            // Do nothing
+        } else {
+            // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
+            // where each element is datum encoded.
+            // The column id datum must be in var i64 type.
+            let mut remaining = value;
+            while !remaining.is_empty() && decoded_columns < columns_len {
+                if remaining[0] != datum::VAR_INT_FLAG {
+                    return Err(box_err!("Expect VAR_INT flag for column id"));
+                }
+                remaining = &remaining[1..];
+                let column_id = box_try!(number::decode_var_i64(&mut remaining));
+                let (val, new_remaining) = datum::split_datum(remaining, false)?;
+                // FIXME: The columns may be not in the same length if there is error.
+                let some_index = self.column_id_index.get(&column_id);
+                if let Some(index) = some_index {
+                    let index = *index;
+                    if !self.is_column_filled[index] {
+                        columns[index].push_raw(val);
+                        decoded_columns += 1;
+                        self.is_column_filled[index] = true;
+                    }
+                    // TODO: Shall we just returns error when met
+                    // `self.unsafe_raw_rows_cache_filled[index] == true`?
+                }
+                remaining = new_remaining;
+            }
+        }
+
+        // Some fields may be missing in the row, we push empty slot to make all columns
+        // in same length.
+        for i in 0..columns_len {
+            if !self.is_column_filled[i] {
+                // Missing fields must not be a primary key, so it must be
+                // `LazyBatchColumn::raw`.
+                columns[i].push_raw(&[]);
+            } else {
+                // Reset to not-filled, prepare for next function call.
+                self.is_column_filled[i] = false;
+            }
+        }
+
+        Ok(())
     }
 }
 

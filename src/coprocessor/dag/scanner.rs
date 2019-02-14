@@ -15,7 +15,7 @@ use kvproto::coprocessor::KeyRange;
 
 use crate::coprocessor::codec::table::truncate_as_row_key;
 use crate::coprocessor::util;
-use crate::storage::txn::Result;
+use crate::coprocessor::Result;
 use crate::storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
 use crate::util::{escape, set_panic_mark};
 
@@ -35,7 +35,7 @@ fn create_range_scanner<S: Store>(
 ) -> Result<S::Scanner> {
     let lower_bound = Some(Key::from_raw(range.get_start()));
     let upper_bound = Some(Key::from_raw(range.get_end()));
-    store.scanner(desc, key_only, lower_bound, upper_bound)
+    Ok(store.scanner(desc, key_only, lower_bound, upper_bound)?)
 }
 
 // `Scanner` is a helper struct to wrap all common scan operations
