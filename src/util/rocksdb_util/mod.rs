@@ -124,11 +124,9 @@ fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: 
                 .get_level_compaction_dynamic_level_bytes()
         {
             warn!(
-                "change dynamic_level_bytes for existing column family is danger, old: {}, new: {}",
-                existed_dynamic_level_bytes,
-                cf_options
-                    .options
-                    .get_level_compaction_dynamic_level_bytes()
+                "change dynamic_level_bytes for existing column family is danger";
+                "old_value" => existed_dynamic_level_bytes,
+                "new_value" => cf_options.options.get_level_compaction_dynamic_level_bytes(),
             );
         }
         cf_options

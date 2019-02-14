@@ -518,14 +518,16 @@ pub fn check_environment_variables() {
 
     if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
         info!(
-            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
-            var
+            "environment variable is present";
+            "GRPC_POLL_STRATEGY" => var
         );
     }
 
     for proxy in &["http_proxy", "https_proxy"] {
         if let Ok(var) = env::var(proxy) {
-            info!("environment variable `{}` is present, `{}`", proxy, var);
+            info!("environment variable is present";
+                *proxy => var
+            );
         }
     }
 }
