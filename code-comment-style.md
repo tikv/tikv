@@ -123,6 +123,7 @@ A comment is generally required for:
 - Avoid unnecessary comments for simple code
 - Write comments as if they were for you
 - Make sure the comment is up-to-date
+- Make sure you keep comments up to date when you edit code
 - Let the code speak for itself
 
 Thanks for your contribution!
