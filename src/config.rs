@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+extern crate prometheus;
 extern crate toml;
 
 use std::error::Error;
@@ -160,6 +161,114 @@ macro_rules! cf_config {
             pub titan: TitanCfConfig,
         }
     };
+}
+
+macro_rules! write_into_metrics {
+    ($cf:expr, $tag:expr,$metrics:expr) => {{
+        $metrics
+            .with_label_values(&[$tag, "block_size"])
+            .set($cf.block_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "block_cache_size"])
+            .set($cf.block_cache_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "disable_block_cache"])
+            .set(($cf.disable_block_cache as i32).into());
+
+        $metrics
+            .with_label_values(&[$tag, "cache_index_and_filter_blocks"])
+            .set(($cf.cache_index_and_filter_blocks as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "pin_l0_filter_and_index_blocks"])
+            .set(($cf.pin_l0_filter_and_index_blocks as i32).into());
+
+        $metrics
+            .with_label_values(&[$tag, "use_bloom_filter"])
+            .set(($cf.use_bloom_filter as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "optimize_filters_for_hits"])
+            .set(($cf.optimize_filters_for_hits as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "whole_key_filtering"])
+            .set(($cf.whole_key_filtering as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "bloom_filter_bits_per_key"])
+            .set($cf.bloom_filter_bits_per_key.into());
+        $metrics
+            .with_label_values(&[$tag, "block_based_bloom_filter"])
+            .set(($cf.block_based_bloom_filter as i32).into());
+
+        $metrics
+            .with_label_values(&[$tag, "read_amp_bytes_per_bit"])
+            .set($cf.read_amp_bytes_per_bit.into());
+        $metrics
+            .with_label_values(&[$tag, "write_buffer_size"])
+            .set($cf.write_buffer_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "max_write_buffer_number"])
+            .set($cf.max_write_buffer_number.into());
+        $metrics
+            .with_label_values(&[$tag, "min_write_buffer_number_to_merge"])
+            .set($cf.min_write_buffer_number_to_merge.into());
+        $metrics
+            .with_label_values(&[$tag, "max_bytes_for_level_base"])
+            .set($cf.max_bytes_for_level_base.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "target_file_size_base"])
+            .set($cf.target_file_size_base.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "level0_file_num_compaction_trigger"])
+            .set($cf.level0_file_num_compaction_trigger.into());
+        $metrics
+            .with_label_values(&[$tag, "level0_slowdown_writes_trigger"])
+            .set($cf.level0_slowdown_writes_trigger.into());
+        $metrics
+            .with_label_values(&[$tag, "level0_stop_writes_trigger"])
+            .set($cf.level0_stop_writes_trigger.into());
+        $metrics
+            .with_label_values(&[$tag, "max_compaction_bytes"])
+            .set($cf.max_compaction_bytes.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "dynamic_level_bytes"])
+            .set(($cf.dynamic_level_bytes as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "num_levels"])
+            .set($cf.num_levels.into());
+        $metrics
+            .with_label_values(&[$tag, "max_bytes_for_level_multiplier"])
+            .set($cf.max_bytes_for_level_multiplier.into());
+
+        $metrics
+            .with_label_values(&[$tag, "disable_auto_compactions"])
+            .set(($cf.disable_auto_compactions as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "soft_pending_compaction_bytes_limit"])
+            .set($cf.soft_pending_compaction_bytes_limit.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
+            .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_min_blob_size"])
+            .set($cf.titan.min_blob_size as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_blob_cache_size"])
+            .set($cf.titan.blob_cache_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_min_gc_batch_size"])
+            .set($cf.titan.min_gc_batch_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_max_gc_batch_size"])
+            .set($cf.titan.max_gc_batch_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_discardable_ratio"])
+            .set($cf.titan.discardable_ratio);
+        $metrics
+            .with_label_values(&[$tag, "titan_sample_ratio"])
+            .set($cf.titan.sample_ratio);
+        $metrics
+            .with_label_values(&[$tag, "titan_merge_small_file_threshold"])
+            .set($cf.titan.merge_small_file_threshold.0 as f64);
+    }};
 }
 
 macro_rules! build_cf_opt {
@@ -601,6 +710,19 @@ impl DbConfig {
 
     fn validate(&mut self) -> Result<(), Box<Error>> {
         Ok(())
+    }
+
+    fn write_into_metrics(&self) {
+        let metrics = register_gauge_vec!(
+            "tikv_config_rocksdb",
+            "Config information of rocksdb",
+            &["cf", "name"]
+        )
+        .unwrap();
+        write_into_metrics!(self.defaultcf, "default_cf", metrics);
+        write_into_metrics!(self.lockcf, "lock_cf", metrics);
+        write_into_metrics!(self.writecf, "write_cf", metrics);
+        write_into_metrics!(self.raftcf, "raft_cf", metrics);
     }
 }
 
@@ -1246,6 +1368,11 @@ impl TiKvConfig {
         f.sync_all()?;
 
         Ok(())
+    }
+
+    pub fn write_into_metrics(&self) {
+        self.raft_store.write_into_metrics();
+        self.rocksdb.write_into_metrics();
     }
 }
 

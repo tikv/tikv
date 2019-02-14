@@ -136,6 +136,8 @@ fn setup_config(matches: &ArgMatches) -> TiKvConfig {
         "config" => serde_json::to_string(&config).unwrap(),
     );
 
+    config.write_into_metrics();
+
     config
 }
 

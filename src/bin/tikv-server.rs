@@ -461,6 +461,8 @@ fn main() {
         "config" => serde_json::to_string(&config).unwrap(),
     );
 
+    config.write_into_metrics();
+
     // Before any startup, check system configuration.
     check_system_config(&config);
 

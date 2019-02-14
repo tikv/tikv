@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus;
 use std::time::Duration;
 use std::u64;
-
 use time::Duration as TimeDuration;
 
 use crate::raftstore::{coprocessor, Result};
@@ -357,6 +357,18 @@ impl Config {
             return Err(box_err!("future-poll-size should be greater than 0."));
         }
         Ok(())
+    }
+
+    pub fn write_into_metrics(&self) {
+        let metrics = register_gauge_vec!(
+            "tikv_config_raftstore",
+            "Config information of raftstore",
+            &["name"]
+        )
+        .unwrap();
+        metrics
+            .with_label_values(&["consistency_check_interval_seconds"])
+            .set(self.consistency_check_interval.as_secs() as f64);
     }
 }
 
