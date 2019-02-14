@@ -20,7 +20,7 @@ use super::{LazyBatchColumn, VectorValue};
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::Result;
 
-pub struct BatchRows<E> {
+pub struct LazyBatchColumnVec<E> {
     /// Multiple interested columns. Each column is either decoded, or not decoded.
     ///
     /// For decoded columns, they may be in different types. If the column is in
@@ -32,7 +32,7 @@ pub struct BatchRows<E> {
     some_error: Option<E>,
 }
 
-impl<E: Clone> Clone for BatchRows<E> {
+impl<E: Clone> Clone for LazyBatchColumnVec<E> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -42,8 +42,8 @@ impl<E: Clone> Clone for BatchRows<E> {
     }
 }
 
-impl<E> BatchRows<E> {
-    /// Creates a new `BatchRows`, which contains `columns_count` number of raw columns
+impl<E> LazyBatchColumnVec<E> {
+    /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns
     /// and each of them reserves capacity according to `rows_capacity`.
     pub fn raw(columns_count: usize, rows_capacity: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
@@ -230,8 +230,8 @@ mod tests {
                 vec![Some(Datum::U64(4)), None, Some(Datum::Null)],
             ];
 
-            // Empty BatchRows
-            let mut rows = BatchRows::<()>::raw(3, 1);
+            // Empty LazyBatchColumnVec
+            let mut rows = LazyBatchColumnVec::<()>::raw(3, 1);
             assert_eq!(rows.rows_len(), 0);
             assert_eq!(rows.columns_len(), 3);
 
@@ -317,7 +317,7 @@ mod tests {
             },
         ];
 
-        let mut rows = BatchRows::<()>::raw(2, 3);
+        let mut rows = LazyBatchColumnVec::<()>::raw(2, 3);
         assert_eq!(rows.rows_len(), 0);
         assert_eq!(rows.columns_len(), 2);
         assert_eq!(rows.rows_capacity(), 3);
