@@ -443,6 +443,160 @@ impl VectorValue {
 
         Ok(())
     }
+
+    /// Returns maximum encoded size in binary format.
+    pub fn maximum_encoded_size(&self) -> Result<usize> {
+        match self {
+            VectorValue::Int(ref vec) => Ok(vec.len() * 9),
+
+            // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
+            // this function only calculates a maximum encoded size (for constructing buffers), not
+            // actual encoded size.
+            VectorValue::Real(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Decimal(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            // FIXME: We don't need approximate size. Maximum size is enough (so
+                            // that we don't need to iterate each value).
+                            size += 1 /* FLAG */ + v.approximate_encoded_size();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::Bytes(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::DateTime(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Duration(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Json(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + v.binary_len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+        }
+    }
+
+    /// Encodes a single element into binary format.
+    pub fn encode(&self, row_index: usize, output: &mut Vec<u8>) -> Result<()> {
+        use crate::coprocessor::codec::mysql::DecimalEncoder;
+        use crate::coprocessor::codec::mysql::JsonEncoder;
+        use crate::util::codec::bytes::BytesEncoder;
+        use crate::util::codec::number::NumberEncoder;
+
+        match self {
+            VectorValue::Int(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::INT_FLAG);
+                        output.encode_i64(val)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Real(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::FLOAT_FLAG);
+                        output.encode_f64(val)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Decimal(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::DECIMAL_FLAG);
+                        let (prec, frac) = val.prec_and_frac();
+                        output.encode_decimal(val, prec, frac)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Bytes(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::COMPACT_BYTES_FLAG);
+                        output.encode_compact_bytes(val)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::DateTime(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::UINT_FLAG);
+                        output.encode_u64(val.to_packed_u64())?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Duration(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::DURATION_FLAG);
+                        output.encode_i64(val.to_nanos())?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Json(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::JSON_FLAG);
+                        output.encode_json(val)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 macro_rules! impl_as_slice {
