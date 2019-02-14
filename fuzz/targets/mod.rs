@@ -106,9 +106,9 @@ trait ReadAsDecimalRoundMode: ReadLiteralExt {
         &mut self,
     ) -> Result<::tikv::coprocessor::codec::mysql::decimal::RoundMode, Error> {
         Ok(match self.read_as_u8()? % 3 {
-            0 => ::tikv::coprocessor::codec::mysql::decimal::RoundMode::HalfEven,
-            1 => ::tikv::coprocessor::codec::mysql::decimal::RoundMode::Truncate,
-            _ => ::tikv::coprocessor::codec::mysql::decimal::RoundMode::Ceiling,
+            0 => tikv::coprocessor::codec::mysql::decimal::RoundMode::HalfEven,
+            1 => tikv::coprocessor::codec::mysql::decimal::RoundMode::Truncate,
+            _ => tikv::coprocessor::codec::mysql::decimal::RoundMode::Ceiling,
         })
     }
 }
@@ -160,9 +160,9 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
 trait ReadAsTimeType: ReadLiteralExt {
     fn read_as_time_type(&mut self) -> Result<::tikv::coprocessor::codec::mysql::TimeType, Error> {
         Ok(match self.read_as_u8()? % 3 {
-            0 => ::tikv::coprocessor::codec::mysql::TimeType::Date,
-            1 => ::tikv::coprocessor::codec::mysql::TimeType::DateTime,
-            _ => ::tikv::coprocessor::codec::mysql::TimeType::Timestamp,
+            0 => tikv::coprocessor::codec::mysql::TimeType::Date,
+            1 => tikv::coprocessor::codec::mysql::TimeType::DateTime,
+            _ => tikv::coprocessor::codec::mysql::TimeType::Timestamp,
         })
     }
 }
@@ -170,7 +170,7 @@ trait ReadAsTimeType: ReadLiteralExt {
 impl<T: ReadLiteralExt> ReadAsTimeType for T {}
 
 fn fuzz_time(
-    t: ::tikv::coprocessor::codec::mysql::Time,
+    t: tikv::coprocessor::codec::mysql::Time,
     mut cursor: Cursor<&[u8]>,
 ) -> Result<(), Error> {
     use tikv::coprocessor::codec::mysql::TimeEncoder;
