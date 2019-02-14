@@ -11,7 +11,7 @@ This document describes the code comment style applied to TiKV repositories. Whe
 
 ## Where/When to comment?
 
-Write a comment where/when:
+Write a comment where/when there is context that is missing from the code or is hard to deduce from the code. Specifically, use a comment:
 
 - For important code
 - For obscure code
@@ -23,7 +23,7 @@ Write a comment where/when:
 
 A comment is generally required for:
 
-- File
+- Module
 - Type
 - Constant
 - Function
@@ -41,20 +41,20 @@ A comment is generally required for:
 
 - Non-doc comment
 
-    - Used for inline code comment (for better code explaination when reviewing)
+    - Used to document implementation details
     - Use **//** for a line comment
     - Use **/* … */** for a block comment (used only when needed)
     
 - Doc comment
 
-    - Used in module level descriptions (structures, fields, macros, etc.) for command line reference
+    - Used to document the interface of code (structures, fields, macros, etc.)
     - Use **///** for a line comment 
     - Use **//!** for a block comment
     - Use **rustfmt** to format your code
 
 - Place the single-line and block comment above the code it’s annotating
 - Fold long lines of comments
-- Each line of text in your code and comment should be at most 100 characters long
+- The maximum width for a line is 100 characters
 - Do not use relative URLs; use **absolute URLs** instead
 
     Right:
@@ -91,7 +91,7 @@ A comment is generally required for:
     
     - Do not use lengthy compound words
 
-    - Do not abbreviate unless it is absolutely necessary
+    - Do not abbreviate unless it is necessary (for readability purposes)
 
     - "we" can be used only when it means the code writer
 
