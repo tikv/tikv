@@ -41,7 +41,7 @@
 //!   capability
 //!
 //! - jemalloc - compiles default jemalloc
-//! 
+//!
 //! - tcmalloc - compiles with `cargo build --no-default-features --features="tikv_alloc/tcmalloc"`
 //!
 //! cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs` and
@@ -117,11 +117,15 @@ pub use self::jemalloc::*;
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-
 // The System Global Allocator, without jemalloc or tcmalloc.
 // This is only necessary prior to the removal of jemalloc from
 // Rust. Afterwards this might be removed.
-#[cfg(all(unix, not(fuzzing), not(feature="jemalloc"), not(feature="tcmallocator")))]
+#[cfg(all(
+    unix,
+    not(fuzzing),
+    not(feature = "jemalloc"),
+    not(feature = "tcmallocator")
+))]
 #[global_allocator]
 static ALLOC: std::alloc::System = std::alloc::System;
 
