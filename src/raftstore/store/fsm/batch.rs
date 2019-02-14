@@ -295,10 +295,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     fn fetch_batch(&self, batch: &mut Batch<N, C>, max_size: usize) {
         let curr_batch_len = batch.len();
         if batch.control.is_some() || curr_batch_len >= max_size {
+            // Do nothing if there's a pending control fsm or the batch is already full.
             return;
         }
 
         let mut pushed = if curr_batch_len == 0 {
+            // Block if the batch is empty.
             match self.fsm_receiver.recv() {
                 Ok(fsm) => batch.push(fsm),
                 Err(_) => return,
@@ -358,6 +360,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
+            // Fetch batch after every round is finished. It's helpful to protect regions 
+            // begin hungry if some regions are hot points.
             self.fetch_batch(&mut batch, self.max_batch_size);
         }
     }
