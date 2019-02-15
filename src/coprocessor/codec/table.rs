@@ -209,7 +209,7 @@ pub fn decode_index_key(
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &FieldTypeAccessor) -> Result<Datum> {
+fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }

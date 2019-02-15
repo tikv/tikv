@@ -59,7 +59,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
