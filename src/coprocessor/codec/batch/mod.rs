@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod column;
 mod rows;
+mod vector;
 
-pub use self::column::BatchColumn;
 pub use self::rows::BatchRows;
+pub use self::vector::VectorValue;
