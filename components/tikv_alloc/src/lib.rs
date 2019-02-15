@@ -99,8 +99,6 @@ extern crate log;
 
 // TCMalloc
 #[cfg(all(unix, not(fuzzing), feature = "tcmallocator"))]
-use std::alloc::Opaque;
-#[cfg(all(unix, not(fuzzing), feature = "tcmallocator"))]
 use tcmalloc::TCMalloc;
 
 #[cfg(all(unix, not(fuzzing), feature = "tcmallocator"))]
