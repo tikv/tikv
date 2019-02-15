@@ -64,6 +64,8 @@ For the why part, if no specific reason for the change,
 you can use one of some generic reasons like "Improve documentation.",
 "Improve performance.", "Improve robustness.", "Improve test coverage."
 
+For more information on how to write a good commit message, see [Code Comment Style](CODE_COMMENT_STYLE.md).
+
 ### Signing off the Commit
 
 The project now enables [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/)
