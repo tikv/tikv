@@ -1140,6 +1140,7 @@ impl<E: Engine> Storage<E> {
                             })
                     })
                     .and_then(move |res| {
+                        _timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future callback: Failed to send result to the future rx, discarded.");
@@ -1210,6 +1211,7 @@ impl<E: Engine> Storage<E> {
                         Ok(result)
                     })
                     .and_then(move |res| {
+                        _timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future_callback: Failed to send result to the future rx, discarded.");
@@ -1517,6 +1519,7 @@ impl<E: Engine> Storage<E> {
                         result
                     })
                     .and_then(move |res| {
+                        _timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future_callback: Failed to send result to the future rx, discarded.");
@@ -1650,6 +1653,7 @@ impl<E: Engine> Storage<E> {
                         Ok(result)
                     })
                     .and_then(move |res| {
+                        _timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future_callback: Failed to send result to the future rx, discarded.");
