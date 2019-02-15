@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.4]
+- Fix the abnormal result issue of the event listener in some cases [#4126](https://github.com/tikv/tikv/pull/4126)
+- Fix the duplicate write issue when closing TiKV [#4146](https://github.com/tikv/tikv/pull/4146)
+
 ## [2.1.3]
 - Support obtaining the monitoring information using the HTTP method [#3855](https://github.com/tikv/tikv/pull/3855)
 - Fix the NULL issue of `data_format` [#4075](https://github.com/tikv/tikv/pull/4075)
@@ -45,7 +49,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 + tikv-ctl
     - [Add the `ldb` command to diagnose RocksDB related issues](https://github.com/tikv/tikv/blob/master/docs/tools/tikv-control.md#ldb-command)
-    - The `compact` command supports specifying whether to compact data in the bottommost level 
+    - The `compact` command supports specifying whether to compact data in the bottommost level
 
 + Tools
     - Fast full import of large amounts of data: [TiDB-Lightning](https://pingcap.com/docs/tools/lightning/overview-architecture/)
@@ -73,8 +77,8 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Add the support for the `year` function [#3622](https://github.com/tikv/tikv/pull/3622)
 - Add the support for the `truncate_real` function [#3633](https://github.com/tikv/tikv/pull/3633)
 ### Bug fixes
-- Fix the reporting error behavior related to time functions [#3487](https://github.com/tikv/tikv/pull/3487), [#3615](https://github.com/tikv/tikv/pull/3615) 
-- Fix the issue that the time parsed from string is inconsistent with that in TiDB [#3589](https://github.com/tikv/tikv/pull/3589) 
+- Fix the reporting error behavior related to time functions [#3487](https://github.com/tikv/tikv/pull/3487), [#3615](https://github.com/tikv/tikv/pull/3615)
+- Fix the issue that the time parsed from string is inconsistent with that in TiDB [#3589](https://github.com/tikv/tikv/pull/3589)
 
 ## [2.1.0-rc.2]
 ### Performance
