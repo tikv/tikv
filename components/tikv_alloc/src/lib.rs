@@ -90,8 +90,8 @@
 //! `tikv`.
 
 #[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
-use jemallocator::*;
-use libc::*;
+use jemallocator;
+use libc;
 
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
