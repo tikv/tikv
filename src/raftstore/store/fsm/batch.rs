@@ -361,7 +361,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             // Fetch batch after every round is finished. It's helpful to protect regions
-            // begin hungry if some regions are hot points.
+            // from becoming hungry if some regions are hot points.
             self.fetch_batch(&mut batch, self.max_batch_size);
         }
     }
