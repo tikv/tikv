@@ -15,8 +15,8 @@ use std::borrow::Cow;
 use std::ops::{Add, Mul, Sub};
 use std::{f64, i64, u64};
 
-use coprocessor::codec::mysql::{Decimal, Res};
-use coprocessor::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, Datum};
+use crate::coprocessor::codec::mysql::{Decimal, Res};
+use crate::coprocessor::codec::{div_i64, div_i64_with_u64, div_u64_with_i64, Datum};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 
@@ -308,13 +308,13 @@ mod tests {
     use cop_datatype::FieldTypeFlag;
     use tipb::expression::ScalarFuncSig;
 
-    use coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
-    use coprocessor::codec::mysql::Decimal;
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{
+    use crate::coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
+    use crate::coprocessor::codec::mysql::Decimal;
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
         check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
     };
-    use coprocessor::dag::expr::*;
+    use crate::coprocessor::dag::expr::*;
 
     #[test]
     fn test_arithmetic_int() {

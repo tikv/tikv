@@ -19,21 +19,20 @@ use std::sync::{Arc, Mutex};
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
-use raftstore::store::engine::{IterOption, Peekable};
+use crate::raftstore::store::engine::{IterOption, Peekable};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
-use util::escape;
-use util::rocksdb;
-use util::rocksdb::CFOptions;
-use util::worker::{Runnable, Scheduler, Worker};
+use crate::util::escape;
+use crate::util::rocksdb_util::{self, CFOptions};
+use crate::util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
     ScanMode, Snapshot,
 };
 
-pub use raftstore::store::engine::SyncSnapshot as RocksSnapshot;
+pub use crate::raftstore::store::engine::SyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -101,7 +100,7 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocksdb::new_engine(&path, cfs, cfs_opts)?);
+        let db = Arc::new(rocksdb_util::new_engine(&path, cfs, cfs_opts)?);
         box_try!(worker.start(Runner(Arc::clone(&db))));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -177,8 +176,8 @@ impl TestEngineBuilder {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
-        let cfs = self.cfs.unwrap_or_else(|| ::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = ::config::DbConfig::default();
+        let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
+        let cfg_rocksdb = crate::config::DbConfig::default();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
@@ -186,7 +185,7 @@ impl TestEngineBuilder {
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
-                _ => CFOptions::new(*cf, ::rocksdb::ColumnFamilyOptions::new()),
+                _ => CFOptions::new(*cf, rocksdb::ColumnFamilyOptions::new()),
             })
             .collect();
         RocksEngine::new(&path, &cfs, Some(cfs_opts))
@@ -203,7 +202,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete(k.as_encoded())
                 } else {
                     trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    let handle = rocksdb::get_cf_handle(db, cf)?;
+                    let handle = rocksdb_util::get_cf_handle(db, cf)?;
                     wb.delete_cf(handle, k.as_encoded())
                 }
             }
@@ -213,7 +212,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     wb.put(k.as_encoded(), &v)
                 } else {
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    let handle = rocksdb::get_cf_handle(db, cf)?;
+                    let handle = rocksdb_util::get_cf_handle(db, cf)?;
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
@@ -224,7 +223,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     "start_key" => %start_key,
                     "end_key" => %end_key
                 );
-                let handle = rocksdb::get_cf_handle(db, cf)?;
+                let handle = rocksdb_util::get_cf_handle(db, cf)?;
                 wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
             }
         };

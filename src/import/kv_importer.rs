@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use kvproto::import_kvpb::*;
 use uuid::Uuid;
 
-use config::DbConfig;
-use util::collections::HashMap;
+use crate::config::DbConfig;
+use crate::util::collections::HashMap;
 
 use super::client::*;
 use super::engine::*;

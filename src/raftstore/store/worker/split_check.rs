@@ -22,14 +22,14 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use rocksdb::{DBIterator, DB};
 
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::SplitCheckerHost;
-use raftstore::store::engine::{IterOption, Iterable};
-use raftstore::store::{keys, Callback, Msg, PeerMsg};
-use raftstore::Result;
-use storage::{CfName, CF_WRITE, LARGE_CFS};
-use util::transport::{RetryableSendCh, Sender};
-use util::worker::Runnable;
+use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::raftstore::coprocessor::SplitCheckerHost;
+use crate::raftstore::store::engine::{IterOption, Iterable};
+use crate::raftstore::store::{keys, Callback, Msg, PeerMsg};
+use crate::raftstore::Result;
+use crate::storage::{CfName, CF_WRITE, LARGE_CFS};
+use crate::util::transport::{RetryableSendCh, Sender};
+use crate::util::worker::Runnable;
 
 use super::metrics::*;
 
@@ -183,8 +183,8 @@ impl<C: Sender<Msg>> Runner<C> {
         debug!(
             "executing task";
             "region_id" => region_id,
-            "start_key" => ::log_wrappers::Key(&start_key),
-            "end_key" => ::log_wrappers::Key(&end_key),
+            "start_key" => log_wrappers::Key(&start_key),
+            "end_key" => log_wrappers::Key(&end_key),
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 

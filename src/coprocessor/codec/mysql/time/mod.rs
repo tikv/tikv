@@ -26,11 +26,13 @@ use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use cop_datatype::FieldTypeTp;
 
-use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use coprocessor::codec::mysql::{self, Decimal};
-use coprocessor::codec::{Error, Result, TEN_POW};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
+use crate::coprocessor::codec::mysql::duration::{
+    Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
+};
+use crate::coprocessor::codec::mysql::{self, Decimal};
+use crate::coprocessor::codec::{Error, Result, TEN_POW};
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 
 pub use self::extension::*;
 pub use self::weekmode::WeekMode;
@@ -732,6 +734,40 @@ impl Time {
             _ => 31,
         }
     }
+
+    /// Checked time addition. Computes self + rhs, returning None if overflow occurred.
+    pub fn checked_add(self, rhs: &MyDuration) -> Option<Time> {
+        if let Some(add) = self
+            .time
+            .checked_add_signed(Duration::nanoseconds(rhs.to_nanos()))
+        {
+            if add.year() > 9999 {
+                return None;
+            }
+            let mut res = self;
+            res.set_time(add);
+            Some(res)
+        } else {
+            None
+        }
+    }
+
+    /// Checked time subtraction. Computes self - rhs, returning None if overflow occurred.
+    pub fn checked_sub(self, rhs: &MyDuration) -> Option<Time> {
+        if let Some(sub) = self
+            .time
+            .checked_sub_signed(Duration::nanoseconds(rhs.to_nanos()))
+        {
+            if sub.year() < 0 {
+                return None;
+            }
+            let mut res = self;
+            res.set_time(sub);
+            Some(res)
+        } else {
+            None
+        }
+    }
 }
 
 impl PartialOrd for Time {
@@ -879,7 +915,7 @@ mod tests {
 
     use chrono::{Duration, Local};
 
-    use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -1505,5 +1541,52 @@ mod tests {
             let t = Time::parse_fsp(s);
             assert_eq!(fsp, t);
         }
+    }
+
+    #[test]
+    fn test_checked_add_and_sub_duration() {
+        let cases = vec![
+            (
+                "2018-12-30 11:30:45.123456",
+                "00:00:14.876545",
+                "2018-12-30 11:31:00.000001",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "00:30:00",
+                "2018-12-30 12:00:45.123456",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "12:30:00",
+                "2018-12-31 00:00:45.123456",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "1 12:30:00",
+                "2019-01-01 00:00:45.123456",
+            ),
+        ];
+        for (lhs, rhs, exp) in cases.clone() {
+            let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
+            let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_add(&rhs).unwrap();
+            let exp = Time::parse_utc_datetime(exp, 6).unwrap();
+            assert_eq!(res, exp);
+        }
+        for (exp, rhs, lhs) in cases {
+            let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
+            let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_sub(&rhs).unwrap();
+            let exp = Time::parse_utc_datetime(exp, 6).unwrap();
+            assert_eq!(res, exp);
+        }
+
+        let lhs = Time::parse_utc_datetime("9999-12-31 23:59:59", 6).unwrap();
+        let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
+        assert_eq!(lhs.checked_add(&rhs), None);
+        let lhs = Time::parse_utc_datetime("0000-01-01 00:00:01", 6).unwrap();
+        let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
+        assert_eq!(lhs.checked_sub(&rhs), None);
     }
 }

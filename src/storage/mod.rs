@@ -35,12 +35,12 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
 use rocksdb::DB;
 
-use raftstore::store::engine::IterOption;
-use server::readpool::{self, ReadPool};
-use server::ServerRaftStoreRouter;
-use util;
-use util::collections::HashMap;
-use util::worker::{self, Builder, ScheduleError, Worker};
+use crate::raftstore::store::engine::IterOption;
+use crate::server::readpool::{self, ReadPool};
+use crate::server::ServerRaftStoreRouter;
+use crate::util;
+use crate::util::collections::HashMap;
+use crate::util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -475,7 +475,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        use util::worker::FutureWorker;
+        use crate::util::worker::FutureWorker;
 
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
@@ -1746,13 +1746,13 @@ quick_error! {
     }
 }
 
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub enum ErrorHeaderKind {
     NotLeader,
     RegionNotFound,
     KeyNotInRegion,
-    StaleEpoch,
+    EpochNotMatch,
     ServerIsBusy,
     StaleCommand,
     StoreNotMatch,
@@ -1768,7 +1768,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::NotLeader => "not_leader",
             ErrorHeaderKind::RegionNotFound => "region_not_found",
             ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
-            ErrorHeaderKind::StaleEpoch => "stale_epoch",
+            ErrorHeaderKind::EpochNotMatch => "epoch_not_match",
             ErrorHeaderKind::ServerIsBusy => "server_is_busy",
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
@@ -1791,8 +1791,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::RegionNotFound
     } else if header.has_key_not_in_region() {
         ErrorHeaderKind::KeyNotInRegion
-    } else if header.has_stale_epoch() {
-        ErrorHeaderKind::StaleEpoch
+    } else if header.has_epoch_not_match() {
+        ErrorHeaderKind::EpochNotMatch
     } else if header.has_server_is_busy() {
         ErrorHeaderKind::ServerIsBusy
     } else if header.has_stale_command() {
@@ -1813,9 +1813,9 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::config::ReadableSize;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
-    use util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
@@ -3744,7 +3744,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock() {
-        use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
+        use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();

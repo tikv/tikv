@@ -46,8 +46,8 @@ extern crate toml;
 #[cfg(unix)]
 #[macro_use]
 mod util;
-use util::setup::*;
-use util::signal_handler;
+use crate::util::setup::*;
+use crate::util::signal_handler;
 
 use std::process;
 use std::sync::atomic::Ordering;
@@ -108,13 +108,13 @@ fn main() {
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     initial_metric(&config.metric, None);
-    util::print_tikv_info();
+    util::log_tikv_info();
     check_environment_variables();
 
     if tikv_util::panic_mark_file_exists(&config.storage.data_dir) {
         fatal!(
-            "panic_mark_file {:?} exists, there must be something wrong with the db.",
-            tikv_util::panic_mark_file_path(&config.storage.data_dir)
+            "panic_mark_file {} exists, there must be something wrong with the db.",
+            tikv_util::panic_mark_file_path(&config.storage.data_dir).display()
         );
     }
 

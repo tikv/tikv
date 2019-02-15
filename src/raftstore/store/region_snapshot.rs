@@ -16,10 +16,10 @@ use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use std::cmp;
 use std::sync::Arc;
 
-use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
-use raftstore::store::{keys, util, PeerStorage};
-use raftstore::Result;
-use util::set_panic_mark;
+use crate::raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
+use crate::raftstore::store::{keys, util, PeerStorage};
+use crate::raftstore::Result;
+use crate::util::set_panic_mark;
 
 /// Snapshot of a region.
 ///
@@ -336,13 +336,13 @@ mod tests {
     use rocksdb::Writable;
     use tempdir::TempDir;
 
-    use raftstore::store::engine::*;
-    use raftstore::store::keys::*;
-    use raftstore::store::{Engines, PeerStorage};
-    use raftstore::Result;
-    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
-    use util::rocksdb::compact_files_in_range;
-    use util::{escape, rocksdb, worker};
+    use crate::raftstore::store::engine::*;
+    use crate::raftstore::store::keys::*;
+    use crate::raftstore::store::{Engines, PeerStorage};
+    use crate::raftstore::Result;
+    use crate::storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
+    use crate::util::rocksdb_util::{self, compact_files_in_range};
+    use crate::util::{escape, worker};
 
     use super::*;
 
@@ -351,9 +351,11 @@ mod tests {
     fn new_temp_engine(path: &TempDir) -> Engines {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
-            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap()),
             Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
+            ),
+            Arc::new(
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             ),
         )
     }
