@@ -2,7 +2,7 @@
 
 This document describes the code comment style applied to TiKV repositories. When you are to commit, be sure to follow the style to write good code comments.
 
-## Why a good comment matters?
+## Why does a good comment matter?
 
 - To speed up the reviewing process
 - To help maintain the code
@@ -48,26 +48,13 @@ A comment is generally required for:
 - Doc comment
 
     - Used to document the interface of code (structures, fields, macros, etc.)
-    - Use **///** for a line comment 
-    - Use **//!** for a block comment
-    - Use **rustfmt** to format your code
+    - Use **///** for item documentation (functions, attributes, structures, etc)
+    - Use **//!** for module level documentation
 
 - Place the single-line and block comment above the code it’s annotating
 - Fold long lines of comments
 - The maximum width for a line is 100 characters
-- Do not use relative URLs; use **absolute URLs** instead
-
-    Right:
-    
-    ```
-    // For more configuration details, see https://example.com/project/tools/config-items.
-    ```
-    
-    Wrong:
-    
-    ```
-    // For more details, see [Configuration Items](../tools/config-items.md).
-    ```
+- Use relative URLs when you link to positions on you local machine
 
 ### Language for a good comment
 
@@ -93,7 +80,7 @@ A comment is generally required for:
 
     - Do not abbreviate unless it is necessary (for readability purposes)
 
-    - "we" can be used only when it means the code writer
+    - "we" should be used only when it means the code writer *and* the reader
 
 - Sentence
 
