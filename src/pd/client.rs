@@ -213,7 +213,7 @@ impl PdClient for RpcClient {
         Ok(resp.take_store())
     }
 
-    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+    fn get_all_stores(&self, include_tombstone: bool) -> Result<Vec<metapb::Store>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_all_stores"])
             .start_coarse_timer();
@@ -226,7 +226,15 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_stores().to_vec())
+        let mut stores = resp.take_stores().to_vec();
+        if !include_tombstone {
+            for i in (0..stores.len()).rev() {
+                if stores[i].get_state() == metapb::StoreState::Tombstone {
+                    stores.swap_remove(i);
+                }
+            }
+        }
+        Ok(stores)
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {

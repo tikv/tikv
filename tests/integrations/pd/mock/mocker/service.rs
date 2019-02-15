@@ -49,6 +49,12 @@ impl Service {
         header.set_cluster_id(DEFAULT_CLUSTER_ID);
         header
     }
+
+    /// Add an arbitrary store.
+    pub fn add_store(&self, store: Store) {
+        let store_id = store.get_id();
+        self.stores.lock().unwrap().insert(store_id, store);
+    }
 }
 
 fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
