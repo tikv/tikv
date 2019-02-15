@@ -155,7 +155,7 @@ fn test_rpc_client() {
 }
 
 #[test]
-fn test_get_all_stores() {
+fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
@@ -204,6 +204,10 @@ fn test_get_all_stores() {
     let mut s = client.get_all_stores(true).unwrap();
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     assert_eq!(s, all_stores);
+
+    client.get_store(store_id).unwrap();
+    client.get_store(99).unwrap_err();
+    client.get_store(199).unwrap_err();
 }
 
 #[test]

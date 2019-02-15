@@ -210,7 +210,12 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_store())
+        let store = resp.take_store();
+        if store.get_state() != metapb::StoreState::Tombstone {
+            Ok(store)
+        } else {
+            Err(Error::StoreTombstone(format!("{:?}", store)))
+        }
     }
 
     fn get_all_stores(&self, include_tombstone: bool) -> Result<Vec<metapb::Store>> {
