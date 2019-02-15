@@ -153,7 +153,7 @@ pub struct ForwardScanner<S: Snapshot> {
 impl<S: Snapshot> ForwardScanner<S> {
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
-        ::std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
     /// Get the next key-value pair, in forward order.
