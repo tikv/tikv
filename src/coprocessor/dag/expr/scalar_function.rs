@@ -134,6 +134,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
+            | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
@@ -462,7 +463,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDateStringString
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
-            | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::SubDurationAndString
             | ScalarFuncSig::SubStringAndDuration
             | ScalarFuncSig::SubStringAndString
@@ -1031,6 +1031,8 @@ dispatch_call! {
         AddDurationAndDuration => add_duration_and_duration,
         AddDurationAndString => add_duration_and_string,
         AddTimeDurationNull => add_time_duration_null,
+
+        SubDurationAndDuration => sub_duration_and_duration,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1544,7 +1546,6 @@ mod tests {
             ScalarFuncSig::SubDateStringString,
             ScalarFuncSig::SubDatetimeAndDuration,
             ScalarFuncSig::SubDatetimeAndString,
-            ScalarFuncSig::SubDurationAndDuration,
             ScalarFuncSig::SubDurationAndString,
             ScalarFuncSig::SubStringAndDuration,
             ScalarFuncSig::SubStringAndString,
