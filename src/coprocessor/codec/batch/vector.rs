@@ -61,28 +61,32 @@ macro_rules! match_self {
     }};
 }
 
-#[inline]
-fn clone_vec_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
-    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
-    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
-    // here.
-    let mut new_vec = Vec::with_capacity(vec.capacity());
-    new_vec.extend_from_slice(vec);
-    new_vec
-}
-
 impl Clone for VectorValue {
     #[inline]
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
         match self {
-            VectorValue::Int(ref vec) => VectorValue::Int(clone_vec_with_capacity(vec)),
-            VectorValue::Real(ref vec) => VectorValue::Real(clone_vec_with_capacity(vec)),
-            VectorValue::Decimal(ref vec) => VectorValue::Decimal(clone_vec_with_capacity(vec)),
-            VectorValue::Bytes(ref vec) => VectorValue::Bytes(clone_vec_with_capacity(vec)),
-            VectorValue::DateTime(ref vec) => VectorValue::DateTime(clone_vec_with_capacity(vec)),
-            VectorValue::Duration(ref vec) => VectorValue::Duration(clone_vec_with_capacity(vec)),
-            VectorValue::Json(ref vec) => VectorValue::Json(clone_vec_with_capacity(vec)),
+            VectorValue::Int(ref vec) => {
+                VectorValue::Int(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Real(ref vec) => {
+                VectorValue::Real(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Decimal(ref vec) => {
+                VectorValue::Decimal(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Bytes(ref vec) => {
+                VectorValue::Bytes(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::DateTime(ref vec) => {
+                VectorValue::DateTime(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Duration(ref vec) => {
+                VectorValue::Duration(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Json(ref vec) => {
+                VectorValue::Json(crate::util::vec_clone_with_capacity(vec))
+            }
         }
     }
 }
