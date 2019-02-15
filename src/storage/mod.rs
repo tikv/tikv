@@ -1472,10 +1472,10 @@ impl<E: Engine> Storage<E> {
             .start_coarse_timer();
 
         let (tx, future) = oneshot::channel();
-        let read_pool = self.read_pool.clone();
+        let readpool = self.read_pool.clone();
         let region_id = ctx.get_region_id();
         let cb = box move |(_, snapshot)| {
-            if let Ok(fut) = read_pool.future_execute(priority, move |ctxd| {
+            if let Ok(fut) = readpool.future_execute(priority, move |ctxd| {
                 future::result(snapshot)
                     .map_err(txn::Error::from)
                     .map_err(Error::from)
@@ -1590,10 +1590,10 @@ impl<E: Engine> Storage<E> {
             .start_coarse_timer();
 
         let (tx, future) = oneshot::channel();
-        let read_pool = self.read_pool.clone();
+        let readpool = self.read_pool.clone();
         let region_id = ctx.get_region_id();
         let cb = box move |(_, snapshot)| {
-            if let Ok(fut) = read_pool.future_execute(priority, move |ctxd| {
+            if let Ok(fut) = readpool.future_execute(priority, move |ctxd| {
                 future::result(snapshot)
                     .map_err(txn::Error::from)
                     .map_err(Error::from)
