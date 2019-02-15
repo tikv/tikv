@@ -597,7 +597,7 @@ mod benches {
         }
     }
 
-    /// Bench performance of push 10 bytes to a vector based LazyBatchColumn.
+    /// Bench performance of pushing 10 bytes to a vector based LazyBatchColumn.
     #[bench]
     fn bench_lazy_batch_column_by_vec_push_raw_10bytes(b: &mut test::Bencher) {
         let mut column = VectorLazyBatchColumn::raw_with_capacity(1000);
