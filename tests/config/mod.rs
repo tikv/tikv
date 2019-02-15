@@ -79,6 +79,8 @@ fn test_serde_custom_tikv_config() {
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
+        kv_read_slow_log_threshold: ReadableDuration::secs(2),
+        end_point_slow_log_threshold: ReadableDuration::secs(4),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {

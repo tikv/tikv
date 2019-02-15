@@ -20,9 +20,6 @@ use util::time::{self, Duration, Instant};
 use coprocessor::dag::executor::ExecutorMetrics;
 use coprocessor::*;
 
-// If handle time is larger than the lower bound, the query is considered as slow query.
-const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrackerState {
     /// The tracker is just created and not initialized. Initialize means `ctxd` is attached.
@@ -50,6 +47,8 @@ enum TrackerState {
 /// Track coprocessor requests to update statistics and provide slow logs.
 #[derive(Debug)]
 pub struct Tracker {
+    slow_log_threshold: Duration,
+
     request_begin_at: Instant,
     item_begin_at: Instant,
     perf_statistics_start: Option<PerfStatisticsInstant>, // The perf statistics when handle begins
@@ -74,8 +73,10 @@ impl Tracker {
     /// Initialize the tracker. Normally it is called outside future pool's factory context,
     /// because the future pool might be full and we need to wait it. This kind of wait time
     /// has to be recorded.
-    pub fn new(req_ctx: ReqContext) -> Tracker {
+    pub fn new(req_ctx: ReqContext, slow_log_threshold: Duration) -> Tracker {
         Tracker {
+            slow_log_threshold,
+
             request_begin_at: Instant::now_coarse(),
             item_begin_at: Instant::now_coarse(),
             perf_statistics_start: None,
@@ -136,18 +137,16 @@ impl Tracker {
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {
         assert!(self.current_stage == TrackerState::ItemFinished);
-        let is_slow_query = time::duration_to_sec(self.item_process_time) > SLOW_QUERY_LOWER_BOUND;
         let mut exec_details = kvrpcpb::ExecDetails::new();
-        if self.req_ctx.context.get_handle_time() || is_slow_query {
-            let mut handle = kvrpcpb::HandleTime::new();
-            handle.set_process_ms((time::duration_to_sec(self.item_process_time) * 1000.0) as i64);
-            handle.set_wait_ms((time::duration_to_sec(self.wait_time) * 1000.0) as i64);
-            exec_details.set_handle_time(handle);
-        }
-        if self.req_ctx.context.get_scan_detail() || is_slow_query {
-            let detail = self.total_exec_metrics.cf_stats.scan_detail();
-            exec_details.set_scan_detail(detail);
-        }
+
+        let mut handle = kvrpcpb::HandleTime::new();
+        handle.set_process_ms((time::duration_to_sec(self.item_process_time) * 1000.0) as i64);
+        handle.set_wait_ms((time::duration_to_sec(self.wait_time) * 1000.0) as i64);
+        exec_details.set_handle_time(handle);
+
+        let detail = self.total_exec_metrics.cf_stats.scan_detail();
+        exec_details.set_scan_detail(detail);
+
         exec_details
     }
 
@@ -167,7 +166,7 @@ impl Tracker {
         }
 
         // Print slow log if *process* time is long.
-        if time::duration_to_sec(self.total_process_time) > SLOW_QUERY_LOWER_BOUND {
+        if self.total_process_time > self.slow_log_threshold {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
                 super::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });

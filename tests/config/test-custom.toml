@@ -38,6 +38,8 @@ end-point-stream-batch-row-limit = 4096
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
+kv-read-slow-log-threshold = "2s"
+end-point-slow-log-threshold = "4s"
 
 [server.labels]
 a = "b"

@@ -45,6 +45,7 @@ pub struct Endpoint<E: Engine> {
     stream_batch_row_limit: usize,
     stream_channel_size: usize,
     max_handle_duration: Duration,
+    slow_log_threshold: Duration,
 }
 
 impl<E: Engine> Clone for Endpoint<E> {
@@ -69,6 +70,7 @@ impl<E: Engine> Endpoint<E> {
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            slow_log_threshold: cfg.end_point_slow_log_threshold.clone().into(),
         }
     }
 
@@ -279,7 +281,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
-        let mut tracker = box Tracker::new(req_ctx);
+        let mut tracker = box Tracker::new(req_ctx, self.slow_log_threshold);
 
         let result = self.read_pool.future_execute(priority, move |ctxd| {
             tracker.attach_ctxd(ctxd);
@@ -409,7 +411,7 @@ impl<E: Engine> Endpoint<E> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // Must be created befure `future_execute`, otherwise wait time is not tracked.
-        let mut tracker = box Tracker::new(req_ctx);
+        let mut tracker = box Tracker::new(req_ctx, self.slow_log_threshold);
 
         let tx1 = tx.clone();
         let result = self.read_pool.future_execute(priority, move |ctxd| {
