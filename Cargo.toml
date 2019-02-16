@@ -6,12 +6,11 @@ keywords = ["KV", "distributed-systems", "raft"]
 publish = false
 
 [features]
-default = ["tikv_alloc/jemalloc"]
+default = ["tikv_alloc/default"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
-# no-jemalloc = ["tikv_alloc/no-jemalloc"]
 
 [lib]
 name = "tikv"

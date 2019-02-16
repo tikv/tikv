@@ -40,9 +40,9 @@
 //! - mem-profiling - compiles jemalloc and this crate with profiling
 //!   capability
 //!
-//! - jemalloc - compiles default jemalloc
+//! - jemalloc - compiles jemallocator (default)
 //!
-//! - tcmalloc - compiles with `cargo build --no-default-features --features="tikv_alloc/tcmalloc"`
+//! - tcmalloc - compiles tcmalloc
 //!
 //! cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs` and
 //! is passed to rustc directly with `--cfg`; in other words it's not
@@ -97,40 +97,31 @@ use libc;
 #[macro_use]
 extern crate log;
 
-// TCMalloc
-#[cfg(all(unix, not(fuzzing), feature = "tcmallocator"))]
-use tcmalloc::TCMalloc;
-
-#[cfg(all(unix, not(fuzzing), feature = "tcmallocator"))]
-#[global_allocator]
-static GLOBAL: TCMalloc = TCMalloc;
-
-// Jemallocator
 #[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
-pub mod jemalloc;
-#[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
-pub use self::jemalloc::*;
+#[path = "jemalloc.rs"]
+mod imp;
+#[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
+#[path = "default.rs"]
+mod imp;
 
+pub use crate::imp::*;
+
+// The Jemallocator Allocator
 #[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
+// The TCMalloc Allocator
+#[cfg(all(unix, not(fuzzing), not(feature="jemalloc"), feature = "tcmalloc"))]
+use tcmalloc::TCMalloc;
+
+#[cfg(all(unix, not(fuzzing), not(feature="jemalloc"), feature = "tcmalloc"))]
+#[global_allocator]
+static ALLOC: TCMalloc = tcmalloc::TCMalloc;
+
 // The System Global Allocator, without jemalloc or tcmalloc.
-// This is only necessary prior to the removal of jemalloc from
-// Rust. Afterwards this might be removed.
-#[cfg(all(
-    unix,
-    not(fuzzing),
-    not(feature = "jemalloc"),
-    not(feature = "tcmallocator")
-))]
+#[cfg(not(all(unix, not(fuzzing), any(feature = "jemalloc", feature = "tcmalloc"))))]
 #[global_allocator]
 static ALLOC: std::alloc::System = std::alloc::System;
 
-#[cfg(all(unix, not(fuzzing), not(feature = "jemalloc")))]
-mod imp {
-    pub fn dump_stats() -> String {
-        String::new()
-    }
-    pub fn dump_prof(_path: Option<&str>) {}
-}
+

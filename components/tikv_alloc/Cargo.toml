@@ -7,16 +7,11 @@ publish = false
 
 [features]
 default = ["jemalloc"]
-
-jemalloc=["jemallocator"]
-tcmallocator=["tcmalloc"]
+jemalloc = ["jemallocator"]
 
 # Build jemalloc's profiling features. Without this
 # certain profile functions will return nothing.
 mem-profiling = ["jemallocator/profiling"]
-
-# # Don't build jemalloc; use the system allocator.
-# no-jemalloc = []
 
 [dependencies]
 libc = "0.2"
