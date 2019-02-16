@@ -244,6 +244,24 @@ impl Duration {
         self.dur = StdDuration::new(self.dur.as_secs(), nanos);
         Ok(self)
     }
+
+    /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
+    pub fn checked_add(self, rhs: &Duration) -> Option<Duration> {
+        let add = match self.to_nanos().checked_add(rhs.to_nanos()) {
+            Some(result) => result,
+            None => return None,
+        };
+        Duration::from_nanos(add, self.fsp().max(rhs.fsp()) as i8).ok()
+    }
+
+    /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
+    pub fn checked_sub(self, rhs: &Duration) -> Option<Duration> {
+        let sub = match self.to_nanos().checked_sub(rhs.to_nanos()) {
+            Some(result) => result,
+            None => return None,
+        };
+        Duration::from_nanos(sub, self.fsp().max(rhs.fsp()) as i8).ok()
+    }
 }
 
 impl Display for Duration {
@@ -530,5 +548,36 @@ mod tests {
             let got = Duration::decode(&mut buf.as_slice()).unwrap();
             assert_eq!(t, got);
         }
+    }
+
+    #[test]
+    fn test_checked_add_and_sub_duration() {
+        let cases = vec![
+            ("11:30:45.123456", "00:00:14.876545", "11:31:00.000001"),
+            ("11:30:45.123456", "00:30:00", "12:00:45.123456"),
+            ("11:30:45.123456", "12:30:00", "1 00:00:45.123456"),
+            ("11:30:45.123456", "1 12:30:00", "2 00:00:45.123456"),
+        ];
+        for (lhs, rhs, exp) in cases.clone() {
+            let lhs = Duration::parse(lhs.as_bytes(), 6).unwrap();
+            let rhs = Duration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_add(&rhs).unwrap();
+            let exp = Duration::parse(exp.as_bytes(), 6).unwrap();
+            assert_eq!(res, exp);
+        }
+        for (exp, rhs, lhs) in cases {
+            let lhs = Duration::parse(lhs.as_bytes(), 6).unwrap();
+            let rhs = Duration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_sub(&rhs).unwrap();
+            let exp = Duration::parse(exp.as_bytes(), 6).unwrap();
+            assert_eq!(res, exp);
+        }
+
+        let lhs = Duration::parse(b"00:00:01", 6).unwrap();
+        let rhs = Duration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
+        assert_eq!(lhs.checked_add(&rhs), None);
+        let lhs = Duration::parse(b"-00:00:01", 6).unwrap();
+        let rhs = Duration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
+        assert_eq!(lhs.checked_sub(&rhs), None);
     }
 }
