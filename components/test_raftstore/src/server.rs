@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use grpc::{EnvBuilder, Error as GrpcError};
+use crate::grpc::{EnvBuilder, Error as GrpcError};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use tempdir::TempDir;
@@ -151,7 +151,8 @@ impl Simulator for ServerCluster {
             storage_read_pool,
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         // Create import service.
@@ -233,7 +234,8 @@ impl Simulator for ServerCluster {
             local_reader,
             coprocessor_host,
             importer,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {

@@ -18,9 +18,9 @@ use std::sync::Arc;
 use std::usize;
 use tipb::expression::ByItem;
 
-use coprocessor::codec::datum::Datum;
-use coprocessor::dag::executor::OriginCols;
-use coprocessor::dag::expr::{EvalContext, Result};
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::executor::OriginCols;
+use crate::coprocessor::dag::expr::{EvalContext, Result};
 
 const HEAP_MAX_CAPACITY: usize = 1024;
 
@@ -186,12 +186,12 @@ mod tests {
 
     use tipb::expression::{ByItem, Expr, ExprType};
 
-    use coprocessor::codec::table::RowColsDict;
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::executor::OriginCols;
-    use coprocessor::dag::expr::EvalContext;
-    use util::codec::number::*;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::table::RowColsDict;
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::executor::OriginCols;
+    use crate::coprocessor::dag::expr::EvalContext;
+    use crate::util::codec::number::*;
+    use crate::util::collections::HashMap;
 
     use super::*;
 
@@ -350,15 +350,13 @@ mod tests {
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
 
-        assert!(
-            topn_heap
-                .try_add_row(
-                    OriginCols::new(0 as i64, row_data3, Arc::default()),
-                    bad_key1,
-                    Arc::clone(&order_cols)
-                )
-                .is_err()
-        );
+        assert!(topn_heap
+            .try_add_row(
+                OriginCols::new(0 as i64, row_data3, Arc::default()),
+                bad_key1,
+                Arc::clone(&order_cols)
+            )
+            .is_err());
 
         assert!(topn_heap.into_sorted_vec().is_err());
     }

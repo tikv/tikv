@@ -20,8 +20,8 @@ use tipb::expression::ScalarFuncSig;
 
 use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
@@ -134,6 +134,7 @@ impl ScalarFunc {
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::AddDurationAndString
+            | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
@@ -462,7 +463,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDateStringString
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
-            | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::SubDurationAndString
             | ScalarFuncSig::SubStringAndDuration
             | ScalarFuncSig::SubStringAndString
@@ -1029,6 +1029,8 @@ dispatch_call! {
         AddDurationAndDuration => add_duration_and_duration,
         AddDurationAndString => add_duration_and_string,
         AddTimeDurationNull => add_time_duration_null,
+
+        SubDurationAndDuration => sub_duration_and_duration,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1058,7 +1060,7 @@ dispatch_call! {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::dag::expr::{Error, ScalarFunc};
+    use crate::coprocessor::dag::expr::{Error, ScalarFunc};
     use std::usize;
     use tipb::expression::ScalarFuncSig;
 
@@ -1542,7 +1544,6 @@ mod tests {
             ScalarFuncSig::SubDateStringString,
             ScalarFuncSig::SubDatetimeAndDuration,
             ScalarFuncSig::SubDatetimeAndString,
-            ScalarFuncSig::SubDurationAndDuration,
             ScalarFuncSig::SubDurationAndString,
             ScalarFuncSig::SubStringAndDuration,
             ScalarFuncSig::SubStringAndString,

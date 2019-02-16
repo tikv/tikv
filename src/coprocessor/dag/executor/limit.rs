@@ -14,9 +14,9 @@
 use tipb::executor::Limit;
 
 use super::ExecutorMetrics;
-use coprocessor::dag::executor::{Executor, Row};
-use coprocessor::dag::expr::EvalWarnings;
-use coprocessor::Result;
+use crate::coprocessor::dag::executor::{Executor, Row};
+use crate::coprocessor::dag::expr::EvalWarnings;
+use crate::coprocessor::Result;
 
 /// Retrieves rows from the source executor and only produces part of the rows.
 pub struct LimitExecutor<'a> {
@@ -73,8 +73,8 @@ impl<'a> Executor for LimitExecutor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::coprocessor::codec::datum::Datum;
     use cop_datatype::FieldTypeTp;
-    use coprocessor::codec::datum::Datum;
 
     use super::super::tests::{gen_table_scan_executor, get_range, new_col_info};
     use super::*;

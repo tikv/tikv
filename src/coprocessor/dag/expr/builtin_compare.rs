@@ -18,9 +18,9 @@ use std::{f64, i64};
 use chrono::TimeZone;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
-use coprocessor::codec::{datum, mysql, Datum};
-use coprocessor::dag::expr::Expression;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
+use crate::coprocessor::codec::{datum, mysql, Datum};
+use crate::coprocessor::dag::expr::Expression;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpOp {
@@ -406,16 +406,20 @@ fn cmp_i64_with_unsigned_flag(
             let rhs = rhs as u64;
             lhs.cmp(&rhs)
         }
-        (true, false) => if rhs < 0 || lhs as u64 > i64::MAX as u64 {
-            Ordering::Greater
-        } else {
-            lhs.cmp(&rhs)
-        },
-        (false, true) => if lhs < 0 || rhs as u64 > i64::MAX as u64 {
-            Ordering::Less
-        } else {
-            lhs.cmp(&rhs)
-        },
+        (true, false) => {
+            if rhs < 0 || lhs as u64 > i64::MAX as u64 {
+                Ordering::Greater
+            } else {
+                lhs.cmp(&rhs)
+            }
+        }
+        (false, true) => {
+            if lhs < 0 || rhs as u64 > i64::MAX as u64 {
+                Ordering::Less
+            } else {
+                lhs.cmp(&rhs)
+            }
+        }
     }
 }
 
@@ -477,11 +481,11 @@ where
 mod tests {
     use super::super::EvalConfig;
     use super::*;
-    use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};

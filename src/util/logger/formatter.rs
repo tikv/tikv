@@ -119,7 +119,8 @@ mod tests {
         write_file_name(
             &mut s,
             "+=!@#$%^&*(){}|:\"<>/?\u{000f} 老虎 tiger 🐅\r\n\\-_1234567890.rs",
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!("tiger-_1234567890.rs", &String::from_utf8(s).unwrap())
     }
 }

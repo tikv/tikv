@@ -179,8 +179,6 @@ fn test_server_snap_gc() {
         if now.elapsed() > Duration::from_secs(10) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
-        // trigger log compaction.
-        cluster.must_put(b"k2", b"v2");
         sleep_ms(20);
     }
 }

@@ -23,7 +23,7 @@ use cop_datatype;
 use cop_datatype::prelude::*;
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::{datum, Datum};
+use crate::coprocessor::codec::{datum, Datum};
 use safemem;
 
 const SPACE: u8 = 0o40u8;
@@ -511,7 +511,7 @@ impl ScalarFunc {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
+    #[allow(clippy::wrong_self_convention)]
     #[inline]
     pub fn from_base64<'a, 'b: 'a>(
         &'b self,
@@ -1050,16 +1050,16 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
+    use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
     use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
-    use coprocessor::codec::mysql::charset::CHARSET_BIN;
     use std::{f64, i64};
     use tipb::expression::{Expr, ScalarFuncSig};
 
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
         col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
     };
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
     fn test_length() {
@@ -1879,7 +1879,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
@@ -1934,7 +1934,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let mut expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);

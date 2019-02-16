@@ -281,9 +281,16 @@ fn run_libfuzzer(target: &str) -> Result<(), Error> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     panic!("libfuzzer-sys only supports Linux and macOS");
 
+    // FIXME: The -C codegen-units=1 and -C incremental=..
+    // below seem to workaround some difficult issues in Rust nightly
+    // https://github.com/rust-lang/rust/issues/53945.
+    // If this is ever fixed remember to remove the fuzz-incremental
+    // entry from .gitignore.
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
     rust_flags.push_str(
         "--cfg fuzzing \
+         -C codegen-units=1 \
+         -C incremental=fuzz-incremental \
          -C passes=sancov \
          -C llvm-args=-sanitizer-coverage-level=4 \
          -C llvm-args=-sanitizer-coverage-trace-pc-guard \

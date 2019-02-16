@@ -19,25 +19,30 @@ lazy_static! {
         "Bucketed histogram of import rpc duration",
         &["request", "result"],
         exponential_buckets(0.001, 2.0, 30).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref IMPORT_WRITE_CHUNK_BYTES: Histogram = register_histogram!(
         "tikv_import_write_chunk_bytes",
         "Bucketed histogram of import write chunk bytes",
         exponential_buckets(1024.0, 2.0, 20).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref IMPORT_WRITE_CHUNK_DURATION: Histogram = register_histogram!(
         "tikv_import_write_chunk_duration",
         "Bucketed histogram of import write chunk duration",
         exponential_buckets(0.001, 2.0, 20).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref IMPORT_UPLOAD_CHUNK_BYTES: Histogram = register_histogram!(
         "tikv_import_upload_chunk_bytes",
         "Bucketed histogram of import upload chunk bytes",
         exponential_buckets(1024.0, 2.0, 20).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref IMPORT_UPLOAD_CHUNK_DURATION: Histogram = register_histogram!(
         "tikv_import_upload_chunk_duration",
         "Bucketed histogram of import upload chunk duration",
         exponential_buckets(0.001, 2.0, 20).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
 }

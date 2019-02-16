@@ -16,14 +16,14 @@ use std::sync::Arc;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 
-use storage::Store;
+use crate::storage::Store;
 
 use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,
 };
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::*;
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::*;
 
 /// Utilities to build an executor DAG.
 ///
@@ -53,7 +53,7 @@ impl DAGBuilder {
         for mut exec in exec_descriptors {
             let curr: Box<Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                    return Err(box_err!("got too much *scan exec, should be only one"))
+                    return Err(box_err!("got too much *scan exec, should be only one"));
                 }
                 ExecType::TypeSelection => Box::new(SelectionExecutor::new(
                     exec.take_selection(),

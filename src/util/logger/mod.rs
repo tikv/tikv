@@ -19,8 +19,8 @@ use std::io::{self, BufWriter};
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::grpc;
 use chrono::{self, Duration};
-use grpc;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
@@ -46,7 +46,7 @@ pub fn init_log<D>(
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
-    <D as Drain>::Err: ::std::fmt::Debug,
+    <D as Drain>::Err: std::fmt::Debug,
 {
     let logger = if use_async {
         let drain = Async::new(drain.fuse())
@@ -62,9 +62,9 @@ where
         slog::Logger::root(drain, slog_o!())
     };
 
-    ::slog_global::set_global(logger);
+    slog_global::set_global(logger);
     if init_stdlog {
-        ::slog_global::redirect_std_log(Some(level))?;
+        slog_global::redirect_std_log(Some(level))?;
         grpc::redirect_log();
     }
 
@@ -279,7 +279,7 @@ impl<'a> Drop for Serializer<'a> {
     fn drop(&mut self) {}
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(write_literal))]
+#[allow(clippy::write_literal)]
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_none(&mut self, key: Key) -> slog::Result {
         self.emit_arguments(key, &format_args!("None"))
@@ -361,16 +361,16 @@ mod tests {
         );
 
         slog_debug!(logger, "Slow query";
-		    "sql" =>"SELECT * FROM TABLE WHERE ID=\"abc\"",
-		    "duration" => ?Duration::new(0, 123),
-		    "process keys" => 1500,
-	    );
+            "sql" => "SELECT * FROM TABLE WHERE ID=\"abc\"",
+            "duration" => ?Duration::new(0, 123),
+            "process keys" => 1500,
+        );
 
         slog_warn!(logger, "Type";
-            "Counter" => ::std::f64::NAN,
-            "Score" => ::std::f64::INFINITY,
-            "Other" => ::std::f64::NEG_INFINITY
-         );
+            "Counter" => std::f64::NAN,
+            "Score" => std::f64::INFINITY,
+            "Other" => std::f64::NEG_INFINITY
+        );
 
         let none: Option<u8> = None;
         slog_info!(logger, "more type tests";
@@ -384,12 +384,12 @@ mod tests {
             "is_None" => none,
             "u8" => 34 as u8,
             "str_array" => ?["💖",
-			    "�",
-			    "☺☻☹",
-			    "日a本b語ç日ð本Ê語þ日¥本¼語i日©",
-			    "日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©",
-			    "\\x80\\x80\\x80\\x80",
-			    "<car><mirror>XML</mirror></car>"]
+                "�",
+                "☺☻☹",
+                "日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+                "日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©",
+                "\\x80\\x80\\x80\\x80",
+                "<car><mirror>XML</mirror></car>"]
         );
 
         let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []

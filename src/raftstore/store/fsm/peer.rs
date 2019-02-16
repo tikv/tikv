@@ -35,34 +35,34 @@ use raft::eraftpb::ConfChangeType;
 use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use pd::{PdClient, PdTask};
-use raftstore::{Error, Result};
-use storage::CF_RAFT;
-use util::mpsc::{self, LooseBoundedSender, Receiver};
-use util::time::duration_to_sec;
-use util::worker::{Scheduler, Stopped};
-use util::{escape, is_zero_duration};
+use crate::pd::{PdClient, PdTask};
+use crate::raftstore::{Error, Result};
+use crate::storage::CF_RAFT;
+use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
+use crate::util::time::duration_to_sec;
+use crate::util::worker::{Scheduler, Stopped};
+use crate::util::{escape, is_zero_duration};
 
-use raftstore::coprocessor::RegionChangeEvent;
-use raftstore::store::cmd_resp::{bind_term, new_error};
-use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
-use raftstore::store::fsm::store::{PollContext, StoreMeta};
-use raftstore::store::fsm::{
+use crate::raftstore::coprocessor::RegionChangeEvent;
+use crate::raftstore::store::cmd_resp::{bind_term, new_error};
+use crate::raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
+use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
+use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
     RegionProposal,
 };
-use raftstore::store::keys::{self, enc_end_key, enc_start_key};
-use raftstore::store::metrics::*;
-use raftstore::store::msg::Callback;
-use raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
-use raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
-use raftstore::store::transport::Transport;
-use raftstore::store::util::KeysInfoFormatter;
-use raftstore::store::worker::{
+use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
+use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
+use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
-use raftstore::store::Engines;
-use raftstore::store::{
+use crate::raftstore::store::Engines;
+use crate::raftstore::store::{
     util, Config, PeerMsg, PeerTick, SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
 };
 
@@ -119,7 +119,7 @@ impl PeerFsm {
                     "find no peer for store {} in region {:?}",
                     store_id,
                     region
-                ))
+                ));
             }
             Some(peer) => peer.clone(),
         };
@@ -187,6 +187,11 @@ impl PeerFsm {
     }
 
     #[inline]
+    pub fn peer_id(&self) -> u64 {
+        self.peer.peer_id()
+    }
+
+    #[inline]
     pub fn stop(&mut self) {
         self.stopped = true;
     }
@@ -245,9 +250,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg>) {
         for m in msgs.drain(..) {
             match m {
-                PeerMsg::RaftMessage(msg) => if let Err(e) = self.on_raft_message(msg) {
-                    error!("{} handle raft message err: {:?}", self.fsm.peer.tag, e);
-                },
+                PeerMsg::RaftMessage(msg) => {
+                    if let Err(e) = self.on_raft_message(msg) {
+                        error!("{} handle raft message err: {:?}", self.fsm.peer.tag, e);
+                    }
+                }
                 PeerMsg::RaftCmd {
                     send_time,
                     request,
@@ -317,6 +324,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
+        if self.fsm.stopped {
+            return;
+        }
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::RaftLogGc => self.on_raft_gc_log_tick(),
@@ -573,6 +583,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .timer
             .delay(timeout)
             .map(move |_| {
+                fail_point!(
+                    "on_raft_log_gc_tick_1",
+                    peer_id == 1 && tick == PeerTick::RaftLogGc,
+                    |_| unreachable!()
+                );
                 if let Err(e) = mb.force_send(PeerMsg::Tick(region_id, tick)) {
                     info!(
                         "[region {}] {} failed to schedule peer tick {:?}: {:?}",
@@ -1094,7 +1109,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.ctx.router.close(region_id);
         self.fsm.stop();
 
-        if is_initialized && !merged_by_target
+        if is_initialized
+            && !merged_by_target
             && meta
                 .region_ranges
                 .remove(&enc_end_key(self.fsm.peer.region()))
@@ -1773,9 +1789,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::CompactLog { first_index, state } => if !merged {
-                    self.on_ready_compact_log(first_index, state)
-                },
+                ExecResult::CompactLog { first_index, state } => {
+                    if !merged {
+                        self.on_ready_compact_log(first_index, state)
+                    }
+                }
                 ExecResult::SplitRegion { derived, regions } => {
                     self.on_ready_split_region(derived, regions)
                 }
@@ -1822,13 +1840,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             {
                 let meta = self.ctx.store_meta.lock().unwrap();
                 match meta.regions.get(&target_region.get_id()) {
-                    Some(r) => if r != target_region {
-                        return Err(box_err!(
-                            "target region not matched, skip proposing: {:?} != {:?}",
-                            r,
-                            target_region
-                        ));
-                    },
+                    Some(r) => {
+                        if r != target_region {
+                            return Err(box_err!(
+                                "target region not matched, skip proposing: {:?} != {:?}",
+                                r,
+                                target_region
+                            ));
+                        }
+                    }
                     None => {
                         return Err(box_err!(
                             "target region {} doesn't exist.",
@@ -1907,7 +1927,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
-            Err(Error::StaleEpoch(msg, mut new_regions)) => {
+            Err(Error::EpochNotMatch(msg, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
@@ -1916,8 +1936,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if let Some(sibling_region) = sibling_region {
                     new_regions.push(sibling_region);
                 }
-                self.ctx.raft_metrics.invalid_proposal.stale_epoch += 1;
-                Err(Error::StaleEpoch(msg, new_regions))
+                self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
+                Err(Error::EpochNotMatch(msg, new_regions))
             }
             Err(e) => Err(e),
             Ok(()) => Ok(None),
@@ -1988,7 +2008,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         )
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
+    #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
         self.register_raft_gc_log_tick();
 
@@ -2077,14 +2097,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         total_gc_logs += compact_idx - first_idx;
 
-        let term = self
-            .fsm
-            .peer
-            .raft_group
-            .raft
-            .raft_log
-            .term(compact_idx)
-            .unwrap();
+        let res = self.fsm.peer.raft_group.raft.raft_log.term(compact_idx);
+        let term = match res {
+            Ok(t) => t,
+            Err(e) => panic!(
+                "{} fail to load term for {}: {:?}",
+                self.fsm.peer.tag, compact_idx, e
+            ),
+        };
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
@@ -2210,7 +2230,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 region.get_region_epoch(),
                 epoch
             );
-            return Err(Error::StaleEpoch(
+            return Err(Error::EpochNotMatch(
                 format!(
                     "{} epoch changed {:?} != {:?}, retry later",
                     self.fsm.peer.tag, latest_epoch, epoch

@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::collections::HashSet;
 use std::sync::Arc;
-use util::collections::HashSet;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanOn};
-use coprocessor::codec::table;
-use coprocessor::{util, Result};
+use crate::coprocessor::codec::table;
+use crate::coprocessor::{util, Result};
+use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
-use storage::Store;
 use tipb::executor::TableScan;
 use tipb::schema::ColumnInfo;
 
@@ -92,9 +92,9 @@ mod tests {
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use kvproto::coprocessor::KeyRange;
-    use storage::SnapshotStore;
-    use tipb::executor::TableScan;
+    use crate::kvproto::coprocessor::KeyRange;
+    use crate::storage::SnapshotStore;
+    use crate::tipb::executor::TableScan;
 
     use super::super::{
         scanner::tests::{get_point_range, prepare_table_data, Data},

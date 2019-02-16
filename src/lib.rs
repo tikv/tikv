@@ -21,18 +21,14 @@
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
 #![feature(duration_as_u128)]
-#![feature(entry_or_default)]
-#![feature(proc_macro_non_items)]
-#![feature(proc_macro_gen)]
-#![feature(ascii_ctype)]
+#![feature(proc_macro_hygiene)]
 #![feature(const_int_ops)]
-#![feature(use_extern_macros)]
 #![feature(cell_update)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![cfg_attr(feature = "cargo-clippy", allow(nonminimal_bool))]
+#![cfg_attr(feature = "cargo-clippy", allow(clippy::nonminimal_bool))]
 
 extern crate alloc;
 extern crate backtrace;
@@ -66,6 +62,8 @@ extern crate num;
 extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
+#[cfg(target_os = "linux")]
+extern crate procinfo;
 extern crate prometheus_static_metric;
 extern crate protobuf;
 #[macro_use]
@@ -90,7 +88,7 @@ extern crate serde_json;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 extern crate slog_async;
@@ -143,4 +141,4 @@ pub mod raftstore;
 pub mod server;
 pub mod storage;
 
-pub use storage::Storage;
+pub use crate::storage::Storage;

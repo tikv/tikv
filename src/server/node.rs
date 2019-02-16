@@ -18,22 +18,22 @@ use std::time::Duration;
 
 use super::transport::RaftStoreRouter;
 use super::Result;
-use import::SSTImporter;
-use kvproto::metapb;
-use kvproto::raft_serverpb::StoreIdent;
-use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
-use protobuf::RepeatedField;
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::fsm::{RaftBatchSystem, SendCh};
-use raftstore::store::{
+use crate::import::SSTImporter;
+use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
+use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::store::fsm::{RaftBatchSystem, SendCh};
+use crate::raftstore::store::{
     self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, SnapManager, Transport,
 };
+use crate::server::readpool::ReadPool;
+use crate::server::Config as ServerConfig;
+use crate::server::ServerRaftStoreRouter;
+use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
+use crate::util::worker::{FutureWorker, Worker};
+use kvproto::metapb;
+use kvproto::raft_serverpb::StoreIdent;
+use protobuf::RepeatedField;
 use rocksdb::DB;
-use server::readpool::ReadPool;
-use server::Config as ServerConfig;
-use server::ServerRaftStoreRouter;
-use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -129,7 +129,7 @@ where
     /// Starts the Node. It tries to bootstrap cluster if the cluster is not
     /// bootstrapped yet. Then it spawns a thread to run the raftstore in
     /// background.
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
         engines: Engines,
@@ -321,7 +321,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[allow(clippy::too_many_arguments)]
     fn start_store<T>(
         &mut self,
         store_id: u64,
@@ -376,8 +376,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::check_region_epoch;
+    use crate::raftstore::store::keys;
     use kvproto::metapb;
-    use raftstore::store::keys;
 
     #[test]
     fn test_check_region_epoch() {

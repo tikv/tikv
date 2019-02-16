@@ -28,14 +28,14 @@ use super::metrics::*;
 use super::{
     Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
-use raftstore::errors::Error as RaftServerError;
-use raftstore::store::engine::IterOption;
-use raftstore::store::engine::Peekable;
-use raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
-use raftstore::store::{RegionIterator, RegionSnapshot};
+use crate::raftstore::errors::Error as RaftServerError;
+use crate::raftstore::store::engine::IterOption;
+use crate::raftstore::store::engine::Peekable;
+use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
+use crate::raftstore::store::{RegionIterator, RegionSnapshot};
+use crate::server::transport::RaftStoreRouter;
+use crate::storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
 use rocksdb::TablePropertiesCollection;
-use server::transport::RaftStoreRouter;
-use storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
 
 quick_error! {
     #[derive(Debug)]
@@ -323,7 +323,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
-        }).map_err(|e| {
+        })
+        .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             e.into()
@@ -353,7 +354,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
                 cb((cb_ctx, Err(e)))
             }
-        }).map_err(|e| {
+        })
+        .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()

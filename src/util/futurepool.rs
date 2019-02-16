@@ -25,21 +25,23 @@ use futures::Future;
 use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
 use prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec};
 
-use util;
-use util::collections::HashMap;
-use util::time::Instant;
+use crate::util;
+use crate::util::collections::HashMap;
+use crate::util::time::Instant;
 
 lazy_static! {
     pub static ref FUTUREPOOL_PENDING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_futurepool_pending_task_total",
         "Current future_pool pending + running tasks.",
         &["name"]
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref FUTUREPOOL_HANDLED_TASK_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_futurepool_handled_task_total",
         "Total number of future_pool handled tasks.",
         &["name"]
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 pub trait Context: fmt::Debug + Send {
@@ -288,8 +290,9 @@ mod tests {
             let ctx = ctxd.current_thread_context_mut();
             assert_eq!(ctx.ctx_thread_id, main_thread_id);
             future::ok::<(), ()>(())
-        }).wait()
-            .unwrap();
+        })
+        .wait()
+        .unwrap();
     }
 
     #[test]

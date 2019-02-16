@@ -19,9 +19,9 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
-use coprocessor::codec::datum::Datum;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::Result;
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
@@ -146,7 +146,7 @@ impl Executor for TopNExecutor {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
-            if let Some(mut topn_warnings) = self.eval_warnings.take() {
+            if let Some(topn_warnings) = self.eval_warnings.take() {
                 warnings.merge(topn_warnings);
             }
             Some(warnings)
@@ -169,11 +169,11 @@ pub mod tests {
     use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType};
 
-    use coprocessor::codec::table::RowColsDict;
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::executor::OriginCols;
-    use util::codec::number::NumberEncoder;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::table::RowColsDict;
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::executor::OriginCols;
+    use crate::util::codec::number::NumberEncoder;
+    use crate::util::collections::HashMap;
 
     use super::super::tests::{gen_table_scan_executor, get_range, new_col_info};
     use super::*;
@@ -335,15 +335,13 @@ pub mod tests {
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
 
-        assert!(
-            topn_heap
-                .try_add_row(
-                    OriginCols::new(0 as i64, row_data3, Arc::default()),
-                    bad_key1,
-                    Arc::clone(&order_cols)
-                )
-                .is_err()
-        );
+        assert!(topn_heap
+            .try_add_row(
+                OriginCols::new(0 as i64, row_data3, Arc::default()),
+                bad_key1,
+                Arc::clone(&order_cols)
+            )
+            .is_err());
         assert!(topn_heap.into_sorted_vec().is_err());
     }
 

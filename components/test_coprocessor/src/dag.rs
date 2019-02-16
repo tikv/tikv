@@ -277,7 +277,7 @@ impl Iterator for DAGChunkSpliter {
             }
             assert_eq!(self.datums.len() >= self.col_cnt, true);
             let mut cols = self.datums.split_off(self.col_cnt);
-            ::std::mem::swap(&mut self.datums, &mut cols);
+            std::mem::swap(&mut self.datums, &mut cols);
             return Some(cols);
         }
     }

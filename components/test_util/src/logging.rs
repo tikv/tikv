@@ -70,7 +70,8 @@ pub fn init_log_for_test() {
     let output = env::var("LOG_FILE").ok();
     let level = tikv::util::logger::get_level_by_string(
         &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
-    ).unwrap();
+    )
+    .unwrap();
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let drain = CaseTraceLogger { f: writer };
@@ -101,5 +102,6 @@ pub fn init_log_for_test() {
     tikv::util::logger::init_log(
         filtered, level, false, // disable async drainer
         true,  // init std log
-    ).unwrap();
+    )
+    .unwrap()
 }

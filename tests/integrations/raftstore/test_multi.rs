@@ -59,7 +59,7 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
 
-    // TODO add stale epoch test cases.
+    // TODO add epoch not match test cases.
 }
 
 fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -127,7 +127,7 @@ fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize
     cluster.run();
 
     let half = (count as u64 + 1) / 2;
-    for i in 1..half + 1 {
+    for i in 1..=half {
         cluster.stop_node(i);
     }
     if let Some(leader) = cluster.leader_of_region(1) {

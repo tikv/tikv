@@ -28,12 +28,12 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use rocksdb::{Writable, WriteBatch, DB};
 
-use raftstore::store::util::{conf_state_from_region, Engines};
-use raftstore::store::ProposalContext;
-use raftstore::{Error, Result};
-use storage::CF_RAFT;
-use util::worker::Scheduler;
-use util::{self, rocksdb};
+use crate::raftstore::store::util::{conf_state_from_region, Engines};
+use crate::raftstore::store::ProposalContext;
+use crate::raftstore::{Error, Result};
+use crate::storage::CF_RAFT;
+use crate::util::worker::Scheduler;
+use crate::util::{self, rocksdb_util};
 
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
 use super::keys::{self, enc_end_key, enc_start_key};
@@ -348,7 +348,7 @@ impl InvokeContext {
             .set_commit(snapshot_index);
         snapshot_raft_state.set_last_index(snapshot_index);
 
-        let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::snapshot_raft_state_key(self.region_id),
@@ -359,7 +359,7 @@ impl InvokeContext {
 
     #[inline]
     pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
-        let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::apply_state_key(self.region_id),
@@ -464,7 +464,7 @@ fn init_last_term(
                 "[region {}] entry at {} doesn't exist, may lose data.",
                 region.get_id(),
                 last_idx
-            ))
+            ));
         }
         Some(e) => e.get_term(),
     })
@@ -822,7 +822,7 @@ impl PeerStorage {
         }
 
         // Delete any previously appended log entries which never committed.
-        for i in (last_index + 1)..(prev_last_index + 1) {
+        for i in (last_index + 1)..=prev_last_index {
             ready_ctx
                 .raft_wb_mut()
                 .delete(&keys::raft_log_key(self.get_region_id(), i))?;
@@ -929,10 +929,9 @@ impl PeerStorage {
     pub fn clear_data(&self) -> Result<()> {
         let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
-        box_try!(
-            self.region_sched
-                .schedule(RegionTask::destroy(region_id, start_key, end_key))
-        );
+        box_try!(self
+            .region_sched
+            .schedule(RegionTask::destroy(region_id, start_key, end_key)));
         Ok(())
     }
 
@@ -1008,23 +1007,25 @@ impl PeerStorage {
     /// Cancel applying snapshot, return true if the job can be considered not be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_cancelled = match *self.snap_state.borrow() {
-            SnapState::Applying(ref status) => if status.compare_and_swap(
-                JOB_STATUS_PENDING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_PENDING
-            {
-                true
-            } else if status.compare_and_swap(
-                JOB_STATUS_RUNNING,
-                JOB_STATUS_CANCELLING,
-                Ordering::SeqCst,
-            ) == JOB_STATUS_RUNNING
-            {
-                return false;
-            } else {
-                false
-            },
+            SnapState::Applying(ref status) => {
+                if status.compare_and_swap(
+                    JOB_STATUS_PENDING,
+                    JOB_STATUS_CANCELLING,
+                    Ordering::SeqCst,
+                ) == JOB_STATUS_PENDING
+                {
+                    true
+                } else if status.compare_and_swap(
+                    JOB_STATUS_RUNNING,
+                    JOB_STATUS_CANCELLING,
+                    Ordering::SeqCst,
+                ) == JOB_STATUS_RUNNING
+                {
+                    return false;
+                } else {
+                    false
+                }
+            }
             _ => return false,
         };
         if is_cancelled {
@@ -1058,9 +1059,12 @@ impl PeerStorage {
             status,
         };
         // TODO: gracefully remove region instead.
-        self.region_sched
-            .schedule(task)
-            .expect("snap apply job should not fail");
+        if self.region_sched.schedule(task).is_err() {
+            info!(
+                "{} fail to schedule apply job, are we shutting down?",
+                self.tag
+            );
+        }
     }
 
     /// Save memory states to disk.
@@ -1261,7 +1265,7 @@ pub fn clear_meta(
     raft_state: &RaftLocalState,
 ) -> Result<()> {
     let t = Instant::now();
-    let handle = rocksdb::get_cf_handle(&engines.kv, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     kv_wb.delete_cf(handle, &keys::region_state_key(region_id))?;
     kv_wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
 
@@ -1275,7 +1279,7 @@ pub fn clear_meta(
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
         })?;
-    for id in first_index..last_index + 1 {
+    for id in first_index..=last_index {
         raft_wb.delete(&keys::raft_log_key(region_id, id))?;
     }
     raft_wb.delete(&keys::raft_state_key(region_id))?;
@@ -1303,7 +1307,7 @@ pub fn do_snapshot(
                 return Err(storage_error(format!(
                     "could not load raft state of region {}",
                     region_id
-                )))
+                )));
             }
             Some(state) => state,
         };
@@ -1317,7 +1321,7 @@ pub fn do_snapshot(
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
                     idx, region_id
-                )))
+                )));
             }
             Some(entry) => entry.get_term(),
         }
@@ -1400,7 +1404,7 @@ pub fn write_initial_apply_state<T: Mutable>(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
-    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
     Ok(())
 }
@@ -1420,7 +1424,7 @@ pub fn write_peer_state<T: Mutable>(
         region_state.set_merge_state(state);
     }
 
-    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     debug!(
         "[region {}] writing merge state: {:?}",
         region_id, region_state
@@ -1457,15 +1461,18 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::store::bootstrap;
+    use crate::raftstore::store::util::Engines;
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::worker::RegionTask;
+    use crate::storage::{ALL_CFS, CF_DEFAULT};
+    use crate::util::rocksdb_util::new_engine;
+    use crate::util::worker::{Scheduler, Worker};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use protobuf;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
-    use raftstore::store::bootstrap;
-    use raftstore::store::util::Engines;
-    use raftstore::store::worker::RegionRunner;
-    use raftstore::store::worker::RegionTask;
     use rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
@@ -1473,10 +1480,7 @@ mod tests {
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
-    use storage::{ALL_CFS, CF_DEFAULT};
     use tempdir::*;
-    use util::rocksdb::new_engine;
-    use util::worker::{Scheduler, Worker};
 
     use super::*;
 
@@ -1817,7 +1821,8 @@ mod tests {
             &mut ctx,
             &[new_entry(6, 5), new_entry(7, 5)],
             &mut ready_ctx,
-        ).unwrap();
+        )
+        .unwrap();
         let mut hs = HardState::new();
         hs.set_commit(7);
         hs.set_term(5);
@@ -2011,14 +2016,14 @@ mod tests {
         let cap = MAX_CACHE_CAPACITY as u64;
 
         // result overflow
-        entries = (3..cap + 1).map(|i| new_entry(i + 5, 8)).collect();
+        entries = (3..=cap).map(|i| new_entry(i + 5, 8)).collect();
         append_ents(&mut store, &entries);
         exp_res.remove(0);
         exp_res.extend_from_slice(&entries);
         validate_cache(&store, &exp_res);
 
         // input overflow
-        entries = (0..cap + 1).map(|i| new_entry(i + cap + 6, 8)).collect();
+        entries = (0..=cap).map(|i| new_entry(i + cap + 6, 8)).collect();
         append_ents(&mut store, &entries);
         exp_res = entries[entries.len() - cap as usize..].to_vec();
         validate_cache(&store, &exp_res);
@@ -2036,7 +2041,7 @@ mod tests {
         assert!(store.cache.cache.capacity() < cap as usize);
 
         // append shrink
-        entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
+        entries = (0..=cap).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
         assert!(store.cache.cache.capacity() >= cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);
@@ -2162,7 +2167,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.cancel_applying_snap());
+        let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
         assert!(res.is_err());
     }
 
@@ -2211,7 +2216,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.check_applying_snap());
+        let res = panic_hook::recover_safe(|| s.check_applying_snap());
         assert!(res.is_err());
     }
 

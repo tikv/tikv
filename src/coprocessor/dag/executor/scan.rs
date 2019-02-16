@@ -14,13 +14,12 @@
 use std::{iter::Peekable, mem, sync::Arc, vec::IntoIter};
 
 use super::{Executor, ExecutorMetrics, Row, ScanOn, Scanner};
-use coprocessor::codec::table;
-use coprocessor::{util, Error, Result};
+use crate::coprocessor::codec::table;
+use crate::coprocessor::{Error, Result};
+use crate::storage::{Key, Store};
 use kvproto::coprocessor::KeyRange;
-use storage::{Key, Store};
 use tipb::schema::ColumnInfo;
 
-//
 pub trait InnerExecutor {
     fn decode_row(
         &self,
@@ -116,7 +115,8 @@ impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
             self.desc,
             self.inner.key_only(),
             range,
-        ).map_err(Error::from)
+        )
+        .map_err(Error::from)
     }
 }
 
@@ -180,7 +180,7 @@ impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
 
     fn start_scan(&mut self) {
         if let Some(range) = self.current_range.as_ref() {
-            if !util::is_point(range) {
+            if !self.inner.is_point(range) {
                 let scanner = self.scanner.as_ref().unwrap();
                 return scanner.start_scan(&mut self.scan_range);
             }
@@ -199,7 +199,7 @@ impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
         let mut ret_range = mem::replace(&mut self.scan_range, KeyRange::default());
         match self.current_range.as_ref() {
             Some(range) => {
-                if !util::is_point(range) {
+                if !self.inner.is_point(range) {
                     let scanner = self.scanner.as_mut().unwrap();
                     if scanner.stop_scan(&mut ret_range) {
                         return Some(ret_range);

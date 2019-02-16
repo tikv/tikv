@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::dag::expr::EvalContext;
+use crate::util;
 use regex::Error as RegexpError;
 use std::error::Error as StdError;
 use std::io;
@@ -20,7 +21,6 @@ use std::string::FromUtf8Error;
 use std::{error, str};
 use tipb::expression::ScalarFuncSig;
 use tipb::select;
-use util;
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_REGEXP: i32 = 1139;
@@ -191,4 +191,4 @@ impl From<RegexpError> for Error {
     }
 }
 
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;

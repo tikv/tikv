@@ -1,6 +1,7 @@
 [package]
 name = "tikv"
 version = "3.0.0-beta"
+edition = "2018"
 keywords = ["KV", "distributed-systems", "raft"]
 publish = false
 
@@ -113,8 +114,8 @@ tokio-threadpool = "0.1"
 vlog = "0.1.4"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
-tipb = { path = "components/tipb" }
-kvproto = { path = "components/kvproto" }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 
 [dependencies.murmur3]
@@ -137,11 +138,15 @@ test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 test_coprocessor = { path = "components/test_coprocessor" }
 # See https://japaric.github.io/criterion.rs/book/user_guide/known_limitations.html
-criterion = { version = "0.2", features=['real_blackbox'] }
+# critcmp is known to support 0.2.5
+criterion = { version = "=0.2.5", features=['real_blackbox'] }
 arrow = "0.10.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 
 [workspace]
 members = [
@@ -158,8 +163,6 @@ members = [
   "components/panic_hook",
   "components/cop_datatype",
   "components/log_wrappers",
-  "components/tipb",
-  "components/kvproto",
 ]
 
 [profile.dev]

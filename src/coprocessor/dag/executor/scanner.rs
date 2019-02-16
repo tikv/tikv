@@ -13,11 +13,11 @@
 
 use kvproto::coprocessor::KeyRange;
 
-use coprocessor::codec::table::truncate_as_row_key;
-use coprocessor::util;
-use storage::txn::Result;
-use storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
-use util::{escape, set_panic_mark};
+use crate::coprocessor::codec::table::truncate_as_row_key;
+use crate::coprocessor::util;
+use crate::storage::txn::Result;
+use crate::storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
+use crate::util::{escape, set_panic_mark};
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
@@ -179,11 +179,11 @@ pub mod tests {
     use tipb::schema::ColumnInfo;
 
     use super::super::tests::{get_range, new_col_info, TestStore};
-    use coprocessor::codec::datum::{self, Datum};
-    use coprocessor::codec::table;
-    use coprocessor::util;
-    use storage::SnapshotStore;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::coprocessor::codec::table;
+    use crate::coprocessor::util;
+    use crate::storage::SnapshotStore;
+    use crate::util::collections::HashMap;
 
     use super::*;
 

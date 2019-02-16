@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use futures::Future;
-use grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 
 use super::Error;
 

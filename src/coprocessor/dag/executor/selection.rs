@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::Result;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
@@ -99,8 +99,8 @@ mod tests {
     use cop_datatype::FieldTypeTp;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::datum::Datum;
-    use util::codec::number::NumberEncoder;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::util::codec::number::NumberEncoder;
 
     use super::super::tests::{gen_table_scan_executor, new_col_info};
     use super::*;

@@ -38,7 +38,7 @@ extern crate uuid;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 #[macro_use]

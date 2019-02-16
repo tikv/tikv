@@ -19,14 +19,14 @@ use kvproto::coprocessor::KeyRange;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use util::codec::number;
-use util::collections::HashSet;
+use crate::util::codec::number;
+use crate::util::collections::HashSet;
 
-use coprocessor::codec::datum::{self, Datum, DatumEncoder};
-use coprocessor::codec::table::{self, RowColsDict};
-use coprocessor::dag::expr::{EvalContext, EvalWarnings};
-use coprocessor::util;
-use coprocessor::*;
+use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
+use crate::coprocessor::codec::table::{self, RowColsDict};
+use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+use crate::coprocessor::util;
+use crate::coprocessor::*;
 
 mod aggregate;
 mod aggregation;
@@ -273,23 +273,23 @@ pub trait Executor {
 #[cfg(test)]
 pub mod tests {
     use super::{Executor, TableScanExecutor};
+    use crate::coprocessor::codec::{table, Datum};
+    use crate::storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
+    use crate::storage::mvcc::MvccTxn;
+    use crate::storage::SnapshotStore;
+    use crate::storage::{Key, Mutation, Options};
+    use crate::util::codec::number::NumberEncoder;
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use coprocessor::codec::{table, Datum};
     use kvproto::{
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
     use protobuf::RepeatedField;
-    use storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
-    use storage::mvcc::MvccTxn;
-    use storage::SnapshotStore;
-    use storage::{Key, Mutation, Options};
     use tipb::{
         executor::TableScan,
         expression::{Expr, ExprType},
         schema::ColumnInfo,
     };
-    use util::codec::number::NumberEncoder;
 
     pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
         let mut expr = Expr::new();
@@ -366,7 +366,8 @@ pub mod tests {
                         Mutation::Put((Key::from_raw(key), value.to_vec())),
                         &pk,
                         &Options::default(),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 txn.into_modifies()
             };

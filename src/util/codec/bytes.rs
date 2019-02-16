@@ -15,8 +15,8 @@ use byteorder::ReadBytesExt;
 use std::io::{BufRead, Write};
 
 use super::{BytesSlice, Error, Result};
+use crate::util::codec::number::{self, NumberEncoder};
 use std::ptr;
-use util::codec::number::{self, NumberEncoder};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -245,8 +245,8 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
             // and the src and dest may overlap
             // if src == dest do nothing
             ptr::copy(
-                data.as_ptr().offset(read_offset as isize),
-                data.as_mut_ptr().offset(write_offset as isize),
+                data.as_ptr().add(read_offset),
+                data.as_mut_ptr().add(write_offset),
                 ENC_GROUP_SIZE,
             );
         }
@@ -292,8 +292,8 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::codec::{bytes, number};
     use std::cmp::Ordering;
-    use util::codec::{bytes, number};
 
     #[test]
     fn test_enc_dec_bytes() {

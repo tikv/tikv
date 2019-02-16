@@ -30,10 +30,11 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
                 config.key_length,
                 config.value_length,
                 DEFAULT_KV_GENERATOR_SEED,
-            ).generate(DEFAULT_ITERATIONS)
-                .iter()
-                .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
-                .collect();
+            )
+            .generate(DEFAULT_ITERATIONS)
+            .iter()
+            .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
+            .collect();
             let snapshot = engine.snapshot(&ctx).unwrap();
             (mutations, snapshot, &option)
         },
@@ -59,13 +60,15 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
                 config.key_length,
                 config.value_length,
                 DEFAULT_KV_GENERATOR_SEED,
-            ).generate(DEFAULT_ITERATIONS);
+            )
+            .generate(DEFAULT_ITERATIONS);
             for (k, v) in &kvs {
                 txn.prewrite(
                     Mutation::Put((Key::from_raw(&k), v.clone())),
                     &k.clone(),
                     &option,
-                ).unwrap();
+                )
+                .unwrap();
             }
             let modifies = txn.into_modifies();
             let _ = engine.async_write(&ctx, modifies, Box::new(move |(_, _)| {}));
@@ -89,10 +92,11 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         config.key_length,
         config.value_length,
         DEFAULT_KV_GENERATOR_SEED,
-    ).generate(DEFAULT_ITERATIONS)
-        .iter()
-        .map(|(k, _)| Key::from_raw(&k))
-        .collect();
+    )
+    .generate(DEFAULT_ITERATIONS)
+    .iter()
+    .map(|(k, _)| Key::from_raw(&k))
+    .collect();
 
     b.iter_with_setup(
         || {
@@ -128,10 +132,11 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
                 config.key_length,
                 config.value_length,
                 DEFAULT_KV_GENERATOR_SEED,
-            ).generate(DEFAULT_ITERATIONS)
-                .iter()
-                .map(|(k, _)| Key::from_raw(&k))
-                .collect();
+            )
+            .generate(DEFAULT_ITERATIONS)
+            .iter()
+            .map(|(k, _)| Key::from_raw(&k))
+            .collect();
             (snapshot, test_keys)
         },
         |(snapshot, test_keys)| {

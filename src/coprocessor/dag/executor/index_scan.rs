@@ -14,10 +14,10 @@
 use std::sync::Arc;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanOn};
-use coprocessor::codec::table;
-use coprocessor::{util, Result};
+use crate::coprocessor::codec::table;
+use crate::coprocessor::{util, Result};
+use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
-use storage::Store;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 
@@ -50,10 +50,10 @@ impl InnerExecutor for IndexInnerExecutor {
         value: Vec<u8>,
         columns: Arc<Vec<ColumnInfo>>,
     ) -> Result<Option<Row>> {
+        use crate::coprocessor::codec::datum;
         use byteorder::{BigEndian, ReadBytesExt};
         use cop_datatype::prelude::*;
         use cop_datatype::FieldTypeFlag;
-        use coprocessor::codec::datum;
 
         let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
         let handle = match handle {
@@ -129,9 +129,9 @@ pub mod tests {
     use protobuf::RepeatedField;
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum};
-    use storage::SnapshotStore;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::storage::SnapshotStore;
+    use crate::util::collections::HashMap;
 
     use super::super::{
         scanner::tests::Data,

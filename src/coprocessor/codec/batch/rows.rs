@@ -21,9 +21,9 @@ use smallvec::SmallVec;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::schema::ColumnInfo;
 
-use super::BatchColumn;
-use coprocessor::codec::mysql::Tz;
-use coprocessor::codec::{datum, Error, Result};
+use super::VectorValue;
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::{datum, Error, Result};
 
 pub struct BatchRows<E> {
     /// Multiple interested columns. Each column is either decoded, or not decoded.
@@ -95,7 +95,7 @@ impl<E> BatchRows<E> {
         column_index: usize,
         time_zone: Tz,
         column_info: &ColumnInfo,
-    ) -> Result<&BatchColumn> {
+    ) -> Result<&VectorValue> {
         let number_of_rows = self.rows_len();
         let col = &mut self.columns[column_index];
         assert_eq!(col.len(), number_of_rows);
@@ -171,7 +171,7 @@ enum LazyBatchColumn {
     /// Ensure that small datum values (i.e. Int, Real, Time) are stored compactly.
     /// Notice that there is an extra 1 byte for datum to store the flag, so there are 9 bytes.
     Raw(Vec<SmallVec<[u8; 9]>>),
-    Decoded(BatchColumn),
+    Decoded(VectorValue),
 }
 
 impl Clone for LazyBatchColumn {
@@ -215,7 +215,7 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn get_decoded(&self) -> &BatchColumn {
+    pub fn get_decoded(&self) -> &VectorValue {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
             LazyBatchColumn::Decoded(ref v) => v,
@@ -293,7 +293,7 @@ impl LazyBatchColumn {
         let eval_type =
             EvalType::try_from(column_info.tp()).map_err(|e| Error::Other(box_err!(e)))?;
 
-        let mut decoded_column = BatchColumn::with_capacity(self.capacity(), eval_type);
+        let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
         {
             let raw_values = self.get_raw();
             for raw_value in raw_values {
@@ -341,13 +341,13 @@ impl LazyBatchColumn {
 mod tests {
     use super::*;
 
-    use coprocessor::codec::datum::{Datum, DatumEncoder};
+    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
     /// Helper method to generate raw row ([u8] vector) from datum vector.
     fn raw_row_from_datums(datums: impl AsRef<[Option<Datum>]>, comparable: bool) -> Vec<Vec<u8>> {
         datums
             .as_ref()
-            .into_iter()
+            .iter()
             .map(|some_datum| {
                 let mut ret = Vec::new();
                 if some_datum.is_some() {
@@ -355,7 +355,8 @@ mod tests {
                         &mut ret,
                         &[some_datum.clone().take().unwrap()],
                         comparable,
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 ret
             })
@@ -866,7 +867,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use super::*;
 
@@ -963,8 +964,8 @@ mod benches {
     /// Bench performance of cloning a decoded column.
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -976,7 +977,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -994,8 +995,8 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -1007,7 +1008,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1026,8 +1027,8 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -1039,7 +1040,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1059,7 +1060,7 @@ mod benches {
     #[derive(Clone)]
     enum VectorLazyBatchColumn {
         Raw(Vec<Vec<u8>>),
-        Decoded(BatchColumn),
+        Decoded(VectorValue),
     }
 
     impl VectorLazyBatchColumn {
