@@ -1154,10 +1154,9 @@ impl<E: Engine> Storage<E> {
 
         let res = engine.async_snapshot(&ctx, cb);
         future::result(res)
-            .map(|_| future.map_err(|e| { EngineError::Other(box_err!(e))}))
+            .map(|_| future.map_err(|e| EngineError::Other(box_err!(e))))
             .flatten()
             .map_err(|_| Error::SchedTooBusy)
-
     }
 
     /// Get the values of some raw keys in a batch.
