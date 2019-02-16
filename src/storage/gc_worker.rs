@@ -539,7 +539,7 @@ enum GCManagerError {
     Stopped,
 }
 
-type GCManagerResult<T> = ::std::result::Result<T, GCManagerError>;
+type GCManagerResult<T> = std::result::Result<T, GCManagerError>;
 
 /// Used to check if `GCManager` should be stopped.
 ///

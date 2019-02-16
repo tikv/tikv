@@ -21,7 +21,7 @@ use smallvec::SmallVec;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::schema::ColumnInfo;
 
-use super::BatchColumn;
+use super::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{datum, Error, Result};
 
@@ -95,7 +95,7 @@ impl<E> BatchRows<E> {
         column_index: usize,
         time_zone: Tz,
         column_info: &ColumnInfo,
-    ) -> Result<&BatchColumn> {
+    ) -> Result<&VectorValue> {
         let number_of_rows = self.rows_len();
         let col = &mut self.columns[column_index];
         assert_eq!(col.len(), number_of_rows);
@@ -171,7 +171,7 @@ enum LazyBatchColumn {
     /// Ensure that small datum values (i.e. Int, Real, Time) are stored compactly.
     /// Notice that there is an extra 1 byte for datum to store the flag, so there are 9 bytes.
     Raw(Vec<SmallVec<[u8; 9]>>),
-    Decoded(BatchColumn),
+    Decoded(VectorValue),
 }
 
 impl Clone for LazyBatchColumn {
@@ -215,7 +215,7 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn get_decoded(&self) -> &BatchColumn {
+    pub fn get_decoded(&self) -> &VectorValue {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
             LazyBatchColumn::Decoded(ref v) => v,
@@ -293,7 +293,7 @@ impl LazyBatchColumn {
         let eval_type =
             EvalType::try_from(column_info.tp()).map_err(|e| Error::Other(box_err!(e)))?;
 
-        let mut decoded_column = BatchColumn::with_capacity(self.capacity(), eval_type);
+        let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
         {
             let raw_values = self.get_raw();
             for raw_value in raw_values {
@@ -977,7 +977,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1008,7 +1008,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1040,7 +1040,7 @@ mod benches {
         }
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -1060,7 +1060,7 @@ mod benches {
     #[derive(Clone)]
     enum VectorLazyBatchColumn {
         Raw(Vec<Vec<u8>>),
-        Decoded(BatchColumn),
+        Decoded(VectorValue),
     }
 
     impl VectorLazyBatchColumn {

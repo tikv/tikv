@@ -50,7 +50,7 @@ impl ProductTable {
     }
 }
 
-impl ::std::ops::Deref for ProductTable {
+impl std::ops::Deref for ProductTable {
     type Target = Table;
 
     fn deref(&self) -> &Table {
