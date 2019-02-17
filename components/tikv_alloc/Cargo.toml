@@ -27,6 +27,5 @@ version = "0.1.9"
 
 [dependencies.tcmalloc]
 optional = true
-# version = "0.1.3"
-git="https://github.com/jmcomets/tcmalloc-rs.git"
+version = "0.2.0"
 
