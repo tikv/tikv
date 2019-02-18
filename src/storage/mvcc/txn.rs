@@ -160,14 +160,6 @@ impl<S: Snapshot> MvccTxn<S> {
         {
             if !options.skip_constraint_check {
                 if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
-                    if should_not_exist {
-                        if write.write_type == WriteType::Put
-                            || (write.write_type != WriteType::Delete
-                                && self.key_exist(&key, write.start_ts - 1)?)
-                        {
-                            return Err(Error::AlreadyExist { key: key.to_raw()? });
-                        }
-                    }
                     // Abort on writes after our start timestamp ...
                     // If exists a commit version whose commit timestamp is larger than or equal to
                     // current start timestamp, we should abort current prewrite, even if the commit
@@ -181,6 +173,14 @@ impl<S: Snapshot> MvccTxn<S> {
                             key: key.to_raw()?,
                             primary: primary.to_vec(),
                         });
+                    }
+                    if should_not_exist {
+                        if write.write_type == WriteType::Put
+                            || (write.write_type != WriteType::Delete
+                            && self.key_exist(&key, write.start_ts - 1)?)
+                            {
+                                return Err(Error::AlreadyExist { key: key.to_raw()? });
+                            }
                     }
                 }
             }
