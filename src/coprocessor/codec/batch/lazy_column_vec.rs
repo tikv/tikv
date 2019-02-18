@@ -18,7 +18,7 @@ use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::Result;
 
-/// Stores multiple `LazyBatchColumn`s. Each column have equal length.
+/// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
 pub struct LazyBatchColumnVec {
     /// Multiple lazy batch columns. Each column is either decoded, or not decoded.
