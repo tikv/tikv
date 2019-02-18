@@ -80,10 +80,9 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use tempdir::TempDir;
 
-    use raftstore::store::keys;
-    use storage::{Key, CF_WRITE, LARGE_CFS};
-    use util::properties::MvccPropertiesCollectorFactory;
-    use util::rocksdb::{self, CFOptions};
+    use crate::raftstore::store::keys;
+    use crate::storage::{Key, CF_WRITE, LARGE_CFS};
+    use crate::util::rocksdb_util::{self, properties::MvccPropertiesCollectorFactory, CFOptions};
 
     use super::*;
 
@@ -100,7 +99,7 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db = rocksdb::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let db = rocksdb_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
@@ -115,7 +114,7 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let cf = rocksdb::get_cf_handle(&db, CF_WRITE).unwrap();
+        let cf = rocksdb_util::get_cf_handle(&db, CF_WRITE).unwrap();
         let (entries, versions) =
             get_range_entries_and_versions(&db, cf, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);

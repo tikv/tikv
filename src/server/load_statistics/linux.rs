@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use libc::{getpid, pid_t};
 
-use server::load_statistics::ThreadLoad;
-use util::metrics::{cpu_total, get_thread_ids};
+use crate::server::load_statistics::ThreadLoad;
+use crate::util::metrics::{cpu_total, get_thread_ids};
 
 use procinfo::pid;
 
@@ -87,7 +87,10 @@ impl ThreadLoadStatistics {
 
         let millis = (current_instant - earlist_instant).as_millis() as usize;
         if millis > 0 {
-            let cpu_usage = calc_cpu_load(millis, earlist_cpu_usage, current_cpu_usage);
+            let mut cpu_usage = calc_cpu_load(millis, earlist_cpu_usage, current_cpu_usage);
+            if cpu_usage > self.tids.len() * 100 {
+                cpu_usage = self.tids.len() * 100;
+            }
             self.thread_load.load.store(cpu_usage, Ordering::Release);
             self.thread_load.term.fetch_add(1, Ordering::Release);
         }
@@ -116,14 +119,15 @@ mod tests {
         let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));
         let start = Instant::now();
         loop {
-            if (Instant::now() - start).as_millis() > 100 {
+            if (Instant::now() - start).as_millis() > 200 {
                 break;
             }
         }
         stats.record(Instant::now());
-        match load.load() {
-            80...100 => {}
-            e => panic!("the load must be heavy than 80, but got {}", e),
+        let cpu_usage = load.load();
+        assert!(cpu_usage < 100); // There is only 1 thread.
+        if cpu_usage < 80 {
+            panic!("the load must be heavy than 80, but got {}", cpu_usage);
         }
     }
 }

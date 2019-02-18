@@ -1,10 +1,11 @@
 [package]
 name = "test_storage"
 version = "0.0.1"
+edition = "2018"
 publish = false
 
 [dependencies]
 tikv = { path = "../../" }
 test_raftstore = { path = "../test_raftstore" }
-kvproto = { path = "../kvproto" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 futures = "0.1"

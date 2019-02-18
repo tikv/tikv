@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use kvproto::import_sstpb::SSTMeta;
 
-use import::SSTImporter;
-use pd::PdClient;
-use raftstore::store::fsm::SendCh;
-use raftstore::store::util::is_epoch_stale;
-use raftstore::store::{Msg, StoreMsg};
-use util::worker::Runnable;
+use crate::import::SSTImporter;
+use crate::pd::PdClient;
+use crate::raftstore::store::fsm::SendCh;
+use crate::raftstore::store::util::is_epoch_stale;
+use crate::raftstore::store::{Msg, StoreMsg};
+use crate::util::worker::Runnable;
 
 pub enum Task {
     DeleteSST { ssts: Vec<SSTMeta> },
@@ -89,7 +89,7 @@ impl<C: PdClient> Runner<C> {
                     invalid_ssts.push(sst);
                 }
                 Err(e) => {
-                    error!("get region failed: {:?}", e);
+                    error!("get region failed"; "err" => %e);
                 }
             }
         }
@@ -99,7 +99,7 @@ impl<C: PdClient> Runner<C> {
         // destroyed.
         let msg = Msg::StoreMsg(StoreMsg::ValidateSSTResult { invalid_ssts });
         if let Err(e) = self.store_ch.try_send(msg) {
-            error!("send validate sst result: {:?}", e);
+            error!("send validate sst result failed"; "err" => %e);
         }
     }
 }

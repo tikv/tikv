@@ -24,8 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use crate::util;
 use rocksdb::DBCompressionType;
-use util;
 
 quick_error! {
     #[derive(Debug)]
@@ -679,7 +679,7 @@ mod check_kernel {
             )));
         }
 
-        info!("kernel parameters {}: {}", param, got);
+        info!("kernel parameters"; "param" => param, "value" => got);
         Ok(())
     }
 
@@ -855,12 +855,12 @@ mod check_data_dir {
             }
         };
 
-        let fs_info = get_fs_info(&real_path, mnt_file)?;
         // TODO check ext4 nodelalloc
-        info!("data_path: {:?}, mount fs info: {:?}", data_path, fs_info);
-        let rotational_info = get_rotational_info(&fs_info.fsname)?;
-        if rotational_info != "0" {
-            warn!("{:?} not on SSD device", data_path);
+        let fs_info = get_fs_info(&real_path, mnt_file)?;
+        info!("check data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
+
+        if get_rotational_info(&fs_info.fsname)? != "0" {
+            warn!("not on SSD device"; "data_path" => data_path);
         }
         Ok(())
     }

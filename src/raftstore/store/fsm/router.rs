@@ -12,15 +12,15 @@
 // limitations under the License.
 
 use super::batch::{Fsm, FsmScheduler};
+use crate::util::collections::HashMap;
+use crate::util::mpsc;
+use crate::util::Either;
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use util::collections::HashMap;
-use util::mpsc;
-use util::Either;
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;
@@ -471,14 +471,13 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raftstore::store::fsm::batch::tests::Message;
+    use crate::raftstore::store::fsm::batch::{self, tests::*};
     use crossbeam::channel::{SendError, TrySendError};
-    use raftstore::store::fsm::batch::tests::Message;
-    use raftstore::store::fsm::batch::{self, tests::*};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
     use std::time::Duration;
     use test::Bencher;
-    use util::mpsc;
 
     fn counter_closure(counter: &Arc<AtomicUsize>) -> Message {
         let c = counter.clone();

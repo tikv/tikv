@@ -139,9 +139,9 @@ impl<T: Display + Send + 'static> Worker<T> {
         R: Runnable<T> + Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
-        info!("starting working thread: {}", self.scheduler.name);
+        info!("starting working thread"; "worker" => &self.scheduler.name);
         if receiver.is_none() {
-            warn!("worker {} has been started.", self.scheduler.name);
+            warn!("worker has been started"; "worker" => &self.scheduler.name);
             return Ok(());
         }
 
@@ -178,10 +178,10 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Stops the worker thread.
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // close sender explicitly so the background thread will exit.
-        info!("stoping {}", self.scheduler.name);
+        info!("stoping worker"; "worker" => &self.scheduler.name);
         let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.unbounded_send(None) {
-            warn!("failed to stop worker thread: {:?}", e);
+            warn!("failed to stop worker thread"; "err" => ?e);
         }
         Some(handle)
     }
@@ -194,10 +194,10 @@ mod tests {
     use std::time::Duration;
     use std::time::Instant;
 
+    use crate::util::timer::GLOBAL_TIMER_HANDLE;
     use futures::Future;
     use tokio_core::reactor::Handle;
     use tokio_timer::timer;
-    use util::timer::GLOBAL_TIMER_HANDLE;
 
     use super::*;
 

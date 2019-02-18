@@ -14,41 +14,56 @@
 use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, ErrorKind, Read, Write};
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
+use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
+use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use protobuf::Message;
+use protobuf::RepeatedField;
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{CFHandle, Writable, WriteBatch, DB};
+use rocksdb::{
+    CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter, Writable,
+    WriteBatch, DB,
+};
 
-use raftstore::errors::Error as RaftStoreError;
-use raftstore::store::fsm::SendCh;
-use raftstore::store::util::check_key_in_region;
-use raftstore::store::{Msg, StoreMsg};
-use raftstore::Result as RaftStoreResult;
-use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
-use util::collections::{HashMap, HashMapEntry as Entry};
-use util::io_limiter::{IOLimiter, LimitWriter};
-use util::rocksdb::{prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use util::HandyRwLock;
+use crate::raftstore::errors::Error as RaftStoreError;
+use crate::raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
+use crate::raftstore::store::fsm::SendCh;
+use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
+use crate::raftstore::store::util::check_key_in_region;
+use crate::raftstore::store::{Msg, StoreMsg};
+use crate::raftstore::Result as RaftStoreResult;
+use crate::storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+use crate::util::collections::{HashMap, HashMapEntry as Entry};
+use crate::util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
+use crate::util::io_limiter::{IOLimiter, LimitWriter};
+use crate::util::rocksdb_util::{
+    self, get_fastest_supported_compression_type, prepare_sst_for_ingestion,
+    validate_sst_for_ingestion,
+};
+use crate::util::time::duration_to_sec;
+use crate::util::HandyRwLock;
 
-use raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
-use raftstore::store::keys::{self, enc_end_key, enc_start_key};
-
-use raftstore::store::metrics::{
+use crate::raftstore::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
     SNAPSHOT_CF_SIZE,
 };
-use raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
+use crate::raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
 pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+
+pub const SNAPSHOT_VERSION: u64 = 2;
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &str = "gen";
@@ -58,6 +73,7 @@ const SNAP_REV_PREFIX: &str = "rev";
 const TMP_FILE_SUFFIX: &str = ".tmp";
 const SST_FILE_SUFFIX: &str = ".sst";
 const CLONE_FILE_SUFFIX: &str = ".clone";
+const META_FILE_SUFFIX: &str = ".meta";
 
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
@@ -218,21 +234,6 @@ pub fn retry_delete_snapshot(
     }
     false
 }
-
-use crc::crc32::{self, Digest, Hasher32};
-use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
-use protobuf::RepeatedField;
-use rocksdb::{DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter};
-use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
-use std::time::Instant;
-use util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
-use util::rocksdb;
-use util::rocksdb::get_fastest_supported_compression_type;
-use util::time::duration_to_sec;
-
-pub const SNAPSHOT_VERSION: u64 = 2;
-const META_FILE_SUFFIX: &str = ".meta";
 
 fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
@@ -970,9 +971,9 @@ impl Snapshot for Snap {
             }
 
             check_abort(&options.abort)?;
-            let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
+            let cf_handle = box_try!(rocksdb_util::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
-                let mut file = box_try!(File::open(&cf_file.path));
+                let file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
@@ -1450,12 +1451,19 @@ impl SnapManagerBuilder {
 
 #[cfg(test)]
 pub mod tests {
-    use protobuf::Message;
     use std::cmp;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    use kvproto::metapb::{Peer, Region};
+    use kvproto::raft_serverpb::{
+        RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
+    };
+    use protobuf::Message;
+    use rocksdb::DB;
     use tempdir::TempDir;
 
     use super::{
@@ -1463,19 +1471,12 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
-    use kvproto::metapb::{Peer, Region};
-    use kvproto::raft_serverpb::{
-        RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
-    };
-    use rocksdb::DB;
-    use std::path::PathBuf;
-
-    use raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-    use raftstore::store::keys;
-    use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-    use raftstore::Result;
-    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::rocksdb::{self, CFOptions};
+    use crate::raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use crate::raftstore::store::keys;
+    use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+    use crate::raftstore::Result;
+    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::rocksdb_util::{self, CFOptions};
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";
@@ -1496,17 +1497,17 @@ pub mod tests {
 
     pub fn open_test_empty_db(path: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = rocksdb::new_engine(p, ALL_CFS, cf_opts)?;
+        let db = rocksdb_util::new_engine(p, ALL_CFS, cf_opts)?;
         Ok(Arc::new(db))
     }
 
     pub fn open_test_db(path: &TempDir, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = rocksdb::new_engine(p, ALL_CFS, cf_opts)?;
+        let db = rocksdb_util::new_engine(p, ALL_CFS, cf_opts)?;
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in ALL_CFS.iter().enumerate() {
-            let handle = rocksdb::get_cf_handle(&db, cf)?;
+            let handle = rocksdb_util::get_cf_handle(&db, cf)?;
             let mut p = Peer::new();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
@@ -1526,14 +1527,14 @@ pub mod tests {
             let mut apply_state = RaftApplyState::new();
             apply_state.set_applied_index(10);
             apply_state.mut_truncated_state().set_index(10);
-            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            let handle = rocksdb_util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
             let mut region_state = RegionLocalState::new();
             region_state.set_region(region);
-            let handle = rocksdb::get_cf_handle(&kv, CF_RAFT)?;
+            let handle = rocksdb_util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
         Ok(kv)
@@ -1748,7 +1749,7 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs, None).unwrap());
+        let dst_db = Arc::new(rocksdb_util::new_engine(dst_db_path, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
             db: Arc::clone(&dst_db),
             region: region.clone(),

@@ -17,11 +17,11 @@
 //! that controls how the former is created or metrics are collected.
 
 use super::router::{BasicMailbox, Router};
+use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::cmp;
 use std::thread::{self, JoinHandle};
-use util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -395,7 +395,7 @@ where
         B::Handler: Send + 'static,
     {
         for i in 0..self.pool_size {
-            let mut handler = builder.build();
+            let handler = builder.build();
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
