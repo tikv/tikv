@@ -552,6 +552,7 @@ impl<E: Engine> Storage<E> {
 
                     thread_ctx.collect_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_perf_stats(CMD, &perf_tracker.record());
 
                     result
                 })
@@ -622,6 +623,7 @@ impl<E: Engine> Storage<E> {
 
                     thread_ctx.collect_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_perf_stats(CMD, &perf_tracker.record());
 
                     result
                 })
@@ -692,6 +694,7 @@ impl<E: Engine> Storage<E> {
                     let statistics = scanner.take_statistics();
                     thread_ctx.collect_scan_count(CMD, &statistics);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    thread_ctx.collect_perf_stats(CMD, &perf_tracker.record());
 
                     res.map_err(Error::from).map(|results| {
                         thread_ctx.collect_key_reads(CMD, results.len() as u64);
@@ -923,7 +926,7 @@ impl<E: Engine> Storage<E> {
                     // no scan_count for this kind of op.
 
                     let key_len = key.len();
-                    snapshot.get_cf(cf, &Key::from_encoded(key))
+                    let r = snapshot.get_cf(cf, &Key::from_encoded(key))
                         // map storage::engine::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
@@ -935,7 +938,11 @@ impl<E: Engine> Storage<E> {
                                 thread_ctx.collect_key_reads(CMD, 1);
                             }
                             r
-                        })
+                        });
+
+                    thread_ctx.collect_perf_stats(CMD, &perf_tracker.record());
+
+                    r
                 })
                 .then(move |r| {
                     _timer.observe_duration();
@@ -995,6 +1002,7 @@ impl<E: Engine> Storage<E> {
                         .collect();
                     thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+                    thread_ctx.collect_perf_stats(CMD, &perf_tracker.record());
                     Ok(result)
                 })
                 .then(move |r| {
@@ -1215,6 +1223,7 @@ impl<E: Engine> Storage<E> {
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
                     thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_perf_stats(CMD, &perf_tracker.record());
 
                     result
                 })
@@ -1315,6 +1324,7 @@ impl<E: Engine> Storage<E> {
                     thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
                     thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                     thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_perf_stats(CMD, &perf_tracker.record());
 
                     Ok(result)
                 })
