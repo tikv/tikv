@@ -71,7 +71,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 
         let mut result = self.src.next_batch(expect_rows);
         for idx in &self.referred_columns {
-            result.data.ensure_column_decoded(
+            let _ = result.data.ensure_column_decoded(
                 *idx,
                 self.eval_context.config.tz,
                 &self.context.columns_info[*idx],
