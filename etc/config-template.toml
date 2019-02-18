@@ -87,10 +87,6 @@
 # should be set based on your disk performance
 # snap-max-write-bytes-per-sec = "100MB"
 
-# How long will a KV read request be treated as slow and print slow log.
-# Setting to 0s will print slow log for all requests.
-# kv-read-slow-log-threshold = "1s"
-
 # How long will a Coprocessor end-point request be treated as slow and print slow log.
 # Setting to 0s will print slow log for all requests.
 # end-point-slow-log-threshold = "1s"
@@ -118,6 +114,10 @@
 # When the pending write bytes exceeds this threshold,
 # the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
+
+# How long will a KV read request be treated as slow and print slow log.
+# Setting to 0s will print slow log for all requests.
+# kv-read-slow-log-threshold = "1s"
 
 [pd]
 # pd endpoints

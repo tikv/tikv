@@ -14,6 +14,7 @@
 use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
+use self::perf_tracker::PerfTracker;
 use self::txn::CMD_BATCH_SIZE;
 use futures::{future, Future};
 use kvproto::errorpb;
@@ -26,6 +27,7 @@ use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::u64;
 use util;
 use util::collections::HashMap;
@@ -36,6 +38,7 @@ pub mod engine;
 pub mod gc_worker;
 mod metrics;
 pub mod mvcc;
+mod perf_tracker;
 mod readpool_context;
 pub mod txn;
 pub mod types;
@@ -404,6 +407,7 @@ pub struct Storage<E: Engine> {
 
     // Storage configurations.
     max_key_size: usize,
+    slow_log_threshold: Duration,
 }
 
 impl Storage<RocksEngine> {
@@ -436,6 +440,7 @@ impl<E: Engine> Storage<E> {
             read_pool,
             gc_worker,
             max_key_size: config.max_key_size,
+            slow_log_threshold: config.kv_read_slow_log_threshold.clone().into(),
         })
     }
 
@@ -514,6 +519,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+        let slow_log_threshold = self.slow_log_threshold;
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let mut _timer = {
@@ -526,6 +532,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let perf_tracker = PerfTracker::new(CMD, slow_log_threshold);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -569,6 +576,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+        let slow_log_threshold = self.slow_log_threshold;
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let mut _timer = {
@@ -581,6 +589,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let perf_tracker = PerfTracker::new(CMD, slow_log_threshold);
 
                     let mut statistics = Statistics::default();
                     let snap_store = SnapshotStore::new(
@@ -640,6 +649,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+        let slow_log_threshold = self.slow_log_threshold;
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let mut _timer = {
@@ -652,6 +662,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let perf_tracker = PerfTracker::new(CMD, slow_log_threshold);
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -894,6 +905,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+        let slow_log_threshold = self.slow_log_threshold;
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let mut _timer = {
@@ -906,6 +918,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let perf_tracker = PerfTracker::new(CMD, slow_log_threshold);
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
 
@@ -944,6 +957,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+        let slow_log_threshold = self.slow_log_threshold;
 
         let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
 
@@ -958,6 +972,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let perf_tracker = PerfTracker::new(CMD, slow_log_threshold);
                     let cf = Self::rawkv_cf(&cf)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
@@ -1171,6 +1186,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+        let slow_log_threshold = self.slow_log_threshold;
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let mut _timer = {
@@ -1183,6 +1199,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let perf_tracker = PerfTracker::new(CMD, slow_log_threshold);
 
                     let mut statistics = Statistics::default();
                     let result = Self::raw_scan(
@@ -1250,6 +1267,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_batch_scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+        let slow_log_threshold = self.slow_log_threshold;
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let mut _timer = {
@@ -1262,6 +1280,7 @@ impl<E: Engine> Storage<E> {
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
                     let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    let perf_tracker = PerfTracker::new(CMD, slow_log_threshold);
 
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges) {

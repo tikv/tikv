@@ -19,6 +19,11 @@ lazy_static! {
         "Total number of commands received.",
         &["type"]
     ).unwrap();
+    pub static ref KV_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_storage_rocksdb_perf",
+        "Total number of RocksDB internal operations from PerfContext",
+        &["type", "metric"]
+    ).unwrap();
     pub static ref SCHED_STAGE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_stage_total",
         "Total number of commands on each stage.",

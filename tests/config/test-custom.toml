@@ -38,7 +38,6 @@ end-point-stream-batch-row-limit = 4096
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
-kv-read-slow-log-threshold = "2s"
 end-point-slow-log-threshold = "4s"
 
 [server.labels]
@@ -52,6 +51,7 @@ scheduler-notify-capacity = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
+kv-read-slow-log-threshold = "2s"
 
 [pd]
 endpoints = [

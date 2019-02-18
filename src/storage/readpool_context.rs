@@ -18,6 +18,7 @@ use std::mem;
 use pd;
 use server::readpool;
 use storage;
+use storage::engine::PerfStatisticsDelta;
 use util::collections::HashMap;
 use util::futurepool;
 use util::worker;
@@ -35,6 +36,7 @@ pub struct Context {
     command_counter: LocalIntCounterVec,
     command_pri_counter: LocalIntCounterVec,
     scan_details: LocalIntCounterVec,
+    rocksdb_perf_stats: LocalIntCounterVec,
 
     read_flow_stats: HashMap<u64, storage::FlowStatistics>,
 }
@@ -55,6 +57,7 @@ impl Context {
             command_counter: KV_COMMAND_COUNTER_VEC.local(),
             command_pri_counter: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             scan_details: KV_COMMAND_SCAN_DETAILS.local(),
+            rocksdb_perf_stats: KV_ROCKSDB_PERF_COUNTER.local(),
             read_flow_stats: HashMap::default(),
         }
     }
@@ -108,6 +111,25 @@ impl Context {
         flow_stats.add(&statistics.write.flow_stats);
         flow_stats.add(&statistics.data.flow_stats);
     }
+
+    #[inline]
+    pub fn collect_perf_stats(&mut self, cmd: &str, statistics: &PerfStatisticsDelta) {
+        self.rocksdb_perf_stats
+            .with_label_values(&[cmd, "internal_key_skipped_count"])
+            .inc_by(statistics.internal_key_skipped_count as i64);
+        self.rocksdb_perf_stats
+            .with_label_values(&[cmd, "internal_delete_skipped_count"])
+            .inc_by(statistics.internal_delete_skipped_count as i64);
+        self.rocksdb_perf_stats
+            .with_label_values(&[cmd, "block_cache_hit_count"])
+            .inc_by(statistics.block_cache_hit_count as i64);
+        self.rocksdb_perf_stats
+            .with_label_values(&[cmd, "block_read_count"])
+            .inc_by(statistics.block_read_count as i64);
+        self.rocksdb_perf_stats
+            .with_label_values(&[cmd, "block_read_byte"])
+            .inc_by(statistics.block_read_byte as i64);
+    }
 }
 
 impl futurepool::Context for Context {
@@ -119,6 +141,7 @@ impl futurepool::Context for Context {
         self.command_counter.flush();
         self.command_pri_counter.flush();
         self.scan_details.flush();
+        self.rocksdb_perf_stats.flush();
 
         // Report PD metrics
         if !self.read_flow_stats.is_empty() {

@@ -15,7 +15,7 @@ use std::error::Error;
 
 use sys_info;
 
-use util::config::{self, ReadableSize};
+use util::config::{self, ReadableDuration, ReadableSize};
 
 pub const DEFAULT_DATA_DIR: &str = "";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
@@ -41,6 +41,7 @@ pub struct Config {
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
+    pub kv_read_slow_log_threshold: ReadableDuration,
 }
 
 impl Default for Config {
@@ -54,6 +55,7 @@ impl Default for Config {
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
+            kv_read_slow_log_threshold: ReadableDuration::secs(1),
         }
     }
 }
