@@ -231,7 +231,7 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        let mut stores = resp.take_stores().to_vec();
+        let mut stores = resp.take_stores().into_vec();
         if !include_tombstone {
             for i in (0..stores.len()).rev() {
                 if stores[i].get_state() == metapb::StoreState::Tombstone {

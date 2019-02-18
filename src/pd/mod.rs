@@ -112,7 +112,7 @@ pub trait PdClient: Send + Sync {
     ///   and Peers will be removed.
     /// - For auto-balance, PD determines how to move the Region from one store to another.
 
-    /// Gets store information if it is not tombstone store.
+    /// Gets store information if it is not a tombstone store.
     fn get_store(&self, store_id: u64) -> Result<metapb::Store>;
 
     /// Gets all stores information.
