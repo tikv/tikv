@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::types::RpnExpressionEvalContext;
+use super::types::RpnRuntimeContext;
 use tipb::expression::FieldType;
 
 #[inline(always)]
 pub fn eq_real(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     arg0: &Option<f64>,
     _: &FieldType,
@@ -32,7 +32,7 @@ pub fn eq_real(
 
 #[inline(always)]
 pub fn eq_int(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     arg0: &Option<i64>,
     _: &FieldType,
@@ -47,7 +47,7 @@ pub fn eq_int(
 
 #[inline(always)]
 pub fn gt_int(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     arg0: &Option<i64>,
     _: &FieldType,
@@ -62,7 +62,7 @@ pub fn gt_int(
 
 #[inline(always)]
 pub fn lt_int(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     arg0: &Option<i64>,
     _: &FieldType,

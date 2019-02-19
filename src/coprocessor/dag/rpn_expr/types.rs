@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::expression::{Expr, ExprType, FieldType};
 
@@ -20,24 +18,35 @@ use super::function::RpnFunction;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalWarnings};
 
-/// Global variables needed in evaluating RPN expression.
+/// Runtime context for evaluating RPN expressions.
 #[derive(Debug)]
-pub struct RpnExpressionEvalContext {
-    pub config: Arc<EvalConfig>,
-    // FIXME: warnings
+pub struct RpnRuntimeContext {
+    // TODO: Make it Arc if necessary. Currently it is not needed because it is efficient to copy
+    // `EvalConfig`.
+    pub config: EvalConfig,
+
+    // TODO: Warnings should be recorded by row.
+    // TODO: We'd better store structural data that can be converted to message (but not the
+    // message itself) to avoid unnecessary message construct when corresponding warning is thrown
+    // away.
+    pub warnings: EvalWarnings,
 }
 
-impl RpnExpressionEvalContext {
-    pub fn new(config: Arc<EvalConfig>) -> Self {
-        Self { config }
+impl RpnRuntimeContext {
+    pub fn new(config: EvalConfig) -> Self {
+        Self {
+            warnings: EvalWarnings::new(config.max_warning_cnt),
+            config,
+        }
     }
 }
 
-impl Default for RpnExpressionEvalContext {
+impl Default for RpnRuntimeContext {
+    /// Constructs a new instance using the default `EvalConfig`. It should be useful only in tests.
     fn default() -> Self {
-        Self::new(Arc::new(EvalConfig::default()))
+        Self::new(EvalConfig::default())
     }
 }
 
@@ -212,7 +221,7 @@ impl RpnExpressionNodeVec {
 
     pub fn eval<'a>(
         &'a self,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         rows: usize,
         columns: &'a LazyBatchColumnVec,
         // Related columns must be decoded before calling this function!
@@ -268,7 +277,7 @@ impl RpnExpressionNodeVec {
     /// Useful in selection executor
     pub fn eval_as_mysql_bools(
         &self,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         rows: usize,
         columns: &LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
@@ -531,7 +540,7 @@ mod tests {
         col.mut_decoded().push_int(Some(15));
 
         let cols = LazyBatchColumnVec::from(vec![col]);
-        let mut ctx = RpnExpressionEvalContext::default();
+        let mut ctx = RpnRuntimeContext::default();
         let ret = rpn_nodes.eval(&mut ctx, cols.rows_len(), &cols);
         assert_eq!(ret.field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(

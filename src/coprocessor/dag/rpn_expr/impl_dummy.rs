@@ -13,17 +13,17 @@
 
 //! For demo purpose.
 
-use super::types::RpnExpressionEvalContext;
+use super::types::RpnRuntimeContext;
 use tipb::expression::FieldType;
 
 #[inline(always)]
-pub fn dummy_0_arg_func(_ctx: &mut RpnExpressionEvalContext) -> Option<i64> {
+pub fn dummy_0_arg_func(_ctx: &mut RpnRuntimeContext) -> Option<i64> {
     Some(7)
 }
 
 #[inline(always)]
 pub fn dummy_1_arg_func(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     _v: &Option<i64>,
 ) -> Option<i64> {
@@ -32,7 +32,7 @@ pub fn dummy_1_arg_func(
 
 #[inline(always)]
 pub fn dummy_2_args_func(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     _lhs: &Option<i64>,
     _: &FieldType,

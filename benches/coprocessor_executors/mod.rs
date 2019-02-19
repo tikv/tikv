@@ -97,7 +97,7 @@ fn bench_table_scan_next_1000(
 
 fn bench_table_scan_next_1000_batch(
     b: &mut Bencher,
-    context: &ExecutorContext,
+    context: &BatchExecutorContext,
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
 ) {
@@ -636,7 +636,7 @@ fn bench_batch_table_scan_long_datum_primary_key_multi_rows(c: &mut Criterion) {
 
         let context = {
             let columns_info = vec![table["id"].as_column_info()];
-            ExecutorContext::new(columns_info)
+            BatchExecutorContext::with_default_config(columns_info)
         };
 
         bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
@@ -673,7 +673,7 @@ fn bench_batch_table_scan_long_datum_normal_multi_rows(c: &mut Criterion) {
 
         let context = {
             let columns_info = vec![table["foo"].as_column_info()];
-            ExecutorContext::new(columns_info)
+            BatchExecutorContext::with_default_config(columns_info)
         };
 
         bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
@@ -710,7 +710,7 @@ fn bench_batch_table_scan_long_datum_long_multi_rows(c: &mut Criterion) {
 
         let context = {
             let columns_info = vec![table["bar"].as_column_info()];
-            ExecutorContext::new(columns_info)
+            BatchExecutorContext::with_default_config(columns_info)
         };
 
         bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
@@ -751,7 +751,7 @@ fn bench_batch_table_scan_long_datum_all_multi_rows(c: &mut Criterion) {
                 table["foo"].as_column_info(),
                 table["bar"].as_column_info(),
             ];
-            ExecutorContext::new(columns_info)
+            BatchExecutorContext::with_default_config(columns_info)
         };
 
         bench_table_scan_next_1000_batch(b, &context, &[table.get_record_range_all()], &store);
@@ -1076,7 +1076,7 @@ fn bench_batch_table_scan_multi_rows(c: &mut Criterion) {
 
         let context = {
             let columns_info = vec![table["id"].as_column_info()];
-            ExecutorContext::new(columns_info)
+            BatchExecutorContext::with_default_config(columns_info)
         };
 
         b.iter_with_setup(
@@ -1133,7 +1133,7 @@ fn bench_batch_table_scan_datum_all_multi_rows(c: &mut Criterion) {
             store.commit();
         }
 
-        let context = ExecutorContext::new(table.columns_info());
+        let context = BatchExecutorContext::with_default_config(table.columns_info());
 
         b.iter_with_setup(
             || {

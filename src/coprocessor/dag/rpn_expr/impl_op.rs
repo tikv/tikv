@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::types::RpnExpressionEvalContext;
+use super::types::RpnRuntimeContext;
 use tipb::expression::FieldType;
 
 #[inline(always)]
 pub fn logical_and(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     arg0: &Option<i64>,
     _: &FieldType,
@@ -39,7 +39,7 @@ pub fn logical_and(
 
 #[inline(always)]
 pub fn logical_or(
-    _ctx: &mut RpnExpressionEvalContext,
+    _ctx: &mut RpnRuntimeContext,
     _: &FieldType,
     arg0: &Option<i64>,
     _: &FieldType,

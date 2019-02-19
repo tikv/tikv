@@ -16,7 +16,9 @@ use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::Response;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch_executor::interface::{BatchExecuteStatistics, BatchExecutor, ExecutorContext};
+use super::batch_executor::interface::{
+    BatchExecuteStatistics, BatchExecutor, BatchExecutorContext,
+};
 use super::executor::ExecutorMetrics;
 use crate::coprocessor::*;
 
@@ -28,7 +30,7 @@ const BATCH_GROW_FACTOR: usize = 2;
 pub struct BatchDAGHandler {
     out_most_executor: Box<BatchExecutor>,
     output_offsets: Vec<u32>,
-    executor_context: ExecutorContext,
+    executor_context: BatchExecutorContext,
 
     statistics: BatchExecuteStatistics,
 
@@ -41,7 +43,7 @@ impl BatchDAGHandler {
     pub fn new(
         out_most_executor: Box<BatchExecutor>,
         output_offsets: Vec<u32>,
-        executor_context: ExecutorContext,
+        executor_context: BatchExecutorContext,
         ranges_len: usize,
     ) -> Self {
         Self {

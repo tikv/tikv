@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tipb::schema::ColumnInfo;
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalWarnings};
 use crate::coprocessor::Error;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
@@ -51,40 +52,44 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     }
 }
 
-/// A shared context for all executors built from a single Coprocessor DAG request.
+/// A shared context for all batch executors.
 ///
 /// It is both `Send` and `Sync`, allows concurrent access from different executors in future.
-///
-/// It is designed to be used in new generation executors, i.e. executors support batch execution.
-/// The old executors will not be refined to use this kind of context.
 #[derive(Clone)]
-pub struct ExecutorContext(Arc<ExecutorContextInner>);
+pub struct BatchExecutorContext(Arc<BatchExecutorContextInner>);
 
-impl ExecutorContext {
-    pub fn new(columns_info: Vec<ColumnInfo>) -> Self {
-        let inner = ExecutorContextInner {
-            collect_range_counts: true,
+impl BatchExecutorContext {
+    pub fn new(columns_info: Vec<ColumnInfo>, config: EvalConfig) -> Self {
+        let inner = BatchExecutorContextInner {
             columns_info,
+            config,
         };
-        ExecutorContext(Arc::new(inner))
+        BatchExecutorContext(Arc::new(inner))
+    }
+
+    /// Builds with a default config. Mainly used in tests.
+    pub fn with_default_config(columns_info: Vec<ColumnInfo>) -> Self {
+        Self::new(columns_info, EvalConfig::default())
     }
 }
 
-impl std::ops::Deref for ExecutorContext {
-    type Target = ExecutorContextInner;
+impl std::ops::Deref for BatchExecutorContext {
+    type Target = BatchExecutorContextInner;
 
-    fn deref(&self) -> &ExecutorContextInner {
+    fn deref(&self) -> &BatchExecutorContextInner {
         self.0.deref()
     }
 }
 
-impl crate::util::AssertSend for ExecutorContext {}
+impl crate::util::AssertSend for BatchExecutorContext {}
 
-impl crate::util::AssertSync for ExecutorContext {}
+impl crate::util::AssertSync for BatchExecutorContext {}
 
-pub struct ExecutorContextInner {
-    pub collect_range_counts: bool,
+pub struct BatchExecutorContextInner {
     pub columns_info: Vec<ColumnInfo>,
+
+    // TODO: This is really a execution config, alhtough called eval config.
+    pub config: EvalConfig,
 }
 
 /// Data to be flowed between parent and child executors' single `next_batch()` invocation.
@@ -102,6 +107,11 @@ pub struct ExecutorContextInner {
 /// The old executors will not be refined to return this kind of result.
 pub struct BatchExecuteResult {
     pub data: LazyBatchColumnVec,
+
+    // TODO: It can be more general, e.g. `ExecuteWarnings` instead of `EvalWarnings`.
+    // TODO: Should be recorded by row.
+    pub warnings: EvalWarnings,
+
     pub is_drained: Result<bool, Error>,
 }
 

@@ -134,9 +134,8 @@ impl DAGBuilder {
         store: S,
         ranges: Vec<KeyRange>,
         eval_config: EvalConfig,
-    ) -> Result<(Box<BatchExecutor>, ExecutorContext)> {
+    ) -> Result<(Box<BatchExecutor>, BatchExecutorContext)> {
         // Shared in multiple executors, so wrap with Rc.
-        let eval_config = Arc::new(eval_config);
         let mut executor_descriptors = executor_descriptors.into_iter();
         let mut first_ed = executor_descriptors
             .next()
@@ -148,8 +147,8 @@ impl DAGBuilder {
         match first_ed.get_tp() {
             ExecType::TypeTableScan => {
                 let mut descriptor = first_ed.take_tbl_scan();
-                // println!("Table Scan {:?}", descriptor);
-                executor_context = ExecutorContext::new(descriptor.take_columns().into_vec());
+                executor_context =
+                    BatchExecutorContext::new(descriptor.take_columns().into_vec(), eval_config);
                 executor = box BatchTableScanExecutor::new(
                     store,
                     executor_context.clone(),
@@ -159,8 +158,8 @@ impl DAGBuilder {
             }
             ExecType::TypeIndexScan => {
                 let mut descriptor = first_ed.take_idx_scan();
-                // println!("Index Scan {:?}", descriptor);
-                executor_context = ExecutorContext::new(descriptor.take_columns().into_vec());
+                executor_context =
+                    BatchExecutorContext::new(descriptor.take_columns().into_vec(), eval_config);
                 executor = box BatchIndexScanExecutor::new(
                     store,
                     executor_context.clone(),
@@ -191,7 +190,6 @@ impl DAGBuilder {
                         executor_context.clone(),
                         executor,
                         ed.take_selection().take_conditions().into_vec(),
-                        Arc::clone(&eval_config),
                     )?)
                 }
                 _ => {

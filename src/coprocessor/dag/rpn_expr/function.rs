@@ -15,7 +15,7 @@ use std::convert::TryFrom;
 
 use tipb::expression::{FieldType, ScalarFuncSig};
 
-use super::types::{RpnExpressionEvalContext, RpnStackNode};
+use super::types::{RpnRuntimeContext, RpnStackNode};
 use super::{impl_compare, impl_dummy, impl_op};
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::coprocessor::Error;
@@ -74,7 +74,7 @@ impl RpnFunction {
     pub fn eval(
         self,
         rows: usize,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         args: &[RpnStackNode],
     ) -> VectorValue {
         debug_assert_eq!(args.len(), self.args_len());
@@ -114,14 +114,10 @@ impl RpnFunction {
     }
 
     #[inline(always)]
-    fn eval_0_arg<Ret, F>(
-        rows: usize,
-        mut f: F,
-        context: &mut RpnExpressionEvalContext,
-    ) -> VectorValue
+    fn eval_0_arg<Ret, F>(rows: usize, mut f: F, context: &mut RpnRuntimeContext) -> VectorValue
     where
         Ret: Evaluable,
-        F: FnMut(&mut RpnExpressionEvalContext) -> Ret,
+        F: FnMut(&mut RpnRuntimeContext) -> Ret,
     {
         let mut result = Vec::with_capacity(rows);
         for _ in 0..rows {
@@ -134,13 +130,13 @@ impl RpnFunction {
     fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         arg0: &RpnStackNode,
     ) -> VectorValue
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnExpressionEvalContext, &FieldType, &Arg0) -> Ret,
+        F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0) -> Ret,
     {
         let mut result = Vec::with_capacity(rows);
         if arg0.is_scalar() {
@@ -163,7 +159,7 @@ impl RpnFunction {
     fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
         f: F,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         arg0: &RpnStackNode,
         arg1: &RpnStackNode,
     ) -> VectorValue
@@ -171,7 +167,7 @@ impl RpnFunction {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnExpressionEvalContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
+        F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
     {
         if arg0.is_scalar() {
             if arg1.is_scalar() {
@@ -224,7 +220,7 @@ impl RpnFunction {
     fn eval_2_args_scalar_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         lhs_field_type: &FieldType,
         lhs: &ScalarValue,
         rhs_field_type: &FieldType,
@@ -234,7 +230,7 @@ impl RpnFunction {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnExpressionEvalContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
+        F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -249,7 +245,7 @@ impl RpnFunction {
     fn eval_2_args_scalar_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         lhs_field_type: &FieldType,
         lhs: &ScalarValue,
         rhs_field_type: &FieldType,
@@ -259,7 +255,7 @@ impl RpnFunction {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnExpressionEvalContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
+        F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
     {
         debug_assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -275,7 +271,7 @@ impl RpnFunction {
     fn eval_2_args_vector_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         lhs_field_type: &FieldType,
         lhs: &VectorValue,
         rhs_field_type: &FieldType,
@@ -285,7 +281,7 @@ impl RpnFunction {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnExpressionEvalContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
+        F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
     {
         debug_assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -301,7 +297,7 @@ impl RpnFunction {
     fn eval_2_args_vector_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnExpressionEvalContext,
+        context: &mut RpnRuntimeContext,
         lhs_field_type: &FieldType,
         lhs: &VectorValue,
         rhs_field_type: &FieldType,
@@ -311,7 +307,7 @@ impl RpnFunction {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnExpressionEvalContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
+        F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
     {
         debug_assert_eq!(rows, lhs.len());
         debug_assert_eq!(rows, rhs.len());

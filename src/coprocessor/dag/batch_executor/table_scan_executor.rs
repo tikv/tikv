@@ -34,7 +34,7 @@ pub struct BatchTableScanExecutor<S: Store>(
 impl<S: Store> BatchTableScanExecutor<S> {
     pub fn new(
         store: S,
-        context: ExecutorContext,
+        context: BatchExecutorContext,
         key_ranges: Vec<KeyRange>,
         desc: bool,
     ) -> Result<Self> {
@@ -83,7 +83,7 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
 }
 
 struct TableScanExecutorImpl {
-    context: ExecutorContext,
+    context: BatchExecutorContext,
 
     /// Whether or not KV value can be omitted.
     ///
@@ -106,6 +106,10 @@ struct TableScanExecutorImpl {
 }
 
 impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
+    fn get_context(&self) -> &BatchExecutorContext {
+        &self.context
+    }
+
     fn build_scanner<S: Store>(
         &self,
         store: &S,
@@ -238,7 +242,7 @@ mod tests {
         let mut test_store = TestStore::new(&test_data.kv_data);
         let context = {
             let columns_info = test_data.get_prev_2_cols();
-            ExecutorContext::new(columns_info)
+            BatchExecutorContext::with_default_config(columns_info)
         };
 
         const HANDLE: i64 = 0;
@@ -276,7 +280,7 @@ mod tests {
         let context = {
             let mut columns_info = test_data.get_prev_2_cols();
             columns_info.push(test_data.get_col_pk());
-            ExecutorContext::new(columns_info)
+            BatchExecutorContext::with_default_config(columns_info)
         };
 
         let r1 = get_range(TABLE_ID, i64::MIN, 0);

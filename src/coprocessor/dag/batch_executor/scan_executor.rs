@@ -18,10 +18,13 @@ use crate::storage::{Key, Store};
 use super::interface::*;
 use super::ranges_iter::{PointRangePolicy, RangesIterator};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
 pub trait ScanExecutorImpl: Send {
+    fn get_context(&self) -> &BatchExecutorContext;
+
     fn build_scanner<S: Store>(&self, store: &S, desc: bool, range: KeyRange)
         -> Result<Scanner<S>>;
 
@@ -186,7 +189,11 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
             Ok(false) => {}
         };
 
-        BatchExecuteResult { data, is_drained }
+        BatchExecuteResult {
+            data,
+            is_drained,
+            warnings: EvalWarnings::new(self.imp.get_context().config.max_warning_cnt),
+        }
     }
 
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
