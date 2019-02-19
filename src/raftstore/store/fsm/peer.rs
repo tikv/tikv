@@ -845,10 +845,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.peer.tag, merge_target
         );
 
-        // When receiving message that has a merge target, it indicates that the source peer on this store is stale,
-        // the peers on other stores are already merged. The epoch in merge target is the state of target peer at the
-        // time when source peer is merged. So here we record the merge target epoch version to let the target peer on
-        // this store to decide whether to destroy the source peer.
+        // When receiving message that has a merge target, it indicates that the source peer on this
+        // store is stale, the peers on other stores are already merged. The epoch in merge target
+        // is the state of target peer at the time when source peer is merged. So here we record the
+        // merge target epoch version to let the target peer on this store to decide whether to
+        // destroy the source peer.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.targets_map.insert(self.region_id(), target_region_id);
         let v = meta
@@ -870,9 +871,22 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .get(&target_region_id)
             .map(|r| r.get_region_epoch())
         {
-            // In the case the the target peer's range isn't overlapped with target's anymore, so target peer can't
-            // find the source peer. If that, source peer still need to decide to destroy itself. When the target peer
-            // has already moved on, source peer can destroy itself.
+            // In the case that the source peer's range isn't overlapped with target's anymore:
+            //     | region 1 | region 2 | region 3 |
+            //                   || merge 2 into 1
+            //                   \/
+            //     |       region 1      | region 3 |
+            //                   || merge 3 into 1
+            //                   \/
+            //     |            region 1            |
+            //                   || split 1 into 4
+            //                   \/
+            //     |        region 4       |region 1|
+            // so the new target peer can't find the source peer.
+            // e.g. new region 1 is overlapped with region 2
+            //
+            // If that, source peer still need to decide whether to destroy itself. When the target
+            // peer has already moved on, source peer can destroy itself.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }

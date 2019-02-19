@@ -593,6 +593,7 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
         let mut stale = self.stale.load(Ordering::Relaxed);
         if stale {
             if last_msg.is_some() {
+                // To make sure the messages will not handled in one raftstore batch.
                 thread::sleep(Duration::from_millis(100));
                 msgs.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(
                     last_msg.take().unwrap(),
