@@ -52,7 +52,7 @@ To use the Raw Key-Value API in applications developed in the Go language, take 
     func (c *RawKVClient) Delete(key []byte) error
     func (c *RawKVClient) Get(key []byte) ([]byte, error)
     func (c *RawKVClient) Put(key, value []byte) error
-    func (c *RawKVClient) Scan(startKey []byte, limit int) (keys [][]byte, values [][]byte, err error)
+    func (c *RawKVClient) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error)
     ```
 
 ### Usage example of the Raw Key-Value API

@@ -610,7 +610,7 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
     }
 
     Err(box_err!(
-        "stale epoch {:?}, we are now {:?}",
+        "epoch not match {:?}, we are now {:?}",
         check_epoch,
         epoch
     ))
@@ -805,6 +805,34 @@ impl TestPdClient {
             region_epoch: region.take_region_epoch(),
         };
         self.schedule_operator(region.get_id(), op);
+    }
+
+    pub fn must_half_split_region(&self, region: metapb::Region) {
+        self.half_split_region(region.clone());
+        for _ in 1..500 {
+            sleep_ms(10);
+
+            let now = self
+                .get_region_by_id(region.get_id())
+                .wait()
+                .unwrap()
+                .unwrap();
+            if (now.get_start_key() != region.get_start_key()
+                && self.get_region(region.get_start_key()).is_ok())
+                || (now.get_end_key() != region.get_end_key()
+                    && self.get_region(now.get_end_key()).is_ok())
+            {
+                if now.get_end_key() != region.get_end_key() {
+                    assert!(now.get_end_key().is_empty());
+                }
+                assert!(
+                    now.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+                );
+                return;
+            }
+        }
+
+        panic!("region {:?} is still not split.", region);
     }
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
