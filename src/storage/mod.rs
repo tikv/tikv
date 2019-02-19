@@ -84,6 +84,7 @@ pub enum Mutation {
     Put((Key, Value)),
     Delete(Key),
     Lock(Key),
+    Insert((Key, Value)), // has a constraint that key should not exist.
 }
 
 #[allow(clippy::match_same_arms)]
@@ -93,6 +94,7 @@ impl Mutation {
             Mutation::Put((ref key, _)) => key,
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
+            Mutation::Insert((ref key, _)) => key,
         }
     }
 }
@@ -358,7 +360,8 @@ impl Command {
             Command::Prewrite { ref mutations, .. } => {
                 for m in mutations {
                     match *m {
-                        Mutation::Put((ref key, ref value)) => {
+                        Mutation::Put((ref key, ref value))
+                        | Mutation::Insert((ref key, ref value)) => {
                             bytes += key.as_encoded().len();
                             bytes += value.len();
                         }
