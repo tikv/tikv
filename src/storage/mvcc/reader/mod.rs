@@ -234,17 +234,24 @@ impl<S: Snapshot> MvccReader<S> {
             IsolationLevel::SI => ts = self.check_lock(key, ts)?,
             IsolationLevel::RC => {}
         }
+        if let Some(mut write) = self.get_write(key, ts)? {
+            if write.short_value.is_some() {
+                if self.key_only {
+                    return Ok(Some(vec![]));
+                }
+                return Ok(write.short_value.take());
+            }
+            return self.load_data(key, write.start_ts).map(Some);
+        }
+        Ok(None)
+    }
+
+    pub fn get_write(&mut self, key: &Key, mut ts: u64) -> Result<Option<Write>> {
         loop {
             match self.seek_write(key, ts)? {
-                Some((commit_ts, mut write)) => match write.write_type {
+                Some((commit_ts, write)) => match write.write_type {
                     WriteType::Put => {
-                        if write.short_value.is_some() {
-                            if self.key_only {
-                                return Ok(Some(vec![]));
-                            }
-                            return Ok(write.short_value.take());
-                        }
-                        return self.load_data(key, write.start_ts).map(Some);
+                        return Ok(Some(write));
                     }
                     WriteType::Delete => {
                         return Ok(None);
@@ -811,5 +818,61 @@ mod tests {
 
         // `get_txn_commit_info(&key, 15)` stopped at `30_25 PUT`.
         assert_eq!(seek_for_prev_new - seek_for_prev_old, 2);
+    }
+
+    #[test]
+    fn test_get_write() {
+        let path = TempDir::new("_test_storage_mvcc_reader_get_write").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 1);
+        engine.commit(k, 1, 2);
+
+        engine.rollback(k, 5);
+
+        engine.lock(k, 6, 7);
+
+        engine.delete(k, 8, 9);
+
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 10);
+        engine.commit(k, 10, 11);
+
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 12);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
+        // is 2.
+        // Commit versions: [11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
+        let key = Key::from_raw(k);
+        let write = reader.get_write(&key, 2).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1);
+
+        let write = reader.get_write(&key, 5).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1);
+
+        let write = reader.get_write(&key, 7).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 1);
+
+        assert!(reader.get_write(&key, 9).unwrap().is_none());
+
+        let write = reader.get_write(&key, 11).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 10);
+
+        let write = reader.get_write(&key, 13).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 10);
     }
 }
