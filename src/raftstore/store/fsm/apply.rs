@@ -451,7 +451,6 @@ impl ApplyContext {
                 self.notifier.notify(
                     res.region_id,
                     PeerMsg::ApplyRes {
-                        region_id: res.region_id,
                         res: TaskRes::Apply(res),
                     },
                 );
@@ -2288,7 +2287,6 @@ impl ApplyFsm {
             ctx.notifier.notify(
                 self.delegate.region_id(),
                 PeerMsg::ApplyRes {
-                    region_id: self.delegate.region_id(),
                     res: TaskRes::Destroy {
                         region_id: self.delegate.region_id(),
                         peer_id: self.delegate.id,

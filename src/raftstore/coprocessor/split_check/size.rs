@@ -13,8 +13,7 @@
 
 use super::super::error::Result;
 use crate::raftstore::store::util as raftstore_util;
-use crate::raftstore::store::{keys, util, Msg, PeerMsg};
-use crate::util::transport::{RetryableSendCh, Sender};
+use crate::raftstore::store::{keys, util, CasualMessage, CasualRouter};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use rocksdb::DB;
@@ -107,15 +106,15 @@ pub struct SizeCheckObserver<C> {
     region_max_size: u64,
     split_size: u64,
     split_limit: u64,
-    ch: Mutex<RetryableSendCh<Msg, C>>,
+    ch: Mutex<C>,
 }
 
-impl<C: Sender<Msg>> SizeCheckObserver<C> {
+impl<C: CasualRouter> SizeCheckObserver<C> {
     pub fn new(
         region_max_size: u64,
         split_size: u64,
         split_limit: u64,
-        ch: RetryableSendCh<Msg, C>,
+        ch: C,
     ) -> SizeCheckObserver<C> {
         SizeCheckObserver {
             region_max_size,
@@ -128,7 +127,7 @@ impl<C: Sender<Msg>> SizeCheckObserver<C> {
 
 impl<C> Coprocessor for SizeCheckObserver<C> {}
 
-impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
+impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext,
@@ -157,11 +156,8 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for SizeCheckObserver<C> {
         };
 
         // send it to rafastore to update region approximate size
-        let res = Msg::PeerMsg(PeerMsg::RegionApproximateSize {
-            region_id,
-            size: region_size,
-        });
-        if let Err(e) = self.ch.lock().unwrap().try_send(res) {
+        let res = CasualMessage::RegionApproximateSize { size: region_size };
+        if let Err(e) = self.ch.lock().unwrap().send(region_id, res) {
             warn!(
                 "[region {}] failed to send approximate region size: {}",
                 region_id, e
@@ -213,32 +209,35 @@ pub mod tests {
 
     use super::Checker;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::raftstore::store::{keys, KeyEntry, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
+    use crate::raftstore::store::{
+        keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
+    };
     use crate::storage::{ALL_CFS, CF_WRITE};
     use crate::util::config::ReadableSize;
     use crate::util::rocksdb_util::{
         new_engine_opt, properties::RangePropertiesCollectorFactory, CFOptions,
     };
-    use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 
     pub fn must_split_at(
-        rx: &mpsc::Receiver<Msg>,
+        rx: &mpsc::Receiver<(u64, CasualMessage)>,
         exp_region: &Region,
         exp_split_keys: Vec<Vec<u8>>,
     ) {
         loop {
             match rx.try_recv() {
-                Ok(Msg::PeerMsg(PeerMsg::RegionApproximateSize { region_id, .. }))
-                | Ok(Msg::PeerMsg(PeerMsg::RegionApproximateKeys { region_id, .. })) => {
+                Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+                | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
                     assert_eq!(region_id, exp_region.get_id());
                 }
-                Ok(Msg::PeerMsg(PeerMsg::SplitRegion {
+                Ok((
                     region_id,
-                    region_epoch,
-                    split_keys,
-                    ..
-                })) => {
+                    CasualMessage::SplitRegion {
+                        region_epoch,
+                        split_keys,
+                        ..
+                    },
+                )) => {
                     assert_eq!(region_id, exp_region.get_id());
                     assert_eq!(&region_epoch, exp_region.get_region_epoch());
                     assert_eq!(split_keys, exp_split_keys);
@@ -273,7 +272,6 @@ pub mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-batch-split");
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(100);
         cfg.region_split_size = ReadableSize(60);
@@ -281,8 +279,8 @@ pub mod tests {
 
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be [z0006]
@@ -294,7 +292,7 @@ pub mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
-            Ok(Msg::PeerMsg(PeerMsg::RegionApproximateSize { region_id, .. })) => {
+            Ok((region_id, CasualMessage::RegionApproximateSize { .. })) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect recv empty, but got {:?}", others),

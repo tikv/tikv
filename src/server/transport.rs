@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crossbeam::SendError;
+use crossbeam::{SendError, TrySendError};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
@@ -20,11 +20,11 @@ use std::sync::{Arc, RwLock};
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
-use crate::raftstore::store::fsm::{RaftRouter, SendCh};
+use crate::raftstore::store::fsm::RaftRouter;
 use crate::raftstore::store::{
-    Callback, Msg as StoreMsg, PeerMsg, ReadTask, SignificantMsg, Transport,
+    Callback, CasualMessage, PeerMsg, RaftCommand, ReadTask, SignificantMsg, StoreMsg, Transport,
 };
-use crate::raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
+use crate::raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use crate::server::raft_client::RaftClient;
 use crate::server::Result;
 use crate::util::collections::HashSet;
@@ -34,21 +34,11 @@ use raft::SnapshotStatus;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {
-    /// Send StoreMsg, retry if failed. Try times may vary from implementation.
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
-
-    /// Send StoreMsg.
-    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
-
     /// Sends RaftMessage to local store.
-    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)))
-    }
+    fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()>;
 
     /// Sends RaftCmdRequest to local store.
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_raft_cmd(req, cb))
-    }
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()>;
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -80,58 +70,64 @@ pub trait RaftStoreRouter: Send + Clone {
             },
         )
     }
+
+    fn casual_send(&self, region_id: u64, msg: CasualMessage) -> RaftStoreResult<()>;
 }
 
 /// A router that routes messages to the raftstore
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
-    pub ch: SendCh,
     router: RaftRouter,
     local_reader_ch: Scheduler<ReadTask>,
 }
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
-    pub fn new(
-        raftstore_ch: SendCh,
-        router: RaftRouter,
-        local_reader_ch: Scheduler<ReadTask>,
-    ) -> ServerRaftStoreRouter {
+    pub fn new(router: RaftRouter, local_reader_ch: Scheduler<ReadTask>) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
-            ch: raftstore_ch,
             router,
             local_reader_ch,
         }
     }
+
+    pub fn send_store(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        self.router.send_control(msg).map_err(|e| {
+            RaftStoreError::Transport(match e {
+                TrySendError::Full(_) => DiscardReason::Full,
+                TrySendError::Disconnected(_) => DiscardReason::Disconnected,
+            })
+        })
+    }
+}
+
+#[inline]
+fn handle_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
+    match e {
+        TrySendError::Full(_) => RaftStoreError::Transport(DiscardReason::Full),
+        TrySendError::Disconnected(_) => RaftStoreError::RegionNotFound(region_id),
+    }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
-    fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        if ReadTask::acceptable(&msg) {
-            self.local_reader_ch
-                .schedule(ReadTask::read(msg))
-                .map_err(|e| box_err!(e))
-        } else {
-            self.ch.try_send(msg).map_err(RaftStoreError::Transport)
-        }
-    }
-
-    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
-        if ReadTask::acceptable(&msg) {
-            self.local_reader_ch
-                .schedule(ReadTask::read(msg))
-                .map_err(|e| box_err!(e))
-        } else {
-            self.ch.send(msg).map_err(RaftStoreError::Transport)
-        }
-    }
-
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)))
+        let region_id = msg.get_region_id();
+        self.router
+            .send_raft_message(msg)
+            .map_err(|e| handle_error(region_id, e))
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::new_raft_cmd(req, cb))
+        let cmd = RaftCommand::new(req, cb);
+        if ReadTask::acceptable(&cmd.request) {
+            self.local_reader_ch
+                .schedule(ReadTask::Read(cmd))
+                .map_err(|e| box_err!(e))
+        } else {
+            let region_id = cmd.request.get_header().get_region_id();
+            self.router
+                .send_raft_command(cmd)
+                .map_err(|e| handle_error(region_id, e))
+        }
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
@@ -141,9 +137,16 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         {
             // TODO: panic here once we can detect system is shutting down reliably.
             error!("failed to send significant msg {:?}", msg);
+            return Err(RaftStoreError::RegionNotFound(region_id));
         }
 
         Ok(())
+    }
+
+    fn casual_send(&self, region_id: u64, msg: CasualMessage) -> RaftStoreResult<()> {
+        self.router
+            .send(region_id, PeerMsg::CasualMessage(msg))
+            .map_err(|e| handle_error(region_id, e))
     }
 }
 
@@ -359,7 +362,7 @@ where
     T: RaftStoreRouter + 'static,
     S: StoreAddrResolver + 'static,
 {
-    fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+    fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         self.send_store(to_store_id, msg);
         Ok(())

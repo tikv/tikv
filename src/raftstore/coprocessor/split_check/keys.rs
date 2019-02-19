@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::raftstore::store::{keys, util, Msg, PeerMsg};
-use crate::util::transport::{RetryableSendCh, Sender};
+use crate::raftstore::store::{keys, util, CasualMessage, CasualRouter};
 use kvproto::pdpb::CheckPolicy;
 use rocksdb::DB;
 use std::mem;
@@ -92,15 +91,15 @@ pub struct KeysCheckObserver<C> {
     region_max_keys: u64,
     split_keys: u64,
     batch_split_limit: u64,
-    ch: Mutex<RetryableSendCh<Msg, C>>,
+    ch: Mutex<C>,
 }
 
-impl<C: Sender<Msg>> KeysCheckObserver<C> {
+impl<C: CasualRouter> KeysCheckObserver<C> {
     pub fn new(
         region_max_keys: u64,
         split_keys: u64,
         batch_split_limit: u64,
-        ch: RetryableSendCh<Msg, C>,
+        ch: C,
     ) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             region_max_keys,
@@ -113,7 +112,7 @@ impl<C: Sender<Msg>> KeysCheckObserver<C> {
 
 impl<C> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
         ctx: &mut ObserverContext,
@@ -141,11 +140,8 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             }
         };
 
-        let res = Msg::PeerMsg(PeerMsg::RegionApproximateKeys {
-            region_id,
-            keys: region_keys,
-        });
-        if let Err(e) = self.ch.lock().unwrap().try_send(res) {
+        let res = CasualMessage::RegionApproximateKeys { keys: region_keys };
+        if let Err(e) = self.ch.lock().unwrap().send(region_id, res) {
             warn!(
                 "[region {}] failed to send approximate region keys: {}",
                 region_id, e
@@ -189,13 +185,12 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use crate::raftstore::store::{keys, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
+    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
     use crate::util::rocksdb_util::{
         new_engine_opt, properties::RangePropertiesCollectorFactory, CFOptions,
     };
-    use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
@@ -254,7 +249,6 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-batch-split");
         let mut cfg = Config::default();
         cfg.region_max_keys = 100;
         cfg.region_split_keys = 80;
@@ -262,8 +256,8 @@ mod tests {
 
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0080
@@ -271,8 +265,8 @@ mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
-            Ok(Msg::PeerMsg(PeerMsg::RegionApproximateSize { region_id, .. }))
-            | Ok(Msg::PeerMsg(PeerMsg::RegionApproximateKeys { region_id, .. })) => {
+            Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+            | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect recv empty, but got {:?}", others),

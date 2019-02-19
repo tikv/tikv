@@ -577,7 +577,7 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
+    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
@@ -881,7 +881,7 @@ impl Peer {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
             ctx.need_flush_trans = true;
-            self.send(&ctx.trans, messages, &mut ctx.raft_metrics.message)
+            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
                 });
@@ -918,7 +918,7 @@ impl Peer {
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             ctx.need_flush_trans = true;
-            self.send(&ctx.trans, msgs, &mut ctx.raft_metrics.message)
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message)
                 .unwrap_or_else(|e| {
                     // We don't care that the message is sent failed, so here just log this error.
                     warn!("{} leader send messages err {:?}", self.tag, e);
@@ -973,7 +973,7 @@ impl Peer {
                 self.pending_messages = mem::replace(&mut ready.messages, vec![]);
             } else {
                 self.send(
-                    &ctx.trans,
+                    &mut ctx.trans,
                     ready.messages.drain(..),
                     &mut ctx.raft_metrics.message,
                 )
@@ -1855,7 +1855,11 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
+    fn send_raft_message<T: Transport>(
+        &mut self,
+        msg: eraftpb::Message,
+        trans: &mut T,
+    ) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch

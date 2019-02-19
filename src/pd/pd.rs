@@ -29,14 +29,13 @@ use rocksdb::DB;
 use super::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
 use crate::raftstore::store::cmd_resp::new_error;
-use crate::raftstore::store::fsm::SendCh;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::util::{
     get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
 };
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
-use crate::raftstore::store::{Msg, PeerMsg};
+use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
 use crate::util::collections::HashMap;
 use crate::util::escape;
@@ -193,7 +192,7 @@ impl Display for Task {
 pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    ch: SendCh,
+    ch: RaftRouter,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
@@ -209,7 +208,7 @@ impl<T: PdClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        ch: SendCh,
+        ch: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
     ) -> Runner<T> {
@@ -508,9 +507,9 @@ impl<T: PdClient> Runner<T> {
                                 .with_label_values(&["peer stale"])
                                 .inc();
                             if let Some(source) = merge_source {
-                                send_merge_fail(ch, source, peer);
+                                send_merge_fail(&ch, source, peer);
                             } else {
-                                send_destroy_peer_message(ch, local_region, peer, pd_region);
+                                send_destroy_peer_message(&ch, local_region, peer, pd_region);
                             }
                             return Ok(());
                         }
@@ -585,9 +584,11 @@ impl<T: PdClient> Runner<T> {
 
                     let split_region = resp.take_split_region();
                     info!("[region {}] try to split {:?}", region_id, epoch);
-                    let msg =
-                        Msg::new_half_split_region(region_id, epoch, split_region.get_policy());
-                    if let Err(e) = ch.try_send(msg) {
+                    let msg = CasualMessage::HalfSplitRegion {
+                        region_epoch: epoch,
+                        policy: split_region.get_policy(),
+                    };
+                    if let Err(e) = ch.send(region_id, PeerMsg::CasualMessage(msg)) {
                         error!("[region {}] send halfsplit request err {:?}", region_id, e);
                     }
                 } else if resp.has_merge() {
@@ -800,7 +801,7 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
 }
 
 fn send_admin_request(
-    ch: &SendCh,
+    ch: &RaftRouter,
     region_id: u64,
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
@@ -816,7 +817,7 @@ fn send_admin_request(
 
     req.set_admin_request(request);
 
-    if let Err(e) = ch.try_send(Msg::new_raft_cmd(req, callback)) {
+    if let Err(e) = ch.send_raft_command(RaftCommand::new(req, callback)) {
         error!(
             "[region {}] send {:?} request err {:?}",
             region_id, cmd_type, e
@@ -825,13 +826,15 @@ fn send_admin_request(
 }
 
 /// Sends merge fail message to gc merge source.
-fn send_merge_fail(ch: SendCh, source_region_id: u64, target: metapb::Peer) {
+fn send_merge_fail(ch: &RaftRouter, source_region_id: u64, target: metapb::Peer) {
     let target_id = target.get_id();
-    if let Err(e) = ch.send(Msg::PeerMsg(PeerMsg::MergeResult {
-        region_id: source_region_id,
-        target,
-        stale: true,
-    })) {
+    if let Err(e) = ch.send(
+        source_region_id,
+        PeerMsg::CasualMessage(CasualMessage::MergeResult {
+            target,
+            stale: true,
+        }),
+    ) {
         error!(
             "[region {}] failed to report merge {} fail: {:?}",
             source_region_id, target_id, e
@@ -841,7 +844,7 @@ fn send_merge_fail(ch: SendCh, source_region_id: u64, target: metapb::Peer) {
 
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message(
-    ch: SendCh,
+    ch: &RaftRouter,
     local_region: metapb::Region,
     peer: metapb::Peer,
     pd_region: metapb::Region,
@@ -852,7 +855,7 @@ fn send_destroy_peer_message(
     message.set_to_peer(peer.clone());
     message.set_region_epoch(pd_region.get_region_epoch().clone());
     message.set_is_tombstone(true);
-    if let Err(e) = ch.try_send(Msg::PeerMsg(PeerMsg::RaftMessage(message))) {
+    if let Err(e) = ch.send_raft_message(message) {
         error!(
             "send gc peer request to region {} err {:?}",
             local_region.get_id(),

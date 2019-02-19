@@ -18,7 +18,7 @@ use std::{thread, usize};
 
 use crate::grpc::{EnvBuilder, Error as GrpcError};
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftMessage};
+use kvproto::raft_serverpb;
 use tempdir::TempDir;
 use tokio::runtime::Builder as RuntimeBuilder;
 
@@ -26,8 +26,8 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::store::fsm::{create_raft_batch_system, SendCh};
-use tikv::raftstore::store::{Callback, Engines, Msg as StoreMsg, SnapManager};
+use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftRouter};
+use tikv::raftstore::store::{Callback, Engines, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;
@@ -45,9 +45,9 @@ use tikv::util::worker::{FutureWorker, Worker};
 
 use super::*;
 
-type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
+type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
-    SimulateTransport<RaftMessage, ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
+    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 
@@ -56,7 +56,7 @@ struct ServerMeta {
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
     router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    store_ch: SendCh,
+    store_ch: RaftRouter,
     worker: Worker<ResolveTask>,
 }
 
@@ -127,17 +127,16 @@ impl Simulator for ServerCluster {
 
         // Initialize raftstore channels.
         let (router, system) = create_raft_batch_system(&cfg.raft_store);
-        let store_sendch = SendCh::new(router.clone(), "raftstore");
 
         // Create localreader.
         let local_reader = Worker::new("test-local-reader");
         let local_ch = local_reader.scheduler();
 
-        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), router, local_ch);
+        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create engine
-        let (engines, path) = create_test_engine(engines, store_sendch.clone(), &cfg);
+        let (engines, path) = create_test_engine(engines, router.clone(), &cfg);
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-future-worker");
@@ -169,7 +168,7 @@ impl Simulator for ServerCluster {
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
-        let snap_mgr = SnapManager::new(tmp_str, Some(store_sendch));
+        let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
@@ -218,7 +217,7 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, router.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
@@ -247,7 +246,7 @@ impl Simulator for ServerCluster {
         self.metas.insert(
             node_id,
             ServerMeta {
-                store_ch: node.get_sendch(),
+                store_ch: router,
                 node,
                 server,
                 router: sim_router,
@@ -301,7 +300,7 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
+    fn add_send_filter(&mut self, node_id: u64, filter: Box<Filter>) {
         self.metas
             .get_mut(&node_id)
             .unwrap()
@@ -317,7 +316,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<Filter>) {
         self.metas
             .get_mut(&node_id)
             .unwrap()
@@ -329,7 +328,7 @@ impl Simulator for ServerCluster {
         self.metas.get_mut(&node_id).unwrap().router.clear_filters();
     }
 
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh> {
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
         self.metas.get(&node_id).map(|m| m.store_ch.clone())
     }
 }

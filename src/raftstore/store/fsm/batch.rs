@@ -16,9 +16,6 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
-// TODO: remove this
-#![allow(dead_code)]
-
 use super::router::{BasicMailbox, Router};
 use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
@@ -519,7 +516,6 @@ mod tests {
 
     struct Handler {
         local: HandleMetrics,
-        router: BatchRouter<Runner, Runner>,
         metrics: Arc<Mutex<HandleMetrics>>,
     }
 
@@ -552,7 +548,6 @@ mod tests {
     }
 
     struct Builder {
-        router: BatchRouter<Runner, Runner>,
         metrics: Arc<Mutex<HandleMetrics>>,
     }
 
@@ -562,7 +557,6 @@ mod tests {
         fn build(&mut self) -> Handler {
             Handler {
                 local: HandleMetrics::default(),
-                router: self.router.clone(),
                 metrics: self.metrics.clone(),
             }
         }
@@ -574,7 +568,6 @@ mod tests {
         let (router, mut system) = super::create_system(2, 2, control_tx, control_fsm);
         let builder = Builder {
             metrics: Arc::default(),
-            router: router.clone(),
         };
         let metrics = builder.metrics.clone();
         system.spawn("test".to_owned(), builder);

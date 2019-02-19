@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: remove this
-#![allow(dead_code)]
-
 use super::batch::{Fsm, FsmScheduler};
 use crate::util::collections::HashMap;
 use crate::util::mpsc;

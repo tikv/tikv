@@ -25,10 +25,9 @@ use rocksdb::{DBIterator, DB};
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::engine::{IterOption, Iterable};
-use crate::raftstore::store::{keys, Callback, Msg, PeerMsg};
+use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
 use crate::storage::{CfName, CF_WRITE, LARGE_CFS};
-use crate::util::transport::{RetryableSendCh, Sender};
 use crate::util::worker::Runnable;
 
 use super::metrics::*;
@@ -155,18 +154,14 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C> {
+pub struct Runner<S> {
     engine: Arc<DB>,
-    ch: RetryableSendCh<Msg, C>,
+    ch: S,
     coprocessor: Arc<CoprocessorHost>,
 }
 
-impl<C: Sender<Msg>> Runner<C> {
-    pub fn new(
-        engine: Arc<DB>,
-        ch: RetryableSendCh<Msg, C>,
-        coprocessor: Arc<CoprocessorHost>,
-    ) -> Runner<C> {
+impl<S: CasualRouter> Runner<S> {
+    pub fn new(engine: Arc<DB>, ch: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
         Runner {
             engine,
             ch,
@@ -233,9 +228,8 @@ impl<C: Sender<Msg>> Runner<C> {
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let res = self
-                .ch
-                .try_send(new_split_region(region_id, region_epoch, split_keys));
+            let msg = new_split_region(region_epoch, split_keys);
+            let res = self.ch.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
             }
@@ -277,17 +271,16 @@ impl<C: Sender<Msg>> Runner<C> {
     }
 }
 
-impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
+impl<S: CasualRouter> Runnable<Task> for Runner<S> {
     fn run(&mut self, task: Task) {
         self.check_split(task);
     }
 }
 
-fn new_split_region(region_id: u64, region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> Msg {
-    Msg::PeerMsg(PeerMsg::SplitRegion {
-        region_id,
+fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage {
+    CasualMessage::SplitRegion {
         region_epoch,
         split_keys,
         callback: Callback::None,
-    })
+    }
 }
