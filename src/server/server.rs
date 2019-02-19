@@ -132,6 +132,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             if let Some(service) = import_service {
                 sb = sb.register_service(create_import_sst(service));
             }
+            // When port is 0, it has to be binded now to get a valid address, which
+            // is then reported to PD before the server is up. 0 is usually used in tests.
             if addr.port() == 0 {
                 let server = sb.build()?;
                 let (ref host, port) = server.bind_addrs()[0];
