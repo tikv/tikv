@@ -337,6 +337,11 @@ impl Column {
         self.length
     }
 
+    /// Return true when it's empty.
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
     #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice, tp: &FieldTypeAccessor) -> Result<Column> {
         use crate::util::codec::read_slice;

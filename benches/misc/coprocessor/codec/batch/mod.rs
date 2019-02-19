@@ -50,7 +50,7 @@ fn bench_column_agg_str(b: &mut Bencher) {
         }
         let dec = Decimal::from(row_id);
         let s = dec.to_string().into_bytes();
-        total_size = total_size + s.len();
+        total_size += s.len();
         str_col.push_bytes(Some(s));
     }
 
@@ -59,7 +59,7 @@ fn bench_column_agg_str(b: &mut Bencher) {
         let slice = str_col.as_bytes_slice();
         for v in slice {
             if let Some(t) = v {
-                get_size = get_size + t.len();
+                get_size += t.len();
             }
         }
         assert_eq!(get_size, total_size);
@@ -83,7 +83,7 @@ fn bench_column_agg_dec(b: &mut Bencher) {
         let slice = dec_col.as_decimal_slice();
         for v in slice {
             if let Some(t) = v {
-                dec_sum = (&dec_sum + &t).unwrap();
+                dec_sum = (&dec_sum + t).unwrap();
             }
         }
         assert_eq!(Decimal::from(262144), dec_sum);

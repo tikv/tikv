@@ -201,7 +201,7 @@ fn bench_column_agg_str(b: &mut Bencher) {
         }
         let dec = Decimal::from(row_id);
         let s = dec.to_string().into_bytes();
-        total_size = total_size + s.len();
+        total_size += s.len();
         str_col.append_datum(&Datum::Bytes(s)).unwrap();
     }
 
@@ -211,7 +211,7 @@ fn bench_column_agg_str(b: &mut Bencher) {
             if str_col.is_null(row_id) {
                 continue;
             }
-            get_size = get_size + str_col.get_bytes(row_id).len();
+            get_size += str_col.get_bytes(row_id).len();
         }
         assert_eq!(get_size, total_size);
     });
