@@ -31,6 +31,7 @@ use crate::raftstore::store::{Engines, SnapManager};
 use crate::storage::{Engine, Storage};
 use crate::util::security::SecurityManager;
 use crate::util::worker::Worker;
+use crate::util::Either;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;
@@ -52,8 +53,10 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 /// and a snapshot worker.
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
-    // Grpc server.
-    grpc_server: GrpcServer,
+    /// A GrpcServer builder or a GrpcServer.
+    ///
+    /// If the listening port is configured, the server will be started lazily.
+    builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S>,
@@ -107,7 +110,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&thread_load),
         );
 
-        let addr = SocketAddr::from_str(&cfg.addr)?;
+        let mut addr = SocketAddr::from_str(&cfg.addr)?;
         info!("listening on {}", addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
@@ -117,7 +120,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .build_args();
-        let grpc_server = {
+        let builder_or_server = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
                 .register_service(create_tikv(kv_service));
@@ -129,12 +132,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             if let Some(service) = import_service {
                 sb = sb.register_service(create_import_sst(service));
             }
-            sb.build()?
-        };
-
-        let addr = {
-            let (ref host, port) = grpc_server.bind_addrs()[0];
-            SocketAddr::new(IpAddr::from_str(host)?, port as u16)
+            if addr.port() == 0 {
+                let server = sb.build()?;
+                let (ref host, port) = server.bind_addrs()[0];
+                addr = SocketAddr::new(IpAddr::from_str(host)?, port as u16);
+                Either::Right(server)
+            } else {
+                Either::Left(sb)
+            }
         };
 
         let raft_client = Arc::new(RwLock::new(RaftClient::new(
@@ -154,7 +159,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let svr = Server {
             env: Arc::clone(&env),
-            grpc_server,
+            builder_or_server: Some(builder_or_server),
             local_addr: addr,
             trans,
             raft_router,
@@ -181,7 +186,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
-        self.grpc_server.start();
+        let builder_or_server = self.builder_or_server.take().unwrap();
+        let mut grpc_server = match builder_or_server {
+            Either::Left(builder) => builder.build()?,
+            Either::Right(server) => server,
+        };
+        grpc_server.start();
+        self.builder_or_server = Some(Either::Right(grpc_server));
 
         let mut load_stats = {
             let tl = Arc::clone(&self.thread_load);
@@ -203,7 +214,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     /// Stops the TiKV server.
     pub fn stop(&mut self) -> Result<()> {
         self.snap_worker.stop();
-        self.grpc_server.shutdown();
+        if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
+            server.shutdown();
+        }
         Ok(())
     }
 
